@@ -1,0 +1,120 @@
+import { createServer } from 'node:http';
+import { pathToFileURL } from 'node:url';
+
+export const marker = 'VEIL_PHASE0_SYNTHETIC_5723';
+
+const page = `<!doctype html>
+<meta charset="utf-8"><title>VEIL 로컬 테스트</title>
+<h1>VEIL 로컬 테스트</h1>
+<p>합성 데이터로 로그인, 사이트 저장소, 탐색, 다운로드를 시험합니다.</p>
+<a href="/second">다음 페이지</a> · <a href="/login">테스트 로그인</a> · <a href="/session">로그인 상태</a>
+<p><a href="/download?kind=get">GET 다운로드</a> · <a href="/download?kind=auth">인증 다운로드</a>
+· <a href="/redirect">리다이렉트 다운로드</a> · <a href="/download?kind=large">대용량 다운로드</a></p>
+<form action="/download?kind=post" method="post"><input name="probe" value="synthetic"><button>POST 다운로드</button></form>
+<form action="/upload" enctype="multipart/form-data" method="post"><input type="file" name="sample">
+<button>테스트 파일 업로드</button></form>
+<p><button id="storage">사이트 데이터 저장</button> <output id="result"></output></p>
+<script>
+document.querySelector('#storage').onclick = async () => {
+  try { document.querySelector('#result').textContent = JSON.stringify(await probe('write')); }
+  catch (error) { document.querySelector('#result').textContent = String(error); }
+};
+</script>
+<script src="/probe.js"></script>`;
+
+const probe = `async function probe(action) {
+  const marker = ${JSON.stringify(marker)};
+  const db = await new Promise((resolve, reject) => {
+    const request = indexedDB.open('veil-probe', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('probe');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  const cache = await caches.open('veil-probe');
+  if (action === 'write') {
+    await fetch('/login');
+    localStorage.setItem('probe', marker);
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('probe', 'readwrite');
+      tx.objectStore('probe').put(marker, 'value');
+      tx.oncomplete = resolve;
+      tx.onabort = () => reject(tx.error);
+    });
+    await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    await cache.put('/cached', new Response(marker));
+  }
+  const value = await new Promise((resolve, reject) => {
+    const request = db.transaction('probe').objectStore('probe').get('value');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+  return {
+    cookie: await (await fetch('/session')).text() === marker,
+    localStorage: localStorage.getItem('probe') === marker,
+    indexedDB: value === marker,
+    serviceWorker: Boolean((await navigator.serviceWorker.getRegistration())?.active),
+    cacheStorage: await (await cache.match('/cached'))?.text() === marker
+  };
+}`;
+
+export async function startFixture(port = 0, { ipv6 = false } = {}) {
+    const host = ipv6 ? '::1' : '127.0.0.1';
+    const authority = ipv6 ? '[::1]' : host;
+    const requests = new Map();
+    const server = createServer(async (request, response) => {
+        const url = new URL(request.url, 'http://127.0.0.1');
+        const hasCookie = (request.headers.cookie ?? '').split(/;\s*/).includes(`veil=${marker}`);
+        const send = (body, type = 'text/plain; charset=utf-8') => {
+            response.setHeader('Content-Type', type);
+            response.end(body);
+        };
+        requests.set(url.pathname, (requests.get(url.pathname) ?? 0) + 1);
+        switch (url.pathname) {
+            case '/network-control': return send('VEIL_DIRECT_CONTROL');
+            case '/': return send(page, 'text/html; charset=utf-8');
+            case '/second': return send('<title>VEIL 두 번째 페이지</title><a href="/">홈</a>', 'text/html; charset=utf-8');
+            case '/probe.js': return send(probe, 'text/javascript');
+            case '/login':
+                response.setHeader('Set-Cookie', `veil=${marker}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`);
+                return send('테스트 로그인 완료');
+            case '/session': return send(hasCookie ? marker : '로그인 필요');
+            case '/sw.js':
+                return send(`self.addEventListener('install', () => self.skipWaiting());
+                    self.addEventListener('activate', event => event.waitUntil(clients.claim()));
+                    self.addEventListener('fetch', event => {
+                        if (new URL(event.request.url).pathname === '/sw-file') {
+                            event.respondWith(new Response('${marker}', {headers: {
+                                'Content-Type': 'application/octet-stream',
+                                'Content-Disposition': 'attachment; filename="veil-phase0-sw.bin"'
+                            }}));
+                        }
+                    });`, 'text/javascript');
+            case '/redirect': return response.writeHead(302, { Location: '/download?kind=redirect' }).end();
+            case '/upload':
+                request.resume();
+                await new Promise(resolve => request.once('end', resolve).once('close', resolve));
+                return send('테스트 업로드 요청 수신');
+            case '/download': {
+                const kind = url.searchParams.get('kind');
+                if (kind === 'auth' && !hasCookie) return response.writeHead(401).end();
+                if (kind === 'post' && request.method !== 'POST') return response.writeHead(405).end();
+                if (!['auth', 'post', 'redirect', 'large', 'get'].includes(kind)) return response.writeHead(400).end();
+                request.resume();
+                response.setHeader('Content-Disposition', `attachment; filename="veil-phase0-${kind}.bin"`);
+                const size = kind === 'large' ? 8 * 1024 * 1024 : marker.length;
+                response.setHeader('Content-Length', size);
+                return send(Buffer.alloc(size, marker), 'application/octet-stream');
+            }
+            default: return response.writeHead(404).end();
+        }
+    });
+    await new Promise((resolve, reject) => server.once('error', reject).listen(port, host, resolve));
+    return { server, requests, origin: `http://${authority}:${server.address().port}` };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    const { origin } = await startFixture(Number(process.argv[2] ?? 8765));
+    console.log(origin);
+}

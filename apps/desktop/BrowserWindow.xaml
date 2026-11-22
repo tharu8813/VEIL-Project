@@ -1,0 +1,72 @@
+<Window x:Class="Veil.Desktop.BrowserWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="VEIL · 개발자용" Width="1180" Height="780" MinWidth="620" MinHeight="440"
+        FontFamily="Segoe UI, Malgun Gothic" FontSize="13">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="10,5" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Margin" Value="2,0" />
+        </Style>
+    </Window.Resources>
+    <DockPanel Background="#F2F4F8">
+        <Border DockPanel.Dock="Top" Background="#252640" Padding="14,8">
+            <TextBlock Foreground="#FFFFFF" TextWrapping="Wrap"
+                       Text="개발자용 · 테스트 데이터만 사용하세요. 프로필과 기록은 암호화되지 않습니다." />
+        </Border>
+        <DockPanel DockPanel.Dock="Top" Margin="10,8,10,0">
+            <Button DockPanel.Dock="Left" Content="+" Click="NewTabClick" ToolTip="새 탭 (Ctrl+T)"
+                    AutomationProperties.Name="새 탭" FontSize="18" />
+            <TabControl x:Name="Tabs" Background="Transparent" BorderThickness="0"
+                        SelectionChanged="TabChanged" AutomationProperties.Name="브라우저 탭" />
+        </DockPanel>
+        <DockPanel DockPanel.Dock="Top" Margin="10,5,10,8" LastChildFill="True">
+            <Button x:Name="Back" DockPanel.Dock="Left" Content="←" IsEnabled="False"
+                    ToolTip="뒤로 (Alt+←)" AutomationProperties.Name="뒤로" Click="BackClick" />
+            <Button x:Name="Forward" DockPanel.Dock="Left" Content="→" IsEnabled="False"
+                    ToolTip="앞으로 (Alt+→)" AutomationProperties.Name="앞으로" Click="ForwardClick" />
+            <Button x:Name="Reload" DockPanel.Dock="Left" Content="↻" IsEnabled="False"
+                    ToolTip="새로고침 (Ctrl+R)" AutomationProperties.Name="새로고침" Click="ReloadClick" />
+            <Button DockPanel.Dock="Right" Content="☰" ToolTip="브라우저 메뉴"
+                    AutomationProperties.Name="브라우저 메뉴" Click="MenuClick">
+                <Button.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="새 탭" InputGestureText="Ctrl+T" Click="NewTabClick" />
+                        <MenuItem Header="닫은 탭 복원" InputGestureText="Ctrl+Shift+T" Click="RestoreClick" />
+                        <Separator />
+                        <MenuItem Header="북마크 추가" InputGestureText="Ctrl+D" Click="BookmarkClick" />
+                        <MenuItem Header="북마크 관리" InputGestureText="Ctrl+B" Click="BookmarksClick" />
+                        <MenuItem Header="방문 기록" InputGestureText="Ctrl+H" Click="HistoryClick" />
+                        <MenuItem Header="다운로드" InputGestureText="Ctrl+J" Click="DownloadsClick" />
+                        <MenuItem Header="페이지 내 검색" InputGestureText="Ctrl+F" Click="FindClick" />
+                    </ContextMenu>
+                </Button.ContextMenu>
+            </Button>
+            <Button DockPanel.Dock="Right" Content="☆" ToolTip="북마크 추가 (Ctrl+D)"
+                    AutomationProperties.Name="북마크 추가" Click="BookmarkClick" />
+            <TextBox x:Name="Address" Margin="6,0" Padding="9,5" VerticalContentAlignment="Center"
+                     ToolTip="주소 또는 DuckDuckGo 검색 (Ctrl+L)" AutomationProperties.Name="주소 또는 검색어"
+                     KeyDown="AddressKeyDown" />
+        </DockPanel>
+        <DockPanel x:Name="FindBar" DockPanel.Dock="Top" LastChildFill="False" Visibility="Collapsed"
+                   Margin="12,0,12,8">
+            <TextBox x:Name="FindText" Width="240" Padding="8,4" AutomationProperties.Name="페이지 내 검색"
+                     KeyDown="FindKeyDown" />
+            <Button Content="이전" Click="FindPreviousClick" />
+            <Button Content="다음" Click="FindNextClick" />
+            <Button Content="닫기" Click="FindCloseClick" />
+        </DockPanel>
+        <Border DockPanel.Dock="Bottom" Padding="13,5" BorderThickness="0,1,0,0" BorderBrush="#DEE3EB">
+            <TextBlock x:Name="Status" Text="엔진 시작 중…" TextTrimming="CharacterEllipsis" />
+        </Border>
+        <Grid x:Name="Pages" Background="White">
+            <StackPanel x:Name="Home" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
+                <TextBlock Text="VEIL" HorizontalAlignment="Center" FontSize="42" FontWeight="SemiBold"
+                           Foreground="#252640" />
+                <TextBlock Text="주소창에 웹 주소 또는 검색어를 입력하세요" HorizontalAlignment="Center"
+                           Margin="0,12,0,0" Foreground="#4B5368" TextWrapping="Wrap" />
+            </StackPanel>
+        </Grid>
+    </DockPanel>
+</Window>
