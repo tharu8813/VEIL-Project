@@ -132,6 +132,7 @@
                                     <MenuItem Header="방문 기록" InputGestureText="Ctrl+H" Click="HistoryClick" />
                                     <MenuItem Header="다운로드" InputGestureText="Ctrl+J" Click="DownloadsClick" />
                                     <MenuItem Header="다운로드 금고" InputGestureText="Ctrl+Shift+J" Click="VaultClick" />
+                                    <MenuItem Header="네트워크 보호" Click="NetworkClick" />
                                     <MenuItem Header="페이지 내 검색" InputGestureText="Ctrl+F" Click="FindClick" />
                                     <Separator />
                                     <MenuItem Header="전체 화면" InputGestureText="F11" Click="FullScreenClick" />
@@ -163,7 +164,8 @@
             </Grid>
 
             <!-- The developer warning stays visible on every page. -->
-            <Border x:Name="Notice" Grid.Row="2" Background="#14F2B84B" BorderBrush="#33F2B84B"
+            <StackPanel Grid.Row="2">
+            <Border x:Name="Notice" Background="#14F2B84B" BorderBrush="#33F2B84B"
                     BorderThickness="0,1,0,1" Padding="14,5">
                 <StackPanel Orientation="Horizontal">
                     <Grid Width="8" Height="8" Margin="0,0,10,0" VerticalAlignment="Center">
@@ -178,6 +180,18 @@
                                Text="개발자용 · 테스트 데이터만 사용하세요. 프로필과 기록은 암호화되지 않습니다." />
                 </StackPanel>
             </Border>
+            <!-- ADR-0006: the HTTP downgrade is a native control so no web content can trigger it. -->
+            <Border x:Name="HttpsBar" Visibility="Collapsed" Background="#1FE5484D" BorderBrush="#55E5484D"
+                    BorderThickness="0,0,0,1" Padding="14,6">
+                <DockPanel>
+                    <Button x:Name="AllowHttpButton" DockPanel.Dock="Right" Style="{StaticResource GhostButton}"
+                            Content="위험을 이해하고 HTTP로 계속" Click="AllowHttpClick"
+                            AutomationProperties.Name="이 사이트를 HTTP로 계속 열기" />
+                    <TextBlock x:Name="HttpsBarText" Foreground="#F3B3B5" FontSize="12" VerticalAlignment="Center"
+                               TextWrapping="Wrap" Text="이 사이트는 안전한 연결(HTTPS)을 사용할 수 없습니다." />
+                </DockPanel>
+            </Border>
+            </StackPanel>
 
             <Border x:Name="FindBar" Grid.Row="3" Background="{StaticResource InkBrush}" Height="0"
                     Visibility="Collapsed" ClipToBounds="True">
@@ -313,7 +327,7 @@
                             </TextBlock.RenderTransform>
                         </TextBlock>
                     </StackPanel>
-                    <TextBlock HorizontalAlignment="Right" Text="VEIL Developer Preview" FontSize="11"
+                    <TextBlock x:Name="NetworkIndicator" HorizontalAlignment="Right" Text="VEIL Developer Preview" FontSize="11"
                                Foreground="#5A6078" />
                 </Grid>
             </Border>

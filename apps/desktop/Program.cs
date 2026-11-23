@@ -149,7 +149,7 @@ internal static class Program
     }
 
     internal static async Task<CoreWebView2Environment> CreateEngine(
-        string profile, ushort? loopbackProxyPort = null, bool observeDownloadContent = false)
+        string profile, ushort? loopbackProxyPort = null, bool observeDownloadContent = false, NetworkSettings? network = null)
     {
         // WebView2 environment overrides can replace the profile path or inject browser flags.
         foreach (var key in Environment.GetEnvironmentVariables().Keys)
@@ -164,11 +164,18 @@ internal static class Program
         // Reject this collision before the runtime can display a native error dialog.
         if (File.Exists(Path.Combine(expected, "EBWebView")))
             throw new IOException("The WebView2 profile directory is obstructed by a file.");
-        var options = new CoreWebView2EnvironmentOptions { ExclusiveUserDataFolderAccess = true };
+        var arguments = new List<string>();
         if (loopbackProxyPort is ushort port)
-            options.AdditionalBrowserArguments = $"--proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback>";
+            arguments.Add($"--proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback>");
         if (observeDownloadContent)
-            options.AdditionalBrowserArguments = "--enable-features=msWebView2EnableDownloadContentInWebResourceResponseReceived";
+            arguments.Add("--enable-features=msWebView2EnableDownloadContentInWebResourceResponseReceived");
+        // ADR-0006: proxy mode pins the engine to the proxy (no DIRECT fallback), limits WebRTC, disables QUIC.
+        arguments.AddRange(NetworkPolicy.BrowserArguments(network ?? NetworkSettings.Standard));
+        var options = new CoreWebView2EnvironmentOptions
+        {
+            ExclusiveUserDataFolderAccess = true,
+            AdditionalBrowserArguments = arguments.Count == 0 ? null : string.Join(' ', arguments),
+        };
         var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: expected, options: options);
         string reported = Path.TrimEndingDirectorySeparator(Path.GetFullPath(environment.UserDataFolder));
         if (!string.Equals(reported, expected, StringComparison.OrdinalIgnoreCase))

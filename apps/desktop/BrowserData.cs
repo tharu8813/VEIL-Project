@@ -19,6 +19,8 @@ internal sealed class BrowserData
     public int Selected { get; set; }
     /// <summary>Windows other than the primary one; null when only one window was open.</summary>
     public List<WindowTabs>? Windows { get; set; }
+    /// <summary>Network mode chosen by the user (ADR-0006); null means standard protection.</summary>
+    public NetworkSettings? Network { get; set; }
 
     internal static BrowserData Load(string path)
     {

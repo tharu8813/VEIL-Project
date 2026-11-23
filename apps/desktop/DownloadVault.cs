@@ -36,7 +36,7 @@ internal sealed class DownloadVault : IDisposable
     private readonly string root;
     private string activeRoot;
     private readonly string? tool;
-    private readonly HttpClient http;
+    private HttpClient http;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, string> methods = new(StringComparer.Ordinal);
     private Process? serve;
@@ -50,13 +50,16 @@ internal sealed class DownloadVault : IDisposable
         activeRoot = root;
         string candidate = Path.Combine(AppContext.BaseDirectory, "veil-vault.exe");
         tool = File.Exists(candidate) ? candidate : null;
-        http = new HttpClient(new SocketsHttpHandler
-        {
-            UseCookies = false,
-            AllowAutoRedirect = false,
-            AutomaticDecompression = DecompressionMethods.All,
-            UseProxy = false, // protected-network routing is Phase 5; never silently use the system proxy
-        }) { Timeout = Timeout.InfiniteTimeSpan };
+        http = new HttpClient(NetworkPolicy.Handler(NetworkSettings.Standard)) { Timeout = Timeout.InfiniteTimeSpan };
+    }
+
+    /// <summary>ADR-0006: VEIL's own download requests follow the engine's network mode. In proxy mode they
+    /// use only that proxy (no system proxy, no direct fallback).</summary>
+    internal void ConfigureNetwork(NetworkSettings settings)
+    {
+        var previous = http;
+        http = new HttpClient(NetworkPolicy.Handler(settings)) { Timeout = Timeout.InfiniteTimeSpan };
+        previous.Dispose();
     }
 
     internal bool Available => tool is not null;

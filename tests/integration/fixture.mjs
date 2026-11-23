@@ -107,6 +107,7 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
     const host = ipv6 ? '::1' : '127.0.0.1';
     const authority = ipv6 ? '[::1]' : host;
     const requests = new Map();
+    const direct = new Map();
     const visitTitleMarker = `VEIL synthetic visit ${randomUUID()}`;
     const server = createServer(async (request, response) => {
         const url = new URL(request.url, 'http://127.0.0.1');
@@ -116,6 +117,8 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
             response.end(body);
         };
         requests.set(url.pathname, (requests.get(url.pathname) ?? 0) + 1);
+        // Phase 5: the test proxy marks what it forwards; anything unmarked reached this server directly.
+        if (!request.headers['x-veil-proxied']) direct.set(url.pathname, (direct.get(url.pathname) ?? 0) + 1);
         switch (url.pathname) {
             case '/network-control': return send('VEIL_DIRECT_CONTROL');
             case '/': return send(page, 'text/html; charset=utf-8');
@@ -199,7 +202,7 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
         }
     });
     await new Promise((resolve, reject) => server.once('error', reject).listen(port, host, resolve));
-    return { server, requests, origin: `http://${authority}:${server.address().port}`, visitTitleMarker };
+    return { server, requests, direct, origin: `http://${authority}:${server.address().port}`, visitTitleMarker };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
