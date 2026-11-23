@@ -3,7 +3,7 @@
 //   node tests/phase4/vault-capture.mjs [--profile-parent <existing dir>]
 //
 // Runs the desktop "vault" smoke stage (auth without login, small 1 KiB, 8 MiB, 64 MiB, cookie-auth,
-// redirect, dropped connection, POST) and then checks, with VEIL closed:
+// redirect, dropped connection, POST, and active and queued user cancellations) and then checks, with VEIL closed:
 //   - every stored object exists and the vault holds nothing else (no staging leftovers);
 //   - no file anywhere in the profile contains the run's unique payload in plaintext;
 //   - no veil-vault-* file appeared in the user's real Downloads folder (names only are read);
@@ -58,6 +58,12 @@ try {
     const vault = JSON.parse(await readFile(join(evidence, 'vault.vault.json'), 'utf8'));
 
     const stored = vault.results.filter(r => r.Outcome === '보관됨').map(r => r.ObjectPath.toLowerCase());
+    const cancelled = vault.results.filter(r => r.Outcome === '취소됨');
+    assert.deepEqual(cancelled.map(r => r.Name).sort(),
+        ['veil-vault-slow-queued.bin', 'veil-vault-slow-unknown.bin', 'veil-vault-slow.bin']);
+    assert.ok(cancelled.every(r => r.ObjectPath === null), 'cancellation must not publish a vault object');
+    assert.ok(cancelled.every(r => r.Name.includes('queued') ? r.Bytes === 0 : r.Bytes > 0),
+        'cancellation must stop queued and active transfers');
     // objects/ holds exactly the stored downloads (no staging or partial files); meta/ and index/ hold encrypted metadata.
     const objectFiles = (await files(join(vault.vault, 'objects'))).map(path => path.toLowerCase());
     assert.deepEqual(objectFiles.sort(), [...stored].sort(), 'vault must hold exactly the stored objects');

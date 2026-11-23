@@ -4,6 +4,7 @@
 //!   veil-vault init   <keyring>          create a keyring envelope
 //!   veil-vault seal   <keyring> <out>    stdin after the passphrase: framed plaintext
 //!   veil-vault verify <keyring> <file>   authenticate an object, print its plaintext length
+//!   veil-vault restore <backup> <dir>   restore into a new directory; stdin adds a recovery-code line
 //!
 //! Long-lived mode, keys stay in this process:
 //!   veil-vault serve <vault-dir>
@@ -13,8 +14,13 @@
 //!     verify\t<path>                                      -> ok\t<bytes>
 //!     read\t<path>            (objects up to 1 MiB)       -> ok\t<len>\n<raw bytes>
 //!     export\t<object>\t<dest>                            -> ok\t<bytes>
+//!     backup\t<dest>\t<backup password>                   -> ok\t<items>
 //!     rewrap\t<new passphrase> / rewrap-recovery\t<new code> -> ok
+//!     rewrap-both\t<new passphrase>\t<new code>             -> ok
+//!     location / rotate-content\t<hex password>\t<new recovery code>
 //!     quit
+//!   Product startup uses unlock-profile/create-profile and rewrap-profile/recover-profile
+//!   with a hex-encoded UTF-8 password field and a recovery code field where required.
 //!   Errors are `err\t<reason>` without paths or secrets; the session continues.
 //!
 //! Frames: `[u32 LE length][bytes]` repeated, then a zero-length frame and the total as u64 LE.
@@ -22,16 +28,15 @@
 //! published only after a complete, length-checked stream.
 #![forbid(unsafe_code)]
 
+use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use veil_security::{Keyring, Purpose, SecretString};
+use veil_security::{Keyring, Purpose, SecretString, vault_backup, vault_credentials, vault_generation};
 use zeroize::Zeroizing;
 
 const MAX_FRAME: usize = 1024 * 1024;
 const ABORT: u32 = u32::MAX;
-const KEYRING: &str = "keyring.age";
-const RECOVERY: &str = "keyring.recovery.age";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -71,7 +76,11 @@ fn one_shot(args: &[String], input: &mut impl BufRead) -> io::Result<String> {
             let keys = Keyring::unlock(Path::new(keyring), passphrase)?;
             Ok(format!("{{\"bytes\":{}}}", keys.verify(Purpose::Download, Path::new(file))?))
         }
-        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "usage: veil-vault init|seal|verify|serve")),
+        [command, backup, dir] if command == "restore" => {
+            vault_backup::restore(Path::new(backup), Path::new(dir), passphrase, secret(read_line(input)?)?)?;
+            Ok("{\"restored\":true}".into())
+        }
+        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "usage: veil-vault init|seal|verify|restore|serve")),
     }
 }
 
@@ -79,7 +88,7 @@ fn serve(dir: &Path, input: &mut impl BufRead) -> io::Result<()> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     let first = read_line(input)?;
-    let keys = start(dir, &first).inspect_err(|error| {
+    let (_lock, mut active, mut keys) = open_session(dir, &first).inspect_err(|error| {
         let _ = writeln!(out, "err\t{}", reason(error));
         let _ = out.flush();
     })?;
@@ -96,6 +105,14 @@ fn serve(dir: &Path, input: &mut impl BufRead) -> io::Result<()> {
         let parts: Vec<&str> = line.split('\t').collect();
         let reply = match parts.as_slice() {
             ["quit"] => return Ok(()),
+            ["location"] => Ok(format!("ok\t{}", generation_name(dir, &active))),
+            ["rotate-content", password, code] => (|| {
+                let (next, replacement, retired) =
+                    vault_generation::rotate(dir, &active, &keys, profile_secret(password)?, secret_str(code)?)?;
+                active = next;
+                keys = replacement;
+                Ok(format!("ok\t{}\t{}", generation_name(dir, &active), if retired { "retired" } else { "retained" }))
+            })(),
             ["seal", path] => match seal(&keys, Path::new(path), input) {
                 Ok(total) => Ok(format!("ok\t{total}")),
                 Err(error) => Err(error),
@@ -104,6 +121,9 @@ fn serve(dir: &Path, input: &mut impl BufRead) -> io::Result<()> {
             ["export", object, dest] => {
                 keys.export_new(Purpose::Download, Path::new(object), Path::new(dest)).map(|n| format!("ok\t{n}"))
             }
+            ["backup", dest, password] => secret_str(password)
+                .and_then(|secret| vault_backup::export(&keys, &active, Path::new(dest), secret))
+                .map(|count| format!("ok\t{count}")),
             ["read", path] => match keys.read_small(Purpose::Download, Path::new(path)) {
                 Ok(bytes) => {
                     writeln!(out, "ok\t{}", bytes.len())?;
@@ -114,11 +134,23 @@ fn serve(dir: &Path, input: &mut impl BufRead) -> io::Result<()> {
                 Err(error) => Err(error),
             },
             ["rewrap", passphrase] => secret_str(passphrase)
-                .and_then(|secret| keys.write_envelope(&dir.join(KEYRING), secret, true))
+                .and_then(|secret| vault_credentials::replace(&active, &keys, Some(secret), None))
                 .map(|()| "ok".into()),
             ["rewrap-recovery", code] => secret_str(code)
-                .and_then(|secret| keys.write_envelope(&dir.join(RECOVERY), secret, true))
+                .and_then(|secret| vault_credentials::replace(&active, &keys, None, Some(secret)))
                 .map(|()| "ok".into()),
+            ["rewrap-both", passphrase, code] => (|| {
+                vault_credentials::replace(&active, &keys, Some(secret_str(passphrase)?), Some(secret_str(code)?))?;
+                Ok("ok".into())
+            })(),
+            ["rewrap-profile", password] => (|| {
+                vault_credentials::replace(&active, &keys, Some(profile_secret(password)?), None)?;
+                Ok("ok".into())
+            })(),
+            ["recover-profile", password, code] => (|| {
+                vault_credentials::replace(&active, &keys, Some(profile_secret(password)?), Some(secret_str(code)?))?;
+                Ok("ok".into())
+            })(),
             // Only the command word and field count are echoed: arguments may hold secrets.
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -138,17 +170,32 @@ fn serve(dir: &Path, input: &mut impl BufRead) -> io::Result<()> {
     }
 }
 
+fn open_session(dir: &Path, first: &str) -> io::Result<(File, PathBuf, Keyring)> {
+    if first.starts_with("restore\t") {
+        let keys = start(dir, first)?;
+        return Ok((vault_generation::lock_session(dir)?, dir.to_path_buf(), keys));
+    }
+    let lock = vault_generation::lock_session(dir)?;
+    let active = vault_generation::active(dir)?;
+    if first.starts_with("create\t") || first.starts_with("create-profile\t") {
+        vault_generation::require_no_generations(dir)?;
+    }
+    let keys = start(&active, first)?;
+    Ok((lock, active, keys))
+}
+
+fn generation_name<'a>(root: &Path, active: &'a Path) -> &'a str {
+    if active == root { "root" } else { active.file_name().and_then(|name| name.to_str()).expect("validated generation name") }
+}
+
 fn start(dir: &Path, first: &str) -> io::Result<Keyring> {
     match first.split('\t').collect::<Vec<_>>().as_slice() {
-        ["create", passphrase, code] => {
-            let (passphrase, code) = (secret_str(passphrase)?, secret_str(code)?);
-            let keys = Keyring::generate();
-            keys.write_envelope(&dir.join(KEYRING), passphrase, false)?;
-            keys.write_envelope(&dir.join(RECOVERY), code, false)?;
-            Ok(keys)
-        }
-        ["unlock", passphrase] => Keyring::unlock(&dir.join(KEYRING), secret_str(passphrase)?),
-        ["recover", code] => Keyring::unlock(&dir.join(RECOVERY), secret_str(code)?),
+        ["create", passphrase, code] => vault_credentials::create(dir, secret_str(passphrase)?, secret_str(code)?),
+        ["unlock", passphrase] => vault_credentials::unlock(dir, secret_str(passphrase)?, false),
+        ["recover", code] => vault_credentials::unlock(dir, secret_str(code)?, true),
+        ["create-profile", password, code] => vault_credentials::create(dir, profile_secret(password)?, secret_str(code)?),
+        ["unlock-profile", password] => vault_credentials::unlock(dir, profile_secret(password)?, false),
+        ["restore", source, password, code] => vault_backup::restore(Path::new(source), dir, secret_str(password)?, secret_str(code)?),
         _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "bad start command")),
     }
 }
@@ -184,6 +231,22 @@ fn secret_str(value: &str) -> io::Result<SecretString> {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "A non-empty single-line passphrase is required"));
     }
     Ok(SecretString::from(value.to_owned()))
+}
+
+/// Profile passwords use hex on the wire so broker-accepted whitespace cannot become protocol syntax.
+fn profile_secret(hex: &str) -> io::Result<SecretString> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "Invalid profile password encoding");
+    if hex.is_empty() || !hex.len().is_multiple_of(2) || hex.len() > 256 * 4 * 2 {
+        return Err(invalid());
+    }
+    let mut bytes = Zeroizing::new(Vec::with_capacity(hex.len() / 2));
+    for &[high, low] in hex.as_bytes().as_chunks::<2>().0 {
+        let high = (high as char).to_digit(16).ok_or_else(invalid)?;
+        let low = (low as char).to_digit(16).ok_or_else(invalid)?;
+        bytes.push(((high << 4) | low) as u8);
+    }
+    let password = std::str::from_utf8(&bytes).map_err(|_| invalid())?;
+    Ok(SecretString::from(password.to_owned()))
 }
 
 fn reason(error: &io::Error) -> String {

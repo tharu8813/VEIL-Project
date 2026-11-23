@@ -33,6 +33,7 @@ internal static class Program
         ProtectedSessionNotifications? notifications = null;
         BrowserWindow? window = null;
         string? scratch = null;
+        char[]? profilePassword = null;
         try
         {
             ProfileGate.RejectElevated();
@@ -59,14 +60,44 @@ internal static class Program
                     }
                     finally { application.Shutdown(); }
                 });
-                protectedSession = ProtectedProfileSession.TryOpen(broker, notifications);
+                protectedSession = ProtectedProfileSession.TryOpen(broker, notifications, out profilePassword);
                 if (protectedSession is null || notifications.LockRequested) return 0;
             }
             string root = Path.GetFullPath(smoke ? args[1] : productProfile ?? Path.Combine(".veil-dev", "desktop"));
             ProfileGate.Prepare(root, volume, requireProtected);
             using var profileLock = new FileStream(Path.Combine(root, "profile.lock"), FileMode.OpenOrCreate,
                 FileAccess.ReadWrite, FileShare.None);
-            window = new BrowserWindow(root);
+            using var vault = new DownloadVault(root, usesProfilePassword: requireProtected);
+            if (profilePassword is not null)
+            {
+                bool vaultFailed = false;
+                try
+                {
+                    string vaultRoot = vault.Directory;
+                    foreach (string directory in new[] { vaultRoot, Path.Combine(vaultRoot, "objects"),
+                        Path.Combine(vaultRoot, "index"), Path.Combine(vaultRoot, "meta") })
+                    {
+                        if (Directory.Exists(directory)) ProfileGate.Verify(directory, volume, requireProtected: true);
+                    }
+                    ProtectedVaultStartup.TryOpen(vault, profilePassword, () => notifications!.LockRequested);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException
+                    or System.ComponentModel.Win32Exception or System.Text.Json.JsonException)
+                {
+                    vaultFailed = true;
+                    vault.Lock();
+                }
+                finally
+                {
+                    ProtectedProfileSession.ClearPassword(profilePassword);
+                    profilePassword = null;
+                }
+                if (notifications!.LockRequested) return 0;
+                if (vaultFailed) MessageBox.Show("다운로드 금고를 열지 못했습니다. 탐색은 계속할 수 있으며 다운로드는 차단됩니다.",
+                    "다운로드 금고", MessageBoxButton.OK, MessageBoxImage.Warning);
+                if (notifications.LockRequested) return 0;
+            }
+            window = new BrowserWindow(root, vault);
             // SEC-004: temp files of the app and engine stay on the profile volume (after state loads,
             // so a refused profile is left exactly as found).
             scratch = ProfileScratch.Redirect(root);
@@ -78,6 +109,7 @@ internal static class Program
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or
             System.Text.Json.JsonException or InvalidDataException or InvalidOperationException)
         {
+            ProtectedProfileSession.ClearPassword(profilePassword);
             if (smoke) File.WriteAllText(args[4], System.Text.Json.JsonSerializer.Serialize(new { error = error.GetType().Name }));
             else if (notifications?.LockRequested != true) MessageBox.Show("프로필을 안전하게 열 수 없습니다. 보호 저장소와 브로커 상태를 확인하세요. 비보호 프로필로 전환하지 않습니다.",
                 "VEIL 보호 프로필", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -85,6 +117,7 @@ internal static class Program
         }
         finally
         {
+            ProtectedProfileSession.ClearPassword(profilePassword);
             if (scratch is not null)
             {
                 try { ProfileScratch.Clear(scratch); }

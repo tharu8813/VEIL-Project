@@ -10,6 +10,10 @@ use std::io::{self, BufReader, Read, Write};
 use std::path::Path;
 use zeroize::Zeroizing;
 
+pub mod vault_credentials;
+pub mod vault_backup;
+pub mod vault_generation;
+
 const VERSION: &str = "VEIL-KEYRING-1";
 const SCRYPT_LOG_N: u8 = 17;
 const ENVELOPE_LIMIT: usize = 4096;
@@ -49,23 +53,33 @@ impl Keyring {
         }
     }
 
+    fn rotate_content_keys(&self) -> Self {
+        Self {
+            profile: self.profile.clone(),
+            download: x25519::Identity::generate(),
+            backup: x25519::Identity::generate(),
+        }
+    }
+
     /// Wraps these keys in a passphrase-encrypted envelope. With `replace`, an existing envelope is
     /// swapped atomically (passphrase change, recovery-code reissue); otherwise the path must not exist.
     pub fn write_envelope(&self, path: &Path, passphrase: SecretString, replace: bool) -> io::Result<()> {
+        let write = |staging: &mut File| self.write_envelope_to(staging, passphrase);
+        if replace { publish_replace(path, write) } else { publish_new(path, write) }
+    }
+
+    fn write_envelope_to(&self, output: impl Write, passphrase: SecretString) -> io::Result<()> {
         require_passphrase(&passphrase)?;
         let mut recipient = scrypt::Recipient::new(passphrase);
         recipient.set_work_factor(SCRYPT_LOG_N);
         let encryptor = make_encryptor(&recipient)?;
-        let write = |staging: &mut File| {
-            let mut encrypted = encryptor.wrap_output(staging)?;
-            writeln!(encrypted, "{VERSION}")?;
-            for identity in [&self.profile, &self.download, &self.backup] {
-                writeln!(encrypted, "{}", identity.to_string().expose_secret())?;
-            }
-            encrypted.finish()?;
-            Ok(())
-        };
-        if replace { publish_replace(path, write) } else { publish_new(path, write) }
+        let mut encrypted = encryptor.wrap_output(output)?;
+        writeln!(encrypted, "{VERSION}")?;
+        for identity in [&self.profile, &self.download, &self.backup] {
+            writeln!(encrypted, "{}", identity.to_string().expose_secret())?;
+        }
+        encrypted.finish()?;
+        Ok(())
     }
 
     /// Decrypts an object to a new plaintext file. The file appears at `destination` only after the
@@ -83,15 +97,16 @@ impl Keyring {
 
     /// Reads a complete, authenticated envelope before returning usable keys.
     pub fn unlock(path: &Path, passphrase: SecretString) -> io::Result<Self> {
+        let ciphertext = read_envelope_file(path, ENVELOPE_LIMIT)?;
+        Self::unlock_envelope(&ciphertext, passphrase)
+    }
+
+    fn unlock_envelope(ciphertext: &[u8], passphrase: SecretString) -> io::Result<Self> {
         require_passphrase(&passphrase)?;
-        let mut ciphertext = Vec::with_capacity(ENVELOPE_LIMIT + 1);
-        File::open(path)?
-            .take((ENVELOPE_LIMIT + 1) as u64)
-            .read_to_end(&mut ciphertext)?;
         if ciphertext.len() > ENVELOPE_LIMIT {
             return Err(invalid("Key envelope exceeds size limit"));
         }
-        let decryptor = Decryptor::new_buffered(ciphertext.as_slice()).map_err(decryption_error)?;
+        let decryptor = Decryptor::new_buffered(ciphertext).map_err(decryption_error)?;
         if !decryptor.is_scrypt() {
             return Err(invalid("Expected a passphrase-encrypted key envelope"));
         }
@@ -126,14 +141,21 @@ impl Keyring {
         path: &Path,
         mut plaintext: impl Read,
     ) -> io::Result<()> {
-        let recipient = self.identity(purpose).to_public();
-        let encryptor = make_encryptor(&recipient)?;
         publish_new(path, |staging| {
-            let mut encrypted = encryptor.wrap_output(staging)?;
-            transfer(&mut plaintext, &mut encrypted)?;
-            encrypted.finish()?;
-            Ok(())
+            self.write_object(purpose, staging, |encrypted| {
+                transfer(&mut plaintext, encrypted)?;
+                Ok(())
+            })
         })
+    }
+
+    fn write_object(&self, purpose: Purpose, output: impl Write,
+        write: impl FnOnce(&mut dyn Write) -> io::Result<()>) -> io::Result<()> {
+        let recipient = self.identity(purpose).to_public();
+        let mut encrypted = make_encryptor(&recipient)?.wrap_output(output)?;
+        write(&mut encrypted)?;
+        encrypted.finish()?;
+        Ok(())
     }
 
     /// Authenticates every chunk and the end of the object without exporting plaintext.
@@ -156,10 +178,19 @@ impl Keyring {
         path: &Path,
         read: impl FnOnce(&mut dyn Read) -> io::Result<T>,
     ) -> io::Result<T> {
+        self.read_object_from(purpose, File::open(path)?, read)
+    }
+
+    fn read_object_from<T>(
+        &self,
+        purpose: Purpose,
+        input: impl Read,
+        read: impl FnOnce(&mut dyn Read) -> io::Result<T>,
+    ) -> io::Result<T> {
         // Bound parsing before authentication, including incomplete or malformed headers.
         let remaining = Cell::new(ENVELOPE_LIMIT);
         let input = HeaderBudget {
-            file: File::open(path)?,
+            input,
             remaining: &remaining,
         };
         let decryptor = Decryptor::new_buffered(BufReader::new(input)).map_err(decryption_error)?;
@@ -179,15 +210,15 @@ impl Keyring {
     }
 }
 
-struct HeaderBudget<'a> {
-    file: File,
+struct HeaderBudget<'a, R> {
+    input: R,
     remaining: &'a Cell<usize>,
 }
 
-impl Read for HeaderBudget<'_> {
+impl<R: Read> Read for HeaderBudget<'_, R> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         let limit = self.remaining.get().min(buffer.len());
-        let bytes = self.file.read(&mut buffer[..limit])?;
+        let bytes = self.input.read(&mut buffer[..limit])?;
         self.remaining.set(self.remaining.get() - bytes);
         Ok(bytes)
     }
@@ -217,7 +248,7 @@ fn read_bounded(reader: impl Read, limit: usize) -> io::Result<Zeroizing<Vec<u8>
     Ok(bytes)
 }
 
-fn transfer(reader: &mut (impl Read + ?Sized), writer: &mut impl Write) -> io::Result<u64> {
+fn transfer(reader: &mut (impl Read + ?Sized), writer: &mut (impl Write + ?Sized)) -> io::Result<u64> {
     let mut buffer = Zeroizing::new([0u8; BUFFER_SIZE]);
     let mut total = 0u64;
     loop {
@@ -236,6 +267,15 @@ fn transfer(reader: &mut (impl Read + ?Sized), writer: &mut impl Write) -> io::R
 fn make_encryptor(recipient: &dyn age::Recipient) -> io::Result<Encryptor> {
     Encryptor::with_recipients(std::iter::once(recipient))
         .map_err(|_| io::Error::other("Cannot initialize age encryption"))
+}
+
+fn read_envelope_file(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(limit + 1);
+    File::open(path)?.take((limit + 1) as u64).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(invalid("Key credential file exceeds size limit"));
+    }
+    Ok(bytes)
 }
 
 fn publish_new(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {

@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace Veil.Desktop;
 
@@ -181,6 +182,8 @@ public partial class BrowserWindow
                     var plan = new (string Kind, string Expected, long Bytes, bool Login)[]
                     {
                         // (A 401 without the login cookie is an error page, not a download: nothing to capture.)
+                        ("slow", DownloadVault.Cancelled, 0, true),
+                        ("slow-unknown", DownloadVault.Cancelled, 0, true),
                         ("small", DownloadVault.Stored, 1024, true),
                         ("large", DownloadVault.Stored, 8L * 1024 * 1024, true),
                         ("huge", DownloadVault.Stored, 64L * 1024 * 1024, true),
@@ -201,11 +204,50 @@ public partial class BrowserWindow
                         var original = Tabs.SelectedItem;
                         Check(await OpenTab(origin) is not null, $"vault tab ({kind})");
                         await ReadyAt("/");
+                        var requestTab = (TabItem)Tabs.SelectedItem;
                         int count = session.Vault.Results.Count;
                         string trigger = kind == "post"
                             ? "let f = document.createElement('form'); f.method = 'post'; f.action = '/vault-dl?kind=post'; document.body.append(f); f.submit()"
                             : $"location.href = '/vault-dl?kind={kind}'";
                         await Active!.View.ExecuteScriptAsync(trigger + "; null");
+                        if (expected == DownloadVault.Cancelled)
+                        {
+                            await WaitFor(() => session.ActiveDownloads.Any(item => item.Bytes >= 64 * 1024),
+                                $"some bytes received ({kind})");
+                            TabItem? queuedTab = null;
+                            if (kind == "slow")
+                            {
+                                queuedTab = (await OpenTab(origin))!.Item;
+                                await ReadyAt("/");
+                                await Active!.View.ExecuteScriptAsync("location.href = '/vault-dl?kind=slow-queued'; null");
+                                await WaitFor(() => session.ActiveDownloads.Count == 2, "two active downloads shown");
+                            }
+                            DownloadsClick(DownloadButton, new RoutedEventArgs());
+                            await WaitFor(() => DownloadProgressPanel.IsVisible && FindProgressElement<Button>(ActiveDownloadsList) is not null,
+                                $"Ctrl+J download progress and cancel button ({kind})");
+                            if (queuedTab is not null)
+                            {
+                                Button? queued = FindProgressElement<Button>(ActiveDownloadsList, button =>
+                                    button.DataContext is BrowserDownload { Name: "veil-vault-slow-queued.bin" });
+                                Check(queued?.DataContext is BrowserDownload { Bytes: 0 }, "second download waits for the vault");
+                                queued!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                                await WaitFor(() => session.Vault.Results.Count == count + 1, "queued download cancelled");
+                                var cancelled = session.Vault.Results[^1];
+                                Check(cancelled is { Name: "veil-vault-slow-queued.bin", Outcome: DownloadVault.Cancelled, Bytes: 0, ObjectPath: null } &&
+                                    session.ActiveDownloads.Single().CanCancel, "queued cancellation leaves first download running");
+                                count++;
+                                CloseTab(queuedTab);
+                            }
+                            var meter = FindProgressElement<ProgressBar>(ActiveDownloadsList);
+                            Check(meter is not null && meter.IsIndeterminate == (kind == "slow-unknown") &&
+                                (meter.IsIndeterminate || meter.Value is > 0 and < 100), $"correct progress meter ({kind})");
+                            var cancelButton = FindProgressElement<Button>(ActiveDownloadsList)!;
+                            Check(cancelButton.IsEnabled, $"download cancel enabled ({kind})");
+                            cancelButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                            await WaitFor(() => session.Vault.Results.Count == count + 1 && !DownloadProgressPanel.IsVisible,
+                                $"cancelled transfer leaves progress panel ({kind})");
+                            CloseTab((TabItem)Tabs.SelectedItem);
+                        }
                         for (int i = 0; i < 1600 && session.Vault.Results.Count == count; i++) await Task.Delay(75);
                         Check(session.Vault.Results.Count == count + 1, $"vault outcome ({kind})");
                         var result = session.Vault.Results[^1];
@@ -216,8 +258,14 @@ public partial class BrowserWindow
                             var entry = session.Vault.Entries.First(e => session.Vault.ObjectPath(e) == result.ObjectPath);
                             Check(await session.Vault.VerifyAsync(entry) == bytes, $"vault {kind} authenticates");
                         }
+                        else if (expected == DownloadVault.Cancelled)
+                        {
+                            Check(result.Bytes > 0 && result.ObjectPath is null &&
+                                session.Vault.Entries.All(entry => entry.Name != result.Name) &&
+                                downloads[0].EndsWith(DownloadVault.Cancelled), $"cancelled download not published ({kind})");
+                        }
                         checks.Add($"engine bytes before cancel ({kind}): received {result.EngineBytesBeforeCancel}, scratch {result.EngineBytesOnDisk}");
-                        CloseTab((TabItem)Tabs.SelectedItem);
+                        CloseTab(requestTab);
                         Tabs.SelectedItem = original;
                     }
                     File.WriteAllText(Path.ChangeExtension(report, ".vault.json"), JsonSerializer.Serialize(new
@@ -253,6 +301,52 @@ public partial class BrowserWindow
                     }
                     File.WriteAllText(Path.ChangeExtension(report, ".vault.json"), JsonSerializer.Serialize(new { opened, entries = vault.Entries, exports }));
                 }
+                else if (stage == "vault-backup")
+                {
+                    var vault = session.Vault;
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync(), "source vault opened");
+                    string target = Path.GetDirectoryName(report)!;
+                    var backup = new VaultBackupSource(Path.Combine(target, "synthetic.veil-backup"),
+                        "synthetic-backup-vault-password", "SSSSS-TTTTT-UUUUU-VVVVV-WWWWW-XXXXX-YYYYY-ZZZZZ");
+                    Check(await vault.BackupAsync(backup.Path, backup.Password) == 5, "five vault items backed up");
+                    using var restored = new DownloadVault(Path.Combine(target, "restored-profile"), usesProfilePassword: true);
+                    Directory.CreateDirectory(Path.Combine(target, "restored-profile"));
+                    char[] password = "synthetic-restored-profile-password".ToCharArray();
+                    try
+                    {
+                        Check(ProtectedVaultStartup.TryOpen(restored, password, () => false, () => null, _ => null,
+                            setupFresh: () => (null, backup)), "backup restored and linked to profile password");
+                        Check(vault.Entries.OrderBy(entry => entry.Id).SequenceEqual(restored.Entries.OrderBy(entry => entry.Id)),
+                            "restored file metadata matches original");
+                        restored.Lock();
+                        Check(await restored.OpenWithProfilePasswordAsync(password) is null, "restored vault reopens");
+                        var sample = restored.Entries.MaxBy(entry => entry.Bytes)!;
+                        string oldFile = restored.ObjectPath(sample);
+                        const string rotationCode = "33333-44444-55555-66666-77777-88888-99999-22222";
+                        Check(await restored.RotateContentKeysAsync(password, rotationCode) == true &&
+                            !File.Exists(oldFile) && File.Exists(restored.ObjectPath(sample)), "content key rotation switches and retires files");
+                        string marker = Path.Combine(restored.Directory, "active-generation");
+                        string previousGeneration = File.ReadAllText(marker);
+                        using (File.Open(marker, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                            Check(await restored.RotateContentKeysAsync(password, backup.RecoveryCode) is null,
+                                "failed content key publication reported");
+                        Check(File.ReadAllText(marker) == previousGeneration &&
+                            Directory.GetDirectories(restored.Directory, "gen-*").Length == 1,
+                            "failed content rotation preserves active generation and cleans staging");
+                        restored.Lock();
+                        Check(await restored.RecoverAsync(backup.RecoveryCode) is not null, "superseded recovery code rejected");
+                        Check(await restored.RecoverAsync(rotationCode) is null, "rotated vault reopens with new recovery code");
+                        Check(restored.Entries.OrderBy(entry => entry.Id).SequenceEqual(vault.Entries.OrderBy(entry => entry.Id)),
+                            "content rotation preserves download metadata after restart");
+                        string destination = Path.Combine(target, "exports-backup");
+                        Directory.CreateDirectory(destination);
+                        string file = Path.Combine(destination, "large.bin");
+                        Check(await restored.ExportAsync(sample, file) == sample.Bytes, "rotated large file authenticates");
+                        File.WriteAllText(Path.ChangeExtension(report, ".vault.json"),
+                            JsonSerializer.Serialize(new { destination = file, sample.Bytes }));
+                    }
+                    finally { ProtectedProfileSession.ClearPassword(password); }
+                }
                 else if (stage == "vault-rotate")
                 {
                     // Recovery-code unlock followed by a new passphrase and a new recovery code.
@@ -260,11 +354,61 @@ public partial class BrowserWindow
                     string code = Environment.GetEnvironmentVariable("VEIL_DEV_VAULT_RECOVERY") ?? "";
                     Check(await vault.RecoverAsync(code) is null, "vault opened with recovery code");
                     string passphrase = Environment.GetEnvironmentVariable("VEIL_TEST_NEW_PASSPHRASE") ?? "";
-                    Check(!await vault.CompleteRecoveryAsync(passphrase, ""), "failed rotation reported");
+                    string newCode = Environment.GetEnvironmentVariable("VEIL_TEST_NEW_RECOVERY") ?? "";
+                    string bundle = Path.Combine(session.Root, "vault", "keyring.bundle");
+                    byte[] previous = File.ReadAllBytes(bundle);
+                    // Deny delete sharing so Windows rejects the final rename, after both envelopes are staged.
+                    using (File.Open(bundle, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                        Check(!await vault.CompleteRecoveryAsync(passphrase, newCode), "failed publication reported");
                     Check(!vault.Unlocked && vault.Entries.Count == 0, "failed rotation locked vault and cleared the list");
+                    Check(previous.AsSpan().SequenceEqual(File.ReadAllBytes(bundle)), "failed publication preserved both envelopes");
                     Check(await vault.RecoverAsync(code) is null, "old code still opens after failed rotation");
-                    Check(await vault.CompleteRecoveryAsync(passphrase, Environment.GetEnvironmentVariable("VEIL_TEST_NEW_RECOVERY") ?? ""),
-                        "vault recovery credentials updated");
+                    Check(await vault.CompleteRecoveryAsync(passphrase, newCode), "vault recovery credentials updated");
+                }
+                else if (stage == "vault-profile")
+                {
+                    using var vault = new DownloadVault(session.Root, usesProfilePassword: true);
+                    string previous = Environment.GetEnvironmentVariable("VEIL_TEST_OLD_PASSPHRASE") ?? "";
+                    string previousCode = Environment.GetEnvironmentVariable("VEIL_TEST_OLD_RECOVERY") ?? "";
+                    string newCode = Environment.GetEnvironmentVariable("VEIL_TEST_NEW_RECOVERY") ?? "";
+                    char[] shared = "합성\tprofile 새 암호".ToCharArray();
+                    char[] changed = "합성\tprofile 변경 암호".ToCharArray();
+                    string? NoCodePrompt() => throw new InvalidOperationException("Unexpected recovery setup");
+                    (string?, string?)? NoLegacyPrompt(string? _) => throw new InvalidOperationException("Unexpected unlock prompt");
+                    try
+                    {
+                        Check(!ProtectedVaultStartup.TryOpen(vault, shared, () => false, NoCodePrompt, _ => null) &&
+                            !vault.Unlocked, "cancelled migration leaves vault locked");
+                        Check(ProtectedVaultStartup.TryOpen(vault, shared, () => false, NoCodePrompt, _ => (previous, null)) &&
+                            vault.Entries.Count == 5, "legacy password links existing vault and preserves entries");
+                        vault.Lock();
+                        Check(await vault.UnlockAsync(previous) is not null, "separate password retired after linking");
+                        Check(ProtectedVaultStartup.TryOpen(vault, shared, () => false, NoCodePrompt, NoLegacyPrompt),
+                            "linked vault opens without a second prompt");
+                        vault.Lock();
+                        Check(!ProtectedVaultStartup.TryOpen(vault, changed, () => false, () => null, _ => (null, previousCode)) &&
+                            !vault.Unlocked, "cancelled recovery does not expose vault");
+                        Check(ProtectedVaultStartup.TryOpen(vault, changed, () => false, () => newCode, _ => (null, previousCode)),
+                            "recovery relinks vault and issues new recovery code");
+                        vault.Lock();
+                        Check(await vault.RecoverAsync(previousCode) is not null, "old recovery code retired");
+                        Check(ProtectedVaultStartup.TryOpen(vault, changed, () => false, NoCodePrompt, NoLegacyPrompt) &&
+                            vault.Entries.Count == 5, "changed shared password reopens existing entries");
+
+                        using var fresh = new DownloadVault(Path.Combine(session.Root, "fresh-linked-vault"), usesProfilePassword: true);
+                        Check(!ProtectedVaultStartup.TryOpen(fresh, shared, () => false, () => null, NoLegacyPrompt) && !fresh.Exists,
+                            "first use requires recovery confirmation");
+                        Check(ProtectedVaultStartup.TryOpen(fresh, shared, () => false, () => newCode, NoLegacyPrompt),
+                            "first use creates vault with shared password");
+                        fresh.Lock();
+                        Check(ProtectedVaultStartup.TryOpen(fresh, shared, () => false, NoCodePrompt, NoLegacyPrompt),
+                            "new vault reopens without another prompt");
+                    }
+                    finally
+                    {
+                        ProtectedProfileSession.ClearPassword(shared);
+                        ProtectedProfileSession.ClearPassword(changed);
+                    }
                 }
                 else if (stage is "storm" or "storm-check")
                 {
@@ -410,6 +554,17 @@ public partial class BrowserWindow
                     await Task.Delay(75);
                 }
                 throw new TimeoutException(name);
+            }
+
+            static T? FindProgressElement<T>(DependencyObject parent, Func<T, bool>? accept = null) where T : DependencyObject
+            {
+                for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+                {
+                    var child = VisualTreeHelper.GetChild(parent, i);
+                    if (child is T found && (accept is null || accept(found))) return found;
+                    if (FindProgressElement(child, accept) is { } nested) return nested;
+                }
+                return null;
             }
 
             async Task WaitForScript(string script, string name)

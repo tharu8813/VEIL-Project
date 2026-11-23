@@ -11,19 +11,20 @@ internal sealed class ProfileUnlockDialog : Window
 {
     private readonly PasswordBox password = new() { Height = 34, MaxLength = 256 };
 
-    private ProfileUnlockDialog()
+    private ProfileUnlockDialog(string title, string prompt, Window? owner)
     {
-        Title = "VEIL 보호 프로필 잠금 해제";
+        Title = title;
+        Owner = owner;
         Width = 420;
         Height = 235;
         ResizeMode = ResizeMode.NoResize;
-        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        WindowStartupLocation = owner is null ? WindowStartupLocation.CenterScreen : WindowStartupLocation.CenterOwner;
         Background = new SolidColorBrush(Color.FromRgb(20, 23, 35));
         Foreground = Brushes.White;
         var panel = new StackPanel { Margin = new Thickness(24) };
-        panel.Children.Add(new TextBlock { Text = "보호 프로필 잠금 해제", FontSize = 17,
+        panel.Children.Add(new TextBlock { Text = title, FontSize = 17,
             FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8) });
-        panel.Children.Add(new TextBlock { Text = "등록된 암호화 저장소의 비밀번호를 입력하세요.",
+        panel.Children.Add(new TextBlock { Text = prompt, TextWrapping = TextWrapping.Wrap,
             Foreground = Brushes.LightGray, Margin = new Thickness(0, 0, 0, 14) });
         panel.Children.Add(password);
         var actions = new StackPanel { Orientation = Orientation.Horizontal,
@@ -44,9 +45,10 @@ internal sealed class ProfileUnlockDialog : Window
         Loaded += (_, _) => password.Focus();
     }
 
-    internal static char[]? Prompt()
+    internal static char[]? Prompt(string title = "보호 프로필 잠금 해제",
+        string prompt = "보호 프로필과 다운로드 금고를 여는 암호를 입력하세요.", Window? owner = null)
     {
-        var dialog = new ProfileUnlockDialog();
+        var dialog = new ProfileUnlockDialog(title, prompt, owner);
         if (dialog.ShowDialog() != true)
         {
             dialog.password.Clear();

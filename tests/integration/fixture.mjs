@@ -123,7 +123,9 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
             case '/vault-dl': {
                 // Phase 4-0 vault capture: distinct sizes and failure modes, each body filled with vaultPayload.
                 const kind = url.searchParams.get('kind');
-                const sizes = { small: 1024, large: 8 * 1024 ** 2, huge: 64 * 1024 ** 2, auth: 4096, redirected: 2048, drop: 4 * 1024 ** 2, post: 2048 };
+                const sizes = { small: 1024, large: 8 * 1024 ** 2, huge: 64 * 1024 ** 2, auth: 4096, redirected: 2048,
+                    drop: 4 * 1024 ** 2, post: 2048, slow: 32 * 1024 ** 2, 'slow-unknown': 32 * 1024 ** 2,
+                    'slow-queued': 32 * 1024 ** 2 };
                 if (kind === 'redirect') return response.writeHead(302, { Location: '/vault-dl?kind=redirected' }).end();
                 if (!(kind in sizes)) return response.writeHead(400).end();
                 if (kind === 'auth' && !hasCookie) return response.writeHead(401).end();
@@ -133,14 +135,24 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
                 response.writeHead(200, {
                     'Content-Type': 'application/octet-stream',
                     'Content-Disposition': `attachment; filename="veil-vault-${kind}.bin"`,
-                    'Content-Length': size,
+                    ...(kind === 'slow-unknown' ? {} : { 'Content-Length': size }),
                 });
                 const block = Buffer.alloc(64 * 1024, vaultPayload);
                 const limit = kind === 'drop' ? size / 4 : size; // drop: cut the connection a quarter of the way in
                 for (let sent = 0; sent < limit;) {
+                    if (kind.startsWith('slow')) await new Promise(resolve => setTimeout(resolve, 35));
+                    if (response.destroyed) return;
                     const chunk = block.subarray(0, Math.min(block.length, limit - sent));
                     sent += chunk.length;
-                    if (!response.write(chunk)) await new Promise(resolve => response.once('drain', resolve));
+                    if (!response.write(chunk)) await new Promise(resolve => {
+                        function resume() {
+                            response.off('drain', resume);
+                            response.off('close', resume);
+                            resolve();
+                        }
+                        response.once('drain', resume);
+                        response.once('close', resume);
+                    });
                 }
                 if (kind === 'drop') { await new Promise(resolve => setTimeout(resolve, 200)); return response.destroy(); }
                 return response.end();

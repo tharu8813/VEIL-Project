@@ -19,7 +19,7 @@ internal class VeilDialog : Window
     private readonly Border badge;
     protected readonly TextBlock Subtitle;
 
-    protected VeilDialog(Window owner, string title, string glyph, double width, double height)
+    protected VeilDialog(Window? owner, string title, string glyph, double width, double height)
     {
         Owner = owner;
         Title = title;
@@ -27,9 +27,9 @@ internal class VeilDialog : Window
         Height = height;
         MinWidth = 380;
         MinHeight = 280;
-        ShowInTaskbar = false;
-        WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        FontFamily = owner.FontFamily;
+        ShowInTaskbar = owner is null;
+        WindowStartupLocation = owner is null ? WindowStartupLocation.CenterScreen : WindowStartupLocation.CenterOwner;
+        if (owner is not null) FontFamily = owner.FontFamily;
         FontSize = 13;
         UseLayoutRounding = true;
         Resources.MergedDictionaries.Add(new ResourceDictionary { Source = ThemeUri });
