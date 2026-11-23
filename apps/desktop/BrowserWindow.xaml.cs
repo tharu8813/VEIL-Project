@@ -154,6 +154,10 @@ public partial class BrowserWindow : Window
         return window;
     }
 
+    /// <summary>Initialized engine views of this window's tabs (Security Manager).</summary>
+    internal IEnumerable<CoreWebView2> CoreViews() => Tabs.Items.OfType<TabItem>()
+        .Select(item => (item.Tag as BrowserTab)?.View.CoreWebView2).OfType<CoreWebView2>();
+
     private async Task<BrowserTab?> OpenTab(string? url, bool select = true, int? index = null)
     {
         if (engine is null || closing) return null;
@@ -175,6 +179,12 @@ public partial class BrowserWindow : Window
             web.Settings.AreDefaultContextMenusEnabled = true;
             web.Settings.AreDevToolsEnabled = false;
             web.Settings.AreBrowserAcceleratorKeysEnabled = false;
+            // ADR-0007: SmartScreen policy before the first navigation (an unset view re-enables it for all).
+            if (!session.Security.Apply(web))
+            {
+                Status.Text = session.Security.Describe();
+                UpdateSecurityIndicators();
+            }
             // SEC-004/007: the engine writes download bytes (GUID.tmp) before DownloadStarting can cancel
             // them. Keep that partial data on the profile volume instead of the user's Downloads folder.
             string downloadScratch = Path.Combine(session.Root, ProfileScratch.FolderName, "downloads");

@@ -10,11 +10,12 @@
 // Real public resolvers, DoH bootstrap of the provider host, and proxy mode stay NOT RUN (VM/internet).
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { X509Certificate, createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:https';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { startDoh } from '../integration/doh.mjs';
 import { startFixture } from '../integration/fixture.mjs';
 
 const run = promisify(execFile);
@@ -25,48 +26,8 @@ const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/
 const { server: fixture, origin } = await startFixture();
 const port = new URL(origin).port;
 
-// Throwaway certificate for 127.0.0.1 and its SPKI pin for the test-only trust hook.
-const key = join(evidence, 'doh-key.pem'), cert = join(evidence, 'doh-cert.pem');
-await run('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1',
-    '-subj', '/CN=127.0.0.1', '-addext', 'subjectAltName=IP:127.0.0.1']);
-const pem = await readFile(cert);
-const spki = createHash('sha256').update(new X509Certificate(pem).publicKey.export({ type: 'spki', format: 'der' })).digest('base64');
-
-// Minimal RFC 8484 responder: A for *.test -> 127.0.0.1, everything else NOERROR/NXDOMAIN without answers.
-const queried = [];
-function answer(query) {
-    let offset = 12;
-    const labels = [];
-    while (query[offset] !== 0) { labels.push(query.subarray(offset + 1, offset + 1 + query[offset]).toString('ascii')); offset += query[offset] + 1; }
-    const name = labels.join('.').toLowerCase();
-    const type = query.readUInt16BE(offset + 1);
-    queried.push(`${name}/${type}`);
-    const question = query.subarray(12, offset + 5);
-    const ours = name.endsWith('.test');
-    const header = Buffer.alloc(12);
-    query.copy(header, 0, 0, 2); // id
-    header.writeUInt16BE(ours ? 0x8180 : 0x8183, 2); // response, RD+RA, NOERROR / NXDOMAIN
-    header.writeUInt16BE(1, 4);
-    const records = ours && type === 1
-        ? Buffer.from([0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 127, 0, 0, 1]) : Buffer.alloc(0);
-    header.writeUInt16BE(records.length ? 1 : 0, 6);
-    return Buffer.concat([header, question, records]);
-}
-const keyPem = await readFile(key);
-const resolver = createServer({ key: keyPem, cert: pem }, (request, response) => {
-    const send = query => {
-        try { response.writeHead(200, { 'Content-Type': 'application/dns-message', 'Cache-Control': 'max-age=0' }).end(answer(query)); }
-        catch { response.writeHead(400).end(); }
-    };
-    if (request.method === 'GET') {
-        const dns = new URL(request.url, 'https://127.0.0.1').searchParams.get('dns') ?? '';
-        return send(Buffer.from(dns.replace(/-/g, '+').replace(/_/g, '/'), 'base64'));
-    }
-    const chunks = [];
-    request.on('data', chunk => chunks.push(chunk)).on('end', () => send(Buffer.concat(chunks)));
-});
-await new Promise(done => resolver.listen(0, '127.0.0.1', done));
-const template = `https://127.0.0.1:${resolver.address().port}/dns-query`;
+const doh = await startDoh(evidence);
+const { template, spki, queried } = doh;
 
 async function probe(label, dnsTemplate, host) {
     const profile = join(evidence, label, 'profile');
@@ -100,8 +61,7 @@ try {
     assert.equal(await osCacheHas(viaDoh), false, 'name also resolved by the system resolver');
     console.log(`secure DNS: PASS · ${viaDoh} resolved only by the local DoH responder`);
 
-    await new Promise(done => resolver.close(done));
-    resolver.closeAllConnections?.();
+    await doh.stop();
     const blocked = `veil-doh-${randomUUID().slice(0, 8)}.test`;
     const off = await probe('doh-down', template, blocked);
     assert.match(off.line, /error=HostNameNotResolved/, off.line);
@@ -119,5 +79,5 @@ try {
     console.log(`PASS secure DNS · evidence ${evidence}`);
 } finally {
     fixture.close();
-    resolver.close();
+    doh.server.close();
 }

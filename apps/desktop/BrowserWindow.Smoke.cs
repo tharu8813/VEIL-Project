@@ -445,6 +445,10 @@ public partial class BrowserWindow
                         && HttpsBar.Visibility != Visibility.Visible, "native button allows http for that host only");
                     Check(session.Network.Mode == NetworkMode.Standard && NetworkIndicator.Text.StartsWith("표준 보호"), $"indicator: {NetworkIndicator.Text}");
                 }
+                else if (stage == "security")
+                {
+                    await SecurityStage();
+                }
                 else if (stage == "dns-probe")
                 {
                     // DNS protection experiments: open VEIL_TEST_DNS_URL and report how it ended.
@@ -527,6 +531,87 @@ public partial class BrowserWindow
                         await Task.Delay(75);
                     }
                     throw new TimeoutException(expression);
+                }
+
+                async Task SecurityStage()
+                {
+                    // ADR-0007 Security Manager. VEIL_TEST_SECURITY_EXPECT: on | off | recovered (saved state at start).
+                    // VEIL_TEST_SECURITY_SET: on | off (change during this run). VEIL_TEST_SECURITY_URL: page opened at the end.
+                    var security = session.Security;
+                    string expect = Environment.GetEnvironmentVariable("VEIL_TEST_SECURITY_EXPECT") ?? "on";
+                    Check(security.Saved.SmartScreen == (expect != "off") && security.Saved.Recovered == (expect == "recovered"),
+                        $"saved policy at start: {expect}");
+                    bool want = security.Saved.SmartScreen;
+                    void AllViews(bool value, string when)
+                    {
+                        var states = session.Windows.SelectMany(window => window.CoreViews()).Select(SecurityManager.Read).ToList();
+                        Check(states.Count > 0 && states.All(state => state == value), $"every view SmartScreen={value} {when} ({states.Count} views)");
+                        Check(security.Verify() == SmartScreenState.Applied, $"state applied {when}");
+                    }
+                    AllViews(want, "after restore");
+                    Check(await OpenTab("about:blank") is not null, "new tab");
+                    AllViews(want, "after new tab");
+                    var second = OpenWindow(["about:blank"], 0);
+                    await WaitFor(() => !second.IsRestoring && second.CoreViews().Any(), "new window");
+                    AllViews(want, "after new window");
+                    Check(security.Threats.Engines.Count == 0, "no VEIL engine registered by default");
+                    Check(!ThreatProtection.ProductionEnginesEnabled, "production engines disabled");
+                    Check((await security.Threats.CheckAsync(new Uri("https://example.test/"), TimeSpan.FromSeconds(1))).Verdict == ThreatVerdict.Unknown,
+                        "no engine gives Unknown, not safe");
+
+                    // A save failure changes nothing (saved or applied).
+                    try { security.Change(new SecuritySettings(!want), _ => throw new IOException("simulated")); Check(false, "save failure surfaced"); }
+                    catch (IOException) { checks.Add("save failure surfaced"); }
+                    Check(security.Saved.SmartScreen == want, "save failure keeps saved policy");
+                    AllViews(want, "after failed save");
+
+                    if (Environment.GetEnvironmentVariable("VEIL_TEST_SECURITY_SET") is { } set)
+                    {
+                        bool value = set == "on";
+                        Check(ChangeSecurity(new SecuritySettings(value)), $"change to {set} applied");
+                        AllViews(value, "after change");
+                        var stored = BrowserData.Load(statePath).Security ?? SecuritySettings.Default;
+                        Check(stored.SmartScreen == value && !stored.Recovered, "change saved to profile state");
+                        Check(await OpenTab("about:blank") is not null, "tab after change");
+                        AllViews(value, "after change and new tab");
+                        Check(value || NetworkIndicator.Text.Contains("SmartScreen 꺼짐"), $"indicator: {NetworkIndicator.Text}");
+                        want = value;
+                    }
+
+#if DEBUG
+                    // Threat interface with the test-only mock engine (separate registry; the session's stays empty).
+                    var threats = new ThreatProtection();
+                    Check(threats.Register(new MockThreatEngine(new Dictionary<string, ThreatVerdict>
+                    {
+                        ["bad.test"] = ThreatVerdict.Malicious, ["good.test"] = ThreatVerdict.NotDetected, ["broken.test"] = ThreatVerdict.Error,
+                    })), "mock engine registered (Debug)");
+                    async Task<ThreatResult> Probe(string host) => await threats.CheckAsync(new Uri($"https://{host}/path?token=x"), TimeSpan.FromSeconds(2));
+                    Check((await Probe("bad.test")).Verdict == ThreatVerdict.Malicious, "mock: Malicious");
+                    Check((await Probe("good.test")).Verdict == ThreatVerdict.NotDetected, "mock: NotDetected");
+                    Check((await Probe("other.test")).Verdict == ThreatVerdict.Unknown, "mock: unlisted host is Unknown, not safe");
+                    var failed = await Probe("broken.test");
+                    Check(failed.Verdict == ThreatVerdict.Error && failed.Reason == nameof(InvalidOperationException), "mock: engine failure is Error");
+                    Check(!failed.Reason.Contains("broken") && !failed.Reason.Contains("token"), "result carries no address");
+                    var slow = new ThreatProtection();
+                    slow.Register(new MockThreatEngine(new Dictionary<string, ThreatVerdict> { ["good.test"] = ThreatVerdict.NotDetected }, TimeSpan.FromSeconds(5)));
+                    var late = await slow.CheckAsync(new Uri("https://good.test/"), TimeSpan.FromMilliseconds(200));
+                    Check(late.Verdict == ThreatVerdict.Error && late.Reason == "timeout", "mock: timeout is Error, not Unknown");
+                    threats.Register(new MockThreatEngine(new Dictionary<string, ThreatVerdict> { ["bad.test"] = ThreatVerdict.NotDetected, ["good.test"] = ThreatVerdict.Error }));
+                    Check((await Probe("bad.test")).Verdict == ThreatVerdict.Malicious, "combined: Malicious wins over NotDetected");
+                    Check((await Probe("good.test")).Verdict == ThreatVerdict.Error, "combined: Error wins over NotDetected");
+                    AllViews(want, "after engine verdicts (SmartScreen not bypassed)");
+#endif
+                    if (Environment.GetEnvironmentVariable("VEIL_TEST_SECURITY_URL") is { } target)
+                    {
+                        Active!.Url = target;
+                        Active.View.CoreWebView2.Navigate(target);
+                        await Task.Delay(500);
+                        for (int i = 0; i < 300 && Active.Loading; i++) await Task.Delay(75);
+                        await Task.Delay(Environment.GetEnvironmentVariable("VEIL_TEST_SECURITY_DWELL") is { } dwell && int.TryParse(dwell, out int ms) ? ms : 0);
+                        checks.Add($"navigation: error={Active.LastNavigationError?.ToString() ?? "none"}");
+                    }
+                    checks.Add($"smartscreen: {security.Describe()}");
+                    second.Close();
                 }
 
                 async Task ReadyAt(string path)
