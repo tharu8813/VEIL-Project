@@ -8,3 +8,10 @@ publish = false
 age = { version = "=0.12.1", default-features = false }
 tempfile = "=3.27.0"
 zeroize = "=1.9.0"
+
+# Dev/test builds only: compile the dependencies (age, scrypt, ChaCha20-Poly1305, ...) with
+# optimizations so tests run the real scrypt work factor (log_n = 17) at native speed instead of
+# ~40x slower unoptimized code. This crate itself stays unoptimized with debug assertions and
+# overflow checks. The release profile and every KDF/encryption parameter are unchanged.
+[profile.dev.package."*"]
+opt-level = 3

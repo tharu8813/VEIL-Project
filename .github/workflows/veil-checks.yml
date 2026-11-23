@@ -95,7 +95,27 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Run locked Rust tests
-        run: cargo test --locked --manifest-path crates/veil-security/Cargo.toml -- --test-threads=1
+      - name: Toolchain version
+        id: toolchain
+        run: |
+          rustc -V
+          echo "rustc=$(rustc -V | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+      # Only downloaded crates and build outputs are cached. The cache key covers the lock file,
+      # the manifest (profiles) and the compiler, so a change in any of them rebuilds from source.
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            crates/veil-security/target
+          key: rust-${{ runner.os }}-${{ steps.toolchain.outputs.rustc }}-${{ hashFiles('crates/veil-security/Cargo.lock', 'crates/veil-security/Cargo.toml') }}
+          restore-keys: rust-${{ runner.os }}-${{ steps.toolchain.outputs.rustc }}-
+      - name: Build tests
+        run: cargo test --locked --manifest-path crates/veil-security/Cargo.toml --no-run
+      # Full security suite, every test serially, each with its own timing in the log and step summary.
+      - name: Run Rust tests (per-test timing)
+        run: bash scripts/rust-timed-tests.sh
       - name: Clippy
         run: cargo clippy --locked --manifest-path crates/veil-security/Cargo.toml --all-targets -- -D warnings
