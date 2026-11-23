@@ -117,7 +117,7 @@ class ThreatProtection
 | 시험 엔진: 등록, 4가지 결과, 미등록 호스트 Unknown, 예외 Error, 시간 초과 Error, 결합 규칙, 결과에 주소 없음, 판정 후 SmartScreen 값 불변 | PASS |
 | 프로덕션: 기본 등록 엔진 0개, `ProductionEnginesEnabled=false`, Release DLL에 시험 엔진 없음 | PASS |
 | 엔진 동작 관찰: 로컬 DoH 응답기로 이름 조회 관찰. 켜짐 실행은 `nav-edge.smartscreen.microsoft.com`을 조회, 꺼짐 실행은 조회 0건 | PASS (응답은 NXDOMAIN이라 실제 Microsoft 연결 없음) |
-| 회귀 | 아래 기록 참고 |
+| 회귀: desktop 통합, `--crash-cycle`, network-guard, dns-protection, profile-routing, engine-kill(3회), vault-capture, vault-persist, phase0 proxy, `node --test` 단위 시험 | 모두 PASS |
 
 미검증(NOT RUN):
 
