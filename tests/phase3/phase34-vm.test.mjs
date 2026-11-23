@@ -49,3 +49,25 @@ test('refuses substituted or unsafe guest and volume proofs', () => {
     assert.throws(() => validatePreflight(receipt(main, { ...small, image: main.image }), guest));
     assert.throws(() => validatePreflight(receipt(main, { ...small, capacity: 3 * 1024 ** 3 }), guest));
 });
+
+test('loopback runners join the batch on the lab volume and stay NOT RUN without their tools', async () => {
+    const plan = makePlan(main.parent, undefined, ['openssl']);
+    const guard = plan.find(item => item.id === 'network-guard');
+    assert.deepEqual(guard.args, ['tests/phase5/network-guard.mjs']);
+    assert.equal(guard.cwd, main.parent, 'evidence and engine profiles stay on the lab volume');
+    for (const id of ['dns-protection', 'smartscreen']) {
+        const item = plan.find(entry => entry.id === id);
+        assert.equal(item.args, undefined);
+        assert.match(item.reason, /openssl/);
+    }
+    assert.ok(makePlan(main.parent).find(item => item.id === 'smartscreen').args);
+    const crash = plan.find(item => item.id === 'desktop-crash-cycle');
+    assert.deepEqual(crash.args, ['tests/integration/desktop.mjs', '--profile-parent', main.parent, '--crash-cycle']);
+});
+
+test('internet-VM items are listed and never executed by the offline batch', async () => {
+    const results = await executePlan(makePlan(main.parent), [], async () => ({ exitCode: 0 }), () => {});
+    const online = results.filter(item => item.id.startsWith('internet-'));
+    assert.ok(online.length >= 4);
+    assert.ok(online.every(item => item.status === 'NOT RUN' && item.reason && !item.args));
+});
