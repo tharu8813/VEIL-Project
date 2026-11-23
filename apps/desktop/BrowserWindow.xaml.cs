@@ -63,10 +63,10 @@ public partial class BrowserWindow : Window
     {
         if (closing) return;
         bool last = session.Windows.Count(window => !window.closing) == 1;
-        if (last && !restoring) SaveTabs();
+        if (last && !restoring && !session.IsEnding) SaveTabs();
         closing = true;
         session.Windows.Remove(this);
-        if (!last)
+        if (!last && !session.IsEnding)
         {
             // Closing one of several windows closes its tabs; they stay reopenable.
             foreach (TabItem item in Tabs.Items)
@@ -75,6 +75,12 @@ public partial class BrowserWindow : Window
         }
         foreach (var view in Pages.Children.OfType<WebView2>())
             view.Dispose();
+    }
+
+    internal void PrepareForProtectedShutdown()
+    {
+        try { session.Save(); }
+        finally { session.IsEnding = true; }
     }
 
     private async void Start(object sender, RoutedEventArgs args)

@@ -24,6 +24,7 @@ internal sealed class BrowserSession
     internal List<string> Downloads { get; } = [];
     internal List<BrowserWindow> Windows { get; } = [];
     internal CoreWebView2Environment? Engine { get; set; }
+    internal bool IsEnding { get; set; }
 
     /// <summary>Writes the open windows. Skipped while any window is still restoring its tabs.</summary>
     internal void Save()

@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace Veil.VolumeBroker;
 
 internal sealed record BackendStatus(bool Attached, string? VolumeGuid, bool FullyEncrypted, bool ProtectionOn,
-    bool Unlocked, bool ProtectorPresent);
+    bool Unlocked, bool ProtectorPresent, bool ReadyToUnlock = false);
 
 internal enum LockResult { Locked, HandlesOpen, Failed }
 
@@ -29,7 +29,9 @@ internal sealed class FakeBitLockerBackend(BrokerConfig config) : IBitLockerBack
     private bool attached, unlocked;
 
     public BackendStatus Status() => new(attached, attached ? fake.ReportedVolumeGuid ?? config.VolumeGuid : null,
-        attached, attached, attached && unlocked, attached && fake.ReportedProtectorPresent);
+        attached && unlocked, attached && unlocked && fake.ReportedProtectionOnAfterUnlock,
+        attached && unlocked, attached && fake.ReportedProtectorPresent,
+        attached && !unlocked && fake.ReportedProtectorPresent);
 
     public void Attach() { attached = true; unlocked = false; }
     public void Detach() { attached = false; unlocked = false; }
@@ -74,12 +76,19 @@ internal sealed class WindowsBitLockerBackend(BrokerConfig config) : IBitLockerB
             if (-not $image.Attached) { '{"attached":false}'; exit 0 }
             $guid = ($image | Get-Disk | Get-Partition).AccessPaths | Where-Object { $_ -like '\\?\Volume{*' } | Select-Object -First 1
             $v = {{Volumes}} | Where-Object DeviceID -eq $guid
-            if (-not $v) { @{ attached = $true; volumeGuid = $guid } | ConvertTo-Json -Compress; exit 0 }
-            $conversion = ($v | Invoke-CimMethod -MethodName GetConversionStatus).ConversionStatus
-            $protection = ($v | Invoke-CimMethod -MethodName GetProtectionStatus).ProtectionStatus
-            $lock = ($v | Invoke-CimMethod -MethodName GetLockStatus).LockStatus
-            $ids = ($v | Invoke-CimMethod -MethodName GetKeyProtectors -Arguments @{ KeyProtectorType = [uint32]0 }).VolumeKeyProtectorID
-            @{ attached = $true; volumeGuid = $guid; conversion = $conversion; protection = $protection; lock = $lock; protectors = @($ids) } | ConvertTo-Json -Compress
+            if (-not $v) { throw 'BitLocker status is unavailable for the attached volume.' }
+            $lock = $v | Invoke-CimMethod -MethodName GetLockStatus
+            if ($lock.ReturnValue -ne 0 -or $lock.LockStatus -notin @(0, 1)) { throw 'BitLocker lock state is unavailable.' }
+            $protection = $v | Invoke-CimMethod -MethodName GetProtectionStatus
+            if ($lock.LockStatus -eq 1) {
+                if ($protection.ReturnValue -ne 0 -and $protection.ReturnValue -ne 2150694912) { throw 'BitLocker protection state is unavailable.' }
+                $candidate = $protection.ReturnValue -eq 2150694912 -or $protection.ProtectionStatus -in @(1, 2)
+                @{ attached = $true; volumeGuid = $guid; lock = 1; readyToUnlock = $candidate } | ConvertTo-Json -Compress; exit 0
+            }
+            $conversion = $v | Invoke-CimMethod -MethodName GetConversionStatus
+            $ids = $v | Invoke-CimMethod -MethodName GetKeyProtectors -Arguments @{ KeyProtectorType = [uint32]0 }
+            if ($protection.ReturnValue -ne 0 -or $conversion.ReturnValue -ne 0 -or $ids.ReturnValue -ne 0) { throw 'BitLocker protection verification failed.' }
+            @{ attached = $true; volumeGuid = $guid; conversion = $conversion.ConversionStatus; protection = $protection.ProtectionStatus; lock = 0; protectors = @($ids.VolumeKeyProtectorID) } | ConvertTo-Json -Compress
             """, null);
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
@@ -89,10 +98,17 @@ internal sealed class WindowsBitLockerBackend(BrokerConfig config) : IBitLockerB
         bool protector = root.TryGetProperty("protectors", out var ids) && ids.ValueKind == JsonValueKind.Array &&
             ids.EnumerateArray().Any(id => string.Equals(id.GetString(), config.ProtectorId, StringComparison.OrdinalIgnoreCase));
         // ConversionStatus 1 = FullyEncrypted, ProtectionStatus 1 = On, LockStatus 0 = Unlocked.
-        return new(true, guid, Number("conversion") == 1, Number("protection") == 1, Number("lock") == 0, protector);
+        return new(true, guid, Number("conversion") == 1, Number("protection") == 1, Number("lock") == 0, protector,
+            root.TryGetProperty("readyToUnlock", out var ready) && ready.GetBoolean());
     }
 
-    public void Attach() => Run($"$ErrorActionPreference = 'Stop'; Mount-DiskImage -ImagePath {Image} | Out-Null", null);
+    public void Attach()
+    {
+        if (config.Development)
+            Run($"$ErrorActionPreference = 'Stop'; Mount-DiskImage -ImagePath {Image} | Out-Null", null);
+        else
+            Native.AttachRegisteredImage(config.ImagePath, config.UserSid);
+    }
 
     public void Detach() => Run($"$ErrorActionPreference = 'Stop'; Dismount-DiskImage -ImagePath {Image} | Out-Null", null);
 

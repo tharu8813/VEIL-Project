@@ -30,6 +30,8 @@ internal static class Program
         bool smoke = args is ["--smoke", _, _, _, _];
         if (!smoke && args.Length != 0) return 2;
         ProtectedProfileSession? protectedSession = null;
+        ProtectedSessionNotifications? notifications = null;
+        BrowserWindow? window = null;
         try
         {
             ProfileGate.RejectElevated();
@@ -47,14 +49,23 @@ internal static class Program
                 requireProtected = true;
                 // The password dialog runs before the browser window. Prevent early WPF shutdown.
                 application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
-                protectedSession = ProtectedProfileSession.TryOpen(broker);
-                if (protectedSession is null) return 0; // User cancelled.
+                notifications = new ProtectedSessionNotifications(() =>
+                {
+                    try { window?.PrepareForProtectedShutdown(); }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                    {
+                        // Preserve the previous snapshot if the final write fails, then close all views.
+                    }
+                    finally { application.Shutdown(); }
+                });
+                protectedSession = ProtectedProfileSession.TryOpen(broker, notifications);
+                if (protectedSession is null || notifications.LockRequested) return 0;
             }
             string root = Path.GetFullPath(smoke ? args[1] : productProfile ?? Path.Combine(".veil-dev", "desktop"));
             ProfileGate.Prepare(root, volume, requireProtected);
             using var profileLock = new FileStream(Path.Combine(root, "profile.lock"), FileMode.OpenOrCreate,
                 FileAccess.ReadWrite, FileShare.None);
-            var window = new BrowserWindow(root);
+            window = new BrowserWindow(root);
             if (smoke) window.ConfigureSmoke(args[2], args[3], args[4]);
             application.MainWindow = window;
             application.ShutdownMode = ShutdownMode.OnLastWindowClose;
@@ -64,13 +75,14 @@ internal static class Program
             System.Text.Json.JsonException or InvalidDataException or InvalidOperationException)
         {
             if (smoke) File.WriteAllText(args[4], System.Text.Json.JsonSerializer.Serialize(new { error = error.GetType().Name }));
-            else MessageBox.Show("프로필을 안전하게 열 수 없습니다. 보호 저장소와 브로커 상태를 확인하세요. 비보호 프로필로 전환하지 않습니다.",
+            else if (notifications?.LockRequested != true) MessageBox.Show("프로필을 안전하게 열 수 없습니다. 보호 저장소와 브로커 상태를 확인하세요. 비보호 프로필로 전환하지 않습니다.",
                 "VEIL 보호 프로필", MessageBoxButton.OK, MessageBoxImage.Warning);
             return 1;
         }
         finally
         {
-            protectedSession?.Dispose();
+            try { protectedSession?.Dispose(); }
+            finally { notifications?.Dispose(); }
         }
     }
 

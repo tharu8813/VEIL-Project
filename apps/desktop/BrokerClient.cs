@@ -19,6 +19,7 @@ internal sealed record BrokerClientConfig
     /// <summary>Expected full path of the broker executable; required outside development.</summary>
     public string? BrokerImage { get; init; }
     public bool Development { get; init; }
+    public bool RequireWindowsService { get; init; }
     /// <summary>Profile directory on the registered volume for product launches.</summary>
     public string? ProfilePath { get; init; }
 
@@ -57,7 +58,8 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
             if (!status.GetProperty("attached").GetBoolean()) return null;
             return new VolumeStatus(status.GetProperty("volumeGuid").GetString() ?? "",
                 status.GetProperty("fullyEncrypted").GetBoolean(), status.GetProperty("protectionOn").GetBoolean(),
-                status.GetProperty("unlocked").GetBoolean());
+                status.GetProperty("unlocked").GetBoolean(), status.GetProperty("readyToUnlock").GetBoolean(),
+                status.GetProperty("protectorPresent").GetBoolean());
         }
         catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException)
         {
@@ -69,6 +71,17 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
     {
         if (config.BrokerImage is null) return;
         if (!GetNamedPipeServerProcessId(pipe.SafePipeHandle, out uint pid)) throw new Win32Exception();
+        if (config.RequireWindowsService)
+        {
+            using var manager = OpenSCManagerW(null, null, 1); // SC_MANAGER_CONNECT
+            if (manager.IsInvalid) throw new Win32Exception();
+            using var service = OpenServiceW(manager, "Veil.VolumeBroker", 4); // SERVICE_QUERY_STATUS
+            if (service.IsInvalid || !QueryServiceStatusEx(service, 0, out var status,
+                Marshal.SizeOf<ServiceProcessStatus>(), out _)) throw new Win32Exception();
+            if (status.State != 4 || status.ProcessId != pid)
+                throw new ProfileLocationException("The volume broker pipe does not belong to the running Windows service.");
+            return;
+        }
         using var process = OpenProcess(0x1000, false, pid);
         if (process.IsInvalid) throw new Win32Exception();
         var image = new StringBuilder(1024);
@@ -86,6 +99,31 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool QueryFullProcessImageNameW(SafeProcessHandle process, int flags, StringBuilder name, ref int size);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ServiceProcessStatus
+    {
+        public uint Type, State, Accepted, Win32ExitCode, ServiceExitCode, CheckPoint, WaitHint, ProcessId, Flags;
+    }
+
+    private sealed class SafeServiceHandle() : SafeHandleZeroOrMinusOneIsInvalid(ownsHandle: true)
+    {
+        protected override bool ReleaseHandle() => CloseServiceHandle(handle);
+    }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeServiceHandle OpenSCManagerW(string? machine, string? database, uint access);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeServiceHandle OpenServiceW(SafeServiceHandle manager, string name, uint access);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryServiceStatusEx(SafeServiceHandle service, int level, out ServiceProcessStatus status, int size, out int needed);
+
+    [DllImport("advapi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseServiceHandle(IntPtr handle);
 
     /// <summary>Only fixed registered-volume commands are allowed; there is no path argument.</summary>
     internal void Attach() { using var response = SendCommand("Attach"); RequireSuccess(response.RootElement, "Attach"); }
@@ -130,9 +168,9 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
                 TokenImpersonationLevel.Identification);
             pipe.Connect(2000);
             VerifyServer(pipe);
-            // A broker may stall during VHDX/WMI operations. Bound both pipe directions;
-            // a hung service must not freeze VEIL's startup or close path indefinitely.
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            // A mutation can take longer than a status query, especially when Windows
+            // mounts a cold VHDX and BitLocker discovers the volume.
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(command == "Status" ? 8 : 45));
             pipe.WriteAsync(wire.AsMemory(0, checked((int)request.Length)), timeout.Token)
                 .AsTask().GetAwaiter().GetResult();
             byte[] newline = [10];

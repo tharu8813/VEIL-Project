@@ -11,15 +11,20 @@ namespace Veil.Desktop;
 internal sealed class ProtectedProfileSession : IDisposable
 {
     private readonly NamedPipeVolumeBroker broker;
+    private readonly ProtectedSessionNotifications notifications;
     private bool attachedHere;
     private bool unlockAttempted;
     private bool disposed;
 
-    private ProtectedProfileSession(NamedPipeVolumeBroker broker) => this.broker = broker;
-
-    internal static ProtectedProfileSession? TryOpen(NamedPipeVolumeBroker broker)
+    private ProtectedProfileSession(NamedPipeVolumeBroker broker, ProtectedSessionNotifications notifications)
     {
-        var session = new ProtectedProfileSession(broker);
+        this.broker = broker;
+        this.notifications = notifications;
+    }
+
+    internal static ProtectedProfileSession? TryOpen(NamedPipeVolumeBroker broker, ProtectedSessionNotifications notifications)
+    {
+        var session = new ProtectedProfileSession(broker, notifications);
         try
         {
             if (session.Begin()) return session;
@@ -43,18 +48,20 @@ internal sealed class ProtectedProfileSession : IDisposable
             broker.Attach();
             state = broker.QueryRegisteredVolume();
         }
-        if (state is null || !state.FullyEncrypted || !state.ProtectionOn)
-            throw new ProfileLocationException("The registered volume is not fully encrypted and protected.");
-        if (state.Unlocked)
+        if (state is { Unlocked: true })
             throw new ProfileLocationException("The volume is already unlocked; a new browser must authenticate.");
+        if (state is not { ReadyToUnlock: true })
+            throw new ProfileLocationException("The registered volume cannot be unlocked safely.");
 
         for (int attempt = 0; attempt < 3; attempt++)
         {
+            if (notifications.LockRequested) return false;
             char[]? secret = ProfileUnlockDialog.Prompt();
             if (secret is null) return false;
             bool accepted;
             try
             {
+                if (notifications.LockRequested) return false;
                 unlockAttempted = true; // Even a lost reply may follow a successful unlock.
                 accepted = broker.Unlock(secret);
             }
@@ -62,7 +69,7 @@ internal sealed class ProtectedProfileSession : IDisposable
             if (accepted)
             {
                 state = broker.QueryRegisteredVolume();
-                if (state is { FullyEncrypted: true, ProtectionOn: true, Unlocked: true })
+                if (state is { FullyEncrypted: true, ProtectionOn: true, Unlocked: true, ProtectorPresent: true })
                     return true;
                 throw new ProfileLocationException("The volume lost protected status during unlock.");
             }
@@ -97,6 +104,8 @@ internal sealed class ProtectedProfileSession : IDisposable
         catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException or
             InvalidOperationException or System.Text.Json.JsonException)
         {
+            // During a Windows lock/suspend, let the process exit so the broker can retry.
+            if (notifications.LockRequested) return;
             MessageBox.Show("보호 저장소의 자동 잠금을 확인하지 못했습니다. 저장소 상태를 확인하세요.",
                 "VEIL 잠금 확인 실패", MessageBoxButton.OK, MessageBoxImage.Warning);
         }

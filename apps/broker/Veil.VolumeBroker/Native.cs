@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -53,6 +54,38 @@ internal static class Native
 
     internal static SafeProcessHandle OpenForWait(int pid) => OpenProcess(Synchronize, false, (uint)pid);
 
+    internal static void AttachRegisteredImage(string path, string userSid)
+    {
+        // Keep the backing file admin-only while the mounted device grants access to the registered user.
+        const uint vhdx = 3, attachReadWrite = 0x00020000, permanentLifetime = 4;
+        var storage = new VirtualStorageType { DeviceId = vhdx, VendorId = new Guid("EC984AEC-A0F9-47E9-901F-71415A66345B") };
+        uint result = OpenVirtualDisk(ref storage, path, attachReadWrite, 0, IntPtr.Zero, out var disk);
+        using (disk)
+        {
+            if (result != 0) throw new Win32Exception((int)result);
+            string sddl = $"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{new SecurityIdentifier(userSid).Value})";
+            if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, out var descriptor, IntPtr.Zero))
+                throw new Win32Exception();
+            try
+            {
+                var parameters = new AttachVirtualDiskParameters { Version = 1 };
+                result = AttachVirtualDisk(disk, descriptor, permanentLifetime, 0, ref parameters, IntPtr.Zero);
+                if (result != 0) throw new Win32Exception((int)result);
+            }
+            finally { LocalFree(descriptor); }
+        }
+    }
+
+    internal static bool MatchesSha256(string path, string expected)
+    {
+        try
+        {
+            using var image = File.OpenRead(path);
+            return string.Equals(Convert.ToHexString(SHA256.HashData(image)), expected, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
+    }
+
     /// <summary>Authenticode check of a file, without network revocation retrieval (offline VM).</summary>
     internal static bool IsSigned(string path)
     {
@@ -78,6 +111,20 @@ internal static class Native
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SecurityAttributes { public int Length; public IntPtr Descriptor; public int Inherit; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct VirtualStorageType { public uint DeviceId; public Guid VendorId; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AttachVirtualDiskParameters { public uint Version; public uint Reserved; }
+
+    [DllImport("virtdisk.dll", CharSet = CharSet.Unicode)]
+    private static extern uint OpenVirtualDisk(ref VirtualStorageType storage, string path, uint access,
+        uint flags, IntPtr parameters, out SafeFileHandle disk);
+
+    [DllImport("virtdisk.dll")]
+    private static extern uint AttachVirtualDisk(SafeFileHandle disk, IntPtr securityDescriptor, uint flags,
+        uint providerFlags, ref AttachVirtualDiskParameters parameters, IntPtr overlapped);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct WinTrustFileInfo { public int Size; [MarshalAs(UnmanagedType.LPWStr)] public string Path; public IntPtr File; public IntPtr Subject; }

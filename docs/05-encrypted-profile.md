@@ -19,6 +19,8 @@ VEIL은 매 실행마다 로그아웃되는 시크릿 브라우저가 아니다.
 
 ## 검토할 저장 구조
 
+제품 브로커는 잠금 여부와 사용 가능한 보호 상태를 별도로 판정한다. Windows는 잠긴 볼륨의 보호 상태를 `Unknown`으로 보고하거나 암호화 상태 조회를 거부할 수 있다. 등록한 볼륨의 잠금 해제 요청을 허용하는 판단은 보호 인증에 사용하지 않는다. 잠금 해제 직후 완전 암호화, 보호 켜짐, 등록 키 보호기가 확인된 경우에만 프로필 시작을 허용한다. 조건을 충족하지 못하면 브로커가 비강제 재잠금을 시도한다. [BitLocker 보호 상태](https://learn.microsoft.com/windows/win32/secprov/getprotectionstatus-win32-encryptablevolume) · [암호화 상태 조회](https://learn.microsoft.com/windows/win32/secprov/getconversionstatus-win32-encryptablevolume)
+
 1. **전용 암호화 파일 시스템/볼륨:** 기존 브라우저 엔진과 호환성이 좋을 수 있으나 볼륨 연결 중 평문 접근, 장치 잠금, OS 캐시, 파일 핸들 등 조사 필수.
 2. **엔진 저장 계층 수정:** 강한 통합이 가능할 수 있으나 유지보수/패치 비용 높음.
 3. **개별 DB 암호화만:** 모든 사이트 저장소를 보호하지 못할 수 있어 단독으로는 필수 요구 충족으로 인정 불가.

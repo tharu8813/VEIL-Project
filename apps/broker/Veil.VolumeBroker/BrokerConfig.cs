@@ -13,6 +13,7 @@ internal sealed record BrokerConfig
     public required string ProtectorId { get; init; }
     public required string UserSid { get; init; }
     public required string[] ClientImages { get; init; }
+    public string? ClientSha256 { get; init; }
     public string PipeName { get; init; } = "VEIL.VolumeBroker";
     public string Backend { get; init; } = "bitlocker";
     public bool Development { get; init; }
@@ -45,6 +46,8 @@ internal sealed record BrokerConfig
             throw new InvalidDataException("The configuration's development flag does not match the start mode.");
         if (!development && (Backend != "bitlocker" || AllowUnsignedClients || Fake is not null || LogPath is not null))
             throw new InvalidDataException("Production configuration allows only the BitLocker backend and signed clients.");
+        if (!development && (ClientImages.Length != 1 || ClientSha256 is not { Length: 64 } || !ClientSha256.All(Uri.IsHexDigit)))
+            throw new InvalidDataException("Production configuration must pin one signed client image by SHA-256.");
         if (Backend is not ("bitlocker" or "fake") || (Backend == "fake") != (Fake is not null))
             throw new InvalidDataException("Unknown or incomplete backend configuration.");
         if (string.IsNullOrWhiteSpace(VolumeId) || VolumeId.Length > 64 ||
@@ -66,4 +69,5 @@ internal sealed record FakeBackendConfig
     /// <summary>Volume GUID the fake reports after attach; defaults to the registered one.</summary>
     public string? ReportedVolumeGuid { get; init; }
     public bool ReportedProtectorPresent { get; init; } = true;
+    public bool ReportedProtectionOnAfterUnlock { get; init; } = true;
 }

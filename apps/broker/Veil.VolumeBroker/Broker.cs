@@ -28,29 +28,57 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private int unlockFailures;
     private int? unlockOwner;
 
-    internal async Task RunAsync(CancellationToken stop)
+    internal async Task RunAsync(CancellationToken stop, Action? ready = null)
     {
         // The first instance claims the name exclusively; "ready" is announced only once it exists.
         var pipe = Native.CreatePipe(config.PipeName, config.UserSid, first: true);
         log.Write("ready", new { pipe = config.PipeName, backend = config.Backend, development = config.Development });
-        while (!stop.IsCancellationRequested)
+        try
         {
-            try { await pipe.WaitForConnectionAsync(stop); }
-            catch (OperationCanceledException) { await pipe.DisposeAsync(); break; }
-            var connected = pipe;
-            _ = Task.Run(() => ServeAsync(connected), CancellationToken.None);
-            pipe = Native.CreatePipe(config.PipeName, config.UserSid, first: false);
+            ready?.Invoke();
+            while (!stop.IsCancellationRequested)
+            {
+                await pipe.WaitForConnectionAsync(stop);
+                var connected = pipe;
+                pipe = Native.CreatePipe(config.PipeName, config.UserSid, first: false);
+                _ = Task.Run(() => ServeAsync(connected, stop), CancellationToken.None);
+            }
         }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        finally { await pipe.DisposeAsync(); }
     }
 
-    private async Task ServeAsync(NamedPipeServerStream pipe)
+    /// <summary>Serializes non-forced service cleanup with any in-progress client operation.</summary>
+    internal async Task SecureVolumeAsync()
+    {
+        await serial.WaitAsync();
+        try
+        {
+            var status = backend.Status();
+            if (!status.Attached) return;
+            if (!string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The attached volume does not match its registration.");
+            if (status.Unlocked && backend.Lock() != LockResult.Locked)
+                throw new InvalidOperationException("The registered volume refused the non-forced lock.");
+            status = backend.Status();
+            if (!status.Attached || status.Unlocked || !string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The registered volume lock could not be verified.");
+            backend.Detach();
+            if (backend.Status().Attached) throw new InvalidOperationException("The registered image remains attached.");
+            unlockOwner = null;
+        }
+        finally { serial.Release(); }
+    }
+
+    private async Task ServeAsync(NamedPipeServerStream pipe, CancellationToken stop)
     {
         await using var _ = pipe;
         byte[] buffer = new byte[Protocol.MaxRequestBytes + 1];
         int length = 0;
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stop);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
             int newline = -1;
             while (newline < 0 && length < buffer.Length)
             {
@@ -92,8 +120,12 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             byte[] response;
             using (request)
             {
-                await serial.WaitAsync();
-                try { response = await Execute(request, client); }
+                await serial.WaitAsync(stop);
+                try
+                {
+                    stop.ThrowIfCancellationRequested();
+                    response = await Execute(request, client);
+                }
                 finally { serial.Release(); }
             }
             await Reply(pipe, response);
@@ -111,7 +143,9 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         if (!string.Equals(client.UserSid, config.UserSid, StringComparison.OrdinalIgnoreCase)) return "user";
         if (!config.ClientImages.Any(image => string.Equals(Path.GetFullPath(image), client.ImagePath, StringComparison.OrdinalIgnoreCase)))
             return "image";
-        if (!(config.Development && config.AllowUnsignedClients) && !Native.IsSigned(client.ImagePath)) return "signature";
+        if (!(config.Development && config.AllowUnsignedClients) &&
+            (!Native.IsSigned(client.ImagePath) || (!config.Development &&
+                !Native.MatchesSha256(client.ImagePath, config.ClientSha256!)))) return "signature";
         return null;
     }
 
@@ -127,6 +161,10 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         try
         {
             var status = backend.Status();
+            bool Registered(BackendStatus current) => current.Attached &&
+                string.Equals(current.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase);
+            if (status.Attached && !Registered(status))
+                return Protocol.Error("VolumeMismatch");
             switch (request.Command)
             {
                 case BrokerCommand.Status:
@@ -136,7 +174,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 case BrokerCommand.Attach:
                     backend.Attach();
                     status = backend.Status();
-                    if (!string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase) || !status.ProtectorPresent)
+                    if (!Registered(status) || (!status.ReadyToUnlock && !status.Unlocked))
                     {
                         // Wrong image content or protector: never leave an unexpected volume attached.
                         backend.Detach();
@@ -147,7 +185,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     code = "NotAttached"; break;
                 case BrokerCommand.Unlock when status.Unlocked:
                     code = "AlreadyUnlocked"; break;
-                case BrokerCommand.Unlock when !status.FullyEncrypted || !status.ProtectionOn:
+                case BrokerCommand.Unlock when !status.ReadyToUnlock:
                     code = "NotProtected"; break;
                 case BrokerCommand.Unlock:
                     // Acquire the crash-relock handle BEFORE opening protected data.
@@ -166,6 +204,15 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     {
                         unlockFailures = 0;
                         Watch(client.ProcessId, ownerHandle);
+                        status = backend.Status();
+                        if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
+                            !status.ProtectionOn || !status.ProtectorPresent)
+                        {
+                            // The requester gets no successful unlock result unless verification passes.
+                            if (Registered(status) && status.Unlocked)
+                                log.Write("rejected-unlock-lock", new { result = LockCode(backend.Lock()) ?? "ok" });
+                            code = "NotProtected";
+                        }
                     }
                     else
                     {
@@ -181,16 +228,19 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     break;
                 case BrokerCommand.Lock:
                     code = LockCode(backend.Lock());
+                    if (code is null) status = backend.Status();
                     break;
                 case BrokerCommand.Detach when status.Attached && status.Unlocked:
                     code = "MustBeLocked"; break;
                 case BrokerCommand.Detach when status.Attached:
-                    backend.Detach(); break;
+                    backend.Detach();
+                    status = backend.Status();
+                    break;
                 case BrokerCommand.Detach:
                     break;
             }
             log.Write("command", new { client.ProcessId, command, result = code ?? "ok" });
-            return code is null ? Protocol.Ok(backend.Status()) : Protocol.Error(code);
+            return code is null ? Protocol.Ok(status) : Protocol.Error(code);
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {

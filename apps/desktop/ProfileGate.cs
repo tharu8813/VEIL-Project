@@ -12,7 +12,8 @@ namespace Veil.Desktop;
 internal sealed class ProfileLocationException(string message) : IOException(message);
 
 /// <summary>Protection state of a registered profile volume, as reported by the privileged broker.</summary>
-internal sealed record VolumeStatus(string VolumeGuid, bool FullyEncrypted, bool ProtectionOn, bool Unlocked);
+internal sealed record VolumeStatus(string VolumeGuid, bool FullyEncrypted, bool ProtectionOn, bool Unlocked,
+    bool ReadyToUnlock, bool ProtectorPresent);
 
 /// <summary>Read-only view of the volume broker used before the engine starts.</summary>
 internal interface IVolumeBroker
@@ -77,7 +78,7 @@ internal static class ProfileGate
 
         string volume = VolumeGuid(final);
         var status = broker.QueryRegisteredVolume();
-        bool verified = status is { FullyEncrypted: true, ProtectionOn: true, Unlocked: true } &&
+        bool verified = status is { FullyEncrypted: true, ProtectionOn: true, Unlocked: true, ProtectorPresent: true } &&
             string.Equals(status.VolumeGuid, volume, StringComparison.OrdinalIgnoreCase);
         if (requireProtected && !verified)
             throw new ProfileLocationException("The profile is not on the registered protected volume.");

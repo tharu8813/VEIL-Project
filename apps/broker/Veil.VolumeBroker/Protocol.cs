@@ -86,6 +86,8 @@ internal static class Protocol
             fullyEncrypted = status.FullyEncrypted,
             protectionOn = status.ProtectionOn,
             unlocked = status.Unlocked,
+            readyToUnlock = status.ReadyToUnlock,
+            protectorPresent = status.ProtectorPresent,
         },
     });
 }

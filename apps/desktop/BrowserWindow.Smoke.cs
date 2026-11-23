@@ -157,7 +157,7 @@ public partial class BrowserWindow
                     Check(downloads[0] == $"veil-phase0-{type}.bin · 취소됨", $"download label ({type})");
                     if (type == "get")
                     {
-                        Check(DownloadButton.Visibility == Visibility.Visible, "download toolbar icon shown");
+                        await WaitFor(() => DownloadButton.Visibility == Visibility.Visible, "download toolbar icon shown");
                         DownloadsClick(this, new RoutedEventArgs());
                         await WaitFor(() => Active?.Url == "veil://downloads", "downloads opened in tab");
                         Check(Active?.Title == "다운로드", "downloads tab title");

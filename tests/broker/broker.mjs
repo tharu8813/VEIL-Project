@@ -113,7 +113,10 @@ try {
     }
     assert.deepEqual(await command(a, 'Status', { volumeId: 'other' }), { ok: false, error: 'UnknownVolume' });
     assert.deepEqual(await command(a, 'Unlock', { secret }), { ok: false, error: 'NotAttached' });
-    assert.equal((await command(a, 'Attach')).status.attached, true);
+    const attached = (await command(a, 'Attach')).status;
+    assert.equal(attached.attached, true);
+    assert.equal(attached.readyToUnlock, true);
+    assert.equal(attached.protectionOn, false, 'locked metadata is not an attestation');
     assert.deepEqual(await command(a, 'Attach'), { ok: false, error: 'AlreadyAttached' });
     const started = Date.now();
     const wrong = await command(a, 'Unlock', { secret: wrongSecret });
@@ -210,6 +213,13 @@ try {
     assert.equal((await command(d, 'Status')).status.attached, false);
     const e = await startBroker('e', config('e', { fake: { ...config('x').fake, reportedProtectorPresent: false } }));
     assert.deepEqual(await command(e, 'Attach'), { ok: false, error: 'VolumeMismatch' });
+
+    const unprotectedConfig = config('protection-off');
+    unprotectedConfig.fake.reportedProtectionOnAfterUnlock = false;
+    const unprotected = await startBroker('protection-off', unprotectedConfig);
+    assert.equal((await command(unprotected, 'Attach')).status.readyToUnlock, true);
+    assert.deepEqual(await command(unprotected, 'Unlock', { secret }), { ok: false, error: 'NotProtected' });
+    assert.equal((await command(unprotected, 'Status')).status.unlocked, false, 'failed verification must relock');
 
     // F: client executable not registered. G: pipe ACL for another user.
     const f = await startBroker('f', config('f', { clientImages: [desktopExe] }));

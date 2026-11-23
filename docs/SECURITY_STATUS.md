@@ -1,6 +1,6 @@
 # VEIL 보안 구현 상태
 
-> **현재 상태 — Phase 3 BitLocker VHDX 잠금과 복원은 격리 VM에서 실측했다. 제품용 보호 프로필의 잠금 해제·종료 재잠금 코드가 추가되었지만, 이 변경의 VM 실행 검증과 출시 게이트 통과는 남아 있다.**
+> **현재 상태 — 오프라인 VM에서 실제 BitLocker로 일반 사용자 Release 브라우저의 정상 종료·강제 종료·Windows 세션 잠금 후 재잠금과 열린 파일 복구를 확인했다. 절전은 모의 알림을 검증했다. 실제 전원 전환, 설치형 서비스, 출시 게이트 검증은 남아 있다.**
 > `TESTED`는 연결된 시험 범위의 결과다. 전체 보안 검증은 별도로 판정한다.
 
 | ID | 항목 | 현재 상태 | 증거 링크 / 기준 커밋 | 다음 검증 |
@@ -34,7 +34,7 @@
 
 | 게이트 | 판정 | 근거 |
 |---|---|---|
-| A 저장/키 | BLOCKED | 평문 프로필 마커 검출. 암호화 프로필·잠금·키 관리 미구현 |
+| A 저장/키 | BLOCKED | 개발 프로필 평문 마커 검출. 정상·강제 종료 및 Windows 세션 잠금 뒤 재잠금 확인. 실제 절전과 제품 경로의 볼륨 밖 쓰기 검증 필요 |
 | B 지속성/복구 | 일부 시험 PASS, 게이트 미통과 | 정상 재실행과 합성 WebView2 호스트 강제 종료 후 복원에 성공했다. 트랜잭션 도중 종료 및 복구 정책 미검증 |
 | C 다운로드 | BLOCKED | 여덟 유형 취소 확인. 원본 쓰기 추적·금고·내보내기 미검증 |
 | D 보호 네트워크 | BLOCKED | 단일 로컬 프록시 장애 시나리오만 PASS |
@@ -82,5 +82,30 @@
 - IMPLEMENTED / **NOT RUN** — 이미 잠금 해제된 볼륨을 이용한 인증 우회 거부. 브로커도 중복 Unlock 요청에 `AlreadyUnlocked` 반환. 가짜 백엔드 자동 시험에 거부 조건 추가.
 - IMPLEMENTED / **NOT RUN** — 비밀번호 임시 `char[]`와 전송 요청 버퍼 정리, 정상 종료 시 비강제 잠금 요청. 클라이언트 종료 감시는 기존 브로커 코드 사용. 열려 있는 핸들이 있을 때 자동 잠금이 성공한다고 주장하지 않는다.
 - IMPLEMENTED / **NOT RUN** — Release 실행 시 등록된 보호 설정이 없는 경우 평문 개발 프로필로 폴백 차단. Debug 개발 흐름 유지.
-- NOT RUN — 이 커밋의 Windows .NET 빌드, `node tests/broker/broker.mjs`, 실제 BitLocker 백엔드·VHDX 통합, 세션 잠금과 절전 재잠금, 자동 잠금 실패 복구, 충돌/재시작 테스트. 브로커는 아직 설치형 Windows 서비스가 아니다.
+- **PASS — 호스트**에서 앱·브로커 Debug/Release 빌드, 합성 브로커 named pipe 시험 및 데스크톱 강제 종료 회귀를 실행했다. 잠긴 볼륨의 보호 상태 미확정과 잠금 해제 후 보호 미확인을 별도로 처리한다. 합성 시험에서 보호 검증 실패 시 브로커가 잠금 해제를 실패로 처리하고 볼륨을 다시 잠갔다. 증거는 `.veil-dev/broker-test-bfI3EP`, `.veil-dev/desktop-test-gqTDVq`에 있다.
+- **PASS** — 오프라인 `Veil-VM-TESTER`에서 전용 1 GiB VHDX를 XTS-AES-256으로 전체 암호화한 뒤, [실제 BitLocker 콘솔 시험기](../tests/broker/bitlocker-vm.mjs)로 `Status → Attach → Unlock → Lock → Detach`를 실행했다(`BROKER_TEST_EXIT=0`). 연결 직후 잠금 상태에서 `readyToUnlock=true`를 관찰했고, 잠금 해제 직후 `fullyEncrypted`, `protectionOn`, `unlocked`, `protectorPresent`가 모두 `true`였다. 재잠금 후 `unlocked=false`, 분리 후 Windows `Get-DiskImage`의 `Attached=False`, 브로커 정상 종료를 각각 확인했다. 게스트 증거는 `C:\VEIL-Project\.veil-dev\broker-real\broker.log`에 있다.
+- **시험 범위** — 관리자 콘솔의 개발용 브로커와 Node 클라이언트를 사용했다. 시험용 암호는 게스트에서 생성해 표준 입력으로 전달했다. 시험 후 VM을 정상 종료했고 기존 오프라인 스냅샷, 네트워크 연결 없음, 클립보드 및 끌어 놓기 비활성화를 확인했다.
+### 일반 사용자 브라우저 실측 (2026-11-23)
+
+- **PASS** — Release 데스크톱과 Debug BitLocker 브로커를 빌드하고 오프라인 게스트 `C:\VEIL-Project\.veil-dev\desktop-real`에 배치했다. 게스트에서 패키지 SHA-256을 대조한 뒤 전송용 가상 DVD를 분리했다.
+- **최초 실행 실패 및 수정** — 첫 연결에서 BitLocker 조회가 기존 8초 요청 제한을 넘겼다. 브로커는 핸들러에서 확인한 상태를 재사용하고, 잠금·분리 뒤에는 상태를 한 번 새로 조회한다. 클라이언트는 상태 조회에 8초, 변경 명령에 45초의 응답 제한을 적용한다.
+- **PASS** — 일반 사용자 Release WPF가 잠금 해제 대화상자를 표시하고 보호 프로필의 WebView2 새 탭을 열었다. 열린 상태에서 `V:\Profile\webview2\EBWebView` 존재와 Windows BitLocker의 `Unlocked`, `FullyEncrypted`, `ProtectionStatus=On`을 확인했다. 정상 창 닫기 후 동일 브라우저 PID의 `Lock=ok`, `Detach=ok`, 프로세스 종료와 Windows `Get-DiskImage`의 `Attached=False`를 확인했다. 브로커 로그에서 종료 시 첫 상태 확인부터 분리 성공까지 약 22초였다.
+- **시험 범위** — 관리자 ACL이 적용된 제품 클라이언트 등록을 사용했다. 브로커는 격리 VM에서만 서명되지 않은 시험 빌드를 허용한 개발용 콘솔이었다. 게스트 `C:\VEIL-Project\.veil-dev\desktop-real`의 `broker.log`, `desktop-result.json`에 증거를 남겼다. 시험용 등록을 제거하고 VM을 정상 종료했다.
+- **PASS** — 가짜 브로커 회귀와 데스크톱 `--crash-cycle` 통합 시험. 다운로드 아이콘 시험은 디스패처의 UI 갱신을 기다리도록 수정했다. 호스트 증거는 `.veil-dev/broker-test-qxujsW`, `.veil-dev/desktop-test-J4mXWZ`에 있다.
+- **NOT RUN** — 실제 전원 전환 중 재잠금, 설치형 서비스와 서명 인증, 제품 모드의 볼륨 밖 쓰기 계측.
 - **출시 불가** — Gate A, Gate B는 모두 기존과 동일하게 미통과. VM 검증 및 보안 리뷰가 필요하다.
+
+### 실제 볼륨의 강제 종료·열린 파일 복구 시험 (2026-11-23)
+
+- **PASS — 호스트**에서 가짜 BitLocker 브로커 회귀 시험을 재실행했다. 증거는 `.veil-dev/broker-test-PYf3Yb`에 있다.
+- **PASS — 강제 종료** — 오프라인 `Veil-VM-TESTER`의 시험용 BitLocker VHDX에서 일반 사용자 Release 브라우저로 WebView2를 열고 브라우저 프로세스만 종료했다. 브로커의 첫 재잠금 시도가 4.6초 후 성공했고, Windows `Locked`와 프로필 접근 불가를 확인했다.
+- **PASS — 열린 파일 복구** — 같은 보호 볼륨의 합성 파일에 대한 독점 핸들을 남기고 브라우저를 종료했다. 브로커는 `LockRefused`를 세 차례 기록했다. Windows가 `Unlocked`를 보고하고 열린 핸들이 유효한 상태에서 핸들을 닫았다. 3.5초 후 네 번째 시도가 성공했고, Windows `Locked`와 프로필 접근 불가를 확인했다.
+- **범위와 증거** — 게스트 `C:\VEIL-Project\.veil-dev\desktop-crash`의 `broker-live.log`와 `crash-result.json`에 기록했다. 최초 UI 자동화는 포커스를 잡지 못해 중단됐으며, 두 성공 사례는 게스트 콘솔에서 단계별로 실행했다. 개발용 콘솔 브로커의 재잠금을 확인한 뒤, 시험 종료 절차에서 관리자가 VHDX를 분리했다. 재시도 횟수를 소진한 경우의 복구는 미검증이다.
+
+### Windows 세션 잠금과 절전 알림 (2026-11-23)
+
+- **구현** — 보호 프로필 인증 전에 현재 세션의 잠금 알림을 등록한다. 세션 잠금과 절전·절전 복귀 알림은 보호 브라우저를 종료한다. 열린 창 상태를 한 번 저장한 뒤 WebView2 뷰와 프로필 핸들을 닫고 기존 비강제 재잠금 경로로 진행한다. Windows 이벤트 콜백은 볼륨 작업을 기다리지 않는다.
+- **PASS — 호스트** — 데스크톱 Debug/Release 빌드, 가짜 브로커 회귀, 데스크톱 `--crash-cycle` 통합 시험. 증거는 `.veil-dev/broker-test-C0gwJW`, `.veil-dev/desktop-test-tChpVh`에 있다.
+- **PASS — 모의 절전 알림** — 오프라인 VM에서 `PBT_APMSUSPEND`를 일반 사용자 Release 브라우저에 전달했다. 실제 BitLocker VHDX에서 `Lock=ok`, `Detach=ok`, 프로세스 종료와 프로필 접근 불가를 확인했다. 시험의 완료까지 19.8초였으며, `desktop-events/SuspendMessage.json`을 게스트에 남겼다.
+- **PASS — 실제 세션 잠금** — 보호 프로필이 열린 상태에서 `LockWorkStation`으로 Windows 잠금 화면을 띄웠다. 24.6초 후 브라우저 종료, 해당 브라우저 PID의 `Lock=ok`와 `Detach=ok`, Windows 이미지 분리, 프로필 접근 불가를 확인했다. 게스트 `C:\VEIL-Project\.veil-dev\desktop-events\SessionLock.json`과 `broker.log`에 증거를 기록했다. 시험용 등록을 제거하고 VM을 정상 종료했다.
+- **NOT RUN — 실제 절전·복귀** — 시험 VM의 BIOS/펌웨어는 `powercfg /a` 기준 S0 저전력 유휴, S1/S2/S3, 최대 절전 모드를 제공하지 않는다. Windows의 실제 전원 전환이나 전환 완료 전에 잠금이 끝나는지는 검증하지 않았다. [Windows 절전 알림 처리 시간](https://learn.microsoft.com/windows/win32/power/pbt-apmsuspend)
