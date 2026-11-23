@@ -15,7 +15,11 @@ internal sealed class BrowserSession
         Root = root;
         StatePath = Path.Combine(root, "browser-state.json");
         Data = BrowserData.Load(StatePath);
+        Vault = new DownloadVault(root);
     }
+
+    /// <summary>Phase 4-0 encrypted download vault (prototype).</summary>
+    internal DownloadVault Vault { get; }
 
     internal string Root { get; }
     internal string StatePath { get; }

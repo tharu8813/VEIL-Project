@@ -74,6 +74,7 @@ node tests/integration/desktop.mjs
 node tests/integration/desktop.mjs --crash-cycle
 node tests/phase3/profile-routing.mjs
 node tests/phase3/engine-kill.mjs --cycles 5
+node tests/phase4/vault-capture.mjs
 node --test tests/security/outside-writes.test.mjs
 node tests/security/browse-session.mjs --runs 3
 ```
@@ -96,6 +97,8 @@ Rust 1.99.1 MSVC에서 브라우저와 분리된 age 스트리밍, 암호문 변
 ```powershell
 cargo test --release --locked --manifest-path crates/veil-security/Cargo.toml
 ```
+
+다운로드 금고(Phase 4-0)는 `veil-vault.exe`가 필요합니다. 데스크톱 앱보다 먼저 `cargo build --release --locked --manifest-path crates/veil-security/Cargo.toml --bin veil-vault`로 빌드하면 앱 출력 폴더에 복사됩니다. 없으면 모든 다운로드가 차단됩니다(평문 저장 없음).
 
 ## Phase 3 보호 프로필 시작 (개발 중)
 
