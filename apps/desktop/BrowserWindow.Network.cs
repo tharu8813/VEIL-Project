@@ -81,7 +81,7 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
     {
         var network = session.Network;
         string saved = (data.Network ?? NetworkSettings.Standard) == network ? "" : " · 변경 사항은 다시 시작하면 적용";
-        string dns = network.DnsTemplate is null ? "" : " · 보안 DNS";
+        string dns = (network.DnsTemplate is null ? "" : " · 보안 DNS") + SecuritySuffix();
         NetworkIndicator.Text = network.Mode == NetworkMode.Standard
             ? $"표준 보호 · HTTPS 우선 · 추적 방지 엄격{dns}{saved}"
             : session.ProxyReachable == true

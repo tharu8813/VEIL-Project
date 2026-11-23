@@ -21,7 +21,11 @@ internal sealed class BrowserSession
         if (Network.Problem is { } problem) throw new System.Text.Json.JsonException(problem);
         Vault = vault;
         Vault.ConfigureNetwork(Network);
+        // ADR-0007: one security policy for every view of this profile's engine (shared user data folder).
+        Security = new SecurityManager(Data.Security, () => Windows.SelectMany(window => window.CoreViews()));
     }
+
+    internal SecurityManager Security { get; }
 
     /// <summary>Network mode applied to this run's engine (changes take effect after a restart).</summary>
     internal NetworkSettings Network { get; }

@@ -21,6 +21,8 @@ internal sealed class BrowserData
     public List<WindowTabs>? Windows { get; set; }
     /// <summary>Network mode chosen by the user (ADR-0006); null means standard protection.</summary>
     public NetworkSettings? Network { get; set; }
+    /// <summary>Security policy (ADR-0007); null means the safe defaults (SmartScreen on).</summary>
+    public SecuritySettings? Security { get; set; }
 
     internal static BrowserData Load(string path)
     {
