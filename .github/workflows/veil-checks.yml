@@ -2,7 +2,7 @@ name: VEIL Windows build and core checks
 
 on:
   push:
-    branches: [main, "feat/**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
