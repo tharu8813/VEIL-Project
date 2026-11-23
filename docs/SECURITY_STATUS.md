@@ -1,14 +1,14 @@
 # VEIL 보안 구현 상태
 
-> **현재 상태 — Phase 1 개발자용 브라우저와 Phase 2 독립 암호화 코어를 실측했다. Phase 3 경로 오류 시험을 통과했다. 실제 보호 볼륨 통합 시험은 VM 준비를 기다리고 있다.**
+> **현재 상태 — Phase 3 전용 BitLocker VHDX에서 WebView2 프로필의 잠금과 사본 복원을 실측했다. 브라우저의 제품용 보호 프로필 통합과 출시 게이트 검증은 남아 있다.**
 > `TESTED`는 연결된 시험 범위의 결과다. 전체 보안 검증은 별도로 판정한다.
 
 | ID | 항목 | 현재 상태 | 증거 링크 / 기준 커밋 | 다음 검증 |
 |---|---|---|---|---|
 | SEC-001 | 브라우저 엔진 선정 | TESTED | [ADR-0001](decisions/ADR-0001-developer-engine.md) | 출시 엔진은 암호화 저장 및 다운로드 경로 실증 후 재평가 |
 | SEC-002 | 영구 쿠키·사이트 데이터 복원 | TESTED | [Phase 0 실측](phase0-evidence.md) | 정상 재시작과 WebView2 호스트 강제 종료 후 복원 확인. 트랜잭션 도중 종료·엔진 손상·세션 쿠키 정책 시험 |
-| SEC-003 | 잠긴 프로필의 암호화 보호 | BLOCKED | [Phase 0 실측](phase0-evidence.md), [Phase 3 경로 시험](../tests/phase3/profile-routing.mjs) | 지정된 프로필에서 정상 복원 및 3종 오류 시 탐색 중단 확인. BitLocker 볼륨과 오프라인 복사는 VM 준비 후 시험 |
-| SEC-004 | 프로필 평문 임시 파일 방지 | BLOCKED | [프로필 마커 실측](phase0-evidence.md) | 승인된 격리 환경에서 Procmon/ETW로 앱·하위 프로세스·TEMP 추적 |
+| SEC-003 | 잠긴 프로필의 암호화 보호 | IN PROGRESS | [BitLocker VHDX 잠금과 복원 실측](05-encrypted-profile.md#2026-11-23-bitlocker-vhdx-실측), [전체 데스크톱 잠금 시험](05-encrypted-profile.md#전체-데스크톱-상태의-잠금-시험), [ADR-0003](decisions/ADR-0003-volume-broker.md) | 제품 실행 경로에서 보호 볼륨 식별, 자동 잠금 및 강제 종료 복구 |
+| SEC-004 | 프로필 평문 임시 파일 방지 | IN PROGRESS | [Procmon 쓰기 추적](05-encrypted-profile.md#2026-11-23-bitlocker-vhdx-실측) | 전체 앱의 TEMP·덤프·캐시 및 충돌 경로, 매핑된 쓰기와 OS 기록 검증 |
 | SEC-005 | Rust 인증 암호화 코어 | TESTED | [Phase 2 실측](phase2-evidence.md) | 독립 코어의 왕복, 변조·잘림, 64 MiB 스트리밍, 강제 종료 시험 통과. 의존성 보안 감사 및 앱 통합 |
 | SEC-006 | 마스터 키·잠금·백업/복구 | IN PROGRESS | [ADR-0002](decisions/ADR-0002-phase2-age.md), [Phase 2 실측](phase2-evidence.md) | 키 봉투와 객체 사본 복원 확인. 브라우저 잠금, 키 회전, 백업 정책, 메모리/OS 노출 검증 |
 | SEC-007 | 다운로드 스트리밍 보호 | BLOCKED | [Phase 0 실측](phase0-evidence.md), [앱 다운로드 취소 시험](../tests/integration/desktop.mjs) | 시험 옵션 적용 시 단일 GET의 메모리 본문 해시 일치. 유형별 본문, 보호 스트리밍, 쓰기 경로 검증 |
@@ -59,3 +59,14 @@
 | 2026-11-23 | Phase 2 | Rust 단위/통합 실행 5건, 자식 강제 종료와 임시 암호문 검증, Clippy | [Phase 2 실측](phase2-evidence.md) | 개발 작업 |
 | 2026-11-23 | Phase 0 추가 | IPv4·IPv6 루프백 프록시 장애와 대조군, 단일 GET의 응답 본문 해시 비교 | [Phase 0 실측](phase0-evidence.md) | 개발 작업 |
 | 2026-11-23 | Phase 3 선행 | 지정 프로필 재사용, 프로필 경로·하위 경로 충돌, 환경 변수 재정의 차단 | [경로 시험](../tests/phase3/profile-routing.mjs) · [VM 구성](05-encrypted-profile.md#virtualbox-실험-vm-구성) | 개발 작업 |
+| 2026-11-23 | 격리 VM 교차 검증 | Windows 11 VirtualBox 게스트에서 `348fe84` Git 무결성 검사, 잠금 파일 기반 오프라인 .NET 복원·빌드, Rust 암호화 코어 및 데스크톱 통합 시험 통과. 프로필 경로 시험은 엔진 오류 대화상자를 표시했고 종료 코드 1을 반환했다. | 게스트 `C:\VEIL-Project\.veil-dev\{rust,profile,desktop}.log` | 개발 작업 |
+| 2026-11-23 | 격리 VM 기준점 | 전송 DVD 분리, VM 네트워크 연결 및 클립보드·드래그 앤 드롭 비활성, 전원 종료 확인 후 `01-veil-tools-offline` 생성. `00-windows-clean`과 이전 오프라인 기준점 보존. | VirtualBox 스냅샷 `e088084b-d435-44e5-b3ba-c7a8e043deed` | 개발 작업 |
+| 2026-11-23 | Phase 3 프로필 오류 재시험 | WebView2 초기화 전에 엔진 폴더를 막는 파일을 감지해 프로필 열기를 중단하도록 수정. 호스트와 오프라인 VM에서 경로 시험 PASS. 호스트 데스크톱 통합 PASS. 게스트에서 BitLocker 및 디스크 이미지 관리 명령 확인. | 게스트 작업 트리의 `348fe84` + 경로 처리 패치 · `.veil-dev/profile-routing-xEcvRj/evidence.json` | 개발 작업 |
+| 2026-11-23 | Phase 3 BitLocker 볼륨 실험 | 격리 VM 전용 1 GiB VHDX를 XTS-AES-256으로 100% 암호화한 뒤 일반 사용자 WebView2에서 합성 저장소 5종을 기록했다. 잠긴 원본의 프로필 열람 차단, 분리 사본 해시 일치, 사본 내 ASCII 마커 부재, 잠긴 사본의 잘못된 암호 거부를 관찰했다. | 게스트 `.veil-dev/bitlocker-before.json`, `.veil-dev/bitlocker-write.pml` | 개발 작업 |
+| 2026-11-23 | Phase 3 BitLocker 사본 복원과 추적 | 올바른 임시 암호로 잠금을 해제한 사본에서 사이트 저장소 5종 복원. 시험 PID와 자식 PID의 성공한 드라이브 경로 파일 쓰기 1,824건은 V:, 1건은 게스트 C:의 의도된 결과 JSON이었다. | [실험 범위와 증거 위치](05-encrypted-profile.md#2026-11-23-bitlocker-vhdx-실측) | 개발 작업 |
+| 2026-11-23 | 전체 데스크톱 잠금 시험 준비 | 별도 프로필 폴더와 잠금·해제 검증 지점을 통합 시험에 추가했다. 호스트에서 합성 경로 차단으로 시작 거부, 원점 요청 없음 및 재개 후 북마크·기록·탭과 사이트 데이터 복원을 확인했다. 이 실행에서는 실제 BitLocker 잠금을 사용하지 않았다. | [시험 절차](05-encrypted-profile.md#전체-데스크톱-상태의-잠금-시험) · `.veil-dev/desktop-test-fau8rb` | 개발 작업 |
+| 2026-11-23 | 전체 데스크톱 BitLocker 실측 | 첫 실행의 기존 상태 파일 교체가 실패해 탭 스냅샷이 오래된 채 남았다. 동일 디렉터리에서 이름을 바꿔 발행하도록 변경하고 종료 후 상태 파일 검증을 추가했다. 재시험에서 실제 잠금 중 앱 시작 거부·원점 요청 없음·잠금 해제 후 북마크·기록·선택 탭·사이트 데이터 복원 및 손상 파일 차단을 확인했다. | 게스트 `C:\VEIL-Project\.veil-dev\desktop-test-tmRNbj` | 개발 작업 |
+| 2026-11-23 | 전체 데스크톱 강제 종료 회귀 | 별도 합성 임시 상태 파일을 쓰는 브라우저 호스트를 강제로 종료했다. 마지막 정상 상태 보존과 사이트 데이터·북마크·기록·선택 탭 복원을 확인했다. 임시 상태만 남은 프로필은 시작을 중단했다. 전원 차단과 엔진 자체의 쓰기 도중 종료는 시험 범위 밖이다. | [테스트 실행기](../tests/integration/desktop.mjs) · 호스트 `.veil-dev/desktop-test-QQqSnB` | 개발 작업 |
+| 2026-11-23 | 격리 VM 강제 종료 회귀 | 별도 복제본에서 잠금 파일 기반 오프라인 빌드 및 `--crash-cycle` 통과. 게스트 일반 디스크의 합성 프로필을 사용했다. BitLocker 볼륨에서의 강제 종료 조합은 별도 시험 대상이다. | 게스트 `C:\VEIL-Project\.veil-dev\crash-verify\.veil-dev\desktop-test-uONpSq`의 `crash.json`, `orphaned.json`, `read.json` | 개발 작업 |
+| 2026-11-23 | 보호 프로필 권한 분리 결정 | 브라우저 일반 권한 + 볼륨 전용 로컬 서비스 구조 승인. 볼륨 식별, 호출자 인증, 시작 차단, 핸들 종료·자동 잠금, 설치·제거 기준 기록. 구현과 시험은 하지 않았다. 호스트에서 `--profile-parent`와 `--crash-cycle` 조합 PASS. | [ADR-0003](decisions/ADR-0003-volume-broker.md) · 호스트 `.veil-dev/desktop-test-RlmZGw` | 사용자 승인 |
+| 2026-11-23 | 브라우저 시작 차단 검사 | ADR-0003 1단계. 관리자 권한 거부, 접합점·재분석 지점·네트워크 경로 거부, 최종 경로 일치, 볼륨 GUID 확인 및 브로커 인터페이스(개발용 미검증 구현) 추가. 호스트 경로 시험(접합점 2종 포함)과 데스크톱 통합·강제 종료 시험 PASS. 관리자 실행 거부, VM·BitLocker 재실행, 브로커 미구현. | [시작 차단 검사](05-encrypted-profile.md#브라우저-시작-차단-검사-adr-0003-1단계) · 호스트 `.veil-dev/profile-routing-8h1Fnq` | 개발 작업 |

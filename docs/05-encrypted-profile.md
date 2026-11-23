@@ -72,3 +72,49 @@ node tests/phase3/profile-routing.mjs --profile-parent 'V:\VEIL-Lab'
 ```
 
 `--profile-parent`는 지정된 기존 폴더 아래 무작위 테스트 디렉터리를 만든다. 경로 시험은 WebView2가 컨트롤러 초기화 전에 보고한 UDF 문자열과 정상 재사용, 경로 오류 및 환경 변수 재정의를 검사한다. 실제 볼륨 식별과 접합점·재분석 지점, BitLocker 보호 상태, 볼륨 밖의 브라우저 호스트·하위 프로세스 파일 쓰기는 게스트에서 별도로 계측한다. 분석은 TEMP와 엔진 캐시·덤프 경로를 포함한다. [Microsoft Procmon](https://learn.microsoft.com/sysinternals/downloads/procmon)
+
+### 2026-11-23 BitLocker VHDX 실측
+
+- 격리된 `Veil-VM-TESTER`에서 전용 1 GiB VHDX의 NTFS 볼륨을 `V:`에 연결했다. BitLocker XTS-AES-256 전체 암호화 100% 및 보호 상태 `On` 확인 후 쓰기를 시작했다.
+- 일반 사용자 WebView2 157.0.4341.60이 전용 UDF `V:\VEIL-Lab\restart`에 영구 쿠키, LocalStorage, IndexedDB, Service Worker, CacheStorage를 기록했다. 원본 잠금 후 프로필 열람이 차단됐다. 분리한 이미지의 사본은 원본과 SHA-256이 일치했고 합성 ASCII 마커는 발견되지 않았다.
+- 원본을 연결하지 않은 상태로 사본을 연결했다. 잘못된 암호가 거부되고 올바른 임시 암호로 열린 사본에서, 같은 루프백 원점과 일반 사용자 계정으로 WebView2를 새로 실행해 다섯 종류의 사이트 데이터가 복원됐다. 사본은 다시 잠그고 분리했으며 일회성 암호는 폐기했다.
+- Procmon 쓰기 추적에서 전용 프로필을 연 시험 PID 및 자식 PID의 성공한 드라이브 경로 `WriteFile`은 `V:` 1,824건, `C:` 1건이었다. `C:` 한 건은 의도적으로 저장한 테스트 결과 JSON이다. 동일한 실행 파일 이름으로 동작한 Windows 구성 요소의 별도 UDF 쓰기는 시험 PID 집계에서 제외했다.
+- 게스트 `C:\VEIL-Project\.veil-dev`에 `bitlocker-before.json`, `bitlocker-after.json`, `bitlocker-write.pml`, `bitlocker-write.csv`, `bitlocker-scoped-outside-writes.json`을 보관한다. 단일 정상 프로필 쓰기 및 오프라인 사본 복원 시험이며 앱의 자동 잠금, 북마크·기록 저장, 강제 종료, 시스템 페이지 파일·덤프, 전체 파일 I/O 경로는 후속 검증 대상이다.
+
+### 전체 데스크톱 상태의 잠금 시험
+
+BitLocker 보호가 완료된 실험 볼륨에 빈 테스트 폴더를 만든 후 일반 사용자 창에서 실행한다.
+
+```powershell
+node tests/integration/desktop.mjs --profile-parent 'V:\VEIL-Lab' --lock-cycle
+```
+
+시험은 무작위 테스트 프로필에 WebView2 데이터와 `browser-state.json`을 생성하고 정상 종료한다. 출력한 증거 디렉터리의 `ready.json`을 확인한 뒤 관리자 창에서 검증 대상 VHDX를 잠그고, 실제 잠금을 확인한 뒤 그 증거 디렉터리에 빈 `locked` 파일을 만든다. 시험은 잠긴 경로에서 앱 시작이 거부되고 합성 원점으로 새 요청이 가지 않는지 확인한다. `locked-checked`가 생성되면 같은 볼륨을 잠금 해제한 후 `unlocked`를 만들어 재실행과 북마크·기록·탭·사이트 데이터 복원을 확인한다. 신호 파일은 실험 진행에만 쓰며 볼륨의 보호 상태는 BitLocker에서 따로 확인한다.
+
+2026-11-23 실제 BitLocker VHDX 시험에서는 최초 실행의 탭 복원 단언이 실패했다. `browser-state.json`은 첫 저장본에 머물렀고 `.new` 파일이 남아 있었다. 같은 디렉터리에서 새 파일로 상태를 교체하도록 수정하고, 정상 종료 후 디스크 상태가 열린 세션과 일치하는지 시험에 추가했다. 재실행에서 `FullyEncrypted` / `ProtectionStatus=On`을 확인했으며, 잠금 중 시작은 `IOException`으로 거부됐다. 잠금 해제 후 탭과 선택 인덱스, 북마크, 방문 기록, 사이트 데이터 5종 복원 및 손상된 상태 파일 차단이 통과했다. 증거는 게스트 `.veil-dev/desktop-test-tmRNbj`에 있다. 앱 실행 자체의 보호 볼륨 강제와 자동 잠금은 별도 제품 통합 대상이다.
+
+### BitLocker 볼륨의 강제 종료·잠금 조합 시험 (준비)
+
+실행기는 두 옵션을 함께 받는다. 잠금 해제한 실험 볼륨의 빈 폴더를 지정해 일반 사용자 창에서 실행한다.
+
+```powershell
+node tests/integration/desktop.mjs --profile-parent 'V:\VEIL-Lab' --crash-cycle --lock-cycle
+```
+
+첫 기록 후 합성 임시 상태를 쓰는 브라우저 호스트를 강제로 종료하고, 마지막 정상 상태 보존과 임시 파일만 남은 프로필의 시작 차단을 확인한 다음 위의 잠금·해제 신호 절차를 진행한다. 2026-11-23 호스트에서 일반 디스크의 별도 상위 폴더로 `--profile-parent … --crash-cycle` 조합이 통과했다(`.veil-dev/desktop-test-RlmZGw`). BitLocker 볼륨에서의 실행은 아직 하지 않았다.
+
+### 브라우저 시작 차단 검사 (ADR-0003 1단계)
+
+[ADR-0003](decisions/ADR-0003-volume-broker.md)의 브라우저 쪽 검사를 [ProfileGate.cs](../apps/desktop/ProfileGate.cs)에 구현했다. 일반 실행, `--smoke`, `--probe` 모두 WebView2 환경을 만들기 전에 다음을 확인한다. 실패하면 `ProfileLocationException`(`IOException` 하위)으로 시작을 중단한다.
+
+- 관리자 권한 토큰으로 실행되면 거부한다.
+- 프로필 경로가 아직 없으면 가장 가까운 기존 상위 폴더를 먼저 검사한 뒤 생성한다. 접합점이 걸린 상위 폴더 아래에는 새 프로필 폴더를 만들지 않는다.
+- 프로필과 모든 상위 폴더에서 재분석 지점(접합점·심볼릭 링크)을 거부한다. 네트워크·UNC 경로를 거부한다.
+- 디렉터리 핸들의 최종 경로가 요청 경로와 같아야 한다. 이후 볼륨 GUID를 구한다.
+- 볼륨 상태는 `IVolumeBroker`로 받는다. 브로커가 아직 없어 현재 모든 실행은 `UnmanagedDevelopmentVolume`을 쓴다. 이 구현은 보호 여부를 주장하지 않는다(`Protected=false`). `requireProtected` 검사는 코드에 있으나 제품 실행 경로에서 아직 켜지 않았다.
+
+2026-11-23 호스트 결과(일반 사용자 권한):
+
+- PASS — `node tests/phase3/profile-routing.mjs`. 프로필 자체가 접합점인 경우와 접합점 상위 폴더 아래 프로필 모두 종료 코드 1, `ProfileLocationException`, 대상 폴더 비어 있음, 합성 원점 요청 없음. 증거 `.veil-dev/profile-routing-8h1Fnq/evidence.json`.
+- PASS — `node tests/integration/desktop.mjs`(`.veil-dev/desktop-test-w314hT`), `node tests/integration/desktop.mjs --crash-cycle`(`.veil-dev/desktop-test-bi4rrl`).
+- NOT RUN — 관리자 권한 실행 거부(일반 사용자 셸에서는 재현할 수 없다), `subst`·심볼릭 링크·네트워크 경로, 격리 VM과 BitLocker 볼륨에서의 재실행, 브로커를 통한 보호 상태 조회.

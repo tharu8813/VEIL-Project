@@ -1,0 +1,45 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build: desktop",
+            "detail": "dotnet build apps/desktop (Debug)",
+            "type": "process",
+            "command": "dotnet",
+            "args": ["build", "${workspaceFolder}/apps/desktop/Veil.Desktop.csproj", "-c", "Debug", "--nologo",
+                     "/property:GenerateFullPaths=true", "/consoleloggerparameters:NoSummary"],
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "test: desktop integration",
+            "type": "process",
+            "command": "node",
+            "args": ["tests/integration/desktop.mjs"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "dependsOn": "build: desktop",
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "test: desktop crash recovery",
+            "type": "process",
+            "command": "node",
+            "args": ["tests/integration/desktop.mjs", "--crash-cycle"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "dependsOn": "build: desktop",
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "test: profile routing",
+            "type": "process",
+            "command": "node",
+            "args": ["tests/phase3/profile-routing.mjs"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "dependsOn": "build: desktop",
+            "group": "test",
+            "problemMatcher": []
+        }
+    ]
+}

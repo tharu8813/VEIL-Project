@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "VEIL 브라우저 (개발 프로필)",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build: desktop",
+            "program": "${workspaceFolder}/apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "console": "internalConsole",
+            "stopAtEntry": false,
+            "justMyCode": true
+        }
+    ]
+}

@@ -21,6 +21,10 @@ dotnet .\apps\desktop\bin\Debug\net10.0-windows\Veil.Desktop.dll
 
 프로토타입은 현재 작업 디렉터리의 `.veil-dev/desktop`을 사용합니다. 엔진 데이터는 그 아래 `webview2/`에, 북마크·기록·열린 탭은 `browser-state.json`에 저장합니다. 테스트용 프로필 하나는 동시에 한 VEIL 프로세스에서만 열 수 있습니다. 잘못된 상태 파일을 읽으면 프로필 열기를 중단합니다.
 
+### VS Code에서 실행
+
+저장소 루트 폴더를 VS Code로 열고 권장 확장(C# Dev Kit)을 설치합니다. **F5**(디버그) 또는 **Ctrl+F5**(디버그 없이)를 누르면 `build: desktop` 작업으로 Debug 빌드한 뒤 `VEIL 브라우저 (개발 프로필)` 구성으로 앱을 실행합니다. 작업 디렉터리는 저장소 루트이므로 위와 같은 `.veil-dev/desktop` 프로필을 사용합니다. **Ctrl+Shift+B**는 빌드만 실행하고, `작업 실행` 메뉴의 `test: …` 작업으로 데스크톱 통합·강제 종료·프로필 경로 시험을 실행할 수 있습니다. VS Code를 관리자 권한으로 실행하지 마세요.
+
 ## 로컬 사이트에서 시험
 
 Node.js 22 이상에서 아래 명령을 실행하고 VEIL 주소창에 `http://127.0.0.1:8765`를 입력합니다.
@@ -43,6 +47,7 @@ node tests/phase0/proxy.mjs
 node tests/phase0/proxy.mjs --ipv6
 node tests/phase0/browser-crash.mjs
 node tests/integration/desktop.mjs
+node tests/integration/desktop.mjs --crash-cycle
 node tests/phase3/profile-routing.mjs
 ```
 

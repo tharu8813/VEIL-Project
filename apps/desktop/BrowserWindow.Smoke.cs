@@ -25,6 +25,17 @@ public partial class BrowserWindow
                 Check(ResolveAddress("127.0.0.1:8765")?.AbsoluteUri == "http://127.0.0.1:8765/", "fixture address");
                 Check(ResolveAddress("file:///C:/secret") is null &&
                     ResolveAddress("https://username@example.test") is null, "address scheme and credentials rejected");
+                foreach (var field in new[] { Address, FindText })
+                {
+                    // Reading the brush throws if the theme assigns a Color where a Brush is required.
+                    Check(field.SelectionBrush is System.Windows.Media.SolidColorBrush, $"{field.Name} selection brush");
+                    field.Text = "selection check";
+                    field.Focus();
+                    field.SelectAll();
+                    await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+                    Check(field.SelectionLength == field.Text.Length, $"{field.Name} text selection renders");
+                    field.Text = "";
+                }
 
                 if (stage == "write")
                 {
@@ -32,6 +43,16 @@ public partial class BrowserWindow
                     await ReadyAt("/");
                     BookmarkClick(this, new RoutedEventArgs());
                     Check(data.Bookmarks.Count == 1, "bookmark created");
+                    BookmarksClick(this, new RoutedEventArgs());
+                    await WaitFor(() => Active?.Url == "veil://bookmarks", "bookmark library opened in tab");
+                    Check(Active?.Title == "북마크", "bookmark library tab title");
+                    CloseTab((TabItem)Tabs.SelectedItem);
+                    await ReadyAt("/");
+                    HistoryClick(this, new RoutedEventArgs());
+                    await WaitFor(() => Active?.Url == "veil://history", "history opened in tab");
+                    Check(Active?.Title == "방문 기록", "history tab title");
+                    CloseTab((TabItem)Tabs.SelectedItem);
+                    await ReadyAt("/");
                     NavigateAddress(origin + "/second");
                     await ReadyAt("/second");
                     await WaitFor(() => Back.IsEnabled, "back button");
@@ -69,9 +90,8 @@ public partial class BrowserWindow
                     Check(Tabs.Items.Count == 3, "closed tab restored");
                     Tabs.SelectedIndex = 1;
                     SaveTabs();
-                    Check(File.Exists(statePath), "browser state saved");
                 }
-                else if (stage == "read")
+                else if (stage is "read" or "crash")
                 {
                     Check(Tabs.Items.Count == 3 && Tabs.SelectedIndex == 1, "tabs and selection restored");
                     await ReadyAt("/");
@@ -79,6 +99,40 @@ public partial class BrowserWindow
                     Check(data.History.Any(entry => entry.Url.EndsWith("/second")), "history restored");
                     await Active!.View.ExecuteScriptAsync("probe('read').then(result => window.smoke = Object.values(result).every(Boolean)); null;");
                     await WaitForScript("window.smoke === true", "five site storage types restored");
+                    if (stage == "read")
+                    {
+                        // Tabs move between windows without reloading; the second window is persisted.
+                        var moving = Active!;
+                        await moving.View.ExecuteScriptAsync("window.veilMarker = 42; null");
+                        int count = Tabs.Items.Count;
+                        var other = MoveTabToNewWindow(moving.Item);
+                        await WaitFor(() => moving.Owner == other && !other.IsRestoring &&
+                            other.Tabs.Items.Contains(moving.Item) && Tabs.Items.Count == count - 1, "tab moved to a new window");
+                        Check(await moving.View.ExecuteScriptAsync("window.veilMarker") == "42", "moved tab kept its live page");
+                        SaveSession();
+                        Check(BrowserData.Load(statePath).Windows is [{ Tabs.Count: 1 }], "second window persisted");
+                        other.DetachTab(moving.Item);
+                        AttachTab(moving.Item, 0);
+                        await WaitFor(() => !session.Windows.Contains(other) && Tabs.Items.IndexOf(moving.Item) == 0 &&
+                            Active == moving && Tabs.Items.Count == count, "tab merged back at the front");
+                        Check(await moving.View.ExecuteScriptAsync("window.veilMarker") == "42", "merged tab kept its live page");
+                        MoveSelectedTab(1);
+                        Check(Tabs.Items.IndexOf(moving.Item) == 1 && Active == moving, "keyboard tab reorder");
+                        Check(BrowserData.Load(statePath).Windows is null, "merged window removed from state");
+                    }
+                    if (stage == "crash")
+                    {
+                        using var temporary = new FileStream(statePath + ".new", FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+                        temporary.Write("{\"Bookmarks\":"u8);
+                        temporary.Flush(flushToDisk: true);
+                        File.WriteAllText(report, JsonSerializer.Serialize(new
+                        {
+                            browserPid = Active.View.CoreWebView2.BrowserProcessId,
+                            interruptedStateReady = true
+                        }));
+                        // The harness terminates this process with the synthetic partial state still open.
+                        await Task.Delay(Timeout.InfiniteTimeSpan);
+                    }
                 }
                 else throw new ArgumentException("Unknown desktop smoke stage.");
 
@@ -93,6 +147,7 @@ public partial class BrowserWindow
                 {
                     var original = Tabs.SelectedItem;
                     Check(await OpenTab(origin) is not null, $"fresh download tab ({type})");
+                    var downloadTab = (TabItem)Tabs.SelectedItem;
                     await ReadyAt("/");
                     if (type == "sw")
                         await WaitForScript("Boolean(navigator.serviceWorker.controller)", "service worker has control");
@@ -100,8 +155,21 @@ public partial class BrowserWindow
                     await Active!.View.ExecuteScriptAsync(script + "; null");
                     await WaitFor(() => downloads.Count == count + 1, $"download cancelled ({type})");
                     Check(downloads[0] == $"veil-phase0-{type}.bin · 취소됨", $"download label ({type})");
-                    CloseTab((TabItem)Tabs.SelectedItem);
-                    Tabs.SelectedItem = original;
+                    if (type == "get")
+                    {
+                        Check(DownloadButton.Visibility == Visibility.Visible, "download toolbar icon shown");
+                        DownloadsClick(this, new RoutedEventArgs());
+                        await WaitFor(() => Active?.Url == "veil://downloads", "downloads opened in tab");
+                        Check(Active?.Title == "다운로드", "downloads tab title");
+                        CloseTab((TabItem)Tabs.SelectedItem);
+                        CloseTab(downloadTab);
+                        Tabs.SelectedItem = original;
+                    }
+                    else
+                    {
+                        CloseTab(downloadTab);
+                        Tabs.SelectedItem = original;
+                    }
                 }
             }
             catch (Exception exception)
@@ -117,6 +185,21 @@ public partial class BrowserWindow
                 Close();
                 try { await exit.Task.WaitAsync(TimeSpan.FromSeconds(12)); }
                 catch (TimeoutException) { error ??= "WebView2 did not exit after closing the desktop window."; }
+            }
+            if (stage == "write" && error is null)
+            {
+                try
+                {
+                    var saved = BrowserData.Load(statePath);
+                    if (saved.Tabs.Count != 3 || saved.Selected != 1 || saved.Bookmarks.Count != 1 ||
+                        !saved.History.Any(entry => entry.Url.EndsWith("/second")))
+                        throw new InvalidDataException("Saved desktop state does not match the open session.");
+                    checks.Add("browser state persisted after closing");
+                }
+                catch (Exception exception)
+                {
+                    error = $"{exception.GetType().Name}: {exception.Message}";
+                }
             }
             File.WriteAllText(report, JsonSerializer.Serialize(new { checks, error }));
             Application.Current.Shutdown(error is null ? 0 : 1);

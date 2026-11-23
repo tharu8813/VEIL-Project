@@ -6,9 +6,16 @@ namespace Veil.Desktop;
 
 internal static class Program
 {
+    // ADR-0003: which volume authority the startup gate consults. Smoke and probe runs stay on the
+    // unmanaged development volume; a product install with %ProgramData%\VEIL\client.json uses the broker.
+    private static IVolumeBroker volume = UnmanagedDevelopmentVolume.Instance;
+    private static bool requireProtected;
+
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args is ["--broker-status", var clientConfig, var gateProfile, var gateReport])
+            return BrokerStatus(clientConfig, gateProfile, gateReport);
         var application = new Application();
         if (args is ["--probe", var profile, var origin, var action, var report])
             return application.Run(new EngineProbe(profile, origin, action, report));
@@ -18,22 +25,53 @@ internal static class Program
 
         bool smoke = args is ["--smoke", _, _, _, _];
         if (!smoke && args.Length != 0) return 2;
-        var root = Path.GetFullPath(smoke ? args[1] : Path.Combine(".veil-dev", "desktop"));
+        string? root = null;
         try
         {
-            Directory.CreateDirectory(root);
+            ProfileGate.RejectElevated();
+            string? productProfile = null;
+            if (!smoke && File.Exists(BrokerClientConfig.ProductPath))
+            {
+                var client = BrokerClientConfig.Load(BrokerClientConfig.ProductPath, development: false);
+                productProfile = client.ProfilePath ?? throw new InvalidDataException("No registered profile path.");
+                volume = new NamedPipeVolumeBroker(client);
+                requireProtected = true;
+            }
+            root = Path.GetFullPath(smoke ? args[1] : productProfile ?? Path.Combine(".veil-dev", "desktop"));
+            ProfileGate.Prepare(root, volume, requireProtected);
             using var profileLock = new FileStream(Path.Combine(root, "profile.lock"), FileMode.OpenOrCreate,
                 FileAccess.ReadWrite, FileShare.None);
             var window = new BrowserWindow(root);
             if (smoke) window.ConfigureSmoke(args[2], args[3], args[4]);
             return application.Run(window);
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            System.Text.Json.JsonException or InvalidDataException)
         {
             if (smoke) File.WriteAllText(args[4], System.Text.Json.JsonSerializer.Serialize(new { error = error.GetType().Name }));
             else MessageBox.Show("테스트 프로필을 열 수 없습니다. 실행 중인 VEIL 창과 저장 위치를 확인하세요.", "VEIL 개발자용");
             return 1;
         }
+    }
+
+    /// <summary>Development check of the gate against a running broker; never starts the engine.</summary>
+    private static int BrokerStatus(string clientConfig, string profile, string report)
+    {
+        object result;
+        try
+        {
+            ProfileGate.RejectElevated();
+            var broker = new NamedPipeVolumeBroker(BrokerClientConfig.Load(clientConfig, development: true));
+            var location = ProfileGate.Verify(profile, broker, requireProtected: true);
+            result = new { error = (string?)null, location.Protected, location.VolumeGuid };
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            System.Text.Json.JsonException or InvalidDataException)
+        {
+            result = new { error = $"{error.GetType().Name}: {error.Message}" };
+        }
+        File.WriteAllText(report, System.Text.Json.JsonSerializer.Serialize(result));
+        return result.GetType().GetProperty("error")!.GetValue(result) is null ? 0 : 1;
     }
 
     internal static async Task<CoreWebView2Environment> CreateEngine(
@@ -46,8 +84,12 @@ internal static class Program
                 throw new InvalidOperationException("WebView2 환경 재정의 설정을 제거한 뒤 다시 실행하세요.");
         }
 
+        ProfileGate.RejectElevated();
         string expected = Path.TrimEndingDirectorySeparator(Path.GetFullPath(profile));
-        Directory.CreateDirectory(expected);
+        ProfileGate.Prepare(expected, volume, requireProtected);
+        // Reject this collision before the runtime can display a native error dialog.
+        if (File.Exists(Path.Combine(expected, "EBWebView")))
+            throw new IOException("The WebView2 profile directory is obstructed by a file.");
         var options = new CoreWebView2EnvironmentOptions { ExclusiveUserDataFolderAccess = true };
         if (loopbackProxyPort is ushort port)
             options.AdditionalBrowserArguments = $"--proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback>";

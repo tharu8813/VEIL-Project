@@ -52,7 +52,7 @@ try {
     await writeFile(join(inside, 'EBWebView'), 'synthetic engine path obstruction');
     const blockedEngine = await probe('blocked-engine', inside, 'read');
     assert.equal(blockedEngine.exitCode, 1);
-    assert.ok(blockedEngine.error);
+    assert.match(blockedEngine.error, /IOException: The WebView2 profile directory is obstructed by a file/);
     assert.equal(await readFile(join(inside, 'EBWebView'), 'utf8'), 'synthetic engine path obstruction');
     assert.deepEqual(await readdir(inside), ['EBWebView']);
 
@@ -68,11 +68,36 @@ try {
     const entries = await readdir(profileRoot);
     assert.ok(!entries.includes('unexpected-user-data'));
     assert.ok(!entries.includes('expected-user-data'));
+    // ADR-0003 startup gate: a junction at the profile or at a parent must stop startup before any engine write.
+    const links = [];
+    async function junction(link, target) {
+        await mkdir(target);
+        await run('cmd', ['/d', '/c', 'mklink', '/J', link, target]);
+        links.push(link);
+    }
+    const junctions = {};
+    try {
+        const leafTarget = join(profileRoot, 'junction-target');
+        await junction(join(profileRoot, 'junction-profile'), leafTarget);
+        junctions.leaf = await probe('junction-profile', join(profileRoot, 'junction-profile'), 'read');
+        const parentTarget = join(profileRoot, 'junction-parent-target');
+        await junction(join(profileRoot, 'junction-parent'), parentTarget);
+        junctions.parent = await probe('junction-parent', join(profileRoot, 'junction-parent', 'child'), 'read');
+        for (const result of Object.values(junctions)) {
+            assert.equal(result.exitCode, 1);
+            assert.match(result.error, /^ProfileLocationException: /);
+        }
+        assert.deepEqual(await readdir(leafTarget), []);
+        assert.deepEqual(await readdir(parentTarget), []);
+        assert.equal(requests.get('/') ?? 0, navigations, 'a junction launch reached the fixture');
+    } finally {
+        for (const link of links) await run('cmd', ['/d', '/c', 'rmdir', link]);
+    }
     const workingDirectory = await readdir(directory);
     assert.ok(!workingDirectory.some(name => name.endsWith('.WebView2')), 'unexpected default profile in the probe working directory');
 
     await writeFile(join(directory, 'evidence.json'), JSON.stringify({
-        profileRoot, write, read, invalidRoot, blockedEngine, blockedOverride, navigations,
+        profileRoot, write, read, invalidRoot, blockedEngine, blockedOverride, junctions, navigations,
     }, null, 2));
     console.log('PASS selected profile and fail-closed routing scenarios', directory);
 } finally {
