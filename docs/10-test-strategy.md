@@ -76,6 +76,8 @@
 - 금고 디스크 부족(`vault-disk-full`)
 - 인터넷 VM 항목(`internet-*`): DNS 실제 경로, IPv6·WebRTC, 절전·네트워크 전환, 실제 SmartScreen 경고·다운로드 판정·Windows 설정 재정의, 실제 사이트 호환성. 오프라인 VM에서는 실행하지 않는다.
 
+VirtualBox `keyboardputstring`으로 명령을 입력할 때 주의할 점이 있다. 큰따옴표는 Windows 인수 전달 과정에서 빠지므로 작은따옴표만 쓴다. 인수가 `\`로 끝나면 다음 따옴표가 이스케이프되므로 이런 인수는 피한다. Procmon은 기본 위치(`C:\Tools\Procmon`)에 없으면 바탕 화면의 `ProcessMonitor` 폴더에서 찾는다. 게스트에 openssl이 없으면 DoH를 쓰는 두 시험은 NOT RUN으로 남는다.
+
 결과는 게스트 `C:\VEIL-Batch\RESULTS.ZIP`에 남는다. 그 안의 `summary.json`, 항목별 로그, `outside-writes.json`, `batch.json`이 SECURITY_STATUS 갱신 근거가 된다.
 
 ## 최소 필수 시나리오
