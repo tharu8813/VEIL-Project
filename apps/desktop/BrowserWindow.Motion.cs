@@ -412,7 +412,7 @@ public partial class BrowserWindow
                     image.CacheOption = BitmapCacheOption.OnLoad;
                     image.StreamSource = stream;
                     image.EndInit();
-                    image.Freeze();
+                    if (image.CanFreeze) image.Freeze();
                     source = image;
                 }
             }

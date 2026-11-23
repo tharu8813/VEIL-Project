@@ -30,6 +30,7 @@ public partial class BrowserWindow : Window
     private readonly TabItem? adopted;
     private bool closing;
     private bool restoring = true;
+    private bool smokeRun;
     private DispatcherTimer? downloadPopupTimer;
 
     private BrowserData data => session.Data;
@@ -161,6 +162,11 @@ public partial class BrowserWindow : Window
             web.Settings.AreDefaultContextMenusEnabled = true;
             web.Settings.AreDevToolsEnabled = false;
             web.Settings.AreBrowserAcceleratorKeysEnabled = false;
+            // SEC-004/007: the engine writes download bytes (GUID.tmp) before DownloadStarting can cancel
+            // them. Keep that partial data on the profile volume instead of the user's Downloads folder.
+            string downloadScratch = Path.Combine(session.Root, ProfileScratch.FolderName, "downloads");
+            Directory.CreateDirectory(downloadScratch);
+            web.Profile.DefaultDownloadFolderPath = downloadScratch;
             web.PermissionRequested += (_, args) =>
             {
                 args.SavesInProfile = false;
@@ -178,6 +184,7 @@ public partial class BrowserWindow : Window
             web.WindowCloseRequested += (_, _) => tab.Owner.Dispatcher.BeginInvoke(() => tab.Owner.CloseTab(tab.Item));
             web.IsDocumentPlayingAudioChanged += (_, _) => tab.Owner.UpdateAudio(tab);
             web.IsMutedChanged += (_, _) => tab.Owner.UpdateAudio(tab);
+            web.ProcessFailed += (_, args) => tab.Owner.OnProcessFailed(tab, args);
             web.ContainsFullScreenElementChanged += (_, _) =>
             {
                 if (tab.Owner.Active == tab) tab.Owner.SetFullScreen(web.ContainsFullScreenElement, page: true);
@@ -267,6 +274,28 @@ public partial class BrowserWindow : Window
             UpdateNavigationButtons();
         }
         if (args.IsSuccess) SaveTabs();
+    }
+
+    /// <summary>Engine browser exit ends the session cleanly (app state saved once, every window closed so the
+    /// profile lock and protected-volume relock run); a renderer failure only affects that page.</summary>
+    private void OnProcessFailed(BrowserTab tab, CoreWebView2ProcessFailedEventArgs args)
+    {
+        if (args.ProcessFailedKind != CoreWebView2ProcessFailedKind.BrowserProcessExited)
+        {
+            if (Active == tab) Status.Text = "페이지 프로세스가 중단되었습니다. 새로고침(F5)하세요.";
+            return;
+        }
+        if (session.EngineLost) return;
+        session.EngineLost = true;
+        try { session.Save(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        session.IsEnding = true;
+        foreach (var window in session.Windows.ToList())
+            window.Status.Text = "브라우저 엔진이 종료되었습니다. VEIL을 다시 시작하세요.";
+        if (smokeRun) return; // the smoke harness observes and closes on its own
+        MessageBox.Show(this, "브라우저 엔진이 예기치 않게 종료되었습니다. 열린 탭은 저장되었습니다. VEIL을 다시 시작하세요.",
+            "VEIL", MessageBoxButton.OK, MessageBoxImage.Warning);
+        foreach (var window in session.Windows.ToList()) window.Close();
     }
 
     private void OnDownloadStarting(CoreWebView2DownloadStartingEventArgs args)

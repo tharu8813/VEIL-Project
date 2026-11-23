@@ -25,6 +25,8 @@ internal sealed class BrowserSession
     internal List<BrowserWindow> Windows { get; } = [];
     internal CoreWebView2Environment? Engine { get; set; }
     internal bool IsEnding { get; set; }
+    /// <summary>The shared engine's browser process exited; no window can use it any more.</summary>
+    internal bool EngineLost { get; set; }
 
     /// <summary>Writes the open windows. Skipped while any window is still restoring its tabs.</summary>
     internal void Save()

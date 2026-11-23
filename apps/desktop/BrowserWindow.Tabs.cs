@@ -33,7 +33,7 @@ public partial class BrowserWindow
         Tabs.PreviewMouseLeftButtonDown += TabPress;
         Tabs.PreviewMouseMove += TabDrag;
         Tabs.PreviewMouseLeftButtonUp += TabRelease;
-        Tabs.LostMouseCapture += (_, _) => { DebugLog("lost capture"); if (draggingTab) FinishTabDrag(); };
+        Tabs.LostMouseCapture += (_, _) => { if (draggingTab) FinishTabDrag(); };
         Tabs.PreviewMouseUp += (_, args) =>
         {
             // Middle-click closes a tab, as in Chrome and Edge.
@@ -214,7 +214,6 @@ public partial class BrowserWindow
     {
         if (pressedTab is not { } item || args.LeftButton != MouseButtonState.Pressed) return;
         var point = args.GetPosition(TabRow);
-        DebugLog($"move {point} dragging={draggingTab} captured={Tabs.IsMouseCaptured}");
         if (!draggingTab)
         {
             if (Math.Abs(point.X - pressPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
@@ -271,14 +270,8 @@ public partial class BrowserWindow
         SaveTabs();
     }
 
-
-
-
-    private static void DebugLog(string line) => System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "veil-tear.log"), line + "\n", System.Text.Encoding.UTF8);
-
     private void TearOff(TabItem item)
     {
-        DebugLog($"tearoff count={Tabs.Items.Count}");
         if (closing || !Tabs.Items.Contains(item)) return;
         if (Tabs.Items.Count == 1)
         {
@@ -300,11 +293,10 @@ public partial class BrowserWindow
 
     private static void DragWindowThenMerge(BrowserWindow window)
     {
-        if (Mouse.LeftButton == MouseButtonState.Pressed)
-        {
-            try { window.DragMove(); }
-            catch (InvalidOperationException) { return; }
-        }
+        // Only a real drag can drop the window's tab onto another window.
+        if (Mouse.LeftButton != MouseButtonState.Pressed) return;
+        try { window.DragMove(); }
+        catch (InvalidOperationException) { return; }
         if (window.closing || window.Tabs.Items.Count != 1) return;
         var target = window.session.Windows.FirstOrDefault(other => other != window && !other.closing &&
             other.OverTabStrip(CursorPixels(), out _));

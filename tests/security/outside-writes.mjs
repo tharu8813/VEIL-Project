@@ -1,0 +1,215 @@
+// SEC-004: classify file writes of a process tree from a Process Monitor CSV export.
+//
+//   node tests/security/outside-writes.mjs <trace.csv> (--root-pid <pid> | --root-command <text>) --volume V:\
+//       [--allow <path-prefix>]... [--out report.json]
+//
+// A write is any successful WriteFile, SetEndOfFile/Allocation, rename target, or a CreateFile that
+// created/overwrote a file. --root-command roots the tree at every process whose creation command line
+// contains the text. Descendants are followed through "Process Create" events
+// (and a "Parent PID" column when present). Paging writes by the System process to a file the tree
+// opened are reported as mapped writes. Exit code 1 when any write lands outside --volume and is not
+// covered by --allow. The trace itself must be captured in the isolated VM (Procmon needs admin).
+// The CSV is streamed line by line, so multi-hundred-MB traces fit in memory.
+import { createReadStream } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
+import { createInterface } from 'node:readline';
+import { pathToFileURL } from 'node:url';
+
+const WRITE_OPERATIONS = new Set([
+    'WriteFile', 'SetEndOfFileInformationFile', 'SetAllocationInformationFile', 'SetRenameInformationFile',
+]);
+
+/** Splits one CSV record into fields (quoted fields, doubled quotes). */
+function splitRecord(line) {
+    const fields = [];
+    let field = '', quoted = false;
+    for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (quoted) {
+            if (c === '"' && line[i + 1] === '"') { field += '"'; i++; }
+            else if (c === '"') quoted = false;
+            else field += c;
+        } else if (c === '"') quoted = true;
+        else if (c === ',') { fields.push(field); field = ''; }
+        else field += c;
+    }
+    fields.push(field);
+    return fields;
+}
+
+/** Joins physical lines into records (a record with unbalanced quotes continues on the next line)
+ *  and keys them by the header row. Calls onRecord for each data record. */
+function recordReader(onRecord) {
+    let header = null, pending = '';
+    return line => {
+        if (header === null) line = line.replace(/^\uFEFF/, '');
+        pending = pending ? `${pending}\n${line}` : line;
+        if ((pending.match(/"/g)?.length ?? 0) % 2 === 1) return;
+        const record = pending;
+        pending = '';
+        if (record === '') return;
+        const values = splitRecord(record);
+        if (header === null) { header = values.map(name => name.trim()); return; }
+        onRecord(Object.fromEntries(header.map((name, i) => [name, values[i] ?? ''])));
+    };
+}
+
+/** Whole-text convenience parser (tests and small traces). */
+export function parseCsv(text) {
+    const records = [];
+    const read = recordReader(record => records.push(record));
+    for (const line of text.split(/\r?\n/)) read(line);
+    return records;
+}
+
+const normalize = path => path.replace(/\//g, '\\').toLowerCase();
+const prefix = path => { const p = normalize(path); return p.endsWith('\\') ? p : p + '\\'; };
+const isDrivePath = path => /^[a-z]:\\/i.test(path);
+
+function writeTarget(event) {
+    if (event.Operation === 'SetRenameInformationFile') {
+        const target = /FileName:\s*(.+?)(?:,\s*\w+:|$)/.exec(event.Detail)?.[1]?.trim();
+        return target || event.Path;
+    }
+    return event.Path;
+}
+
+/** True when a CreateFile opened a directory ("Options: Directory, ..."; not "Non-Directory File"). */
+function opensDirectory(event) {
+    const options = /Options:\s*(.*?)(?:,\s*Attributes:|,\s*ShareMode:|$)/.exec(event.Detail)?.[1] ?? '';
+    return options.split(',').some(option => option.trim() === 'Directory');
+}
+
+function createsFile(event) {
+    if (event.Operation !== 'CreateFile' || event.Result !== 'SUCCESS') return false;
+    return /OpenResult:\s*(Created|Overwritten|Superseded)/i.test(event.Detail);
+}
+
+/** Incremental analyzer: add(event) for each record in trace order, then report(). */
+export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allow = [] }) {
+    const tree = new Map(rootPids.map(pid => [String(pid), 'root']));
+    const volumePrefixes = volumes.map(prefix);
+    const allowPrefixes = allow.map(prefix);
+    const commands = rootCommands.map(text => text.toLowerCase());
+    const opened = new Set();
+    let inside = 0, allowed = 0;
+    const outside = new Map();
+    const metadata = new Map();
+    const names = new Map();
+
+    const classify = (path, event, kind) => {
+        if (!isDrivePath(path)) return;
+        const key = normalize(path);
+        if (volumePrefixes.some(p => key.startsWith(p) || key + '\\' === p)) { inside++; return; }
+        if (allowPrefixes.some(p => key.startsWith(p) || key + '\\' === p)) { allowed++; return; }
+        // NTFS journal/MFT updates follow file operations on that volume; they hold no file data
+        // and are listed as side effects. The file operation that caused them is reported itself.
+        if (/^[a-z]:\\\$/.test(key)) { metadata.set(path, (metadata.get(path) ?? 0) + 1); return; }
+        const entry = outside.get(key) ?? { path, count: 0, operations: {}, processes: new Set(), kinds: new Set() };
+        entry.count++;
+        entry.operations[event.Operation] = (entry.operations[event.Operation] ?? 0) + 1;
+        entry.processes.add(`${event['Process Name']} (${event.PID})`);
+        entry.kinds.add(kind);
+        outside.set(key, entry);
+    };
+
+    const add = event => {
+        const pid = String(event.PID);
+        if (commands.length && event.Operation === 'Process Create' && event.Result === 'SUCCESS' &&
+            commands.some(text => event.Detail.toLowerCase().includes(text))) {
+            const root = /PID:\s*(\d+)/.exec(event.Detail)?.[1];
+            if (root && !tree.has(root)) tree.set(root, 'root');
+        }
+        if (!tree.has(pid) && event['Parent PID'] && tree.has(String(event['Parent PID']))) tree.set(pid, String(event['Parent PID']));
+        if (tree.has(pid)) {
+            names.set(pid, event['Process Name']);
+            if (event.Operation === 'Process Create' && event.Result === 'SUCCESS') {
+                const child = /PID:\s*(\d+)/.exec(event.Detail)?.[1];
+                if (child) tree.set(child, pid);
+            }
+            // Track files (not directories: the System process updates directory indexes on its own)
+            // so later paging writes to them can be attributed to this tree.
+            if (event.Operation === 'CreateFile' && event.Result === 'SUCCESS' && isDrivePath(event.Path) && !opensDirectory(event))
+                opened.add(normalize(event.Path));
+            if (event.Result !== 'SUCCESS') return;
+            if (WRITE_OPERATIONS.has(event.Operation)) classify(writeTarget(event), event, 'direct');
+            else if (createsFile(event)) classify(event.Path, event, 'create');
+        } else if (pid === '4' && event.Operation === 'WriteFile' && event.Result === 'SUCCESS' &&
+                   /Paging I\/O/i.test(event.Detail) && opened.has(normalize(event.Path))) {
+            classify(event.Path, event, 'mapped');
+        }
+    };
+
+    const report = () => {
+        // A paging write to a folder that contains files the tree used is a directory-index update
+        // (even when the folder was not opened with the Directory option): list it as a side effect.
+        const directories = {};
+        for (const [key, entry] of outside) {
+            if (!entry.kinds.has('mapped') || entry.kinds.size !== 1) continue;
+            const parent = key.endsWith('\\') ? key : key + '\\';
+            if ([...opened].some(path => path.startsWith(parent))) {
+                directories[entry.path] = entry.count;
+                outside.delete(key);
+            }
+        }
+        const outsideList = [...outside.values()]
+            .map(entry => ({ ...entry, processes: [...entry.processes], kinds: [...entry.kinds] }))
+            .sort((a, b) => b.count - a.count);
+        return {
+            processes: [...tree.keys()].map(pid => ({ pid, parent: tree.get(pid), name: names.get(pid) ?? null })),
+            writes: { inside, allowed, outside: outsideList.reduce((n, e) => n + e.count, 0) },
+            outside: outsideList,
+            metadata: Object.fromEntries(metadata),
+            directories,
+            pass: outsideList.length === 0,
+        };
+    };
+    return { add, report };
+}
+
+export function analyze(events, options) {
+    const analyzer = createAnalyzer(options);
+    for (const event of events) analyzer.add(event);
+    return analyzer.report();
+}
+
+/** Streams a Procmon CSV file through the analyzer without holding it in memory. */
+export async function analyzeFile(path, options) {
+    const analyzer = createAnalyzer(options);
+    const read = recordReader(analyzer.add);
+    const lines = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity });
+    for await (const line of lines) read(line);
+    return analyzer.report();
+}
+
+function parseArgs(argv) {
+    const [trace, ...rest] = argv;
+    const options = { trace, rootPids: [], rootCommands: [], volumes: [], allow: [], out: null };
+    for (let i = 0; i < rest.length; i += 2) {
+        const [flag, value] = [rest[i], rest[i + 1]];
+        if (value === undefined) throw new Error(`Missing value for ${flag}`);
+        if (flag === '--root-pid') options.rootPids.push(value);
+        else if (flag === '--root-command') options.rootCommands.push(value);
+        else if (flag === '--volume') options.volumes.push(value);
+        else if (flag === '--allow') options.allow.push(value);
+        else if (flag === '--out') options.out = value;
+        else throw new Error(`Unknown option ${flag}`);
+    }
+    if (!trace || !(options.rootPids.length || options.rootCommands.length) || !options.volumes.length)
+        throw new Error('Usage: outside-writes.mjs <trace.csv> (--root-pid <pid> | --root-command <text>) --volume <X:\\> [--allow <prefix>]... [--out <json>]');
+    return options;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+    const options = parseArgs(process.argv.slice(2));
+    const report = await analyzeFile(options.trace, options);
+    if (options.out) await writeFile(options.out, JSON.stringify(report, null, 2));
+    console.log(`${report.pass ? 'PASS' : 'FAIL'} writes inside=${report.writes.inside} allowed=${report.writes.allowed} outside=${report.writes.outside} processes=${report.processes.length}`);
+    for (const entry of report.outside.slice(0, 25))
+        console.log(`  ${entry.count}\t${entry.kinds.join('+')}\t${entry.path}\t${entry.processes.join(', ')}`);
+    const meta = Object.entries(report.metadata);
+    if (meta.length) console.log(`  NTFS metadata side effects: ${meta.map(([path, n]) => `${path} x${n}`).join(', ')}`);
+    const dirs = Object.keys(report.directories);
+    if (dirs.length) console.log(`  Directory index side effects: ${dirs.join(', ')}`);
+    process.exitCode = report.pass ? 0 : 1;
+}

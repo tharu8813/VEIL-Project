@@ -59,6 +59,45 @@ const probe = `async function probe(action) {
   };
 }`;
 
+// Phase 3 engine-kill test: one numbered IndexedDB record per transaction (64 KiB each) plus a
+// localStorage counter, written as fast as the engine commits them.
+const stormPage = `<!doctype html><meta charset="utf-8"><title>VEIL storm</title><script>
+function openStorm() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('veil-storm', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('gen', { keyPath: 'n' });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+window.stormRead = async () => {
+  const db = await openStorm();
+  const keys = await new Promise((resolve, reject) => {
+    const query = db.transaction('gen').objectStore('gen').getAllKeys();
+    query.onsuccess = () => resolve(query.result);
+    query.onerror = () => reject(query.error);
+  });
+  db.close();
+  const max = keys.length ? Math.max(...keys) : 0;
+  return { count: keys.length, max, contiguous: keys.length === max, ls: Number(localStorage.getItem('storm') ?? 0) };
+};
+window.stormGen = 0;
+window.stormStart = async from => {
+  const db = await openStorm();
+  const pad = 'x'.repeat(65536);
+  for (let n = from + 1; ; n++) {
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction('gen', 'readwrite');
+      transaction.objectStore('gen').put({ n, pad });
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    localStorage.setItem('storm', String(n));
+    window.stormGen = n;
+  }
+};
+</script><p>storm</p>`;
+
 export async function startFixture(port = 0, { ipv6 = false } = {}) {
     const host = ipv6 ? '::1' : '127.0.0.1';
     const authority = ipv6 ? '[::1]' : host;
@@ -75,6 +114,12 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
             case '/network-control': return send('VEIL_DIRECT_CONTROL');
             case '/': return send(page, 'text/html; charset=utf-8');
             case '/second': return send('<title>VEIL 두 번째 페이지</title><a href="/">홈</a>', 'text/html; charset=utf-8');
+            case '/storm': return send(stormPage, 'text/html; charset=utf-8');
+            case '/visit': {
+                // Distinct synthetic pages for the long-session jump-list trace (SEC-004).
+                const n = Number.parseInt(url.searchParams.get('n') ?? '0', 10) || 0;
+                return send(`<title>VEIL synthetic visit ${n}</title><p>visit ${n}</p>`, 'text/html; charset=utf-8');
+            }
             case '/probe.js': return send(probe, 'text/javascript');
             case '/login':
                 response.setHeader('Set-Cookie', `veil=${marker}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`);
