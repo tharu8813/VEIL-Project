@@ -99,8 +99,16 @@ node tests/phase0/run.mjs
 
 Rust 1.99.1 MSVC에서 브라우저와 분리된 age 스트리밍, 암호문 변조 감지, 중단 후 파일 발행을 시험합니다. 테스트는 합성 데이터만 사용합니다. [Phase 2 증거](docs/phase2-evidence.md)
 
+개발 중 빠른 확인(병렬 실행, 약 5초). Debug 빌드도 의존성은 최적화해 실제 scrypt 비용(log_n = 17)을 그대로 씁니다.
+
 ```powershell
-cargo test --release --locked --manifest-path crates/veil-security/Cargo.toml
+cargo test --locked --manifest-path crates/veil-security/Cargo.toml -- --test-threads=4
+```
+
+PR 병합 전 필수 검증(CI와 같은 전체 보안 시험, 직렬 실행, 테스트별 시간 표시, Git Bash 필요):
+
+```powershell
+bash scripts/rust-timed-tests.sh
 ```
 
 다운로드 금고(Phase 4-0)는 `veil-vault.exe`가 필요합니다. 데스크톱 앱보다 먼저 `cargo build --release --locked --manifest-path crates/veil-security/Cargo.toml --bin veil-vault`로 빌드하면 앱 출력 폴더에 복사됩니다. 없으면 모든 다운로드가 차단됩니다(평문 저장 없음).
