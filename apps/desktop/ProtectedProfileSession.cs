@@ -22,12 +22,15 @@ internal sealed class ProtectedProfileSession : IDisposable
         this.notifications = notifications;
     }
 
-    internal static ProtectedProfileSession? TryOpen(NamedPipeVolumeBroker broker, ProtectedSessionNotifications notifications)
+    internal static ProtectedProfileSession? TryOpen(NamedPipeVolumeBroker broker, ProtectedSessionNotifications notifications,
+        out char[]? password)
     {
+        password = null;
         var session = new ProtectedProfileSession(broker, notifications);
         try
         {
-            if (session.Begin()) return session;
+            password = session.Begin();
+            if (password is not null) return session;
             session.Dispose(); // Cancelled; detach only if we attached the still-locked volume.
             return null;
         }
@@ -38,7 +41,7 @@ internal sealed class ProtectedProfileSession : IDisposable
         }
     }
 
-    private bool Begin()
+    private char[]? Begin()
     {
         var state = broker.QueryRegisteredVolume();
         if (state is null)
@@ -55,23 +58,26 @@ internal sealed class ProtectedProfileSession : IDisposable
 
         for (int attempt = 0; attempt < 3; attempt++)
         {
-            if (notifications.LockRequested) return false;
+            if (notifications.LockRequested) return null;
             char[]? secret = ProfileUnlockDialog.Prompt();
-            if (secret is null) return false;
-            bool accepted;
+            if (secret is null) return null;
             try
             {
-                if (notifications.LockRequested) return false;
+                if (notifications.LockRequested) return null;
                 unlockAttempted = true; // Even a lost reply may follow a successful unlock.
-                accepted = broker.Unlock(secret);
+                if (broker.Unlock(secret))
+                {
+                    state = broker.QueryRegisteredVolume();
+                    if (state is not { FullyEncrypted: true, ProtectionOn: true, Unlocked: true, ProtectorPresent: true })
+                        throw new ProfileLocationException("The volume lost protected status during unlock.");
+                    var accepted = secret;
+                    secret = null; // Transfer ownership to the startup caller for vault unlock.
+                    return accepted;
+                }
             }
-            finally { CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(secret.AsSpan())); }
-            if (accepted)
+            finally
             {
-                state = broker.QueryRegisteredVolume();
-                if (state is { FullyEncrypted: true, ProtectionOn: true, Unlocked: true, ProtectorPresent: true })
-                    return true;
-                throw new ProfileLocationException("The volume lost protected status during unlock.");
+                ClearPassword(secret);
             }
             if (attempt < 2)
                 MessageBox.Show("잠금 해제 암호가 올바르지 않습니다.", "VEIL 보호 프로필",
@@ -79,6 +85,9 @@ internal sealed class ProtectedProfileSession : IDisposable
         }
         throw new ProfileLocationException("Too many failed unlock attempts.");
     }
+
+    internal static void ClearPassword(char[]? password) =>
+        CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(password.AsSpan()));
 
     /// <summary>Best-effort non-forced relock; broker's process-exit monitor covers crashes.</summary>
     public void Dispose()

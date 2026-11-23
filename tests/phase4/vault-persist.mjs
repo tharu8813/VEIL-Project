@@ -73,6 +73,11 @@ try {
     }
     console.log('reopen: PASS · 5 items listed and exported byte-exact');
 
+    const backup = await stage('vault-backup', { VEIL_DEV_VAULT_PASSPHRASE: P1 });
+    assert.equal(backup.result.error, null, backup.result.error);
+    assert.ok(await isPayloadFile(backup.vault.destination, backup.vault.Bytes), 'backed up file differs after restore');
+    console.log('backup and content-key rotation: PASS · metadata and byte-exact large file preserved');
+
     // 3. Wrong passphrase is refused.
     vault = await reopen({ VEIL_DEV_VAULT_PASSPHRASE: 'not-the-passphrase' }, 'wrong passphrase');
     assert.equal(vault.opened, false);
@@ -112,7 +117,14 @@ try {
     assert.equal((await reopen({ VEIL_TEST_RECOVER: R2 }, 'new code')).opened, true);
     console.log('rotation: PASS · old passphrase/code refused, new ones open');
 
-    // 7. No download plaintext anywhere in the profile (exports live outside it).
+    const linked = await stage('vault-profile', {
+        VEIL_TEST_OLD_PASSPHRASE: P2, VEIL_TEST_OLD_RECOVERY: R2,
+        VEIL_TEST_NEW_RECOVERY: 'SSSSS-TTTTT-UUUUU-VVVVV-WWWWW-XXXXX-YYYYY-ZZZZZ',
+    });
+    assert.equal(linked.result.error, null, linked.result.error);
+    console.log('profile link: PASS · fresh setup, cancellation, migration, recovery, and prompt-free reopen');
+
+    // No download plaintext anywhere in the profile (exports live outside it).
     const needle = Buffer.from(vaultPayload);
     const files = (await readdir(profile, { recursive: true, withFileTypes: true })).filter(e => e.isFile());
     for (const entry of files) {

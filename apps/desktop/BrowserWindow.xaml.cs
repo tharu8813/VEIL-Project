@@ -42,7 +42,7 @@ public partial class BrowserWindow : Window
     internal bool IsClosing => closing;
     internal bool IsRestoring => restoring;
 
-    internal BrowserWindow(string root) : this(new BrowserSession(root), null, 0, null) { }
+    internal BrowserWindow(string root, DownloadVault vault) : this(new BrowserSession(root, vault), null, 0, null) { }
 
     /// <summary>Additional window: restores <paramref name="urls"/>, or adopts a tab dragged out of another window.</summary>
     private BrowserWindow(BrowserSession session, IReadOnlyList<string>? urls, int selected, TabItem? adopt)
@@ -53,6 +53,8 @@ public partial class BrowserWindow : Window
         adopted = adopt;
         session.Windows.Add(this);
         InitializeComponent();
+        ActiveDownloadsList.ItemsSource = session.ActiveDownloads;
+        RefreshDownloadProgress();
         InitializeMotion(playIntro: adopt is null);
         InitializeWindowFeatures();
         Loaded += Start;
@@ -65,6 +67,8 @@ public partial class BrowserWindow : Window
         if (closing) return;
         bool last = session.Windows.Count(window => !window.closing) == 1;
         if (last && !restoring && !session.IsEnding) SaveTabs();
+        if (last || session.IsEnding)
+            foreach (var download in session.ActiveDownloads.ToArray()) download.Cancel();
         closing = true;
         session.Windows.Remove(this);
         if (!last && !session.IsEnding)
@@ -321,49 +325,61 @@ public partial class BrowserWindow : Window
             ShowDownloadOutcome(fileName, $"{DownloadVault.Blocked}: {unsupported}", $"{fileName}: 보호 저장을 지원하지 않는 다운로드라 차단했습니다.");
             return;
         }
-        Status.Text = $"{fileName}을(를) 금고에 보관하는 중…";
         _ = CaptureAsync(tab.View.CoreWebView2, uri!, fileName, engineReceived, engineOnDisk);
     }
 
     private async Task CaptureAsync(CoreWebView2 web, Uri uri, string fileName, long engineReceived, long engineOnDisk)
     {
         var vault = session.Vault;
-        bool open;
-        try { open = await EnsureVaultOpenAsync(); }
-        catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException
-            or System.ComponentModel.Win32Exception)
+        using var download = new BrowserDownload(fileName);
+        session.ActiveDownloads.Add(download);
+        foreach (var window in session.Windows) window.RefreshDownloadProgress();
+        Status.Text = $"{fileName} · Ctrl+J에서 진행 상황을 확인할 수 있습니다.";
+
+        void Report(string outcome, string? detail, string message, VaultEntry? entry = null)
         {
-            vault.Results.Add(new VaultResult(fileName, DownloadVault.Failed, 0, $"금고 열기 실패: {error.GetType().Name}: {error.Message}", null, engineReceived, engineOnDisk));
-            ShowDownloadOutcome(fileName, $"{DownloadVault.Failed}: 금고 열기 실패", $"{fileName}: 금고를 열지 못해 저장하지 않았습니다.");
-            return;
+            vault.Results.Add(new VaultResult(fileName, outcome, entry?.Bytes ?? download.Bytes, detail,
+                entry is null ? null : vault.ObjectPath(entry), engineReceived, engineOnDisk));
+            var window = closing ? session.Windows.FirstOrDefault() : this;
+            window?.ShowDownloadOutcome(fileName, detail is null ? outcome : $"{outcome}: {detail}", message);
         }
-        if (!open)
-        {
-            vault.Results.Add(new VaultResult(fileName, DownloadVault.Blocked, 0, "금고 잠김", null, engineReceived, engineOnDisk));
-            ShowDownloadOutcome(fileName, $"{DownloadVault.Blocked}: 금고 잠김", $"{fileName}: 금고를 열지 않아 저장하지 않았습니다.");
-            return;
-        }
+
+        bool open = false;
         try
         {
-            var progress = new Progress<long>(bytes => Status.Text = $"{fileName} 보관 중… {bytes / 1024d / 1024d:0.0} MB");
-            var entry = await vault.CaptureAsync(uri, fileName, web, progress, CancellationToken.None);
-            vault.Results.Add(new VaultResult(fileName, DownloadVault.Stored, entry.Bytes, null, vault.ObjectPath(entry), engineReceived, engineOnDisk));
-            ShowDownloadOutcome(fileName, DownloadVault.Stored, $"{fileName}을(를) 암호화 금고에 보관했습니다.");
+            open = await EnsureVaultOpenAsync(download.Token);
+            download.Token.ThrowIfCancellationRequested();
+            if (!open)
+            {
+                Report(DownloadVault.Blocked, "금고 잠김", $"{fileName}: 금고를 열지 않아 저장하지 않았습니다.");
+                return;
+            }
+            var entry = await vault.CaptureAsync(uri, download, web);
+            Report(DownloadVault.Stored, null, $"{fileName}을(를) 암호화 금고에 보관했습니다.", entry);
+        }
+        catch (OperationCanceledException) when (download.Token.IsCancellationRequested)
+        {
+            Report(DownloadVault.Cancelled, null, $"{fileName} 다운로드를 취소했습니다.");
         }
         catch (Exception error) when (error is IOException or System.Net.Http.HttpRequestException or InvalidOperationException
-            or TaskCanceledException or System.ComponentModel.Win32Exception or System.Runtime.InteropServices.COMException)
+            or OperationCanceledException or UnauthorizedAccessException or System.ComponentModel.Win32Exception
+            or System.Runtime.InteropServices.COMException)
         {
-            string reason = error is System.Net.Http.HttpRequestException http ? http.Message : "보관 실패";
-            vault.Results.Add(new VaultResult(fileName, DownloadVault.Failed, 0, reason, null, engineReceived, engineOnDisk));
-            ShowDownloadOutcome(fileName, $"{DownloadVault.Failed}: {reason}", $"{fileName}을(를) 보관하지 못했습니다. 일반 디스크에는 저장하지 않았습니다.");
+            string reason = !open ? "금고 열기 실패" : error is System.Net.Http.HttpRequestException http ? http.Message : "보관 실패";
+            Report(DownloadVault.Failed, reason, $"{fileName}을(를) 보관하지 못했습니다.");
+        }
+        finally
+        {
+            session.ActiveDownloads.Remove(download);
+            foreach (var window in session.Windows) window.RefreshDownloadProgress();
         }
     }
 
     /// <summary>Opens the vault: Debug test variables, else the setup wizard (first use) or the unlock dialog.
     /// Smoke runs never show dialogs. A recovery-code unlock requires a new passphrase and code at once.</summary>
-    private async Task<bool> EnsureVaultOpenAsync()
+    private async Task<bool> EnsureVaultOpenAsync(CancellationToken cancellation = default)
     {
-        await session.VaultOpenGate.WaitAsync();
+        await session.VaultOpenGate.WaitAsync(cancellation);
         try { return await OpenVaultAsync(); }
         finally { session.VaultOpenGate.Release(); }
     }
@@ -372,13 +388,19 @@ public partial class BrowserWindow : Window
     {
         var vault = session.Vault;
         if (vault.Unlocked) return true;
+        if (vault.UsesProfilePassword) return false;
         if (!vault.Available) return false;
         if (await vault.TryOpenFromDevelopmentEnvironmentAsync()) return true;
         if (smokeRun) return false;
         if (!vault.Exists)
         {
-            var setup = new VaultSetupDialog(this, "다운로드 금고 만들기", askPassphrase: true, issueCode: true);
-            return setup.ShowDialog() == true && await vault.CreateAsync(setup.Passphrase!, setup.RecoveryCode!) is null;
+            var setup = new VaultSetupDialog(this, "다운로드 금고 만들기", askPassphrase: true, issueCode: true, allowRestore: true);
+            if (setup.ShowDialog() != true) return false;
+            if (setup.Backup is not { } backup) return await vault.CreateAsync(setup.Passphrase!, setup.RecoveryCode!) is null;
+            string? restoreFailure = await vault.RestoreAsync(backup);
+            if (restoreFailure is not null)
+                MessageBox.Show(this, restoreFailure, "금고 백업 복원", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return restoreFailure is null;
         }
         string? error = null;
         for (int attempt = 0; attempt < 5; attempt++)
@@ -414,6 +436,9 @@ public partial class BrowserWindow : Window
     private async void VaultClick(object sender, RoutedEventArgs args)
     {
         if (await EnsureVaultOpenAsync()) new VaultWindow(this, session.Vault).ShowDialog();
+        else if (session.Vault.UsesProfilePassword)
+            MessageBox.Show(this, "다운로드 금고가 잠겨 있습니다. VEIL을 다시 시작하고 보호 프로필 잠금 해제 단계에서 금고를 여세요.",
+                "다운로드 금고", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     /// <summary>Drops the engine's HTTP disk cache after a cancelled download (twice: the engine can still
@@ -446,6 +471,7 @@ public partial class BrowserWindow : Window
         Status.Text = message + " Ctrl+J에서 확인할 수 있습니다.";
         Dispatcher.BeginInvoke(() =>
         {
+            if (closing) return;
             DownloadButton.Visibility = Visibility.Visible;
             DownloadPopupText.Text = message;
             DownloadPopup.IsOpen = true;
@@ -535,6 +561,20 @@ public partial class BrowserWindow : Window
             Active.View.Visibility = Home.Visibility == Visibility.Visible ? Visibility.Hidden : Visibility.Visible;
         UpdateNavigationButtons();
         UpdateBookmarkGlyph();
+        RefreshDownloadProgress();
+    }
+
+    private void RefreshDownloadProgress()
+    {
+        bool hasDownloads = session.ActiveDownloads.Count > 0;
+        if (hasDownloads) DownloadButton.Visibility = Visibility.Visible;
+        DownloadProgressPanel.Visibility = hasDownloads && Active?.Url == "veil://downloads"
+            ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void CancelDownloadClick(object sender, RoutedEventArgs args)
+    {
+        if (sender is Button { DataContext: BrowserDownload download }) download.Cancel();
     }
 
     private void UpdateNavigationButtons()

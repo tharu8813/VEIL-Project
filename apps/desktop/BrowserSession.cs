@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.IO;
 using Microsoft.Web.WebView2.Core;
 
@@ -10,12 +11,12 @@ namespace Veil.Desktop;
 /// </summary>
 internal sealed class BrowserSession
 {
-    internal BrowserSession(string root)
+    internal BrowserSession(string root, DownloadVault vault)
     {
         Root = root;
         StatePath = Path.Combine(root, "browser-state.json");
         Data = BrowserData.Load(StatePath);
-        Vault = new DownloadVault(root);
+        Vault = vault;
     }
 
     /// <summary>Encrypted download vault shared by all windows of this profile.</summary>
@@ -27,6 +28,7 @@ internal sealed class BrowserSession
     internal BrowserData Data { get; }
     internal Stack<string> ClosedTabs { get; } = new();
     internal List<string> Downloads { get; } = [];
+    internal ObservableCollection<BrowserDownload> ActiveDownloads { get; } = [];
     internal List<BrowserWindow> Windows { get; } = [];
     internal CoreWebView2Environment? Engine { get; set; }
     internal bool IsEnding { get; set; }
