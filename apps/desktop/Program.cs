@@ -32,6 +32,7 @@ internal static class Program
         ProtectedProfileSession? protectedSession = null;
         ProtectedSessionNotifications? notifications = null;
         BrowserWindow? window = null;
+        string? scratch = null;
         try
         {
             ProfileGate.RejectElevated();
@@ -66,6 +67,9 @@ internal static class Program
             using var profileLock = new FileStream(Path.Combine(root, "profile.lock"), FileMode.OpenOrCreate,
                 FileAccess.ReadWrite, FileShare.None);
             window = new BrowserWindow(root);
+            // SEC-004: temp files of the app and engine stay on the profile volume (after state loads,
+            // so a refused profile is left exactly as found).
+            scratch = ProfileScratch.Redirect(root);
             if (smoke) window.ConfigureSmoke(args[2], args[3], args[4]);
             application.MainWindow = window;
             application.ShutdownMode = ShutdownMode.OnLastWindowClose;
@@ -81,6 +85,11 @@ internal static class Program
         }
         finally
         {
+            if (scratch is not null)
+            {
+                try { ProfileScratch.Clear(scratch); }
+                catch (ProfileLocationException) { }
+            }
             try { protectedSession?.Dispose(); }
             finally { notifications?.Dispose(); }
         }

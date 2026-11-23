@@ -161,6 +161,11 @@ public partial class BrowserWindow : Window
             web.Settings.AreDefaultContextMenusEnabled = true;
             web.Settings.AreDevToolsEnabled = false;
             web.Settings.AreBrowserAcceleratorKeysEnabled = false;
+            // SEC-004/007: the engine writes download bytes (GUID.tmp) before DownloadStarting can cancel
+            // them. Keep that partial data on the profile volume instead of the user's Downloads folder.
+            string downloadScratch = Path.Combine(session.Root, ProfileScratch.FolderName, "downloads");
+            Directory.CreateDirectory(downloadScratch);
+            web.Profile.DefaultDownloadFolderPath = downloadScratch;
             web.PermissionRequested += (_, args) =>
             {
                 args.SavesInProfile = false;

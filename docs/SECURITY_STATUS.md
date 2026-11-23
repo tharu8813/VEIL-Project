@@ -8,10 +8,10 @@
 | SEC-001 | 브라우저 엔진 선정 | TESTED | [ADR-0001](decisions/ADR-0001-developer-engine.md) | 출시 엔진은 암호화 저장 및 다운로드 경로 실증 후 재평가 |
 | SEC-002 | 영구 쿠키·사이트 데이터 복원 | TESTED | [Phase 0 실측](phase0-evidence.md) | 정상 재시작과 WebView2 호스트 강제 종료 후 복원 확인. 트랜잭션 도중 종료·엔진 손상·세션 쿠키 정책 시험 |
 | SEC-003 | 잠긴 프로필의 암호화 보호 | IN PROGRESS | [BitLocker VHDX 잠금과 복원 실측](05-encrypted-profile.md#2026-11-23-bitlocker-vhdx-실측), [전체 데스크톱 잠금 시험](05-encrypted-profile.md#전체-데스크톱-상태의-잠금-시험), [ADR-0003](decisions/ADR-0003-volume-broker.md) | 제품 실행 경로에서 보호 볼륨 식별, 자동 잠금 및 강제 종료 복구 |
-| SEC-004 | 프로필 평문 임시 파일 방지 | IN PROGRESS | [Procmon 쓰기 추적](05-encrypted-profile.md#2026-11-23-bitlocker-vhdx-실측) | 전체 앱의 TEMP·덤프·캐시 및 충돌 경로, 매핑된 쓰기와 OS 기록 검증 |
+| SEC-004 | 프로필 평문 임시 파일 방지 | IN PROGRESS | [Procmon 쓰기 추적](05-encrypted-profile.md#2026-11-23-bitlocker-vhdx-실측), [볼륨 밖 쓰기 추적 도구](05-encrypted-profile.md#볼륨-밖-쓰기-추적-sec-004) | VM 추적: 취소된 다운로드의 `Downloads\*.tmp` 누출 발견 후 수정, 재추적에서 제거 확인. 남은 볼륨 밖 쓰기는 WebView2 점프 목록(프로필 경로 포함) — Chromium 스위치·Edge 기능 플래그·환경 변수 우회 모두 효과 없음, 미해결. 루프백 합성 사이트로 세션 3회 장시간 탐색 VM 추적에서 URL·제목 기록은 관찰되지 않음(실제 인터넷 사이트는 미검증). 덤프·WER·페이지 파일은 OS 정책 대상 |
 | SEC-005 | Rust 인증 암호화 코어 | TESTED | [Phase 2 실측](phase2-evidence.md) | 독립 코어의 왕복, 변조·잘림, 64 MiB 스트리밍, 강제 종료 시험 통과. 의존성 보안 감사 및 앱 통합 |
 | SEC-006 | 마스터 키·잠금·백업/복구 | IN PROGRESS | [ADR-0002](decisions/ADR-0002-phase2-age.md), [Phase 2 실측](phase2-evidence.md) | 키 봉투와 객체 사본 복원 확인. 브라우저 잠금, 키 회전, 백업 정책, 메모리/OS 노출 검증 |
-| SEC-007 | 다운로드 스트리밍 보호 | BLOCKED | [Phase 0 실측](phase0-evidence.md), [앱 다운로드 취소 시험](../tests/integration/desktop.mjs) | 시험 옵션 적용 시 단일 GET의 메모리 본문 해시 일치. 유형별 본문, 보호 스트리밍, 쓰기 경로 검증 |
+| SEC-007 | 다운로드 스트리밍 보호 | BLOCKED | [Phase 0 실측](phase0-evidence.md), [앱 다운로드 취소 시험](../tests/integration/desktop.mjs) | 시험 옵션 적용 시 단일 GET의 메모리 본문 해시 일치. VM 추적에서 취소 전 본문이 기본 Downloads 폴더에 기록됨을 확인해 프로필 볼륨 안으로 이동. 유형별 본문, 보호 스트리밍 검증 |
 | SEC-008 | 다운로드 금고·내보내기 | NOT STARTED | [취소 목록 구현](../apps/desktop/BrowserWindow.xaml.cs) | 인증 저장, 내보내기·충돌·중단 검증 |
 | SEC-009 | 표준 네트워크 보호 | NOT STARTED | 없음 | HTTPS/추적 정책 동작 |
 | SEC-010 | 프록시 우회/누출 차단 | BLOCKED | [IPv4·IPv6 루프백 HTTP 정상·장애 시험](phase0-evidence.md) | HTTPS CONNECT, DNS/WebRTC/외부 IPv6/QUIC, 절전·재개, OS 경로 격리 검증 |
@@ -122,3 +122,6 @@
 - `tester` 커밋 `ed1a525`의 GitHub Linux Rust 테스트는 **FAILED**: `forced_termination_never_publishes_partial_ciphertext`에서 테스트 자식 프로세스가 준비 마커를 15초 안에 기록하지 못했다. 나머지 4개 활성 테스트는 통과했다 (GitHub Actions run 45103920485).
 - 수정을 통해 scrypt 기반 키 잠금 해제가 과부하 환경에서 오래 걸리는 상황을 고려해 **준비 마커 대기 시간만 90초로 변경**하고, 조기 종료/소요 시간 진단을 추가했다. 모든 검증 조건 (임시 암호문, 완성본 부재, 기존 암호문 불변, 인증 실패)은 그대로 유지한다.
 - CI는 KDF 메모리/CPU 경쟁을 줄이기 위해 Rust 테스트를 순차 실행한다. **CI 결과 확인 전에는 수정 성공으로 표시하지 않으며**, 실패가 재현되면 실제 crypto/환경 이슈를 조사한다.
+| 2026-11-23 | SEC-004 볼륨 밖 쓰기 대응 | 앱 프로세스와 WebView2 하위 프로세스가 상속하는 TEMP/TMP를 프로필의 `temp` 폴더로 이동하고 시작·종료 시 비우도록 변경. Procmon CSV 분석기(프로세스 트리 추적, 직접·생성·이름 변경·매핑 쓰기 분류) 단위 시험 6건 PASS, 호스트 데스크톱 통합·강제 종료·경로 시험 PASS. 하위 엔진 프로세스의 TEMP 상속과 실제 볼륨 밖 쓰기는 VM 추적 전까지 미검증. | [분석기](../tests/security/outside-writes.mjs) · [VM 절차](../tests/security/trace-writes.ps1) | 개발 작업 |
+| 2026-11-23 | SEC-004 격리 VM 쓰기 추적 | 일회성 BitLocker VHDX와 일반 사용자 토큰으로 데스크톱 `--crash-cycle` 하네스를 Procmon으로 2회 추적. 1차에서 취소된 다운로드 8건의 본문이 `Downloads\<GUID>.tmp`에 기록됨을 발견해 엔진 기본 다운로드 폴더를 프로필 볼륨으로 이동. 2차에서 해당 누출 제거와 V: 쓰기 4,803건 확인. WebView2 점프 목록(엔진 프로필 경로 포함) 쓰기 2개 파일은 미해결. 분석기 단위 시험 7건 PASS. | 게스트 `C:\VEIL-Trace-20261123-130538\.veil-dev\write-trace` · [절차](05-encrypted-profile.md#볼륨-밖-쓰기-추적-sec-004) | 개발 작업 |
+| 2026-11-23 | SEC-004 점프 목록 장시간 탐색 추적 | 루프백 합성 페이지로 세션 3회(서로 다른 페이지 90개, 재방문, 닫은 탭 24개)를 호스트와 오프라인 VM에서 실행. VM Procmon 추적에서 V: 쓰기 8,683건, 볼륨 밖은 점프 목록 2개 파일뿐이며 내용은 프로필 경로만, URL·제목 없음. 앱 수준 점프 목록 차단 시도(Chromium 스위치, Edge 기능 플래그, APPDATA/USERPROFILE 변경)는 효과 없어 코드에 남기지 않음. | 게스트 `C:\VEIL-Trace-20261123-133611\.veil-dev` · [러너](../tests/security/browse-session.mjs) | 개발 작업 |

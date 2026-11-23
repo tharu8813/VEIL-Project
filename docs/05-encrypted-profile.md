@@ -120,3 +120,23 @@ node tests/integration/desktop.mjs --profile-parent 'V:\VEIL-Lab' --crash-cycle 
 - PASS — `node tests/phase3/profile-routing.mjs`. 프로필 자체가 접합점인 경우와 접합점 상위 폴더 아래 프로필 모두 종료 코드 1, `ProfileLocationException`, 대상 폴더 비어 있음, 합성 원점 요청 없음. 증거 `.veil-dev/profile-routing-8h1Fnq/evidence.json`.
 - PASS — `node tests/integration/desktop.mjs`(`.veil-dev/desktop-test-w314hT`), `node tests/integration/desktop.mjs --crash-cycle`(`.veil-dev/desktop-test-bi4rrl`).
 - NOT RUN — 관리자 권한 실행 거부(일반 사용자 셸에서는 재현할 수 없다), `subst`·심볼릭 링크·네트워크 경로, 격리 VM과 BitLocker 볼륨에서의 재실행, 브로커를 통한 보호 상태 조회.
+
+### 볼륨 밖 쓰기 추적 (SEC-004)
+
+- **대응** — 앱은 상태 파일을 읽은 뒤, 엔진을 시작하기 전에 프로세스의 `TEMP`/`TMP`를 프로필 아래 `temp` 폴더로 바꾼다. WebView2 하위 프로세스는 이 환경을 상속하는 것으로 예상한다. 폴더가 재분석 지점이면 시작을 거부하고, 시작과 종료 때 내용을 비운다. 거부된 프로필에는 폴더를 만들지 않는다.
+- **분석기** — `tests/security/outside-writes.mjs`는 Procmon CSV에서 하네스가 시작한 프로세스와 모든 하위 프로세스를 따라간다. 성공한 `WriteFile`, 파일 크기 변경, 이름 변경 대상, 새 파일 생성과, 이 트리가 연 파일에 대한 System 프로세스의 페이징 쓰기(매핑된 쓰기)를 분류한다. 보호 볼륨과 하네스 증거 폴더 밖의 쓰기가 하나라도 있으면 실패한다.
+- **절차** — 격리 VM에서만 실행한다. Procmon은 관리자 창(`tests/security/trace-writes.ps1 -Action Start -IsolatedVm`)에서, VEIL 하네스는 일반 사용자 창(`node tests/integration/desktop.mjs --profile-parent 'V:\VEIL-Lab' --crash-cycle`)에서 실행한 뒤 `-Action Stop -IsolatedVm`으로 내보내고 분석한다. 스크립트는 `-IsolatedVm` 없이, 또는 관리자 권한 없이는 실행을 거부하며 볼륨이 `FullyEncrypted`/보호 `On`인지 먼저 확인한다.
+- **1차 VM 추적 (2026-11-23 13:00, 오프라인 VM)** — 무작위 일회성 암호로 만든 전용 1 GiB BitLocker VHDX(`FullyEncrypted`/`On`)에서 일반 사용자 토큰으로 `--crash-cycle` 하네스가 PASS했다. 하네스 아래 40개 프로세스의 쓰기 4,817건이 V:에 있었다. **볼륨 밖 누출 발견** — WebView2 브라우저 프로세스가 취소된 다운로드 8건의 본문을 `DownloadStarting` 전에 `C:\Users\<user>\Downloads\<GUID>.tmp`로 기록했다(시험 후 파일은 삭제됐으나 시스템 디스크의 빈 공간에 평문이 남을 수 있다). `C:\$LogFile`·`$Mft` 쓰기는 이 파일 생성의 부수 효과였다.
+- **수정** — 엔진 프로필의 기본 다운로드 폴더(`CoreWebView2Profile.DefaultDownloadFolderPath`)를 프로필의 `temp\downloads`로 지정했다. 통합 시험이 여덟 유형 각각에서 이 경로가 프로필 안인지 확인한다.
+- **2차 VM 추적 (13:05)** — 수정본으로 하네스 PASS, V: 쓰기 4,803건, Downloads의 `.tmp` 0건. TEMP·캐시·다운로드 임시 파일은 볼륨 밖에 쓰이지 않았다. **남은 볼륨 밖 쓰기** — WebView2 브라우저 프로세스가 Windows 작업 표시줄 점프 목록(`%APPDATA%\Microsoft\Windows\Recent\CustomDestinations\*.customDestinations-ms`)에 2개 파일, 5회 기록했다. 내용은 Edge의 "새 창"·"InPrivate" 작업이며 각 항목에 엔진 프로필 경로(`--user-data-dir="V:\VEIL-Lab\…\EBWebView"`)가 들어 있다. 방문 URL은 발견되지 않았지만 보호 프로필의 위치가 시스템 디스크에 남는다. 디렉터리 인덱스 갱신(`C:\` 등)과 `$LogFile`은 부수 효과로 분리했다.
+- **점프 목록 차단 시도 (호스트, 2026-11-23)** — 호스트에서도 시험 실행마다 같은 파일(`2a2e0412b8ad04a2.customDestinations-ms`)이 다시 쓰이고 시험 프로필 경로가 들어 있음을 재현했다(일반 실행 5/5). WebView2 157.0.4341.60 런타임의 `msedge.dll`에는 Edge 점프 목록 코드(`jumplist_updater`, `jumplist_profiles`, `jumplisttopsites`, `jumplistrecentlyclosed`)가 있어, 더 오래 탐색하면 자주 가는 사이트·최근 닫은 탭 URL이 기록될 가능성이 있다. 다음 방법은 효과가 없어 코드에 남기지 않았다.
+  - Chromium `--disable-custom-jumplist` — 브라우저 프로세스 명령줄에 전달됐지만 무시됨(3/3 기록). 이 문자열은 Edge 바이너리에 없다.
+  - `--disable-features=msWorkspacesJumpList,TaskbarJumplistNewWindow,TaskbarJumplistRecentlyClosed,TaskbarJumplistTopSites` — 3/3 기록.
+  - 엔진 환경의 `APPDATA`/`LOCALAPPDATA`를 프로필로 변경 — 셸이 실제 폴더에 기록(1/1).
+  - `USERPROFILE`을 프로필로 변경 — 2회 중 1회 기록, 일관되지 않아 대책으로 쓰지 않음.
+- **장시간 탐색 추적 (2026-11-23 13:36, 오프라인 VM)** — `tests/security/browse-session.mjs --runs 3`로 같은 프로필에서 세션 3회(회당 서로 다른 합성 페이지 30개, 3개 페이지 5회 재방문, 탭 8개 열고 닫기, 종료 전 20초 대기)를 일회성 BitLocker VHDX에서 일반 사용자 토큰으로 실행했다. 하네스 PASS, V: 쓰기 8,683건. 볼륨 밖 쓰기는 점프 목록 파일 2개(5회)뿐이었고, 점프 목록에는 프로필 경로만 있고 시험 URL·호스트·페이지 제목은 없었다. Downloads `.tmp`는 0건, 시험 볼륨은 삭제됐다. 호스트에서 같은 세션을 돌린 결과도 같았다. 증거는 게스트 `C:\VEIL-Trace-20261123-133611\.veil-dev`.
+- **한계** — 시험 페이지는 루프백(`127.0.0.1`)이다. Edge의 자주 가는 사이트 목록이 루프백 주소를 제외할 수 있으므로, 실제 인터넷 사이트에서 URL이 기록되지 않는다고 결론 내리지 않는다. 오프라인 VM 정책상 외부 사이트 시험은 하지 않았다.
+- **상태** — 앱 수준 차단 방법을 찾지 못했다. 관찰된 누출은 프로필 경로(보호 볼륨 위치)로 한정되며 **미해결**이다. 후보는 배포 정책(점프 목록·최근 항목 기록 끄기), Microsoft에 WebView2 호스트용 점프 목록 비활성화 옵션 요청, 더 긴 탐색 후 파일에 URL이 기록되는지 확인하는 추가 추적이다.
+- **분석 기준 보정** — 대용량 CSV(최대 145 MB)를 스트리밍으로 처리하고, NTFS 메타데이터와 디렉터리 인덱스에 대한 System 페이징 쓰기를 누출 목록과 분리한다. Procmon 기본 필터로 수집했으며 내보내기는 완료까지 기다린다.
+- **증거** — 게스트 `C:\VEIL-Trace\.veil-dev`(1차)와 `C:\VEIL-Trace-20261123-130538\.veil-dev`(2차)의 `write-trace\trace.pml`, `trace.csv`, `outside-writes.json`, `harness.log`. 시험 볼륨은 잠근 뒤 분리하고 이미지를 삭제했다.
+- **범위 밖** — 충돌 덤프(WER), 페이지 파일·최대 절전 파일, Windows 검색 색인과 같은 OS 기록은 앱이 막을 수 없다. 시스템 드라이브 BitLocker, WER 로컬 덤프 정책 등 배포 정책으로 다룬다.

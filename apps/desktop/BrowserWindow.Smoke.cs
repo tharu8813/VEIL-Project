@@ -19,6 +19,8 @@ public partial class BrowserWindow
             {
                 var uri = new Uri(origin);
                 Check(uri.Scheme == "http" && uri.Host == "127.0.0.1", "loopback fixture");
+                Check(string.Equals(Path.TrimEndingDirectorySeparator(Path.GetTempPath()),
+                    Path.Combine(session.Root, ProfileScratch.FolderName), StringComparison.OrdinalIgnoreCase), "temp path inside profile");
                 await WaitFor(() => !restoring, "desktop initialization");
                 Check(ResolveAddress("example.test")?.AbsoluteUri == "https://example.test/", "HTTPS address default");
                 Check(ResolveAddress("한글 브라우저")?.Host == "duckduckgo.com", "search encoding");
@@ -119,6 +121,16 @@ public partial class BrowserWindow
                         MoveSelectedTab(1);
                         Check(Tabs.Items.IndexOf(moving.Item) == 1 && Active == moving, "keyboard tab reorder");
                         Check(BrowserData.Load(statePath).Windows is null, "merged window removed from state");
+                        // Tear-off path used by dragging a tab out of the strip (without real mouse input).
+                        var torn = (TabItem)Tabs.Items[^1];
+                        int windowCount = session.Windows.Count;
+                        TearOff(torn);
+                        await WaitFor(() => session.Windows.Count == windowCount + 1 && Tabs.Items.Count == count - 1 &&
+                            session.Windows[^1].Tabs.Items.Contains(torn) && !session.Windows[^1].IsRestoring, "tab torn off into a new window");
+                        var tornWindow = session.Windows[^1];
+                        tornWindow.DetachTab(torn);
+                        AttachTab(torn, Tabs.Items.Count);
+                        await WaitFor(() => session.Windows.Count == windowCount && Tabs.Items.Count == count, "torn-off tab dropped back");
                     }
                     if (stage == "crash")
                     {
@@ -133,6 +145,32 @@ public partial class BrowserWindow
                         // The harness terminates this process with the synthetic partial state still open.
                         await Task.Delay(Timeout.InfiniteTimeSpan);
                     }
+                }
+                else if (stage == "browse")
+                {
+                    // SEC-004 long session: distinct pages, repeat visits and closed tabs give the engine's
+                    // jump-list updater "frequent" and "recently closed" material, then time to write it.
+                    for (int i = 0; i < 30; i++)
+                    {
+                        NavigateAddress($"{origin}/visit?n={i}");
+                        await ReadyAt($"/visit?n={i}");
+                    }
+                    for (int round = 0; round < 5; round++)
+                        foreach (int i in new[] { 1, 2, 3 })
+                        {
+                            NavigateAddress($"{origin}/visit?n={i}");
+                            await ReadyAt($"/visit?n={i}");
+                        }
+                    for (int i = 100; i < 108; i++)
+                    {
+                        int count = Tabs.Items.Count;
+                        Check(await OpenTab($"{origin}/visit?n={i}") is not null, $"browse tab {i}");
+                        await ReadyAt($"/visit?n={i}");
+                        CloseTab((TabItem)Tabs.SelectedItem);
+                        await WaitFor(() => Tabs.Items.Count == count, $"browse tab {i} closed");
+                    }
+                    await Task.Delay(TimeSpan.FromSeconds(20));
+                    Check(data.History.Count >= 53, "long browse session recorded");
                 }
                 else throw new ArgumentException("Unknown desktop smoke stage.");
 
@@ -155,6 +193,9 @@ public partial class BrowserWindow
                     await Active!.View.ExecuteScriptAsync(script + "; null");
                     await WaitFor(() => downloads.Count == count + 1, $"download cancelled ({type})");
                     Check(downloads[0] == $"veil-phase0-{type}.bin · 취소됨", $"download label ({type})");
+                    Check(Active!.View.CoreWebView2.Profile.DefaultDownloadFolderPath.StartsWith(
+                        Path.Combine(session.Root, ProfileScratch.FolderName), StringComparison.OrdinalIgnoreCase),
+                        $"download scratch inside profile ({type})");
                     if (type == "get")
                     {
                         await WaitFor(() => DownloadButton.Visibility == Visibility.Visible, "download toolbar icon shown");

@@ -75,6 +75,11 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
             case '/network-control': return send('VEIL_DIRECT_CONTROL');
             case '/': return send(page, 'text/html; charset=utf-8');
             case '/second': return send('<title>VEIL 두 번째 페이지</title><a href="/">홈</a>', 'text/html; charset=utf-8');
+            case '/visit': {
+                // Distinct synthetic pages for the long-session jump-list trace (SEC-004).
+                const n = Number.parseInt(url.searchParams.get('n') ?? '0', 10) || 0;
+                return send(`<title>VEIL synthetic visit ${n}</title><p>visit ${n}</p>`, 'text/html; charset=utf-8');
+            }
             case '/probe.js': return send(probe, 'text/javascript');
             case '/login':
                 response.setHeader('Set-Cookie', `veil=${marker}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`);
