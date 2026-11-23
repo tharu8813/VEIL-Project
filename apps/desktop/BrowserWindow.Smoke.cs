@@ -11,6 +11,7 @@ public partial class BrowserWindow
     {
         ShowActivated = false;
         ShowInTaskbar = false;
+        smokeRun = true;
         Loaded += async (_, _) =>
         {
             var checks = new List<string>();
@@ -172,7 +173,51 @@ public partial class BrowserWindow
                     await Task.Delay(TimeSpan.FromSeconds(20));
                     Check(data.History.Count >= 53, "long browse session recorded");
                 }
+                else if (stage is "storm" or "storm-check")
+                {
+                    // Phase 3: the engine is killed while IndexedDB/localStorage commits are in flight.
+                    // Each start must find the stored records readable and gap-free.
+                    NavigateAddress(origin + "/storm");
+                    await ReadyAt("/storm");
+                    var state = await Evaluate("stormRead()");
+                    Check(!state.TryGetProperty("error", out _), "storm storage opens");
+                    int max = state.GetProperty("max").GetInt32();
+                    Check(state.GetProperty("contiguous").GetBoolean(), $"storm records contiguous (max {max}, localStorage {state.GetProperty("ls").GetInt32()})");
+                    if (stage == "storm")
+                    {
+                        await Active!.View.ExecuteScriptAsync($"stormStart({max}); null");
+                        for (int i = 0; i < 400; i++)
+                        {
+                            if (int.TryParse(await Active!.View.ExecuteScriptAsync("window.stormGen"), out int gen) && gen >= max + 100) break;
+                            await Task.Delay(75);
+                        }
+                        File.WriteAllText(report, JsonSerializer.Serialize(new
+                        {
+                            stormReady = true,
+                            browserPid = Active!.View.CoreWebView2.BrowserProcessId,
+                            before = max,
+                        }));
+                        // VEIL_STORM_HOLD_SECONDS keeps the writer running longer for the VM power-cut test.
+                        int hold = int.TryParse(Environment.GetEnvironmentVariable("VEIL_STORM_HOLD_SECONDS"), out int seconds) ? seconds : 30;
+                        for (var stopAt = DateTime.UtcNow.AddSeconds(hold); DateTime.UtcNow < stopAt && !session.EngineLost;)
+                            await Task.Delay(75);
+                        Check(session.EngineLost, "engine loss detected");
+                    }
+                }
                 else throw new ArgumentException("Unknown desktop smoke stage.");
+
+                async Task<JsonElement> Evaluate(string expression)
+                {
+                    await Active!.View.ExecuteScriptAsync("window.__veil = undefined; Promise.resolve(" + expression +
+                        ").then(r => window.__veil = JSON.stringify(r), e => window.__veil = JSON.stringify({ error: String(e) })); null");
+                    for (int attempt = 0; attempt < 200; attempt++)
+                    {
+                        string raw = await Active!.View.ExecuteScriptAsync("window.__veil ?? null");
+                        if (raw != "null") return JsonDocument.Parse(JsonSerializer.Deserialize<string>(raw)!).RootElement.Clone();
+                        await Task.Delay(75);
+                    }
+                    throw new TimeoutException(expression);
+                }
 
                 async Task ReadyAt(string path)
                 {
@@ -218,7 +263,13 @@ public partial class BrowserWindow
                 error = $"{exception.GetType().Name}: {exception.Message}";
             }
 
-            if (engine is not null && Tabs.Items.Count > 0)
+            if (engine is not null && Tabs.Items.Count > 0 && session.EngineLost)
+            {
+                // The killed engine cannot report exit again; just release the windows and the profile.
+                Application.Current.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                foreach (var window in session.Windows.ToList()) window.Close();
+            }
+            else if (engine is not null && Tabs.Items.Count > 0)
             {
                 var exit = new TaskCompletionSource();
                 engine.BrowserProcessExited += (_, _) => exit.TrySetResult();

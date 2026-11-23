@@ -73,6 +73,7 @@ node tests/phase0/browser-crash.mjs
 node tests/integration/desktop.mjs
 node tests/integration/desktop.mjs --crash-cycle
 node tests/phase3/profile-routing.mjs
+node tests/phase3/engine-kill.mjs --cycles 5
 node --test tests/security/outside-writes.test.mjs
 node tests/security/browse-session.mjs --runs 3
 ```
