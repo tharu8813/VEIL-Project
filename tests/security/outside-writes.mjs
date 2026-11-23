@@ -109,6 +109,9 @@ export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allo
     const harness = new Map();
     const osRecords = new Map();
     const names = new Map();
+    // Exact report files named as the last argument of a test-mode launch (--smoke/--probe ... <report>).
+    // The harness chooses where they go (a disk-full run cannot put them on its full volume).
+    const reports = new Set();
     const count = (map, path) => map.set(path, (map.get(path) ?? 0) + 1);
 
     const classify = (path, event, kind) => {
@@ -121,6 +124,7 @@ export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allo
             return;
         }
         if (allowPrefixes.some(p => key.startsWith(p) || key + '\\' === p)) { allowed++; return; }
+        if (reports.has(key)) { allowed++; return; }
         // The Node runner's evidence folder: its own writes and the System flush of files it wrote.
         if (/^node(\.exe)?$/i.test(writer) && nodePrefixes.some(p => key.startsWith(p) || key + '\\' === p)) {
             allowed++;
@@ -153,7 +157,11 @@ export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allo
         if (!tree.has(pid) && event['Parent PID'] && tree.has(String(event['Parent PID']))) join(pid, String(event['Parent PID']));
         if (tree.has(pid)) {
             names.set(pid, event['Process Name']);
-            if (created) join(created, pid);
+            if (created) {
+                join(created, pid);
+                const report = /\s--(?:smoke|probe)\s.*\s"?([A-Za-z]:\\[^"]+?\.json)"?\s*$/.exec(event.Detail)?.[1];
+                if (report) reports.add(normalize(report));
+            }
             // Track files (not directories: the System process updates directory indexes on its own)
             // so later paging writes to them can be attributed to this tree.
             if (event.Operation === 'CreateFile' && event.Result === 'SUCCESS' && isDrivePath(event.Path) && !opensDirectory(event) &&

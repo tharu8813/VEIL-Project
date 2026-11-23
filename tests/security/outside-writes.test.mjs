@@ -145,6 +145,9 @@ test('VM batch findings: PID reuse, runner flush, harness helpers and Prefetch a
         // Prefetch flushed by System after the loader opened it for a tree process.
         row('node.exe', 100, 'CreateFile', 'C:\\Windows\\Prefetch\\NODE.EXE-1234.pf', 'SUCCESS', 'OpenResult: Opened'),
         row('System', 4, 'WriteFile', 'C:\\Windows\\Prefetch\\NODE.EXE-1234.pf', 'SUCCESS', 'I/O Flags: Paging I/O'),
+        // A test-mode launch may write exactly the report file named on its command line.
+        row('node.exe', 100, 'Process Create', 'C:\\dotnet.exe', 'SUCCESS', 'PID: 500, Command line: dotnet C:\\b\\Veil.Desktop.dll --smoke V:\\VEIL-Lab\\p http://127.0.0.1:1 write C:\\VEIL-Batch\\src\\.veil-dev\\desktop-test-x\\write.json'),
+        row('dotnet.exe', 500, 'WriteFile', 'C:\\VEIL-Batch\\src\\.veil-dev\\desktop-test-x\\write.json', 'SUCCESS', ''),
         row('node.exe', 100, 'Process Create', 'C:\\msedgewebview2.exe', 'SUCCESS', 'PID: 300, Command line: msedgewebview2.exe'),
         row('msedgewebview2.exe', 300, 'WriteFile', 'V:\\VEIL-Lab\\p\\Cookies', 'SUCCESS', ''),
         // Engine jump list (known leak) must still fail the trace.
@@ -153,7 +156,7 @@ test('VM batch findings: PID reuse, runner flush, harness helpers and Prefetch a
     const report = analyze(parseCsv(csv(events)), vm);
     assert.deepEqual(report.outside.map(entry => entry.path), ['C:\\Users\\lab\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\CustomDestinations\\x.tmp']);
     assert.equal(report.pass, false);
-    assert.equal(report.writes.allowed, 2);
+    assert.equal(report.writes.allowed, 3);
     assert.deepEqual(Object.keys(report.harness), ['C:\\Users\\lab\\AppData\\Local\\Temp\\__PSScriptPolicyTest_x.ps1']);
     assert.deepEqual(Object.keys(report.osRecords), ['C:\\Windows\\Prefetch\\NODE.EXE-1234.pf']);
     assert.ok(report.processes.some(p => p.pid === '200'), 'exited process stays in the report');
@@ -163,4 +166,8 @@ test('VM batch findings: PID reuse, runner flush, harness helpers and Prefetch a
     const engineTemp = analyze(parseCsv(csv([...events.slice(0, -1),
         row('msedgewebview2.exe', 300, 'CreateFile', 'C:\\Users\\lab\\AppData\\Local\\Temp\\e.tmp', 'SUCCESS', 'OpenResult: Created')])), vm);
     assert.equal(engineTemp.pass, false);
+    // Any other file next to the report still counts as outside.
+    const sibling = analyze(parseCsv(csv([...events.slice(0, -1),
+        row('dotnet.exe', 500, 'WriteFile', 'C:\\VEIL-Batch\\src\\.veil-dev\\desktop-test-x\\other.bin', 'SUCCESS', '')])), vm);
+    assert.equal(sibling.pass, false);
 });
