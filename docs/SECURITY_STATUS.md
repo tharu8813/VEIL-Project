@@ -116,3 +116,9 @@
 - **IMPLEMENTED / CI PENDING** — 클라이언트 제품 구성은 서비스 PID 확인을 우회하지 못하도록 `requireWindowsService=true`, 브로커 실행 파일의 절대 경로, 보호 프로필 절대 경로를 필수로 검증한다. 누락되거나 잘못된 브로커 구성 값은 제어된 오류로 거부한다.
 - **TEST COVERAGE** — Windows PowerShell 5.1 설치 스크립트 파싱과 비파괴적 Node 정적 정책 검증을 CI에 추가한다. 이는 설치·서비스 동작을 실행한 시험이 아니며 격리 VM에서 설치/재부팅/서비스 충돌 후 재잠금/제거 순서 및 Windows 11 Home 대상 지원 여부를 검증해야 한다.
 - **SECURITY LIMIT** — 브로커 강제 종료 시 이미 열린 브라우저나 WebView2 핸들이 잠금을 거부할 수 있으며, 이 때 재시작이 데이터를 즉시 보호한다는 보장은 없다. 실제 VM 재시작 회복 실측은 미실행. Gate A/B 판정은 그대로 BLOCKED이다.
+
+### Rust 코어 강제 종료 테스트 CI 안정화 (2026-11-23)
+
+- `tester` 커밋 `ed1a525`의 GitHub Linux Rust 테스트는 **FAILED**: `forced_termination_never_publishes_partial_ciphertext`에서 테스트 자식 프로세스가 준비 마커를 15초 안에 기록하지 못했다. 나머지 4개 활성 테스트는 통과했다 (GitHub Actions run 45103920485).
+- 수정을 통해 scrypt 기반 키 잠금 해제가 과부하 환경에서 오래 걸리는 상황을 고려해 **준비 마커 대기 시간만 90초로 변경**하고, 조기 종료/소요 시간 진단을 추가했다. 모든 검증 조건 (임시 암호문, 완성본 부재, 기존 암호문 불변, 인증 실패)은 그대로 유지한다.
+- CI는 KDF 메모리/CPU 경쟁을 줄이기 위해 Rust 테스트를 순차 실행한다. **CI 결과 확인 전에는 수정 성공으로 표시하지 않으며**, 실패가 재현되면 실제 crypto/환경 이슈를 조사한다.

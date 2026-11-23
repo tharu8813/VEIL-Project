@@ -184,19 +184,29 @@ fn forced_termination_never_publishes_partial_ciphertext() {
         .env("VEIL_TEST_INTERRUPTED_DIRECTORY", root)
         .spawn()
         .unwrap();
-    let limit = Instant::now() + Duration::from_secs(15);
-    while !root.join("ready").exists() && Instant::now() < limit {
-        if child.try_wait().unwrap().is_some() {
+    // The child must decrypt an scrypt-encrypted key envelope before it can write
+    // the partial ciphertext. A busy CI runner can take far longer than 15 seconds.
+    // Keep the test's interrupted-write assertion; only relax the startup deadline.
+    let started = Instant::now();
+    let ready_file = root.join("ready");
+    let limit = started + Duration::from_secs(90);
+    let mut early_exit = None;
+    while !ready_file.exists() && Instant::now() < limit {
+        if let Some(status) = child.try_wait().unwrap() {
+            early_exit = Some(status);
             break;
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(50));
     }
+    let ready = ready_file.exists();
     let _ = child.kill();
-    assert!(!child.wait().unwrap().success());
+    let exit = child.wait().unwrap();
     assert!(
-        root.join("ready").exists(),
-        "child did not reach the partial write"
+        ready,
+        "child did not reach the partial write after {:.1}s (early exit: {early_exit:?}, final status: {exit:?})",
+        started.elapsed().as_secs_f64()
     );
+    assert!(!exit.success());
     assert!(!root.join("interrupted.age").exists());
     let parts: Vec<_> = fs::read_dir(root)
         .unwrap()
