@@ -171,6 +171,12 @@ internal static class Program
             arguments.Add("--enable-features=msWebView2EnableDownloadContentInWebResourceResponseReceived");
         // ADR-0006: proxy mode pins the engine to the proxy (no DIRECT fallback), limits WebRTC, disables QUIC.
         arguments.AddRange(NetworkPolicy.BrowserArguments(network ?? NetworkSettings.Standard));
+        NetworkPolicy.ApplyDns(expected, network ?? NetworkSettings.Standard);
+#if DEBUG
+        // Test-only: trust one test server key (local DoH responder). Never present in Release builds.
+        if (Environment.GetEnvironmentVariable("VEIL_TEST_TRUSTED_SPKI") is { Length: > 0 } spki && spki.All(c => char.IsAsciiLetterOrDigit(c) || c is '+' or '/' or '='))
+            arguments.Add($"--ignore-certificate-errors-spki-list={spki}");
+#endif
         var options = new CoreWebView2EnvironmentOptions
         {
             ExclusiveUserDataFolderAccess = true,
