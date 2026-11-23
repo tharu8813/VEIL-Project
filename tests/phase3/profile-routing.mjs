@@ -14,7 +14,7 @@ if (option !== undefined && (option !== '--profile-parent' || !location || !isAb
     throw new Error('Use --profile-parent followed by an existing absolute test directory.');
 }
 const profileRoot = location ? await mkdtemp(join(location, 'veil-synthetic-')) : directory;
-const desktop = resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
+const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
 const { origin, server, requests } = await startFixture();
 
 async function probe(name, profile, action, env = process.env) {

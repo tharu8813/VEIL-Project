@@ -328,11 +328,26 @@ public partial class BrowserWindow : Window
     private async Task CaptureAsync(CoreWebView2 web, Uri uri, string fileName, long engineReceived, long engineOnDisk)
     {
         var vault = session.Vault;
+        bool open;
+        try { open = await EnsureVaultOpenAsync(); }
+        catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException
+            or System.ComponentModel.Win32Exception)
+        {
+            vault.Results.Add(new VaultResult(fileName, DownloadVault.Failed, 0, $"금고 열기 실패: {error.GetType().Name}: {error.Message}", null, engineReceived, engineOnDisk));
+            ShowDownloadOutcome(fileName, $"{DownloadVault.Failed}: 금고 열기 실패", $"{fileName}: 금고를 열지 못해 저장하지 않았습니다.");
+            return;
+        }
+        if (!open)
+        {
+            vault.Results.Add(new VaultResult(fileName, DownloadVault.Blocked, 0, "금고 잠김", null, engineReceived, engineOnDisk));
+            ShowDownloadOutcome(fileName, $"{DownloadVault.Blocked}: 금고 잠김", $"{fileName}: 금고를 열지 않아 저장하지 않았습니다.");
+            return;
+        }
         try
         {
             var progress = new Progress<long>(bytes => Status.Text = $"{fileName} 보관 중… {bytes / 1024d / 1024d:0.0} MB");
-            var (bytes, path) = await vault.CaptureAsync(uri, web, progress, CancellationToken.None);
-            vault.Results.Add(new VaultResult(fileName, DownloadVault.Stored, bytes, null, path, engineReceived, engineOnDisk));
+            var entry = await vault.CaptureAsync(uri, fileName, web, progress, CancellationToken.None);
+            vault.Results.Add(new VaultResult(fileName, DownloadVault.Stored, entry.Bytes, null, vault.ObjectPath(entry), engineReceived, engineOnDisk));
             ShowDownloadOutcome(fileName, DownloadVault.Stored, $"{fileName}을(를) 암호화 금고에 보관했습니다.");
         }
         catch (Exception error) when (error is IOException or System.Net.Http.HttpRequestException or InvalidOperationException
@@ -342,6 +357,63 @@ public partial class BrowserWindow : Window
             vault.Results.Add(new VaultResult(fileName, DownloadVault.Failed, 0, reason, null, engineReceived, engineOnDisk));
             ShowDownloadOutcome(fileName, $"{DownloadVault.Failed}: {reason}", $"{fileName}을(를) 보관하지 못했습니다. 일반 디스크에는 저장하지 않았습니다.");
         }
+    }
+
+    /// <summary>Opens the vault: Debug test variables, else the setup wizard (first use) or the unlock dialog.
+    /// Smoke runs never show dialogs. A recovery-code unlock requires a new passphrase and code at once.</summary>
+    private async Task<bool> EnsureVaultOpenAsync()
+    {
+        await session.VaultOpenGate.WaitAsync();
+        try { return await OpenVaultAsync(); }
+        finally { session.VaultOpenGate.Release(); }
+    }
+
+    private async Task<bool> OpenVaultAsync()
+    {
+        var vault = session.Vault;
+        if (vault.Unlocked) return true;
+        if (!vault.Available) return false;
+        if (await vault.TryOpenFromDevelopmentEnvironmentAsync()) return true;
+        if (smokeRun) return false;
+        if (!vault.Exists)
+        {
+            var setup = new VaultSetupDialog(this, "다운로드 금고 만들기", askPassphrase: true, issueCode: true);
+            return setup.ShowDialog() == true && await vault.CreateAsync(setup.Passphrase!, setup.RecoveryCode!) is null;
+        }
+        string? error = null;
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            var unlock = new VaultUnlockDialog(this, error);
+            if (unlock.ShowDialog() != true) return false;
+            if (unlock.RecoveryCode is { } code)
+            {
+                error = await vault.RecoverAsync(code);
+                if (error is not null) continue;
+                bool resetSaved = false;
+                try
+                {
+                    var reset = new VaultSetupDialog(this, "복구 후 새 암호와 복구 코드", askPassphrase: true, issueCode: true);
+                    if (reset.ShowDialog() != true) return false;
+                    resetSaved = await vault.CompleteRecoveryAsync(reset.Passphrase!, reset.RecoveryCode!);
+                    if (resetSaved) return true;
+                    error = "새 인증 정보를 모두 저장하지 못했습니다. 다시 잠금을 해제하세요.";
+                }
+                finally
+                {
+                    if (!resetSaved) vault.Lock();
+                }
+                continue;
+            }
+            error = await vault.UnlockAsync(unlock.Passphrase!);
+            if (error is null) return true;
+            await Task.Delay(500 * (attempt + 1)); // slow down repeated guesses
+        }
+        return false;
+    }
+
+    private async void VaultClick(object sender, RoutedEventArgs args)
+    {
+        if (await EnsureVaultOpenAsync()) new VaultWindow(this, session.Vault).ShowDialog();
     }
 
     /// <summary>Drops the engine's HTTP disk cache after a cancelled download (twice: the engine can still
@@ -510,14 +582,18 @@ public partial class BrowserWindow : Window
 
     private string BuildInternalPage(string? url)
     {
+        bool vaultVisible = session.VaultOpenGate.CurrentCount > 0 && session.Vault.Unlocked;
         var rows = url switch
         {
             "veil://bookmarks" => data.Bookmarks.Select(entry =>
                 $@"<a class=""row"" href=""{EscapeHtml(entry.Url)}""><strong>{EscapeHtml(entry.Title)}</strong><span>{EscapeHtml(entry.Url)}</span></a>"),
             "veil://history" => data.History.Select(entry =>
                 $@"<a class=""row"" href=""{EscapeHtml(entry.Url)}""><strong>{EscapeHtml(entry.Title)}</strong><span>{EscapeHtml(entry.Url)}</span></a>"),
-            "veil://downloads" => downloads.Select(entry =>
-                $@"<div class=""row""><strong>{EscapeHtml(entry)}</strong><span>금고 검증 전까지 차단됨</span></div>"),
+            // Vault items appear only while the vault is open; names come from the encrypted index.
+            "veil://downloads" => (vaultVisible ? session.Vault.Entries : []).Select(entry =>
+                    $@"<div class=""row""><strong>{EscapeHtml(entry.Name)}</strong><span>금고 보관 · {entry.Bytes / 1024d / 1024d:0.00} MB · {entry.SavedAt.LocalDateTime:yyyy-MM-dd HH:mm} · 내보내기는 메뉴의 다운로드 금고(Ctrl+Shift+J)</span></div>")
+                .Concat(downloads.Where(entry => !entry.EndsWith(DownloadVault.Stored)).Select(entry =>
+                    $@"<div class=""row""><strong>{EscapeHtml(entry)}</strong><span>보관하지 않음 · 일반 디스크에도 저장하지 않음</span></div>")),
             _ => [],
         };
         string title = InternalTitle(url);
@@ -525,7 +601,7 @@ public partial class BrowserWindow : Window
         {
             "veil://bookmarks" => "저장한 북마크가 없습니다.",
             "veil://history" => "방문 기록이 없습니다.",
-            "veil://downloads" => "차단한 다운로드가 없습니다.",
+            "veil://downloads" => vaultVisible ? "금고에 보관한 다운로드가 없습니다." : "금고가 잠겨 있습니다. 메뉴의 다운로드 금고에서 열 수 있습니다.",
             _ => "",
         };
         string body = rows.Any() ? string.Concat(rows) : $"<div class=\"empty\">{EscapeHtml(empty)}</div>";

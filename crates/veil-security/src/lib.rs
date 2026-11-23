@@ -35,25 +35,50 @@ impl Keyring {
     /// Generates distinct keys and publishes a new passphrase-encrypted envelope.
     /// The destination must not exist.
     pub fn create(path: &Path, passphrase: SecretString) -> io::Result<Self> {
-        require_passphrase(&passphrase)?;
-        let keys = Self {
+        let keys = Self::generate();
+        keys.write_envelope(path, passphrase, false)?;
+        Ok(keys)
+    }
+
+    /// Generates three distinct identities without writing anything.
+    pub fn generate() -> Self {
+        Self {
             profile: x25519::Identity::generate(),
             download: x25519::Identity::generate(),
             backup: x25519::Identity::generate(),
-        };
+        }
+    }
+
+    /// Wraps these keys in a passphrase-encrypted envelope. With `replace`, an existing envelope is
+    /// swapped atomically (passphrase change, recovery-code reissue); otherwise the path must not exist.
+    pub fn write_envelope(&self, path: &Path, passphrase: SecretString, replace: bool) -> io::Result<()> {
+        require_passphrase(&passphrase)?;
         let mut recipient = scrypt::Recipient::new(passphrase);
         recipient.set_work_factor(SCRYPT_LOG_N);
         let encryptor = make_encryptor(&recipient)?;
-        publish_new(path, |staging| {
+        let write = |staging: &mut File| {
             let mut encrypted = encryptor.wrap_output(staging)?;
             writeln!(encrypted, "{VERSION}")?;
-            for identity in [&keys.profile, &keys.download, &keys.backup] {
+            for identity in [&self.profile, &self.download, &self.backup] {
                 writeln!(encrypted, "{}", identity.to_string().expose_secret())?;
             }
             encrypted.finish()?;
             Ok(())
+        };
+        if replace { publish_replace(path, write) } else { publish_new(path, write) }
+    }
+
+    /// Decrypts an object to a new plaintext file. The file appears at `destination` only after the
+    /// whole object authenticated; on any failure nothing is left behind. The destination must not exist.
+    pub fn export_new(&self, purpose: Purpose, object: &Path, destination: &Path) -> io::Result<u64> {
+        let mut total = 0;
+        self.read_object(purpose, object, |plaintext| {
+            publish_new_plain(destination, |staging| {
+                total = transfer(plaintext, staging)?;
+                Ok(())
+            })
         })?;
-        Ok(keys)
+        Ok(total)
     }
 
     /// Reads a complete, authenticated envelope before returning usable keys.
@@ -220,6 +245,37 @@ fn publish_new(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) -> 
         .unwrap_or_else(|| Path::new("."));
     let mut staging = tempfile::Builder::new()
         .prefix(PART_PREFIX)
+        .tempfile_in(parent)?;
+    write(staging.as_file_mut())?;
+    staging.as_file().sync_all()?;
+    staging
+        .persist_noclobber(path)
+        .map_err(|error| error.error)?;
+    Ok(())
+}
+
+fn publish_replace(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut staging = tempfile::Builder::new()
+        .prefix(PART_PREFIX)
+        .tempfile_in(parent)?;
+    write(staging.as_file_mut())?;
+    staging.as_file().sync_all()?;
+    staging.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+/// Like `publish_new`, but for exported plaintext: the staging name does not claim to be ciphertext.
+fn publish_new_plain(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut staging = tempfile::Builder::new()
+        .prefix(".veil-export-")
         .tempfile_in(parent)?;
     write(staging.as_file_mut())?;
     staging.as_file().sync_all()?;

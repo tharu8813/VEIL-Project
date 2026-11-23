@@ -25,7 +25,7 @@ await mkdir(root, { recursive: true });
 const evidence = await mkdtemp(join(root, 'browse-session-'));
 const profileRoot = parent ? await mkdtemp(join(parent, 'veil-browse-')) : evidence;
 const profile = join(profileRoot, 'profile');
-const desktop = resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
+const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
 const jumpLists = join(process.env.APPDATA, 'Microsoft', 'Windows', 'Recent', 'CustomDestinations');
 
 async function snapshot() {

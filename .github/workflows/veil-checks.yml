@@ -82,7 +82,8 @@ jobs:
       # Hosted runners may be elevated and do not provide an interactive desktop.
       # Running the WPF smoke suite or broker authorization test here would
       # incorrectly test the runner, not a regular Windows user's security token.
-      # Those checks are required separately in a normal-user Windows VM.
+      # Run ordinary WPF smoke tests in an interactive standard-user Windows session.
+      # Run authorization against the installed broker in the isolated VM integration session.
 
   rust-security:
     name: Rust authenticated encryption tests

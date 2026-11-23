@@ -24,7 +24,7 @@ await mkdir(root, { recursive: true });
 const evidence = await mkdtemp(join(root, 'engine-kill-'));
 const profileRoot = parent ? await mkdtemp(join(parent, 'veil-engine-kill-')) : evidence;
 const profile = join(profileRoot, 'profile');
-const desktop = resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
+const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
 const { server, origin } = await startFixture();
 
 async function stage(name, report, onReady) {

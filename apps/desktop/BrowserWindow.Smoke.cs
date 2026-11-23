@@ -213,7 +213,8 @@ public partial class BrowserWindow
                         if (expected == DownloadVault.Stored)
                         {
                             Check(result.Bytes == bytes, $"vault {kind} size {result.Bytes}");
-                            Check(await session.Vault.VerifyAsync(result.ObjectPath!) == bytes, $"vault {kind} authenticates");
+                            var entry = session.Vault.Entries.First(e => session.Vault.ObjectPath(e) == result.ObjectPath);
+                            Check(await session.Vault.VerifyAsync(entry) == bytes, $"vault {kind} authenticates");
                         }
                         checks.Add($"engine bytes before cancel ({kind}): received {result.EngineBytesBeforeCancel}, scratch {result.EngineBytesOnDisk}");
                         CloseTab((TabItem)Tabs.SelectedItem);
@@ -224,6 +225,46 @@ public partial class BrowserWindow
                         vault = session.Vault.Directory,
                         results = session.Vault.Results,
                     }));
+                }
+                else if (stage == "vault-reopen")
+                {
+                    // ADR-0005: a new VEIL process opens the persistent vault (passphrase, or the recovery code
+                    // in VEIL_TEST_RECOVER) and exports every item into the evidence folder.
+                    var vault = session.Vault;
+                    string? recover = Environment.GetEnvironmentVariable("VEIL_TEST_RECOVER");
+                    bool opened = recover is { Length: > 0 }
+                        ? await vault.RecoverAsync(recover) is null
+                        : await vault.TryOpenFromDevelopmentEnvironmentAsync();
+                    checks.Add($"vault opened: {opened}");
+                    var exports = new List<object>();
+                    if (opened)
+                    {
+                        string target = Path.Combine(Path.GetDirectoryName(report)!, "exports-" + Guid.NewGuid().ToString("N")[..6]);
+                        Directory.CreateDirectory(target);
+                        foreach (var item in vault.Entries)
+                        {
+                            string destination = Path.Combine(target, item.Id + ".bin");
+                            string? failure = null;
+                            long exported = 0;
+                            try { exported = await vault.ExportAsync(item, destination); }
+                            catch (IOException exception) { failure = exception.Message; }
+                            exports.Add(new { item.Id, item.Name, item.Bytes, item.Recovered, destination, exported, failure });
+                        }
+                    }
+                    File.WriteAllText(Path.ChangeExtension(report, ".vault.json"), JsonSerializer.Serialize(new { opened, entries = vault.Entries, exports }));
+                }
+                else if (stage == "vault-rotate")
+                {
+                    // Recovery-code unlock followed by a new passphrase and a new recovery code.
+                    var vault = session.Vault;
+                    string code = Environment.GetEnvironmentVariable("VEIL_DEV_VAULT_RECOVERY") ?? "";
+                    Check(await vault.RecoverAsync(code) is null, "vault opened with recovery code");
+                    string passphrase = Environment.GetEnvironmentVariable("VEIL_TEST_NEW_PASSPHRASE") ?? "";
+                    Check(!await vault.CompleteRecoveryAsync(passphrase, ""), "failed rotation reported");
+                    Check(!vault.Unlocked && vault.Entries.Count == 0, "failed rotation locked vault and cleared the list");
+                    Check(await vault.RecoverAsync(code) is null, "old code still opens after failed rotation");
+                    Check(await vault.CompleteRecoveryAsync(passphrase, Environment.GetEnvironmentVariable("VEIL_TEST_NEW_RECOVERY") ?? ""),
+                        "vault recovery credentials updated");
                 }
                 else if (stage is "storm" or "storm-check")
                 {

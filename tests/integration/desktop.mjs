@@ -8,6 +8,9 @@ import { promisify } from 'node:util';
 import { startFixture } from './fixture.mjs';
 
 const run = promisify(execFile);
+// Debug-build vault test secrets (synthetic); without them the vault stays locked and downloads are blocked.
+const vaultEnv = { ...process.env, VEIL_DEV_VAULT_PASSPHRASE: 'synthetic-desktop-pass', VEIL_DEV_VAULT_RECOVERY: 'TESTA-TESTB-TESTC-TESTD-TESTE-TESTF-TESTG-TESTH' };
+
 const args = process.argv.slice(2);
 const crashCycle = args.includes('--crash-cycle');
 const [option, location, mode, ...extra] = args.filter(arg => arg !== '--crash-cycle');
@@ -22,12 +25,12 @@ const directory = await mkdtemp(join(root, 'desktop-test-'));
 const profileRoot = location ? await mkdtemp(join(location, 'veil-desktop-')) : directory;
 const profile = join(profileRoot, 'profile');
 const { server, origin, requests } = await startFixture();
-const desktop = resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
+const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
 
 async function launch(path, stage) {
     const report = join(directory, `${stage}.json`);
     try {
-        await run('dotnet', [desktop, '--smoke', path, origin, stage, report], { timeout: 90000 });
+        await run('dotnet', [desktop, '--smoke', path, origin, stage, report], { timeout: 90000, env: vaultEnv });
     } catch (error) {
         if (!(await readFile(report).catch(() => null))) throw error;
     }
@@ -52,6 +55,7 @@ async function verifyInterruptedWrite() {
     const state = join(profile, 'browser-state.json');
     const report = join(directory, 'crash.json');
     const child = spawn('dotnet', [desktop, '--smoke', profile, origin, 'crash', report], {
+        env: vaultEnv,
         windowsHide: true,
         stdio: 'ignore',
     });
