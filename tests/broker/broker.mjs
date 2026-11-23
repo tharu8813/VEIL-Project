@@ -124,6 +124,8 @@ try {
     assert.equal(evidence.unsignedDesktop.exitCode, 1);
     assert.match(evidence.unsignedDesktop.error, /ProfileLocationException: .*ClientRejected/);
     assert.equal((await command(a, 'Unlock', { secret })).status.unlocked, true);
+    assert.deepEqual(await command(a, 'Unlock', { secret }), { ok: false, error: 'AlreadyUnlocked' },
+        'an unlocked volume must not silently accept another Unlock');
     assert.deepEqual(await command(a, 'Detach'), { ok: false, error: 'MustBeLocked' });
     await writeFile(marker, 'synthetic open handle');
     assert.deepEqual(await command(a, 'Lock'), { ok: false, error: 'HandlesOpen' });

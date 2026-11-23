@@ -145,7 +145,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 case BrokerCommand.Unlock when !status.Attached:
                     code = "NotAttached"; break;
                 case BrokerCommand.Unlock when status.Unlocked:
-                    break;
+                    code = "AlreadyUnlocked"; break;
                 case BrokerCommand.Unlock when !status.FullyEncrypted || !status.ProtectionOn:
                     code = "NotProtected"; break;
                 case BrokerCommand.Unlock:

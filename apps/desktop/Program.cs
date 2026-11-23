@@ -14,6 +14,10 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+#if !DEBUG
+        // Release builds must never fall back to the unencrypted developer profile or test modes.
+        if (args.Length != 0) return 2;
+#endif
         if (args is ["--broker-status", var clientConfig, var gateProfile, var gateReport])
             return BrokerStatus(clientConfig, gateProfile, gateReport);
         var application = new Application();
@@ -25,32 +29,48 @@ internal static class Program
 
         bool smoke = args is ["--smoke", _, _, _, _];
         if (!smoke && args.Length != 0) return 2;
-        string? root = null;
+        ProtectedProfileSession? protectedSession = null;
         try
         {
             ProfileGate.RejectElevated();
+#if !DEBUG
+            if (!File.Exists(BrokerClientConfig.ProductPath))
+                throw new ProfileLocationException("Protected profile registration is missing.");
+#endif
             string? productProfile = null;
             if (!smoke && File.Exists(BrokerClientConfig.ProductPath))
             {
                 var client = BrokerClientConfig.Load(BrokerClientConfig.ProductPath, development: false);
                 productProfile = client.ProfilePath ?? throw new InvalidDataException("No registered profile path.");
-                volume = new NamedPipeVolumeBroker(client);
+                var broker = new NamedPipeVolumeBroker(client);
+                volume = broker;
                 requireProtected = true;
+                // The password dialog runs before the browser window. Prevent early WPF shutdown.
+                application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                protectedSession = ProtectedProfileSession.TryOpen(broker);
+                if (protectedSession is null) return 0; // User cancelled.
             }
-            root = Path.GetFullPath(smoke ? args[1] : productProfile ?? Path.Combine(".veil-dev", "desktop"));
+            string root = Path.GetFullPath(smoke ? args[1] : productProfile ?? Path.Combine(".veil-dev", "desktop"));
             ProfileGate.Prepare(root, volume, requireProtected);
             using var profileLock = new FileStream(Path.Combine(root, "profile.lock"), FileMode.OpenOrCreate,
                 FileAccess.ReadWrite, FileShare.None);
             var window = new BrowserWindow(root);
             if (smoke) window.ConfigureSmoke(args[2], args[3], args[4]);
+            application.MainWindow = window;
+            application.ShutdownMode = ShutdownMode.OnLastWindowClose;
             return application.Run(window);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or
-            System.Text.Json.JsonException or InvalidDataException)
+            System.Text.Json.JsonException or InvalidDataException or InvalidOperationException)
         {
             if (smoke) File.WriteAllText(args[4], System.Text.Json.JsonSerializer.Serialize(new { error = error.GetType().Name }));
-            else MessageBox.Show("테스트 프로필을 열 수 없습니다. 실행 중인 VEIL 창과 저장 위치를 확인하세요.", "VEIL 개발자용");
+            else MessageBox.Show("프로필을 안전하게 열 수 없습니다. 보호 저장소와 브로커 상태를 확인하세요. 비보호 프로필로 전환하지 않습니다.",
+                "VEIL 보호 프로필", MessageBoxButton.OK, MessageBoxImage.Warning);
             return 1;
+        }
+        finally
+        {
+            protectedSession?.Dispose();
         }
     }
 
