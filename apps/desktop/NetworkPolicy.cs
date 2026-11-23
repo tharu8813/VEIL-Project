@@ -82,7 +82,7 @@ internal static class NetworkPolicy
         var proxy = settings.ProxyUri ?? throw new InvalidOperationException(settings.Problem);
         yield return $"--proxy-server={proxy.Scheme}://{proxy.Authority}";
         yield return "--proxy-bypass-list=<-loopback>";
-        yield return "--force-webrtc-ip-handling-policy=disable_non_proxied_udp";
+        yield return "--webrtc-ip-handling-policy=disable_non_proxied_udp";
         yield return "--disable-quic";
     }
 

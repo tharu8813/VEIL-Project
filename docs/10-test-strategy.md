@@ -63,7 +63,7 @@
 자동 실행 항목(3단계):
 
 - 보호 볼륨 V:의 프로필: `profile-routing`, `engine-kill`, `vault-capture`, `vault-persistence`, `jump-list`, `desktop-crash-cycle`
-- V:의 작업 폴더에서 실행하는 루프백 시험: `network-guard`, `dns-protection`, `smartscreen`. 게스트에 openssl이 없으면 뒤의 두 시험은 사유와 함께 NOT RUN으로 남는다.
+- V:의 작업 폴더에서 실행하는 루프백 시험: `network-guard`, `webrtc-guard`, `dns-protection`, `smartscreen`. 게스트에 openssl이 없으면 뒤의 두 시험은 사유와 함께 NOT RUN으로 남는다.
 - 작은 볼륨 W:: `profile-disk-full`
 
 4단계 추적 결과는 `physical-writes`로 기록된다.
@@ -79,6 +79,28 @@
 VirtualBox `keyboardputstring`으로 명령을 입력할 때 주의할 점이 있다. 큰따옴표는 Windows 인수 전달 과정에서 빠지므로 작은따옴표만 쓴다. 인수가 `\`로 끝나면 다음 따옴표가 이스케이프되므로 이런 인수는 피한다. Procmon은 기본 위치(`C:\Tools\Procmon`)에 없으면 바탕 화면의 `ProcessMonitor` 폴더에서 찾는다. 게스트에 openssl이 없으면 DoH를 쓰는 두 시험은 NOT RUN으로 남는다.
 
 결과는 게스트 `C:\VEIL-Batch\RESULTS.ZIP`에 남는다. 그 안의 `summary.json`, 항목별 로그, `outside-writes.json`, `batch.json`이 SECURITY_STATUS 갱신 근거가 된다.
+
+## 인터넷 VM 시험 (Gate D)
+
+ADR-0004 정책 4에 따라 인터넷에 연결된 **별도의 격리 시험 VM**에서만 실행한다. 오프라인 실험 VM과 그 스냅샷은 그대로 둔다. 시험 계정과 합성 프로필만 쓰고, 공유 폴더·클립보드·드래그 앤 드롭은 끈다. 소스와 Debug 빌드는 오프라인 일괄 시험과 같은 번들(`make-bundle.mjs`)로 옮긴다.
+
+| 단계 | 위치 | 명령 |
+|---|---|---|
+| 1. 캡처 시작 | 게스트 관리자 셸 | `<src>\tests\vm\guest-internet.ps1 -Stage Start -Src <src>`: 기본 경로(인터넷)가 있는지 확인한 뒤 pktmon으로 포트 53만 캡처한다. |
+| 2. 실행 | 게스트 일반 사용자 셸 | `node tests\vm\internet-batch.mjs --run --internet-vm --desktop-dll <Veil.Desktop.dll>` |
+| 3. 판정 | 게스트 관리자 셸 | `<src>\tests\vm\guest-internet.ps1 -Stage Finish -Src <src>`: 캡처를 멈추고 `dns-path`를 판정한다. |
+
+| ID | 판정 |
+|---|---|
+| `dns-path` | PASS 조건: 시스템 DNS 대조 이름이 평문 DNS(포트 53)에 보이고, 보안 DNS(Cloudflare)로 찾은 이름은 보이지 않는다. 대조 이름이 없으면 캡처를 믿을 수 없으므로 FAIL. DoH 제공자 이름의 부트스트랩 조회는 `public-doh-bootstrap`에 기록한다. |
+| `webrtc-standard` | 기록만(OBSERVED). STUN을 쓴 ICE 후보 종류(host/srflx, IPv4/IPv6/mDNS). |
+| `webrtc-proxy` | PASS 조건: 프록시 보호에서 UDP 후보가 하나도 없고, 페이지가 프록시를 거친다. |
+| `smartscreen-demo` | Microsoft SmartScreen 데모 피싱 페이지를 켜기·끄기로 비교한다. 켰을 때 차단되고 껐을 때 열리면 PASS, 그 밖에는 OBSERVED. |
+| `site-compat` | 실제 사이트 8개가 HTTPS 우선·추적 방지 엄격 상태에서 열리고, HTTP 전용 사이트는 경고 페이지를 보여야 PASS. |
+| `ipv6-reachability` | 기록만. IPv6 전용 사이트에 도달하는지. |
+| 수동(NOT RUN) | 절전·네트워크 전환, Windows "Microsoft Edge용 SmartScreen" 끄기에 따른 재정의(게스트 설정 변경 필요). |
+
+인터넷 VM 준비 전에 호스트에서 확인할 수 있는 부분은 루프백 시험으로 대신한다. `node tests/phase5/webrtc-guard.mjs`는 STUN 없이 프록시 모드의 UDP 후보 0개를 확인한다.
 
 ## 최소 필수 시나리오
 

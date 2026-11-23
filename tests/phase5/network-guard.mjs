@@ -11,12 +11,11 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { createServer, request as httpRequest } from 'node:http';
-import { connect } from 'node:net';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { startFixture } from '../integration/fixture.mjs';
+import { startProxy } from '../integration/proxy.mjs';
 
 const run = promisify(execFile);
 const root = resolve('.veil-dev');
@@ -41,27 +40,6 @@ async function stage(profile, name, report, watch) {
     }
     await Promise.race([exited, delay(240_000).then(() => { child.kill(); throw new Error(`${name} timed out`); })]);
     return { ...JSON.parse(await readFile(report, 'utf8')), commandLine };
-}
-
-function startProxy() {
-    const seen = [];
-    const proxy = createServer((request, response) => {
-        const target = new URL(request.url);
-        seen.push(target.pathname);
-        const upstream = httpRequest(target, { method: request.method, headers: { ...request.headers, 'x-veil-proxied': '1' } }, reply => {
-            response.writeHead(reply.statusCode, reply.headers);
-            reply.pipe(response);
-        });
-        upstream.on('error', () => response.destroy());
-        request.pipe(upstream);
-    });
-    proxy.on('connect', (request, socket) => {
-        seen.push(`CONNECT ${request.url}`);
-        const [host, port] = request.url.split(':');
-        const tunnel = connect(Number(port), host, () => { socket.write('HTTP/1.1 200 OK\r\n\r\n'); tunnel.pipe(socket); socket.pipe(tunnel); });
-        tunnel.on('error', () => socket.destroy());
-    });
-    return new Promise(resolveProxy => proxy.listen(0, '127.0.0.1', () => resolveProxy({ proxy, seen, port: proxy.address().port })));
 }
 
 const directTotal = () => [...direct.values()].reduce((sum, n) => sum + n, 0);
@@ -91,7 +69,7 @@ try {
     assert.equal(directTotal(), directBefore, `direct requests reached the origin: ${JSON.stringify([...direct])}`);
     assert.ok(up.commandLine, 'engine browser process not observed');
     for (const flag of [`--proxy-server=http://127.0.0.1:${port}`, '--proxy-bypass-list=<-loopback>',
-        '--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--disable-quic'])
+        '--webrtc-ip-handling-policy=disable_non_proxied_udp', '--disable-quic'])
         assert.ok(up.commandLine.includes(flag), `engine command line lacks ${flag}`);
     console.log(`proxy up: PASS · page and vault download via proxy (${seen.length} proxied), 0 direct, engine switches present`);
 

@@ -123,6 +123,23 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
             case '/network-control': return send('VEIL_DIRECT_CONTROL');
             case '/': return send(page, 'text/html; charset=utf-8');
             case '/second': return send('<title>VEIL 두 번째 페이지</title><a href="/">홈</a>', 'text/html; charset=utf-8');
+            // Gate D: gathers WebRTC ICE candidates (STUN server from ?stun=, none by default) into window.veilCandidates.
+            case '/webrtc': return send(`<title>VEIL WebRTC</title><script>
+                window.veilCandidates = null;
+                (async () => {
+                    const stun = new URLSearchParams(location.search).get('stun');
+                    const found = [];
+                    try {
+                        const pc = new RTCPeerConnection({ iceServers: stun ? [{ urls: stun }] : [] });
+                        pc.createDataChannel('veil');
+                        pc.onicecandidate = event => { if (event.candidate?.candidate) found.push(event.candidate.candidate); };
+                        await pc.setLocalDescription(await pc.createOffer());
+                        await new Promise(done => { pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && done(); setTimeout(done, 8000); });
+                        pc.close();
+                        window.veilCandidates = found;
+                    } catch (error) { window.veilCandidates = ['error ' + error.name]; }
+                })();
+            </script>`, 'text/html; charset=utf-8');
             case '/storm': return send(stormPage, 'text/html; charset=utf-8');
             case '/vault-dl': {
                 // Phase 4-0 vault capture: distinct sizes and failure modes, each body filled with vaultPayload.
