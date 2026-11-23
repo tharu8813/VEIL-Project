@@ -18,6 +18,7 @@ $ErrorActionPreference = 'Stop'
 if ([bool]$Run -eq [bool]$RestoreOnly) { throw 'Choose exactly one of -Run and -RestoreOnly.' }
 . (Join-Path $PSScriptRoot '..\phase3\phase34-guest-identity.ps1')
 $guest = Get-VeilPhase34Guest
+$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 if (-not $guest.virtualBox -or -not $guest.noDefaultRoute -or $guest.elevated) {
     throw 'Only a standard-user session in an offline VirtualBox test VM may run this experiment.'
 }
@@ -80,7 +81,7 @@ if ($RestoreOnly) {
         throw 'Supply -RecoveryJson from this VM and Windows user.'
     }
     $journal = Get-Content -LiteralPath $RecoveryJson -Raw | ConvertFrom-Json
-    if ($journal.schema -ne 1 -or $journal.guestUuid -ne $guest.uuid) { throw 'Recovery file does not belong to this VM.' }
+    if ($journal.schema -ne 1 -or $journal.guestUuid -ne $guest.uuid -or $journal.userSid -ne $currentSid) { throw 'Recovery file does not belong to this VM and Windows user.' }
     Restore-Policies $journal.original
     Write-Host 'RESTORED: original HKCU Jump List policy values verified.'
     return
@@ -113,7 +114,7 @@ $evidence = Join-Path $repo ('.veil-dev\jumplist-policy-' + [Guid]::NewGuid().To
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 $original = @($policies | ForEach-Object { Read-PolicyState $_ })
 $journalPath = Join-Path $evidence 'restore.json'
-@{ schema = 1; guestUuid = $guest.uuid; original = $original } |
+@{ schema = 1; guestUuid = $guest.uuid; userSid = $currentSid; original = $original } |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $journalPath -Encoding UTF8
 $variants = @(
     @{ id = 'baseline'; settings = @() },
