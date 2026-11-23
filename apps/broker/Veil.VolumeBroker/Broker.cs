@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using Microsoft.Win32.SafeHandles;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -149,13 +150,26 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 case BrokerCommand.Unlock when !status.FullyEncrypted || !status.ProtectionOn:
                     code = "NotProtected"; break;
                 case BrokerCommand.Unlock:
-                    if (backend.Unlock(request.SecretSpan))
+                    // Acquire the crash-relock handle BEFORE opening protected data.
+                    // If this process cannot be watched, no new unlock is allowed.
+                    var ownerHandle = Native.OpenForWait(client.ProcessId);
+                    if (ownerHandle.IsInvalid)
+                    {
+                        ownerHandle.Dispose();
+                        code = "ClientWatchUnavailable";
+                        break;
+                    }
+                    bool authenticated;
+                    try { authenticated = backend.Unlock(request.SecretSpan); }
+                    catch { ownerHandle.Dispose(); throw; }
+                    if (authenticated)
                     {
                         unlockFailures = 0;
-                        Watch(client.ProcessId);
+                        Watch(client.ProcessId, ownerHandle);
                     }
                     else
                     {
+                        ownerHandle.Dispose();
                         unlockFailures++;
                         await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(8000, 250 << Math.Min(unlockFailures, 5))));
                         code = "AccessDenied";
@@ -193,11 +207,9 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     };
 
     /// <summary>Locks the volume when the client that unlocked it exits without locking.</summary>
-    private void Watch(int pid)
+    private void Watch(int pid, SafeProcessHandle handle)
     {
         unlockOwner = pid;
-        var handle = Native.OpenForWait(pid);
-        if (handle.IsInvalid) { log.Write("watch-failed", new { pid }); return; }
         _ = Task.Run(async () =>
         {
             using (handle)
