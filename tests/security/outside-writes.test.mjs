@@ -127,3 +127,47 @@ test('CLI exits 1 on outside writes and 0 when everything stays on the volume', 
     assert.match(ok.stdout, /^PASS/);
     assert.equal(JSON.parse(await readFile(join(directory, 'clean.json'), 'utf8')).pass, true);
 });
+
+test('VM batch findings: PID reuse, runner flush, harness helpers and Prefetch are separated; the jump list still fails', () => {
+    const vm = { rootPids: [100], volumes: ['V:\\'], allowNode: ['C:\\VEIL-Batch\\src\\.veil-dev'], harnessProcesses: ['powershell.exe'] };
+    const events = [
+        row('node.exe', 100, 'Process Create', 'C:\\dotnet.exe', 'SUCCESS', 'PID: 200, Command line: dotnet Veil.Desktop.dll --smoke'),
+        row('dotnet.exe', 200, 'Process Exit', '', 'SUCCESS', ''),
+        // PID 200 reused by an unrelated program: its writes are not the tree's.
+        row('svchost.exe', 50, 'Process Create', 'C:\\other.exe', 'SUCCESS', 'PID: 200, Command line: other.exe'),
+        row('other.exe', 200, 'WriteFile', 'C:\\Users\\lab\\AppData\\Local\\Temp\\other.tmp', 'SUCCESS', ''),
+        // Runner evidence written by node, later flushed by System.
+        row('node.exe', 100, 'CreateFile', 'C:\\VEIL-Batch\\src\\.veil-dev\\run\\summary.json', 'SUCCESS', 'OpenResult: Created'),
+        row('System', 4, 'WriteFile', 'C:\\VEIL-Batch\\src\\.veil-dev\\run\\summary.json', 'SUCCESS', 'I/O Flags: Paging I/O'),
+        // Harness PowerShell started by the runner.
+        row('node.exe', 100, 'Process Create', 'C:\\powershell.exe', 'SUCCESS', 'PID: 400, Command line: powershell -NoProfile'),
+        row('powershell.exe', 400, 'CreateFile', 'C:\\Users\\lab\\AppData\\Local\\Temp\\__PSScriptPolicyTest_x.ps1', 'SUCCESS', 'OpenResult: Created'),
+        // Prefetch flushed by System after the loader opened it for a tree process.
+        row('node.exe', 100, 'CreateFile', 'C:\\Windows\\Prefetch\\NODE.EXE-1234.pf', 'SUCCESS', 'OpenResult: Opened'),
+        row('System', 4, 'WriteFile', 'C:\\Windows\\Prefetch\\NODE.EXE-1234.pf', 'SUCCESS', 'I/O Flags: Paging I/O'),
+        // A test-mode launch may write exactly the report file named on its command line.
+        row('node.exe', 100, 'Process Create', 'C:\\dotnet.exe', 'SUCCESS', 'PID: 500, Command line: dotnet C:\\b\\Veil.Desktop.dll --smoke V:\\VEIL-Lab\\p http://127.0.0.1:1 write C:\\VEIL-Batch\\src\\.veil-dev\\desktop-test-x\\write.json'),
+        row('dotnet.exe', 500, 'WriteFile', 'C:\\VEIL-Batch\\src\\.veil-dev\\desktop-test-x\\write.json', 'SUCCESS', ''),
+        row('node.exe', 100, 'Process Create', 'C:\\msedgewebview2.exe', 'SUCCESS', 'PID: 300, Command line: msedgewebview2.exe'),
+        row('msedgewebview2.exe', 300, 'WriteFile', 'V:\\VEIL-Lab\\p\\Cookies', 'SUCCESS', ''),
+        // Engine jump list (known leak) must still fail the trace.
+        row('msedgewebview2.exe', 300, 'CreateFile', 'C:\\Users\\lab\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\CustomDestinations\\x.tmp', 'SUCCESS', 'OpenResult: Created'),
+    ];
+    const report = analyze(parseCsv(csv(events)), vm);
+    assert.deepEqual(report.outside.map(entry => entry.path), ['C:\\Users\\lab\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\CustomDestinations\\x.tmp']);
+    assert.equal(report.pass, false);
+    assert.equal(report.writes.allowed, 3);
+    assert.deepEqual(Object.keys(report.harness), ['C:\\Users\\lab\\AppData\\Local\\Temp\\__PSScriptPolicyTest_x.ps1']);
+    assert.deepEqual(Object.keys(report.osRecords), ['C:\\Windows\\Prefetch\\NODE.EXE-1234.pf']);
+    assert.ok(report.processes.some(p => p.pid === '200'), 'exited process stays in the report');
+    // Without the jump list write the same trace passes.
+    assert.equal(analyze(parseCsv(csv(events.slice(0, -1))), vm).pass, true);
+    // Engine writes are never treated as harness, even to the same TEMP folder.
+    const engineTemp = analyze(parseCsv(csv([...events.slice(0, -1),
+        row('msedgewebview2.exe', 300, 'CreateFile', 'C:\\Users\\lab\\AppData\\Local\\Temp\\e.tmp', 'SUCCESS', 'OpenResult: Created')])), vm);
+    assert.equal(engineTemp.pass, false);
+    // Any other file next to the report still counts as outside.
+    const sibling = analyze(parseCsv(csv([...events.slice(0, -1),
+        row('dotnet.exe', 500, 'WriteFile', 'C:\\VEIL-Batch\\src\\.veil-dev\\desktop-test-x\\other.bin', 'SUCCESS', '')])), vm);
+    assert.equal(sibling.pass, false);
+});

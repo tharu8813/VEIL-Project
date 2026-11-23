@@ -26,6 +26,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if (-not $Media) { $Media = Split-Path -Parent $MyInvocation.MyCommand.Path }
+# The lab VM keeps Procmon on the desktop; use it when the default location is empty.
+$desktopProcmon = Join-Path $env:USERPROFILE 'Desktop\ProcessMonitor\Procmon64.exe'
+if (-not (Test-Path $Procmon) -and (Test-Path $desktopProcmon)) { $Procmon = $desktopProcmon }
 $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run this stage from an elevated PowerShell in the VM.' }
 $src = Join-Path $Work 'src'
