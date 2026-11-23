@@ -410,6 +410,67 @@ public partial class BrowserWindow
                         ProtectedProfileSession.ClearPassword(changed);
                     }
                 }
+                else if (stage == "network")
+                {
+                    // ADR-0006 standard protection.
+                    var none = new HashSet<string>();
+                    Check(NetworkPolicy.HttpsUpgrade(new Uri("http://example.com/a?b=1"), none)?.AbsoluteUri == "https://example.com/a?b=1", "https-first upgrades public http");
+                    Check(NetworkPolicy.HttpsUpgrade(new Uri("http://example.com:8080/"), none)?.AbsoluteUri == "https://example.com:8080/", "https-first keeps explicit port");
+                    foreach (string local in new[] { "http://127.0.0.1:8765/", "http://localhost:3000/", "http://[::1]/", "http://192.168.0.10/", "http://10.1.2.3/", "http://172.20.0.1/", "http://169.254.1.1/", "http://intranet/", "http://printer.local/", "http://app.test/", "https://example.com/" })
+                        Check(NetworkPolicy.HttpsUpgrade(new Uri(local), none) is null, $"https-first leaves {local}");
+                    Check(NetworkPolicy.HttpsUpgrade(new Uri("http://example.com/"), new HashSet<string> { "example.com" }) is null, "https-first honours a user exception");
+                    Check(new NetworkSettings(NetworkMode.Proxy, "ftp", "127.0.0.1", 9050).Problem is not null &&
+                        new NetworkSettings(NetworkMode.Proxy, "socks5", "", 9050).Problem is not null &&
+                        new NetworkSettings(NetworkMode.Proxy, "http", "127.0.0.1", 70000).Problem is not null &&
+                        new NetworkSettings(NetworkMode.Proxy, "socks5", "127.0.0.1", 9050).Problem is null, "proxy settings validated");
+                    Check(!NetworkPolicy.BrowserArguments(NetworkSettings.Standard).Any(), "standard mode adds no engine switches");
+                    var proxyArgs = NetworkPolicy.BrowserArguments(new NetworkSettings(NetworkMode.Proxy, "socks5", "127.0.0.1", 9050)).ToList();
+                    Check(proxyArgs.SequenceEqual(new[] { "--proxy-server=socks5://127.0.0.1:9050", "--proxy-bypass-list=<-loopback>",
+                        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--disable-quic" }), "proxy mode engine switches");
+                    Check(Active!.View.CoreWebView2.Profile.PreferredTrackingPreventionLevel == Microsoft.Web.WebView2.Core.CoreWebView2TrackingPreventionLevel.Strict, "tracking prevention strict");
+
+                    // Live: a public http address is tried as https; the failure shows the warning page.
+                    NavigateAddress("http://veil-https-first.invalid/page");
+                    for (int i = 0; i < 300 && Active?.Url != HttpsWarningUrl; i++) await Task.Delay(75);
+                    Check(Active!.Url == HttpsWarningUrl && Active.PendingHttp?.AbsoluteUri == "http://veil-https-first.invalid/page", "failed https upgrade shows the warning page");
+                    // A script-initiated downgrade link must be ignored; only a real click may allow HTTP.
+                    await Active.View.ExecuteScriptAsync("location.href = 'veil://allow-http'; null");
+                    await Task.Delay(1500);
+                    Check(Active.Url == HttpsWarningUrl && session.HttpAllowed.Count == 0,
+                        $"script cannot downgrade to http (tab {Active.Url}, allowed [{string.Join(",", session.HttpAllowed)}])");
+                    // The native bar is the only way: it is shown for the warning tab and its button allows the host.
+                    Check(HttpsBar.Visibility == Visibility.Visible, "native downgrade bar shown");
+                    AllowHttpClick(this, new RoutedEventArgs());
+                    Check(session.HttpAllowed.Contains("veil-https-first.invalid") && Active.Url == "http://veil-https-first.invalid/page"
+                        && HttpsBar.Visibility != Visibility.Visible, "native button allows http for that host only");
+                    Check(session.Network.Mode == NetworkMode.Standard && NetworkIndicator.Text.StartsWith("표준 보호"), $"indicator: {NetworkIndicator.Text}");
+                }
+                else if (stage == "network-proxy")
+                {
+                    // ADR-0006 proxy mode: browsing and VEIL's own vault requests use only the proxy.
+                    var settings = session.Network;
+                    Check(settings.Mode == NetworkMode.Proxy, "proxy mode applied from saved settings");
+                    checks.Add($"indicator: {NetworkIndicator.Text}");
+                    checks.Add($"proxy reachable: {session.ProxyReachable}");
+                    NavigateAddress(origin + "/second");
+                    for (int i = 0; i < 200 && Active?.Loading != false; i++) await Task.Delay(75);
+                    await Task.Delay(500);
+                    string text = await Active!.View.ExecuteScriptAsync("document.title");
+                    checks.Add($"page title: {text}");
+                    bool vaultOpen = await session.Vault.TryOpenFromDevelopmentEnvironmentAsync();
+                    checks.Add($"vault open: {vaultOpen}");
+                    string vaultOutcome;
+                    try
+                    {
+                        var entry = await session.Vault.CaptureAsync(new Uri(origin + "/vault-dl?kind=small"), new BrowserDownload("proxy-check.bin"), Active.View.CoreWebView2);
+                        vaultOutcome = $"stored {entry.Bytes}";
+                    }
+                    catch (Exception exception) when (exception is IOException or System.Net.Http.HttpRequestException or InvalidOperationException or TaskCanceledException)
+                    {
+                        vaultOutcome = $"failed {exception.GetType().Name}";
+                    }
+                    checks.Add($"vault download: {vaultOutcome}");
+                }
                 else if (stage is "storm" or "storm-check")
                 {
                     // Phase 3: the engine is killed while IndexedDB/localStorage commits are in flight.

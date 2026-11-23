@@ -13,8 +13,8 @@
 | SEC-006 | 마스터 키·잠금·백업/복구 | IN PROGRESS | [ADR-0002](decisions/ADR-0002-phase2-age.md), [BitLocker 복구 절차](05-encrypted-profile.md#bitlocker-복구-키-백업과-점검) | 새 설치에 복구 사본 재입력·실제 잠금 해제 확인 로직과 등록 후 드릴 추가. 가짜 공급자 로컬 PASS. 실제 BitLocker 복구·재등록·OS 노출 확인은 NOT RUN |
 | SEC-007 | 다운로드 스트리밍 보호 | IN PROGRESS | [Phase 4-0 실측](07-download-vault.md#phase-4-0-실측-2026-11-23), [ADR-0004](decisions/ADR-0004-protection-policies.md) | GET·쿠키 인증·리다이렉트를 VEIL이 재요청해 Rust 코어로 스트리밍 봉인(1 KiB~64 MiB, 중단 시 미발행) PASS. 엔진이 취소 전 받은 본문은 보호 볼륨 임시 폴더·캐시에 잠시 존재(삭제·비움 확인). POST·Blob·Data·Service Worker는 차단. 실제 사이트 성공률, VM 볼륨 밖 쓰기 추적, 디스크 부족 중 봉인 미검증 |
 | SEC-008 | 다운로드 금고·내보내기 | IN PROGRESS | [ADR-0005](decisions/ADR-0005-vault-keys-index.md), [금고 지속성 시험](../tests/phase4/vault-persist.mjs), [금고 캡처 시험](../tests/phase4/vault-capture.mjs) | 영구 금고, 인증 정보·내용 키 교체, 보호 프로필 암호 연동, 암호화 백업·복원, Ctrl+J 진행률·취소 로컬 PASS. 실제 설치형 브로커·BitLocker 연동, 보호 볼륨의 쓰기 추적·디스크 부족·전원 차단은 NOT RUN |
-| SEC-009 | 표준 네트워크 보호 | NOT STARTED | 없음 | HTTPS/추적 정책 동작 |
-| SEC-010 | 프록시 우회/누출 차단 | BLOCKED | [IPv4·IPv6 루프백 HTTP 정상·장애 시험](phase0-evidence.md) | HTTPS CONNECT, DNS/WebRTC/외부 IPv6/QUIC, 절전·재개, OS 경로 격리 검증 |
+| SEC-009 | 표준 네트워크 보호 | IN PROGRESS | [ADR-0006](decisions/ADR-0006-network-guard.md), [네트워크 시험](../tests/phase5/network-guard.mjs) | HTTPS 우선(공용 주소만, 실패 시 경고 페이지, 다운그레이드는 네이티브 막대에서만), 추적 방지 엄격 로컬 PASS. 실제 사이트 호환성·HTTPS 다운그레이드 리다이렉트는 인터넷 VM NOT RUN. DNS 보호 미정 |
+| SEC-010 | 프록시 우회/누출 차단 | IN PROGRESS | [ADR-0006](decisions/ADR-0006-network-guard.md), [네트워크 시험](../tests/phase5/network-guard.mjs), [IPv4·IPv6 루프백 장애 시험](phase0-evidence.md) | 프록시 보호 모드(HTTP·SOCKS5, DIRECT 폴백 없음, 루프백 포함, WebRTC 비프록시 UDP 금지, QUIC 끔). 로컬: 탐색·금고 재요청 모두 프록시 경유, 프록시 중단 시 차단·직접 요청 0건, 엔진 인수 확인 PASS. DNS 경로·외부 IPv6·실제 WebRTC 후보·절전·재개·엔진 밖 프로세스는 VM NOT RUN. OS 수준 강제(WFP) 없음 |
 | SEC-011 | 일반 브라우저 UI/기능 | TESTED | [데스크톱 통합 시험](../tests/integration/desktop.mjs) | 실제 키 입력·IME·접근성·DPI 및 주요 사이트 회귀 |
 | SEC-012 | 엔진 보안 업데이트 및 배포 | IN PROGRESS | [ADR-0001](decisions/ADR-0001-developer-engine.md) | 패키지 복원, 서명, 라이선스, 설치·업데이트 실증 |
 
@@ -23,7 +23,7 @@
 1. 두 기본 엔진 프로필과 앱 상태는 일반 디스크에 평문 데이터를 기록한다. 전체 쓰기 경로와 보호 백엔드는 미검증이다.
 2. 두 엔진에서 GET 취소를 관찰했다. WebView2 최종 앱에서 여덟 가지 다운로드 요청을 취소했다. 일시적 디스크 쓰기와 스트리밍 금고는 미검증이다.
 3. 잠금 해제 중 동일 사용자 악성코드에 대한 접근 제한 및 OS 페이지 파일/덤프의 노출 한계가 존재한다.
-4. 로컬 프록시가 중단된 상황의 IPv4·IPv6 루프백 HTTP 요청을 관찰했다. 그 외 경로의 우회·누출 방지는 미검증이며 앱에 보호 모드를 노출하지 않는다.
+4. 프록시 보호 모드는 엔진 인수로만 강제한다. 로컬 시험에서 프록시 중단 시 엔진·금고 모두 직접 연결이 없었다. DNS·외부 IPv6·WebRTC 실측과 엔진 밖 프로세스·OS 수준 우회 방지는 미검증이다.
 5. 별도 렌더러 프로세스가 관찰됐다. 샌드박스 적용 범위와 장기 엔진 패치·배포 체계는 미검증이다.
 6. 손상된 앱 상태 JSON은 시작에서 차단한다. WebView2 호스트 종료, 암호화 코어 쓰기 도중 종료, 엔진 저장 트랜잭션 도중 엔진 종료, 디스크 가득 참 후 복원을 실측했다. 엔진 종료 시 마지막 수 초의 localStorage 쓰기는 사라질 수 있다(IndexedDB 완료 트랜잭션은 보존). 실제 전원 차단과 엔진의 상태 손상 복구는 미검증이다.
 7. 독립 코어는 브라우저 프로필을 감싸지 않는다. 암호화된 파일을 발행할 때 상위 저장소의 파일명·백업 세대와 객체 교체 공격에 대한 인증은 별도 검증이 필요하다.
@@ -37,7 +37,7 @@
 | A 저장/키 | BLOCKED | 개발 프로필 평문 마커 검출. 정상·강제 종료 및 Windows 세션 잠금 뒤 재잠금 확인. 실제 절전과 제품 경로의 볼륨 밖 쓰기 검증 필요 |
 | B 지속성/복구 | 일부 시험 PASS, 게이트 미통과 | 정상 재실행, 호스트 강제 종료, 저장 도중 엔진 강제 종료, 디스크 가득 참 후 복원 PASS. 엔진 종료를 감지해 상태 저장 후 모든 창을 닫는다. 실제 전원 차단, 비밀번호 분실·복구 키 정책 미정 |
 | C 다운로드 | BLOCKED | 로컬 금고·내보내기 시험 PASS. 출시용 보호 볼륨의 쓰기 추적과 저장 공간 부족·전원 차단 시험 필요 |
-| D 보호 네트워크 | BLOCKED | 단일 로컬 프록시 장애 시나리오만 PASS |
+| D 보호 네트워크 | BLOCKED | 프록시 보호 모드 1단계 로컬 PASS(직접 연결 0건). DNS·IPv6·WebRTC 실측, 절전·네트워크 전환, OS 수준 강제 미검증. 고강도 보호 표시 불가 |
 | E 제품 품질 | 미통과 | 앱 탐색 통합 시험 PASS. 실제 키 입력, 호환성, 샌드박스 토큰, 서명과 설치·업데이트 미검증 |
 
 ## Phase 1 시험 범위
@@ -148,3 +148,4 @@
 | 2026-11-23 | SEC-004 점프 목록 장시간 탐색 추적 | 루프백 합성 페이지로 세션 3회(서로 다른 페이지 90개, 재방문, 닫은 탭 24개)를 호스트와 오프라인 VM에서 실행. VM Procmon 추적에서 V: 쓰기 8,683건, 볼륨 밖은 점프 목록 2개 파일뿐이며 내용은 프로필 경로만, URL·제목 없음. 앱 수준 점프 목록 차단 시도(Chromium 스위치, Edge 기능 플래그, APPDATA/USERPROFILE 변경)는 효과 없어 코드에 남기지 않음. | 게스트 `C:\VEIL-Trace-20261123-133611\.veil-dev` · [러너](../tests/security/browse-session.mjs) | 개발 작업 |
 | 2026-11-23 | Phase 3 지속성·복구 시험 | 엔진 브라우저 프로세스 종료 감지(상태 1회 저장 후 모든 창 종료, 렌더러 실패는 해당 탭만 안내) 추가. IndexedDB·localStorage 연속 쓰기 중 엔진 강제 종료 5회: 호스트 PASS, 격리 VM BitLocker 볼륨 PASS(완료 트랜잭션 보존·번호 연속, 마지막 수 초의 localStorage는 유실 가능). 128 MiB 볼륨을 가득 채운 상태에서 VEIL 정상 종료, 공간 확보 후 상태·저장소 복원 PASS(VM). 실제 전원 차단 시험은 시간 관계로 건너뜀(NOT RUN). 민감 데이터 저장 위치와 OS 기록 정책 문서 추가. | [엔진 종료 시험](../tests/phase3/engine-kill.mjs) · [디스크 가득 참](../tests/phase3/disk-full.mjs) · [저장 위치 목록](15-sensitive-data-inventory.md) · 게스트 `C:\VEIL-P3-20261123-140133\.veil-dev` | 개발 작업 |
 | 2026-11-23 | Phase 4-0 다운로드 금고 경로 검증 | 정책 결정 ADR-0004 기록. 엔진 다운로드는 즉시 취소하고 GET 계열은 VEIL이 쿠키를 붙여 재요청, `veil-vault.exe`로 스트리밍 봉인. Rust 브리지 시험 3건(정상·중단·길이 불일치·잘못된 암호, 실패 시 객체·스테이징 없음) PASS. 호스트 금고 시험 2회 PASS: 1 KiB·8 MiB·64 MiB·쿠키 인증·리다이렉트 보관 및 인증, 연결 끊김 미발행, POST 차단. 엔진이 다운로드 본문 앞부분을 HTTP 디스크 캐시에 남기는 것을 발견해 취소 시 캐시 비움 추가, 재시험에서 프로필 전체에 페이로드 없음. 기존 데스크톱 8가지 다운로드 시험 기대값 갱신. | [실측](07-download-vault.md#phase-4-0-실측-2026-11-23) | 개발 작업 |
+| 2026-11-23 | Phase 5 네트워크 보호 1단계 | ADR-0006. 표준 보호: HTTPS 우선과 경고 페이지, 추적 방지 엄격. 프록시 보호: 고정 프록시·루프백 포함·WebRTC 비프록시 UDP 금지·QUIC 끔, 금고 재요청도 같은 프록시만 사용, 시작 시 경로 확인 표시. 시험 중 스크립트가 `veil://allow-http`로 HTTP 다운그레이드를 일으키는 결함을 발견해(사이트가 연 팝업에도 적용 가능) 페이지 링크를 제거하고 네이티브 막대로만 허용하도록 수정. 로컬 network-guard 시험 PASS(프록시 경유 5건, 직접 0건, 중단 시 차단) 및 기존 회귀 전체 PASS. DNS·IPv6·WebRTC 실측·절전은 VM NOT RUN. | [ADR-0006](decisions/ADR-0006-network-guard.md) · [시험](../tests/phase5/network-guard.mjs) | 개발 작업 |

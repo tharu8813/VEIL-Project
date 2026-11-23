@@ -22,6 +22,10 @@ public partial class BrowserWindow : Window
         internal string Url { get; set; } = "about:blank";
         internal TabHeader Header { get; set; } = null!;
         internal bool Loading { get; set; }
+        /// <summary>HTTPS-first: the plain-HTTP address this tab is currently trying as HTTPS.</summary>
+        internal Uri? UpgradedFrom { get; set; }
+        /// <summary>The plain-HTTP address the HTTPS warning page offers to open.</summary>
+        internal Uri? PendingHttp { get; set; }
     }
 
     private readonly BrowserSession session;
@@ -96,8 +100,11 @@ public partial class BrowserWindow : Window
             if (session.Engine is null)
             {
                 string profile = Path.GetFullPath(Path.Combine(session.Root, "webview2"));
-                session.Engine = await Program.CreateEngine(profile);
+                session.Engine = await Program.CreateEngine(profile, network: session.Network);
+                if (session.Network.Mode == NetworkMode.Proxy)
+                    session.ProxyReachable = await NetworkPolicy.ProxyReachableAsync(session.Network, TimeSpan.FromSeconds(3));
             }
+            UpdateNetworkIndicator();
             if (closing) return;
             if (adopted is not null)
             {
@@ -171,6 +178,8 @@ public partial class BrowserWindow : Window
             string downloadScratch = Path.Combine(session.Root, ProfileScratch.FolderName, "downloads");
             Directory.CreateDirectory(downloadScratch);
             web.Profile.DefaultDownloadFolderPath = downloadScratch;
+            // ADR-0006 standard protection: strict tracking prevention for every profile.
+            web.Profile.PreferredTrackingPreventionLevel = CoreWebView2TrackingPreventionLevel.Strict;
             web.PermissionRequested += (_, args) =>
             {
                 args.SavesInProfile = false;
@@ -230,6 +239,7 @@ public partial class BrowserWindow : Window
 
     private void OnNavigationStarting(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
     {
+        if (HandleHttpsFirst(tab, args)) return;
         args.Cancel = args.Uri != "about:blank" &&
             !args.Uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase) &&
             !IsWebUrl(args.Uri) && !IsInternalUrl(args.Uri);
@@ -272,6 +282,15 @@ public partial class BrowserWindow : Window
     {
         if (closing) return;
         SetTabLoading(tab, false);
+        if (tab.UpgradedFrom is { } plain && args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
+        {
+            tab.UpgradedFrom = null;
+            if (!args.IsSuccess)
+            {
+                ShowHttpsWarning(tab, plain, $"HTTPS 연결에 실패했습니다 ({args.WebErrorStatus}).");
+                return;
+            }
+        }
         if (args.IsSuccess && IsWebUrl(tab.Url))
             data.History.Insert(0, new PageEntry(tab.Title, tab.Url, DateTimeOffset.Now));
         if (Active == tab)
@@ -554,6 +573,7 @@ public partial class BrowserWindow : Window
 
     private void RefreshChrome()
     {
+        UpdateHttpsBar();
         if (!Address.IsKeyboardFocusWithin)
             Address.Text = Active?.Url is null or "about:blank" ? "" : Active.Url;
         Home.Visibility = Active?.Url is null or "about:blank" ? Visibility.Visible : Visibility.Collapsed;
@@ -591,13 +611,14 @@ public partial class BrowserWindow : Window
         (url.Scheme is "http" or "https") && !string.IsNullOrEmpty(url.Host) && url.UserInfo.Length == 0;
 
     internal static bool IsInternalUrl(string? value) =>
-        value is "veil://bookmarks" or "veil://history" or "veil://downloads";
+        value is "veil://bookmarks" or "veil://history" or "veil://downloads" or HttpsWarningUrl;
 
     private static string InternalTitle(string? value) => value switch
     {
         "veil://bookmarks" => "북마크",
         "veil://history" => "방문 기록",
         "veil://downloads" => "다운로드",
+        HttpsWarningUrl => "안전하지 않은 연결",
         _ => "새 탭",
     };
 
@@ -667,7 +688,9 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     // ── Persistence ──────────────────────────────────────────────────────────
 
     internal (List<string> Tabs, int Selected) Snapshot() =>
-        (Tabs.Items.Cast<TabItem>().Select(item => ((BrowserTab)item.Tag).Url).ToList(), Tabs.SelectedIndex);
+        // The HTTPS warning page is not restored as such: its HTTP address is upgraded again next time.
+        (Tabs.Items.Cast<TabItem>().Select(item => (BrowserTab)item.Tag)
+            .Select(tab => tab.Url == HttpsWarningUrl && tab.PendingHttp is { } plain ? plain.AbsoluteUri : tab.Url).ToList(), Tabs.SelectedIndex);
 
     private void SaveTabs()
     {

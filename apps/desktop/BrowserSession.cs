@@ -16,8 +16,19 @@ internal sealed class BrowserSession
         Root = root;
         StatePath = Path.Combine(root, "browser-state.json");
         Data = BrowserData.Load(StatePath);
+        // ADR-0006: an unusable proxy setting refuses to start instead of silently connecting directly.
+        Network = Data.Network ?? NetworkSettings.Standard;
+        if (Network.Problem is { } problem) throw new System.Text.Json.JsonException(problem);
         Vault = vault;
+        Vault.ConfigureNetwork(Network);
     }
+
+    /// <summary>Network mode applied to this run's engine (changes take effect after a restart).</summary>
+    internal NetworkSettings Network { get; }
+    /// <summary>Proxy path check result for the UI; null until checked or in standard mode.</summary>
+    internal bool? ProxyReachable { get; set; }
+    /// <summary>Hosts the user explicitly allowed over plain HTTP in this run (HTTPS-first exceptions).</summary>
+    internal HashSet<string> HttpAllowed { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Encrypted download vault shared by all windows of this profile.</summary>
     internal DownloadVault Vault { get; }
