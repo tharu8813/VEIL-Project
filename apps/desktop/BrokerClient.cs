@@ -3,6 +3,7 @@ using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -49,35 +50,18 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
     {
         try
         {
-            using var pipe = new NamedPipeClientStream(".", config.PipeName, PipeDirection.InOut, PipeOptions.None,
-                TokenImpersonationLevel.Identification);
-            pipe.Connect(2000);
-            VerifyServer(pipe);
-            pipe.Write(JsonSerializer.SerializeToUtf8Bytes(new { command = "Status", volumeId = config.VolumeId }));
-            pipe.WriteByte((byte)'\n');
-            pipe.Flush();
-            var response = new MemoryStream();
-            int value;
-            while ((value = pipe.ReadByte()) is >= 0 and not '\n')
-            {
-                response.WriteByte((byte)value);
-                if (response.Length > 4096) throw new InvalidDataException("Broker response too large.");
-            }
-            using var document = JsonDocument.Parse(response.ToArray());
-            var root = document.RootElement;
-            if (!root.GetProperty("ok").GetBoolean())
-                throw new ProfileLocationException($"The volume broker refused the status request ({root.GetProperty("error").GetString()}).");
+            using var reply = SendCommand("Status");
+            var root = reply.RootElement;
+            RequireSuccess(root, "Status");
             var status = root.GetProperty("status");
             if (!status.GetProperty("attached").GetBoolean()) return null;
             return new VolumeStatus(status.GetProperty("volumeGuid").GetString() ?? "",
                 status.GetProperty("fullyEncrypted").GetBoolean(), status.GetProperty("protectionOn").GetBoolean(),
                 status.GetProperty("unlocked").GetBoolean());
         }
-        catch (Exception error) when (error is IOException or TimeoutException or UnauthorizedAccessException or
-            JsonException or InvalidOperationException or KeyNotFoundException or InvalidDataException or Win32Exception)
+        catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException)
         {
-            if (error is ProfileLocationException) throw;
-            throw new ProfileLocationException($"The volume broker is unavailable ({error.GetType().Name}).");
+            throw new ProfileLocationException($"Invalid volume broker status ({error.GetType().Name}).");
         }
     }
 
@@ -102,4 +86,77 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool QueryFullProcessImageNameW(SafeProcessHandle process, int flags, StringBuilder name, ref int size);
+
+    /// <summary>Only fixed registered-volume commands are allowed; there is no path argument.</summary>
+    internal void Attach() { using var response = SendCommand("Attach"); RequireSuccess(response.RootElement, "Attach"); }
+    internal void Lock() { using var response = SendCommand("Lock"); RequireSuccess(response.RootElement, "Lock"); }
+    internal void Detach() { using var response = SendCommand("Detach"); RequireSuccess(response.RootElement, "Detach"); }
+
+    internal bool Unlock(ReadOnlySpan<char> secret)
+    {
+        using var response = SendCommand("Unlock", secret);
+        var root = response.RootElement;
+        if (!root.GetProperty("ok").GetBoolean() &&
+            root.GetProperty("error").GetString() == "AccessDenied") return false;
+        RequireSuccess(root, "Unlock");
+        return root.GetProperty("status").GetProperty("unlocked").GetBoolean();
+    }
+
+    private static void RequireSuccess(JsonElement reply, string command)
+    {
+        if (!reply.GetProperty("ok").GetBoolean())
+            throw new ProfileLocationException(
+                $"The volume broker refused {command} ({reply.GetProperty("error").GetString()}).");
+    }
+
+    private JsonDocument SendCommand(string command) => SendCommand(command, ReadOnlySpan<char>.Empty);
+
+    private JsonDocument SendCommand(string command, ReadOnlySpan<char> secret)
+    {
+        using var request = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(request))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("command", command);
+            writer.WriteString("volumeId", config.VolumeId);
+            if (command == "Unlock") writer.WriteString("secret", secret);
+            writer.WriteEndObject();
+        }
+        byte[] wire = request.GetBuffer();
+        try
+        {
+            if (request.Length > 4096) throw new InvalidDataException("Broker request too long.");
+            using var pipe = new NamedPipeClientStream(".", config.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous,
+                TokenImpersonationLevel.Identification);
+            pipe.Connect(2000);
+            VerifyServer(pipe);
+            // A broker may stall during VHDX/WMI operations. Bound both pipe directions;
+            // a hung service must not freeze VEIL's startup or close path indefinitely.
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            pipe.WriteAsync(wire.AsMemory(0, checked((int)request.Length)), timeout.Token)
+                .AsTask().GetAwaiter().GetResult();
+            byte[] newline = [10];
+            pipe.WriteAsync(newline.AsMemory(), timeout.Token).AsTask().GetAwaiter().GetResult();
+            pipe.FlushAsync(timeout.Token).GetAwaiter().GetResult();
+            using var response = new MemoryStream();
+            byte[] byteBuffer = new byte[1];
+            while (true)
+            {
+                int read = pipe.ReadAsync(byteBuffer.AsMemory(), timeout.Token)
+                    .AsTask().GetAwaiter().GetResult();
+                if (read == 0) throw new IOException("Broker response ended prematurely.");
+                if (byteBuffer[0] == 10) break;
+                if (response.Length >= 4096) throw new InvalidDataException("Broker response too large.");
+                response.WriteByte(byteBuffer[0]);
+            }
+            return JsonDocument.Parse(response.ToArray());
+        }
+        catch (Exception error) when (error is IOException or TimeoutException or UnauthorizedAccessException or
+            JsonException or InvalidOperationException or InvalidDataException or Win32Exception or OperationCanceledException)
+        {
+            if (error is ProfileLocationException) throw;
+            throw new ProfileLocationException($"The volume broker is unavailable ({error.GetType().Name}).");
+        }
+        finally { CryptographicOperations.ZeroMemory(wire); }
+    }
 }

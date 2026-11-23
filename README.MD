@@ -67,3 +67,30 @@ Rust 1.99.1 MSVC에서 브라우저와 분리된 age 스트리밍, 암호문 변
 ```powershell
 cargo test --release --locked --manifest-path crates/veil-security/Cargo.toml
 ```
+
+## Phase 3 보호 프로필 시작 (개발 중)
+
+제품용 구성 파일 `%ProgramData%\\VEIL\\client.json`이 있을 때 일반 사용자 VEIL은 등록된
+브로커에 연결해 보호 볼륨의 암호화·보호 상태를 확인합니다. 볼륨이 분리되어 있으면 연결을
+요청하고, 잠겨 있는 볼륨에서 비밀번호를 입력받아 해제한 후에만 WebView2 프로필을 엽니다.
+이미 열린 볼륨은 이 실행에서 비밀번호를 검증한 것으로 간주하지 않고 시작을 거부합니다.
+브라우저 종료 시 잠금 요청 후 이번 실행이 연결한 볼륨만 분리합니다. 강제 종료 시에는 브로커의
+클라이언트 종료 감시가 잠금을 재시도합니다. 실패하면 비보호 프로필로 전환하지 않습니다.
+
+**아직 완성된 보안 기능이 아닙니다.** 실제 BitLocker 백엔드가 포함된 격리 VM에서 시작·종료,
+중단·열린 핸들, 자동 잠금, 로그·메모리, 설치/업데이트를 검증해야 합니다. 브로커는 현재
+Windows 서비스 설치까지 통합되지 않았습니다. 비밀번호는 전송 버퍼에서 지우지만 OS/프로세스
+메모리의 모든 복제본 제거를 보장하지 않습니다.
+
+Release 빌드는 제품용 보호 설정이 없으면 시작하지 않으며, Debug 빌드만 이전의 비보호
+`.veil-dev` 테스트 프로필을 계속 사용합니다.
+
+Windows 일반 사용자 PowerShell에서 가짜 BitLocker 백엔드 회귀 시험:
+
+```powershell
+dotnet build apps/desktop
+dotnet build apps/broker/Veil.VolumeBroker
+node tests/broker/broker.mjs
+```
+
+이 시험은 실제 BitLocker를 제어하지 않습니다. 제품 설치·볼륨 설정을 임의로 진행하지 마세요.

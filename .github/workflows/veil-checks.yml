@@ -1,0 +1,75 @@
+name: VEIL Windows build and core checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: veil-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-build:
+    name: Windows .NET build / source checks
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Restore locked dependencies
+        shell: pwsh
+        run: |
+          dotnet restore apps/desktop/Veil.Desktop.csproj --locked-mode
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet restore apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj --locked-mode
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Compile Debug and Release
+        shell: pwsh
+        run: |
+          foreach ($configuration in @('Debug', 'Release')) {
+            dotnet build apps/desktop/Veil.Desktop.csproj -c $configuration --no-restore --nologo
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            dotnet build apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj -c $configuration --no-restore --nologo
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Validate Node test syntax
+        shell: pwsh
+        run: |
+          Get-ChildItem tests -Filter '*.mjs' -Recurse | ForEach-Object {
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Syntax check failed: $($_.FullName)" }
+          }
+
+      # Hosted runners may be elevated and do not provide an interactive desktop.
+      # Running the WPF smoke suite or broker authorization test here would
+      # incorrectly test the runner, not a regular Windows user's security token.
+      # Those checks are required separately in a normal-user Windows VM.
+
+  rust-security:
+    name: Rust authenticated encryption tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run locked Rust tests
+        run: cargo test --locked --manifest-path crates/veil-security/Cargo.toml
+      - name: Clippy
+        run: cargo clippy --locked --manifest-path crates/veil-security/Cargo.toml --all-targets -- -D warnings

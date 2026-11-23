@@ -1,6 +1,6 @@
 # VEIL 보안 구현 상태
 
-> **현재 상태 — Phase 3 전용 BitLocker VHDX에서 WebView2 프로필의 잠금과 사본 복원을 실측했다. 브라우저의 제품용 보호 프로필 통합과 출시 게이트 검증은 남아 있다.**
+> **현재 상태 — Phase 3 BitLocker VHDX 잠금과 복원은 격리 VM에서 실측했다. 제품용 보호 프로필의 잠금 해제·종료 재잠금 코드가 추가되었지만, 이 변경의 VM 실행 검증과 출시 게이트 통과는 남아 있다.**
 > `TESTED`는 연결된 시험 범위의 결과다. 전체 보안 검증은 별도로 판정한다.
 
 | ID | 항목 | 현재 상태 | 증거 링크 / 기준 커밋 | 다음 검증 |
@@ -70,3 +70,17 @@
 | 2026-11-23 | 격리 VM 강제 종료 회귀 | 별도 복제본에서 잠금 파일 기반 오프라인 빌드 및 `--crash-cycle` 통과. 게스트 일반 디스크의 합성 프로필을 사용했다. BitLocker 볼륨에서의 강제 종료 조합은 별도 시험 대상이다. | 게스트 `C:\VEIL-Project\.veil-dev\crash-verify\.veil-dev\desktop-test-uONpSq`의 `crash.json`, `orphaned.json`, `read.json` | 개발 작업 |
 | 2026-11-23 | 보호 프로필 권한 분리 결정 | 브라우저 일반 권한 + 볼륨 전용 로컬 서비스 구조 승인. 볼륨 식별, 호출자 인증, 시작 차단, 핸들 종료·자동 잠금, 설치·제거 기준 기록. 구현과 시험은 하지 않았다. 호스트에서 `--profile-parent`와 `--crash-cycle` 조합 PASS. | [ADR-0003](decisions/ADR-0003-volume-broker.md) · 호스트 `.veil-dev/desktop-test-RlmZGw` | 사용자 승인 |
 | 2026-11-23 | 브라우저 시작 차단 검사 | ADR-0003 1단계. 관리자 권한 거부, 접합점·재분석 지점·네트워크 경로 거부, 최종 경로 일치, 볼륨 GUID 확인 및 브로커 인터페이스(개발용 미검증 구현) 추가. 호스트 경로 시험(접합점 2종 포함)과 데스크톱 통합·강제 종료 시험 PASS. 관리자 실행 거부, VM·BitLocker 재실행, 브로커 미구현. | [시작 차단 검사](05-encrypted-profile.md#브라우저-시작-차단-검사-adr-0003-1단계) · 호스트 `.veil-dev/profile-routing-8h1Fnq` | 개발 작업 |
+
+## Phase 3 보호 프로필 실행 흐름 구현 (2026-11-23)
+
+코드: [ProtectedProfileSession.cs](../apps/desktop/ProtectedProfileSession.cs),
+[ProfileUnlockDialog.cs](../apps/desktop/ProfileUnlockDialog.cs),
+[BrokerClient.cs](../apps/desktop/BrokerClient.cs),
+[Broker.cs](../apps/broker/Veil.VolumeBroker/Broker.cs).
+
+- IMPLEMENTED / **NOT RUN** — 등록된 브로커에 Attach / Unlock / Lock / Detach 클라이언트 호출 추가. 보호 상태 확인 후 암호를 입력받아 잠금을 해제하고, WebView2와 앱 상태는 그 후에만 연다.
+- IMPLEMENTED / **NOT RUN** — 이미 잠금 해제된 볼륨을 이용한 인증 우회 거부. 브로커도 중복 Unlock 요청에 `AlreadyUnlocked` 반환. 가짜 백엔드 자동 시험에 거부 조건 추가.
+- IMPLEMENTED / **NOT RUN** — 비밀번호 임시 `char[]`와 전송 요청 버퍼 정리, 정상 종료 시 비강제 잠금 요청. 클라이언트 종료 감시는 기존 브로커 코드 사용. 열려 있는 핸들이 있을 때 자동 잠금이 성공한다고 주장하지 않는다.
+- IMPLEMENTED / **NOT RUN** — Release 실행 시 등록된 보호 설정이 없는 경우 평문 개발 프로필로 폴백 차단. Debug 개발 흐름 유지.
+- NOT RUN — 이 커밋의 Windows .NET 빌드, `node tests/broker/broker.mjs`, 실제 BitLocker 백엔드·VHDX 통합, 세션 잠금과 절전 재잠금, 자동 잠금 실패 복구, 충돌/재시작 테스트. 브로커는 아직 설치형 Windows 서비스가 아니다.
+- **출시 불가** — Gate A, Gate B는 모두 기존과 동일하게 미통과. VM 검증 및 보안 리뷰가 필요하다.
