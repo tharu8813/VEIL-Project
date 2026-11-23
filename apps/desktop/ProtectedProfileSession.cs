@@ -38,8 +38,9 @@ internal sealed class ProtectedProfileSession : IDisposable
         var state = broker.QueryRegisteredVolume();
         if (state is null)
         {
-            broker.Attach();
+            // Claim cleanup responsibility before sending Attach: the reply may be lost after success.
             attachedHere = true;
+            broker.Attach();
             state = broker.QueryRegisteredVolume();
         }
         if (state is null || !state.FullyEncrypted || !state.ProtectionOn)
@@ -77,6 +78,7 @@ internal sealed class ProtectedProfileSession : IDisposable
     {
         if (disposed) return;
         disposed = true;
+        if (!attachedHere && !unlockAttempted) return;
         try
         {
             var state = broker.QueryRegisteredVolume();

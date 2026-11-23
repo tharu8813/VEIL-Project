@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { connect } from 'node:net';
+import { connect, createServer } from 'node:net';
 import { isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
@@ -166,6 +166,27 @@ try {
     assert.match(evidence.gateRelocked.error, /not on the registered protected volume/);
     evidence.gateNoBroker = await gate({ pipeName: `VEIL.Test.absent-${randomBytes(4).toString('hex')}` });
     assert.match(evidence.gateNoBroker.error, /volume broker is unavailable/);
+
+    // An unresponsive named-pipe peer must fail closed within the configured timeout.
+    // Use a synthetic development-only broker with no trusted-image requirement.
+    const stalledName = `VEIL.Test.stalled-${randomBytes(5).toString('hex')}`;
+    const stalledPipe = `\\\\.\\pipe\\${stalledName}`;
+    const stalled = createServer(socket => socket.on('data', () => { /* deliberately no reply */ }));
+    try {
+        await new Promise((ok, fail) => {
+            stalled.once('error', fail);
+            stalled.listen(stalledPipe, ok);
+        });
+        const begun = Date.now();
+        evidence.gateStalled = await gate({ pipeName: stalledName });
+        evidence.gateStalledMs = Date.now() - begun;
+        assert.equal(evidence.gateStalled.exitCode, 1);
+        assert.match(evidence.gateStalled.error, /ProfileLocationException/);
+        assert.ok(evidence.gateStalledMs < 14000, 'stalled IPC did not time out');
+    } finally {
+        stalled.closeAllConnections();
+        await new Promise(ok => stalled.close(ok));
+    }
 
     // Pipe name already owned by another broker instance.
     const squat = await startBroker('squat', config('squat', { pipeName: b.settings.pipeName }));
