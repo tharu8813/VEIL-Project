@@ -11,6 +11,10 @@
   <ItemGroup>
     <Compile Include="../shared/AdminOnlyFile.cs" Link="Shared/AdminOnlyFile.cs" />
   </ItemGroup>
+  <!-- Phase 4-0: the Rust vault bridge. Without it every download is blocked (never stored in plaintext). -->
+  <ItemGroup Condition="Exists('../../crates/veil-security/target/release/veil-vault.exe')">
+    <None Include="../../crates/veil-security/target/release/veil-vault.exe" Link="veil-vault.exe" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
   <ItemGroup Condition="'$(VeilWebView2Sdk)' == ''">
     <PackageReference Include="Microsoft.Web.WebView2" Version="[1.0.2903.40]" />
   </ItemGroup>

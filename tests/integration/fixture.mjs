@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 export const marker = 'VEIL_PHASE0_SYNTHETIC_5723';
@@ -59,6 +60,10 @@ const probe = `async function probe(action) {
   };
 }`;
 
+// Phase 4-0: unique per fixture start, only ever sent in vault download bodies, so any copy found
+// on disk afterwards is a plaintext leak.
+export const vaultPayload = `VEIL-VAULT-PAYLOAD-${randomUUID()}-`;
+
 // Phase 3 engine-kill test: one numbered IndexedDB record per transaction (64 KiB each) plus a
 // localStorage counter, written as fast as the engine commits them.
 const stormPage = `<!doctype html><meta charset="utf-8"><title>VEIL storm</title><script>
@@ -115,6 +120,31 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
             case '/': return send(page, 'text/html; charset=utf-8');
             case '/second': return send('<title>VEIL 두 번째 페이지</title><a href="/">홈</a>', 'text/html; charset=utf-8');
             case '/storm': return send(stormPage, 'text/html; charset=utf-8');
+            case '/vault-dl': {
+                // Phase 4-0 vault capture: distinct sizes and failure modes, each body filled with vaultPayload.
+                const kind = url.searchParams.get('kind');
+                const sizes = { small: 1024, large: 8 * 1024 ** 2, huge: 64 * 1024 ** 2, auth: 4096, redirected: 2048, drop: 4 * 1024 ** 2, post: 2048 };
+                if (kind === 'redirect') return response.writeHead(302, { Location: '/vault-dl?kind=redirected' }).end();
+                if (!(kind in sizes)) return response.writeHead(400).end();
+                if (kind === 'auth' && !hasCookie) return response.writeHead(401).end();
+                if (kind === 'post' && request.method !== 'POST') return response.writeHead(405).end();
+                request.resume();
+                const size = sizes[kind];
+                response.writeHead(200, {
+                    'Content-Type': 'application/octet-stream',
+                    'Content-Disposition': `attachment; filename="veil-vault-${kind}.bin"`,
+                    'Content-Length': size,
+                });
+                const block = Buffer.alloc(64 * 1024, vaultPayload);
+                const limit = kind === 'drop' ? size / 4 : size; // drop: cut the connection a quarter of the way in
+                for (let sent = 0; sent < limit;) {
+                    const chunk = block.subarray(0, Math.min(block.length, limit - sent));
+                    sent += chunk.length;
+                    if (!response.write(chunk)) await new Promise(resolve => response.once('drain', resolve));
+                }
+                if (kind === 'drop') { await new Promise(resolve => setTimeout(resolve, 200)); return response.destroy(); }
+                return response.end();
+            }
             case '/visit': {
                 // Distinct synthetic pages for the long-session jump-list trace (SEC-004).
                 const n = Number.parseInt(url.searchParams.get('n') ?? '0', 10) || 0;

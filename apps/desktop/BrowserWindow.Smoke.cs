@@ -173,6 +173,58 @@ public partial class BrowserWindow
                     await Task.Delay(TimeSpan.FromSeconds(20));
                     Check(data.History.Count >= 53, "long browse session recorded");
                 }
+                else if (stage == "vault")
+                {
+                    // Phase 4-0: every supported download lands only in the encrypted vault; failures and
+                    // unsupported requests leave nothing behind.
+                    Check(session.Vault.Available, "vault bridge present");
+                    var plan = new (string Kind, string Expected, long Bytes, bool Login)[]
+                    {
+                        // (A 401 without the login cookie is an error page, not a download: nothing to capture.)
+                        ("small", DownloadVault.Stored, 1024, true),
+                        ("large", DownloadVault.Stored, 8L * 1024 * 1024, true),
+                        ("huge", DownloadVault.Stored, 64L * 1024 * 1024, true),
+                        ("auth", DownloadVault.Stored, 4096, true),
+                        ("redirect", DownloadVault.Stored, 2048, true),
+                        ("drop", DownloadVault.Failed, 0, true),
+                        ("post", DownloadVault.Blocked, 0, true),
+                    };
+                    bool loggedIn = false;
+                    foreach (var (kind, expected, bytes, login) in plan)
+                    {
+                        if (login && !loggedIn)
+                        {
+                            NavigateAddress(origin + "/login");
+                            await ReadyAt("/login");
+                            loggedIn = true;
+                        }
+                        var original = Tabs.SelectedItem;
+                        Check(await OpenTab(origin) is not null, $"vault tab ({kind})");
+                        await ReadyAt("/");
+                        int count = session.Vault.Results.Count;
+                        string trigger = kind == "post"
+                            ? "let f = document.createElement('form'); f.method = 'post'; f.action = '/vault-dl?kind=post'; document.body.append(f); f.submit()"
+                            : $"location.href = '/vault-dl?kind={kind}'";
+                        await Active!.View.ExecuteScriptAsync(trigger + "; null");
+                        for (int i = 0; i < 1600 && session.Vault.Results.Count == count; i++) await Task.Delay(75);
+                        Check(session.Vault.Results.Count == count + 1, $"vault outcome ({kind})");
+                        var result = session.Vault.Results[^1];
+                        Check(result.Outcome == expected, $"vault {kind}: {result.Outcome} {result.Detail} (expected {expected})");
+                        if (expected == DownloadVault.Stored)
+                        {
+                            Check(result.Bytes == bytes, $"vault {kind} size {result.Bytes}");
+                            Check(await session.Vault.VerifyAsync(result.ObjectPath!) == bytes, $"vault {kind} authenticates");
+                        }
+                        checks.Add($"engine bytes before cancel ({kind}): received {result.EngineBytesBeforeCancel}, scratch {result.EngineBytesOnDisk}");
+                        CloseTab((TabItem)Tabs.SelectedItem);
+                        Tabs.SelectedItem = original;
+                    }
+                    File.WriteAllText(Path.ChangeExtension(report, ".vault.json"), JsonSerializer.Serialize(new
+                    {
+                        vault = session.Vault.Directory,
+                        results = session.Vault.Results,
+                    }));
+                }
                 else if (stage is "storm" or "storm-check")
                 {
                     // Phase 3: the engine is killed while IndexedDB/localStorage commits are in flight.
@@ -237,7 +289,14 @@ public partial class BrowserWindow
                     int count = downloads.Count;
                     await Active!.View.ExecuteScriptAsync(script + "; null");
                     await WaitFor(() => downloads.Count == count + 1, $"download cancelled ({type})");
-                    Check(downloads[0] == $"veil-phase0-{type}.bin · 취소됨", $"download label ({type})");
+                    // Phase 4-0: supported GET downloads go to the vault; others are blocked, never stored in plaintext.
+                    string expected = type switch
+                    {
+                        "get" or "auth" or "redirect" or "large" => DownloadVault.Stored,
+                        "sw" => DownloadVault.Failed, // VEIL refetches from the network, where /sw-file does not exist
+                        _ => DownloadVault.Blocked,
+                    };
+                    Check(downloads[0].StartsWith($"veil-phase0-{type}.bin · {expected}"), $"download {expected} ({type}): {downloads[0]}");
                     Check(Active!.View.CoreWebView2.Profile.DefaultDownloadFolderPath.StartsWith(
                         Path.Combine(session.Root, ProfileScratch.FolderName), StringComparison.OrdinalIgnoreCase),
                         $"download scratch inside profile ({type})");

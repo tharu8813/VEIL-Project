@@ -179,7 +179,10 @@ public partial class BrowserWindow : Window
             web.DocumentTitleChanged += (_, _) => tab.Owner.OnTitleChanged(tab);
             web.FaviconChanged += async (_, _) => await tab.Owner.UpdateFavicon(tab, web);
             web.NavigationCompleted += (_, args) => tab.Owner.OnNavigationCompleted(tab, args);
-            web.DownloadStarting += (_, args) => tab.Owner.OnDownloadStarting(args);
+            web.DownloadStarting += (_, args) => tab.Owner.OnDownloadStarting(tab, args);
+            // Record navigation methods so the vault never replays a POST download as GET.
+            web.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Document);
+            web.WebResourceRequested += (_, args) => session.Vault.NoteRequest(args.Request.Method, args.Request.Uri);
             web.NewWindowRequested += (_, args) => tab.Owner.OnNewWindowRequested(tab, args);
             web.WindowCloseRequested += (_, _) => tab.Owner.Dispatcher.BeginInvoke(() => tab.Owner.CloseTab(tab.Item));
             web.IsDocumentPlayingAudioChanged += (_, _) => tab.Owner.UpdateAudio(tab);
@@ -298,17 +301,81 @@ public partial class BrowserWindow : Window
         foreach (var window in session.Windows.ToList()) window.Close();
     }
 
-    private void OnDownloadStarting(CoreWebView2DownloadStartingEventArgs args)
+    /// <summary>Phase 4-0: the engine's download is always cancelled. Supported requests are fetched again
+    /// by VEIL straight into the encrypted vault; everything else is blocked (no plaintext fallback).</summary>
+    private void OnDownloadStarting(BrowserTab tab, CoreWebView2DownloadStartingEventArgs args)
     {
+        var operation = args.DownloadOperation;
+        long engineReceived = operation.BytesReceived;
+        long engineOnDisk = ScratchBytes();
         args.Cancel = true;
         args.Handled = true;
         string fileName = Path.GetFileName(args.ResultFilePath);
-        downloads.Insert(0, $"{fileName} · 취소됨");
-        Status.Text = "다운로드를 취소했습니다. Ctrl+J에서 확인할 수 있습니다.";
+        // The engine has already received (and HTTP-cached) the start of the body before this event.
+        _ = PurgeEngineCacheAsync(tab.View.CoreWebView2);
+        var vault = session.Vault;
+        string? unsupported = Uri.TryCreate(operation.Uri, UriKind.Absolute, out var uri) ? vault.Unsupported(uri) : "미지원 방식";
+        if (unsupported is not null)
+        {
+            vault.Results.Add(new VaultResult(fileName, DownloadVault.Blocked, 0, unsupported, null, engineReceived, engineOnDisk));
+            ShowDownloadOutcome(fileName, $"{DownloadVault.Blocked}: {unsupported}", $"{fileName}: 보호 저장을 지원하지 않는 다운로드라 차단했습니다.");
+            return;
+        }
+        Status.Text = $"{fileName}을(를) 금고에 보관하는 중…";
+        _ = CaptureAsync(tab.View.CoreWebView2, uri!, fileName, engineReceived, engineOnDisk);
+    }
+
+    private async Task CaptureAsync(CoreWebView2 web, Uri uri, string fileName, long engineReceived, long engineOnDisk)
+    {
+        var vault = session.Vault;
+        try
+        {
+            var progress = new Progress<long>(bytes => Status.Text = $"{fileName} 보관 중… {bytes / 1024d / 1024d:0.0} MB");
+            var (bytes, path) = await vault.CaptureAsync(uri, web, progress, CancellationToken.None);
+            vault.Results.Add(new VaultResult(fileName, DownloadVault.Stored, bytes, null, path, engineReceived, engineOnDisk));
+            ShowDownloadOutcome(fileName, DownloadVault.Stored, $"{fileName}을(를) 암호화 금고에 보관했습니다.");
+        }
+        catch (Exception error) when (error is IOException or System.Net.Http.HttpRequestException or InvalidOperationException
+            or TaskCanceledException or System.ComponentModel.Win32Exception or System.Runtime.InteropServices.COMException)
+        {
+            string reason = error is System.Net.Http.HttpRequestException http ? http.Message : "보관 실패";
+            vault.Results.Add(new VaultResult(fileName, DownloadVault.Failed, 0, reason, null, engineReceived, engineOnDisk));
+            ShowDownloadOutcome(fileName, $"{DownloadVault.Failed}: {reason}", $"{fileName}을(를) 보관하지 못했습니다. 일반 디스크에는 저장하지 않았습니다.");
+        }
+    }
+
+    /// <summary>Drops the engine's HTTP disk cache after a cancelled download (twice: the engine can still
+    /// finish writing the cancelled entry shortly after the event).</summary>
+    private static async Task PurgeEngineCacheAsync(CoreWebView2 web)
+    {
+        try
+        {
+            await web.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.DiskCache);
+            await Task.Delay(1500);
+            await web.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.DiskCache);
+        }
+        catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
+    }
+
+    /// <summary>Bytes the engine already put in its (profile-volume) download scratch before cancellation.</summary>
+    private long ScratchBytes()
+    {
+        try
+        {
+            var scratch = new DirectoryInfo(Path.Combine(session.Root, ProfileScratch.FolderName, "downloads"));
+            return scratch.Exists ? scratch.EnumerateFiles("*", SearchOption.AllDirectories).Sum(file => file.Length) : 0;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return -1; }
+    }
+
+    private void ShowDownloadOutcome(string fileName, string label, string message)
+    {
+        downloads.Insert(0, $"{fileName} · {label}");
+        Status.Text = message + " Ctrl+J에서 확인할 수 있습니다.";
         Dispatcher.BeginInvoke(() =>
         {
             DownloadButton.Visibility = Visibility.Visible;
-            DownloadPopupText.Text = $"{fileName} 다운로드 요청이 차단되었습니다.";
+            DownloadPopupText.Text = message;
             DownloadPopup.IsOpen = true;
             if (Active?.Url == "veil://downloads")
                 Active.View.CoreWebView2.NavigateToString(BuildInternalPage("veil://downloads"));
