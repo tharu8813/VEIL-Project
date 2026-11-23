@@ -12,7 +12,7 @@
 | SEC-005 | Rust 인증 암호화 코어 | TESTED | [Phase 2 실측](phase2-evidence.md) | 독립 코어의 왕복, 변조·잘림, 64 MiB 스트리밍, 강제 종료 시험 통과. 의존성 보안 감사 및 앱 통합 |
 | SEC-006 | 마스터 키·잠금·백업/복구 | IN PROGRESS | [ADR-0002](decisions/ADR-0002-phase2-age.md), [Phase 2 실측](phase2-evidence.md) | 키 봉투와 객체 사본 복원 확인. 브라우저 잠금, 키 회전, 백업 정책, 메모리/OS 노출 검증 |
 | SEC-007 | 다운로드 스트리밍 보호 | IN PROGRESS | [Phase 4-0 실측](07-download-vault.md#phase-4-0-실측-2026-11-23), [ADR-0004](decisions/ADR-0004-protection-policies.md) | GET·쿠키 인증·리다이렉트를 VEIL이 재요청해 Rust 코어로 스트리밍 봉인(1 KiB~64 MiB, 중단 시 미발행) PASS. 엔진이 취소 전 받은 본문은 보호 볼륨 임시 폴더·캐시에 잠시 존재(삭제·비움 확인). POST·Blob·Data·Service Worker는 차단. 실제 사이트 성공률, VM 볼륨 밖 쓰기 추적, 디스크 부족 중 봉인 미검증 |
-| SEC-008 | 다운로드 금고·내보내기 | IN PROGRESS | [veil-vault 브리지](../crates/veil-security/src/bin/veil-vault.rs), [금고 시험](../tests/phase4/vault-capture.mjs) | 세션 키링 프로토타입(종료 후 열람 불가). 영구 키·암호화 메타데이터·목록·내보내기 UI 미구현 |
+| SEC-008 | 다운로드 금고·내보내기 | IN PROGRESS | [ADR-0005](decisions/ADR-0005-vault-keys-index.md), [금고 지속성 시험](../tests/phase4/vault-persist.mjs), [금고 캡처 시험](../tests/phase4/vault-capture.mjs) | 로컬 Windows에서 영구 키·암호화 목록·복구·내보내기 PASS. 보호 볼륨에서의 쓰기 추적·디스크 부족·전원 차단은 NOT RUN. 두 인증 봉투의 일괄 교체 및 제품 모드 단일 비밀번호는 후속 |
 | SEC-009 | 표준 네트워크 보호 | NOT STARTED | 없음 | HTTPS/추적 정책 동작 |
 | SEC-010 | 프록시 우회/누출 차단 | BLOCKED | [IPv4·IPv6 루프백 HTTP 정상·장애 시험](phase0-evidence.md) | HTTPS CONNECT, DNS/WebRTC/외부 IPv6/QUIC, 절전·재개, OS 경로 격리 검증 |
 | SEC-011 | 일반 브라우저 UI/기능 | TESTED | [데스크톱 통합 시험](../tests/integration/desktop.mjs) | 실제 키 입력·IME·접근성·DPI 및 주요 사이트 회귀 |
@@ -116,6 +116,16 @@
 - **IMPLEMENTED / CI PENDING** — 클라이언트 제품 구성은 서비스 PID 확인을 우회하지 못하도록 `requireWindowsService=true`, 브로커 실행 파일의 절대 경로, 보호 프로필 절대 경로를 필수로 검증한다. 누락되거나 잘못된 브로커 구성 값은 제어된 오류로 거부한다.
 - **TEST COVERAGE** — Windows PowerShell 5.1 설치 스크립트 파싱과 비파괴적 Node 정적 정책 검증을 CI에 추가한다. 이는 설치·서비스 동작을 실행한 시험이 아니며 격리 VM에서 설치/재부팅/서비스 충돌 후 재잠금/제거 순서 및 Windows 11 Home 대상 지원 여부를 검증해야 한다.
 - **SECURITY LIMIT** — 브로커 강제 종료 시 이미 열린 브라우저나 WebView2 핸들이 잠금을 거부할 수 있으며, 이 때 재시작이 데이터를 즉시 보호한다는 보장은 없다. 실제 VM 재시작 회복 실측은 미실행. Gate A/B 판정은 그대로 BLOCKED이다.
+
+## Phase 4 영구 금고 로컬 검증 (2026-11-23)
+
+- **PASS — 로컬 Windows** — Debug·Release 빌드, 데스크톱 통합 시험, 다운로드 캡처 및 지속성 시험. 브라우저 재시작 후 다운로드 5개를 암호화 목록에서 읽고 바이트 단위로 동일하게 내보냈다. 잘못된 암호를 거부했다.
+- **PASS — 자동 검사** — Rust 테스트 9건 및 Clippy, Node 러너 구문 검사, 설치 스크립트 계약·쓰기 추적 파서 테스트 11건. Rust 강제 종료 시험의 자식 프로세스 전용 테스트는 단독 실행에서 제외된다.
+- **PASS — 손상·복구** — 목록 삭제, 메타데이터 변조, 잘못된 객체 파일명 및 남은 스테이징을 함께 주입했다. 목록을 재구성하고 손상된 메타데이터의 항목을 원본 객체에서 복구했다. 잘못된 파일명의 객체는 보존했다. 변조된 객체의 내보내기는 거부했다.
+- **PASS — 인증 정보 변경** — 두 번째 봉투 저장 실패 시 금고를 잠그고 목록을 비웠다. 정상 변경 뒤 이전 암호와 복구 코드를 거부하고 새 인증 정보로 각각 열었다. 두 봉투는 별도 파일이므로 중간 실패 시 일부 변경이 남는다.
+- **PASS — 종료 후 파일 검사** — 합성 다운로드 본문은 검사 시점에 프로필 파일에서 검색되지 않았다. 엔진이 취소 전에 보호 경로의 임시 파일에 쓴 양은 별도로 기록했다.
+- **NOT RUN — 통합 VM 시험** — 보호 볼륨에서 Release 금고의 실제 쓰기 추적, 디스크 부족 상태의 금고 처리, 전원 차단 시 자격 증명·금고 복구와 외부 내보내기 스테이징 잔여물 검증. Gate C는 계속 출시 차단 상태다.
+- **NOT RUN — GitHub Actions** — 이 작업 트리 변경분의 원격 CI는 실행하지 않았다.
 
 ### Rust 코어 강제 종료 테스트 CI 안정화 (2026-11-23)
 

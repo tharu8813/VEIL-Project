@@ -130,6 +130,7 @@
                                     <MenuItem Header="북마크 관리" InputGestureText="Ctrl+B" Click="BookmarksClick" />
                                     <MenuItem Header="방문 기록" InputGestureText="Ctrl+H" Click="HistoryClick" />
                                     <MenuItem Header="다운로드" InputGestureText="Ctrl+J" Click="DownloadsClick" />
+                                    <MenuItem Header="다운로드 금고" InputGestureText="Ctrl+Shift+J" Click="VaultClick" />
                                     <MenuItem Header="페이지 내 검색" InputGestureText="Ctrl+F" Click="FindClick" />
                                     <Separator />
                                     <MenuItem Header="전체 화면" InputGestureText="F11" Click="FullScreenClick" />

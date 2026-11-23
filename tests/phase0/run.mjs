@@ -12,7 +12,7 @@ await mkdir(root, { recursive: true });
 const runDir = await mkdtemp(join(root, 'phase0-'));
 const { origin, server, requests } = await startFixture();
 const evidence = { origin, results: {} };
-const desktop = resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
+const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
 
 async function inventory(directory) {
     const files = await readdir(directory, { recursive: true, withFileTypes: true });

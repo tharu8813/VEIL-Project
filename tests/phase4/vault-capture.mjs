@@ -14,7 +14,7 @@ import { execFile } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { startFixture, vaultPayload } from '../integration/fixture.mjs';
 
@@ -26,7 +26,7 @@ await mkdir(root, { recursive: true });
 const evidence = await mkdtemp(join(root, 'vault-capture-'));
 const profileRoot = parent ? await mkdtemp(join(parent, 'veil-vault-')) : evidence;
 const profile = join(profileRoot, 'profile');
-const desktop = resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
+const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
 const downloadsDir = join(homedir(), 'Downloads');
 
 async function containsPayload(path) {
@@ -50,16 +50,18 @@ const downloadsBefore = new Set((await readdir(downloadsDir).catch(() => [])).fi
 const { server, origin } = await startFixture();
 try {
     const report = join(evidence, 'vault.json');
-    await promisify(execFile)('dotnet', [desktop, '--smoke', profile, origin, 'vault', report], { timeout: 600_000 })
+    await promisify(execFile)('dotnet', [desktop, '--smoke', profile, origin, 'vault', report], { timeout: 600_000, env: {
+        ...process.env, VEIL_DEV_VAULT_PASSPHRASE: 'synthetic-capture-pass', VEIL_DEV_VAULT_RECOVERY: 'CAPTA-CAPTB-CAPTC-CAPTD-CAPTE-CAPTF-CAPTG-CAPTH' } })
         .catch(async error => { if (!(await readFile(report).catch(() => null))) throw error; });
     const result = JSON.parse(await readFile(report, 'utf8'));
     assert.equal(result.error, null, result.error);
     const vault = JSON.parse(await readFile(join(evidence, 'vault.vault.json'), 'utf8'));
 
     const stored = vault.results.filter(r => r.Outcome === '보관됨').map(r => r.ObjectPath.toLowerCase());
-    const vaultFiles = (await files(vault.vault)).map(path => path.toLowerCase());
-    assert.deepEqual(vaultFiles.filter(path => !path.endsWith('session-keyring.age')).sort(), [...stored].sort(),
-        'vault must hold exactly the stored objects (no staging or partial files)');
+    // objects/ holds exactly the stored downloads (no staging or partial files); meta/ and index/ hold encrypted metadata.
+    const objectFiles = (await files(join(vault.vault, 'objects'))).map(path => path.toLowerCase());
+    assert.deepEqual(objectFiles.sort(), [...stored].sort(), 'vault must hold exactly the stored objects');
+    assert.ok((await files(vault.vault)).every(path => !basename(path).startsWith('.veil-encrypted-')), 'no staging leftovers');
 
     const leaks = [];
     for (const path of await files(profileRoot)) if (await containsPayload(path)) leaks.push(path);

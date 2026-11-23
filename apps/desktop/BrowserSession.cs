@@ -18,8 +18,9 @@ internal sealed class BrowserSession
         Vault = new DownloadVault(root);
     }
 
-    /// <summary>Phase 4-0 encrypted download vault (prototype).</summary>
+    /// <summary>Encrypted download vault shared by all windows of this profile.</summary>
     internal DownloadVault Vault { get; }
+    internal SemaphoreSlim VaultOpenGate { get; } = new(1, 1);
 
     internal string Root { get; }
     internal string StatePath { get; }

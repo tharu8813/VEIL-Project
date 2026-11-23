@@ -27,7 +27,7 @@ const evidence = await mkdtemp(join(root, 'disk-full-'));
 const profileRoot = await mkdtemp(join(parent, 'veil-disk-full-'));
 const profile = join(profileRoot, 'profile');
 const filler = join(profileRoot, 'filler.bin');
-const desktop = resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
+const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
 const { server, origin } = await startFixture();
 
 async function stage(name, report, { killWhenReady = false, timeout = 120_000 } = {}) {

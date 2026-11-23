@@ -12,7 +12,7 @@ const root = resolve('.veil-dev');
 await mkdir(root, { recursive: true });
 const directory = await mkdtemp(join(root, 'browser-crash-'));
 const profile = join(directory, 'profile');
-const desktop = resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
+const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
 const { server, origin } = await startFixture();
 const ready = join(directory, 'before.json');
 const recovered = join(directory, 'after.json');

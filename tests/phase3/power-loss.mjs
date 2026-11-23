@@ -21,7 +21,7 @@ const profile = option('--profile');
 const evidence = option('--evidence');
 if (!mode || !profile || !evidence || !isAbsolute(profile) || !isAbsolute(evidence))
     throw new Error('Use --arm or --check with absolute --profile and --evidence paths.');
-const desktop = resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
+const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
 // Site storage is per origin (host + port): --arm and --check must serve the same origin.
 const { server, origin } = await startFixture(Number(option('--port') ?? 47391));
 
