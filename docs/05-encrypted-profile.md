@@ -159,3 +159,20 @@ node tests/integration/desktop.mjs --profile-parent 'V:\VEIL-Lab' --crash-cycle 
 - 확인한 [WebView2 관리 정책 목록](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-webview-policies)에는 이 엔진의 맞춤 점프 목록 작업을 제어하는 옵션이 없었다. Windows의 최근 항목 정책은 최근·자주 사용한 항목을 대상으로 한다. WebView2가 추가하는 새 창 같은 맞춤 작업에도 적용되는지는 별도로 검증해야 한다. [Windows 시작 메뉴 정책](https://learn.microsoft.com/en-us/windows/configuration/start/policy-settings#hide-recent-jumplists) · [Windows 작업 표시줄 확장](https://learn.microsoft.com/en-us/windows/win32/shell/taskbar-extensions)
 - `node tests/security/browse-session.mjs --runs 1 --assert-clean`을 일반 사용자로 실행한다. 러너는 두 종류의 점프 목록에서 매 실행 뒤 변경된 파일을 비교한다. 시험 전용 프로필 경로·루프백 호스트·무작위 제목 중 하나라도 나오면 증거를 저장하고 종료 코드 1을 반환한다. 원본 점프 목록 내용은 보고서에 저장하지 않는다. 로컬 기준 시험에서는 맞춤 점프 목록 1개에 프로필 경로가 남았고 합성 호스트·제목은 관찰되지 않았다.
 - 통합 세션은 기존 기준 증거를 먼저 활용한다. 정책 비교가 필요하면 격리 VM의 시험 계정에서만 Windows 최근 항목 정책 적용 전후를 비교하고, 정책 적용에 필요한 재시작 뒤 같은 런타임과 시험 빌드를 사용한다. 기존 Procmon 러너의 `-RootCommand 'tests/security/browse-session.mjs'`와 일반 사용자 러너의 `--profile-parent` 옵션으로 시험용 보호 볼륨의 쓰기를 함께 계측한다. 파일 비교는 세션 중 생겼다가 사라진 쓰기를 놓칠 수 있으므로 물리 쓰기 판정에는 Procmon 증거가 필요하다. 정책의 맞춤 작업 차단 효과는 **NOT RUN**이다. [Procmon 러너](../tests/security/trace-writes.ps1)
+
+
+### SEC-004 Windows 점프 목록 정책 후보 A/B 실험 (2026-11-23, 러너 추가)
+
+WebView2 엔진의 CustomDestinations 기록은 Chromium 플래그나 APPDATA 변경으로 중단되지 않았다. 전역 Windows 최근 항목 정책을 제품 시작 시 자동으로 바꾸지 않는다. 다른 프로그램에 영향을 미치며 Edge/WebView2 맞춤 작업 기록을 막는지도 검증되지 않았기 때문이다.
+
+새 러너: [jump-list-policy-vm.ps1](../tests/security/jump-list-policy-vm.ps1). **오프라인 일회용 VirtualBox VM, 일반 사용자**에서만 실행할 수 있다. 기존 Phase 3/4 VM 사전 점검의 동일 부팅 증빙, BitLocker 볼륨 GUID 및 Debug 데스크톱 DLL을 검사한다. 게스트 예시:
+
+    powershell -NoProfile -ExecutionPolicy Bypass -File tests/security/jump-list-policy-vm.ps1 -Run -Preflight .veil-dev/phase34-preflight.json -DesktopDll C:\VEIL-Batch\desktop\Veil.Desktop.dll
+
+기준선(기존 HKCU 설정), Start_TrackDocs=0, NoRecentDocsHistory=1, 두 설정 동시 적용의 네 회차를 각각 합성 브라우징·Jump List 스캔으로 비교한다. 각 회차 직후 원래 레지스트리 값으로 복원하고, 값이 없었던 경우 해당 값을 제거한다. 결과는 .veil-dev/jumplist-policy-*/summary.json에 LEAK_OBSERVED(표식 확인), NOT_OBSERVED(해당 회차 미관찰), INCONCLUSIVE/ERROR(판정 불가)로 남긴다.
+
+프로세스 강제 종료처럼 finally가 실행되지 않는 경우, 같은 VM·Windows 계정에서 회복 파일을 지정해 다시 복원한다.
+
+    powershell -NoProfile -ExecutionPolicy Bypass -File tests/security/jump-list-policy-vm.ps1 -RestoreOnly -RecoveryJson C:\VEIL-Batch\src\.veil-dev\jumplist-policy-<실험ID>\restore.json
+
+**한계:** 같은 로그인 세션에서 정책을 바꾸기 때문에 셸 로그오프나 Explorer 재시작을 요구하는 정책의 효과는 이 실험만으로 판단할 수 없다. NOT_OBSERVED는 보안 PASS가 아니고 Windows 업데이트·실제 설치형 Release·URL 누출 방지 증거도 아니다. 후보 실측은 **NOT RUN**, SEC-004 및 Gate A는 계속 미통과다.
