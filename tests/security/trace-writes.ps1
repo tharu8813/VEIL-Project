@@ -88,7 +88,7 @@ $ErrorActionPreference = 'Continue'
 $arguments = @($csv, '--root-command', $RootCommand, '--volume', $Volume, '--out', $report)
 if ($Phase34) {
     $arguments = @($csv, '--root-command', 'tests/phase3/phase34-vm.mjs', '--volume', $Volume, '--out', $report,
-        '--allow-node', (Join-Path $repo '.veil-dev'), '--require-activity', 'true')
+        '--allow-node', (Join-Path $repo '.veil-dev'), '--require-activity', 'true', '--harness-process', 'powershell.exe')
 }
 else { $arguments += @('--allow', (Join-Path $repo '.veil-dev')) }
 foreach ($extra in $ExtraVolume) { $arguments += @('--volume', $extra) }

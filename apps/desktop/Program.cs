@@ -177,6 +177,10 @@ internal static class Program
         if (Environment.GetEnvironmentVariable("VEIL_TEST_TRUSTED_SPKI") is { Length: > 0 } spki && spki.All(c => char.IsAsciiLetterOrDigit(c) || c is '+' or '/' or '='))
             arguments.Add($"--ignore-certificate-errors-spki-list={spki}");
 #endif
+        // SEC-004: engine processes inherit TEMP when the environment is created. The desktop app has
+        // already moved it into the profile; any other caller (the Debug-only --probe experiments) gets a
+        // scratch folder inside the verified engine profile, created only after every gate check passed.
+        if (ProfileScratch.Active is null) ProfileScratch.Redirect(expected);
         var options = new CoreWebView2EnvironmentOptions
         {
             ExclusiveUserDataFolderAccess = true,

@@ -86,34 +86,53 @@ function createsFile(event) {
 }
 
 /** Incremental analyzer: add(event) for each record in trace order, then report(). */
-export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allow = [], allowNode = [], requireActivity = false }) {
-    const tree = new Map(rootPids.map(pid => [String(pid), 'root']));
+/**
+ * harnessProcesses: image names of test-harness helpers in the tree (e.g. powershell.exe used by the
+ * runners). VEIL never starts them, so their writes are reported separately and do not fail the trace.
+ */
+export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allow = [], allowNode = [], requireActivity = false,
+    harnessProcesses = [] }) {
+    const tree = new Map();
+    const members = [];
+    const join = (pid, parent) => { tree.set(pid, parent); members.push({ pid, parent }); };
+    for (const pid of rootPids) join(String(pid), 'root');
     const volumePrefixes = volumes.map(prefix);
     const allowPrefixes = allow.map(prefix);
     const nodePrefixes = allowNode.map(prefix);
     const commands = rootCommands.map(normalize);
-    const opened = new Set();
+    const harnessNames = new Set(harnessProcesses.map(name => name.toLowerCase()));
+    // File -> image name of the tree process that opened it (attributes later paging writes).
+    const opened = new Map();
     let inside = 0, engineInside = 0, allowed = 0;
     const outside = new Map();
     const metadata = new Map();
+    const harness = new Map();
+    const osRecords = new Map();
     const names = new Map();
+    const count = (map, path) => map.set(path, (map.get(path) ?? 0) + 1);
 
     const classify = (path, event, kind) => {
         if (!isDrivePath(path)) return;
         const key = normalize(path);
+        const writer = (kind === 'mapped' ? opened.get(key) : event['Process Name']) ?? '';
         if (volumePrefixes.some(p => key.startsWith(p) || key + '\\' === p)) {
             inside++;
             if (/^msedgewebview2\.exe$/i.test(event['Process Name'])) engineInside++;
             return;
         }
         if (allowPrefixes.some(p => key.startsWith(p) || key + '\\' === p)) { allowed++; return; }
-        if (/^node(\.exe)?$/i.test(event['Process Name']) && nodePrefixes.some(p => key.startsWith(p) || key + '\\' === p)) {
+        // The Node runner's evidence folder: its own writes and the System flush of files it wrote.
+        if (/^node(\.exe)?$/i.test(writer) && nodePrefixes.some(p => key.startsWith(p) || key + '\\' === p)) {
             allowed++;
             return;
         }
         // NTFS journal/MFT updates follow file operations on that volume; they hold no file data
         // and are listed as side effects. The file operation that caused them is reported itself.
-        if (/^[a-z]:\\\$/.test(key)) { metadata.set(path, (metadata.get(path) ?? 0) + 1); return; }
+        if (/^[a-z]:\\\$/.test(key)) { count(metadata, path); return; }
+        if (harnessNames.has(writer.toLowerCase())) { count(harness, path); return; }
+        // Windows Prefetch: the OS records launched images (and files they touched early) for every
+        // program. Reported separately as an OS record; it is not a write by VEIL.
+        if (kind === 'mapped' && /^[a-z]:\\windows\\prefetch\\[^\\]+\.pf$/.test(key)) { count(osRecords, path); return; }
         const entry = outside.get(key) ?? { path, count: 0, operations: {}, processes: new Set(), kinds: new Set() };
         entry.count++;
         entry.operations[event.Operation] = (entry.operations[event.Operation] ?? 0) + 1;
@@ -124,22 +143,23 @@ export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allo
 
     const add = event => {
         const pid = String(event.PID);
-        if (commands.length && event.Operation === 'Process Create' && event.Result === 'SUCCESS' &&
-            commands.some(text => normalize(event.Detail).includes(text))) {
-            const root = /PID:\s*(\d+)/.exec(event.Detail)?.[1];
-            if (root && !tree.has(root)) tree.set(root, 'root');
-        }
-        if (!tree.has(pid) && event['Parent PID'] && tree.has(String(event['Parent PID']))) tree.set(pid, String(event['Parent PID']));
+        const created = event.Operation === 'Process Create' && event.Result === 'SUCCESS'
+            ? /PID:\s*(\d+)/.exec(event.Detail)?.[1] : undefined;
+        // Windows reuses PIDs: a process created outside the tree under a PID the tree used before is
+        // a different process and must not inherit the tree's membership.
+        if (created && !tree.has(pid)) tree.delete(created);
+        if (created && commands.length && commands.some(text => normalize(event.Detail).includes(text)) && !tree.has(created))
+            join(created, 'root');
+        if (!tree.has(pid) && event['Parent PID'] && tree.has(String(event['Parent PID']))) join(pid, String(event['Parent PID']));
         if (tree.has(pid)) {
             names.set(pid, event['Process Name']);
-            if (event.Operation === 'Process Create' && event.Result === 'SUCCESS') {
-                const child = /PID:\s*(\d+)/.exec(event.Detail)?.[1];
-                if (child) tree.set(child, pid);
-            }
+            if (created) join(created, pid);
             // Track files (not directories: the System process updates directory indexes on its own)
             // so later paging writes to them can be attributed to this tree.
-            if (event.Operation === 'CreateFile' && event.Result === 'SUCCESS' && isDrivePath(event.Path) && !opensDirectory(event))
-                opened.add(normalize(event.Path));
+            if (event.Operation === 'CreateFile' && event.Result === 'SUCCESS' && isDrivePath(event.Path) && !opensDirectory(event) &&
+                !opened.has(normalize(event.Path)))
+                opened.set(normalize(event.Path), event['Process Name']);
+            if (event.Operation === 'Process Exit') { tree.delete(pid); return; }
             if (event.Result !== 'SUCCESS') return;
             if (WRITE_OPERATIONS.has(event.Operation)) classify(writeTarget(event), event, 'direct');
             else if (createsFile(event)) classify(event.Path, event, 'create');
@@ -156,7 +176,7 @@ export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allo
         for (const [key, entry] of outside) {
             if (!entry.kinds.has('mapped') || entry.kinds.size !== 1) continue;
             const parent = key.endsWith('\\') ? key : key + '\\';
-            if ([...opened].some(path => path.startsWith(parent))) {
+            if ([...opened.keys()].some(path => path.startsWith(parent))) {
                 directories[entry.path] = entry.count;
                 outside.delete(key);
             }
@@ -165,11 +185,13 @@ export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allo
             .map(entry => ({ ...entry, processes: [...entry.processes], kinds: [...entry.kinds] }))
             .sort((a, b) => b.count - a.count);
         return {
-            processes: [...tree.keys()].map(pid => ({ pid, parent: tree.get(pid), name: names.get(pid) ?? null })),
+            processes: members.map(({ pid, parent }) => ({ pid, parent, name: names.get(pid) ?? null })),
             writes: { inside, allowed, outside: outsideList.reduce((n, e) => n + e.count, 0) },
             engineWritesInside: engineInside,
             outside: outsideList,
             metadata: Object.fromEntries(metadata),
+            harness: Object.fromEntries(harness),
+            osRecords: Object.fromEntries(osRecords),
             directories,
             pass: outsideList.length === 0 && (!requireActivity || engineInside > 0),
         };
@@ -194,7 +216,7 @@ export async function analyzeFile(path, options) {
 
 function parseArgs(argv) {
     const [trace, ...rest] = argv;
-    const options = { trace, rootPids: [], rootCommands: [], volumes: [], allow: [], allowNode: [], out: null };
+    const options = { trace, rootPids: [], rootCommands: [], volumes: [], allow: [], allowNode: [], harnessProcesses: [], out: null };
     for (let i = 0; i < rest.length; i += 2) {
         const [flag, value] = [rest[i], rest[i + 1]];
         if (value === undefined) throw new Error(`Missing value for ${flag}`);
@@ -203,6 +225,7 @@ function parseArgs(argv) {
         else if (flag === '--volume') options.volumes.push(value);
         else if (flag === '--allow') options.allow.push(value);
         else if (flag === '--allow-node') options.allowNode.push(value);
+        else if (flag === '--harness-process') options.harnessProcesses.push(value);
         else if (flag === '--require-activity' && value === 'true') options.requireActivity = true;
         else if (flag === '--out') options.out = value;
         else throw new Error(`Unknown option ${flag}`);
@@ -222,6 +245,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
         console.log(`  ${entry.count}\t${entry.kinds.join('+')}\t${entry.path}\t${entry.processes.join(', ')}`);
     const meta = Object.entries(report.metadata);
     if (meta.length) console.log(`  NTFS metadata side effects: ${meta.map(([path, n]) => `${path} x${n}`).join(', ')}`);
+    const harness = Object.entries(report.harness);
+    if (harness.length) console.log(`  Test-harness writes (not VEIL): ${harness.length} paths, ${harness.reduce((n, [, c]) => n + c, 0)} writes`);
+    const records = Object.keys(report.osRecords);
+    if (records.length) console.log(`  Windows Prefetch records (OS): ${records.join(', ')}`);
     const dirs = Object.keys(report.directories);
     if (dirs.length) console.log(`  Directory index side effects: ${dirs.join(', ')}`);
     process.exitCode = report.pass ? 0 : 1;

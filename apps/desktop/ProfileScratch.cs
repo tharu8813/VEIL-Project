@@ -12,6 +12,9 @@ internal static class ProfileScratch
 {
     internal const string FolderName = "temp";
 
+    /// <summary>The folder TEMP/TMP point at for this process, or null before <see cref="Redirect"/>.</summary>
+    internal static string? Active { get; private set; }
+
     /// <summary>Creates an empty <c>temp</c> folder in <paramref name="profileRoot"/> and points TEMP/TMP
     /// at it. Must run before the WebView2 environment is created so child processes inherit it.</summary>
     internal static string Redirect(string profileRoot)
@@ -26,6 +29,7 @@ internal static class ProfileScratch
         Environment.SetEnvironmentVariable("TMP", scratch);
         if (!string.Equals(Path.TrimEndingDirectorySeparator(Path.GetTempPath()), scratch, StringComparison.OrdinalIgnoreCase))
             throw new ProfileLocationException("The process temp path could not be moved into the profile.");
+        Active = scratch;
         return scratch;
     }
 
