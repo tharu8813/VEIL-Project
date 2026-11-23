@@ -18,11 +18,14 @@ disposable. Nothing here runs on the host.
 param(
     [Parameter(Mandatory)][ValidateSet('Prepare', 'Finish')][string]$Stage,
     [string]$StandardUser,
-    [string]$Media = $PSScriptRoot,
+    # Folder holding the bundle (the attached DVD). Windows PowerShell 5.1 leaves $PSScriptRoot empty in
+    # parameter defaults, so the default is resolved below.
+    [string]$Media,
     [string]$Work = 'C:\VEIL-Batch',
     [string]$Procmon = 'C:\Tools\Procmon\Procmon64.exe'
 )
 $ErrorActionPreference = 'Stop'
+if (-not $Media) { $Media = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run this stage from an elevated PowerShell in the VM.' }
 $src = Join-Path $Work 'src'
