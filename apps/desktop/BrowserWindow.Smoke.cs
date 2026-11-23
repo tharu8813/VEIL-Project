@@ -445,6 +445,37 @@ public partial class BrowserWindow
                         && HttpsBar.Visibility != Visibility.Visible, "native button allows http for that host only");
                     Check(session.Network.Mode == NetworkMode.Standard && NetworkIndicator.Text.StartsWith("표준 보호"), $"indicator: {NetworkIndicator.Text}");
                 }
+                else if (stage == "jumplist")
+                {
+                    // SEC-004 jump-list mitigation: only lists naming this profile are removed.
+                    string engineProfile = Path.Combine(session.Root, "webview2");
+                    string folder = JumpListScrubber.ListFolder;
+                    Directory.CreateDirectory(folder);
+                    string Synthetic() => Path.Combine(folder, Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8)).ToLowerInvariant() + ".customDestinations-ms");
+                    string ours = Synthetic(), other = Synthetic(), utf8 = Synthetic();
+                    byte[] Shell(string text, System.Text.Encoding encoding) => [0x02, 0x00, 0x00, 0x00, 0x01, .. encoding.GetBytes(text), 0xAB, 0xBA];
+                    try
+                    {
+                        // Case differs from the profile path; one byte of padding makes the UTF-16 text odd-aligned.
+                        File.WriteAllBytes(ours, Shell($"--user-data-dir=\"{engineProfile.ToUpperInvariant()}\\EBWebView\" --edge-jumplist-new-window", System.Text.Encoding.Unicode));
+                        File.WriteAllBytes(utf8, Shell($"--user-data-dir=\"{engineProfile}\"", System.Text.Encoding.UTF8));
+                        File.WriteAllBytes(other, Shell("--user-data-dir=\"C:\\Users\\someone\\AppData\\Local\\OtherApp\" --edge-jumplist-new-window", System.Text.Encoding.Unicode));
+                        using var scrubber = new JumpListScrubber(engineProfile);
+                        // The app's own scrubber may win the race; either way both lists must be gone.
+                        scrubber.Scrub();
+                        Check(!File.Exists(ours) && !File.Exists(utf8), "lists naming this profile removed (UTF-16 odd offset, other case, UTF-8)");
+                        Check(File.Exists(other), "other applications' lists untouched");
+                        // Watcher: a list written while running is removed without an explicit call.
+                        string late = Synthetic();
+                        File.WriteAllBytes(late, Shell($"--user-data-dir=\"{engineProfile}\"", System.Text.Encoding.Unicode));
+                        for (int i = 0; i < 40 && File.Exists(late); i++) await Task.Delay(100);
+                        Check(!File.Exists(late), "list written during the run removed by the watcher");
+                    }
+                    finally
+                    {
+                        foreach (string file in new[] { ours, other, utf8 }) File.Delete(file);
+                    }
+                }
                 else if (stage == "security")
                 {
                     await SecurityStage();

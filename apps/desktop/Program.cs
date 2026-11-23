@@ -97,6 +97,9 @@ internal static class Program
                     "다운로드 금고", MessageBoxButton.OK, MessageBoxImage.Warning);
                 if (notifications.LockRequested) return 0;
             }
+            // SEC-004 / ADR-0004 policy 2: remove jump lists that name this profile (engine tasks).
+            using var jumpLists = new JumpListScrubber(Path.Combine(root, "webview2"));
+            jumpLists.Scrub();
             window = new BrowserWindow(root, vault);
             // SEC-004: temp files of the app and engine stay on the profile volume (after state loads,
             // so a refused profile is left exactly as found).
@@ -104,7 +107,9 @@ internal static class Program
             if (smoke) window.ConfigureSmoke(args[2], args[3], args[4]);
             application.MainWindow = window;
             application.ShutdownMode = ShutdownMode.OnLastWindowClose;
-            return application.Run(window);
+            int exitCode = application.Run(window);
+            jumpLists.ScrubAfterExit();
+            return exitCode;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or
             System.Text.Json.JsonException or InvalidDataException or InvalidOperationException)
