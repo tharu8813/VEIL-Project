@@ -109,3 +109,10 @@
 - **PASS — 모의 절전 알림** — 오프라인 VM에서 `PBT_APMSUSPEND`를 일반 사용자 Release 브라우저에 전달했다. 실제 BitLocker VHDX에서 `Lock=ok`, `Detach=ok`, 프로세스 종료와 프로필 접근 불가를 확인했다. 시험의 완료까지 19.8초였으며, `desktop-events/SuspendMessage.json`을 게스트에 남겼다.
 - **PASS — 실제 세션 잠금** — 보호 프로필이 열린 상태에서 `LockWorkStation`으로 Windows 잠금 화면을 띄웠다. 24.6초 후 브라우저 종료, 해당 브라우저 PID의 `Lock=ok`와 `Detach=ok`, Windows 이미지 분리, 프로필 접근 불가를 확인했다. 게스트 `C:\VEIL-Project\.veil-dev\desktop-events\SessionLock.json`과 `broker.log`에 증거를 기록했다. 시험용 등록을 제거하고 VM을 정상 종료했다.
 - **NOT RUN — 실제 절전·복귀** — 시험 VM의 BIOS/펌웨어는 `powercfg /a` 기준 S0 저전력 유휴, S1/S2/S3, 최대 절전 모드를 제공하지 않는다. Windows의 실제 전원 전환이나 전환 완료 전에 잠금이 끝나는지는 검증하지 않았다. [Windows 절전 알림 처리 시간](https://learn.microsoft.com/windows/win32/power/pbt-apmsuspend)
+
+### Phase 3 설치 서비스 시작 및 복구 보강 (2026-11-23)
+
+- **IMPLEMENTED / CI PENDING** — 설치 시 볼륨 브로커를 수동 시작이 아니라 자동 시작으로 등록한다. 예상치 못한 종료는 SCM에서 유한한 3회 재시작을 시도하도록 구성한다. 서버는 재기동 직후 등록된 볼륨을 먼저 확인하고 잠금/분리한 뒤 명령을 받는다.
+- **IMPLEMENTED / CI PENDING** — 클라이언트 제품 구성은 서비스 PID 확인을 우회하지 못하도록 `requireWindowsService=true`, 브로커 실행 파일의 절대 경로, 보호 프로필 절대 경로를 필수로 검증한다. 누락되거나 잘못된 브로커 구성 값은 제어된 오류로 거부한다.
+- **TEST COVERAGE** — Windows PowerShell 5.1 설치 스크립트 파싱과 비파괴적 Node 정적 정책 검증을 CI에 추가한다. 이는 설치·서비스 동작을 실행한 시험이 아니며 격리 VM에서 설치/재부팅/서비스 충돌 후 재잠금/제거 순서 및 Windows 11 Home 대상 지원 여부를 검증해야 한다.
+- **SECURITY LIMIT** — 브로커 강제 종료 시 이미 열린 브라우저나 WebView2 핸들이 잠금을 거부할 수 있으며, 이 때 재시작이 데이터를 즉시 보호한다는 보장은 없다. 실제 VM 재시작 회복 실측은 미실행. Gate A/B 판정은 그대로 BLOCKED이다.

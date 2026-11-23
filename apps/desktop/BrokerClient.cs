@@ -37,8 +37,15 @@ internal sealed record BrokerClientConfig
         string text = development ? File.ReadAllText(path) : AdminOnlyFile.ReadAllText(path);
         var config = JsonSerializer.Deserialize<BrokerClientConfig>(text, Options)
             ?? throw new InvalidDataException("Empty broker client configuration.");
-        if (config.Development != development || (!development && config.BrokerImage is null) ||
-            config.PipeName.Length is 0 or > 128 || config.PipeName.Contains('\\') || config.VolumeId.Length is 0 or > 64)
+        if (config.Development != development ||
+            string.IsNullOrWhiteSpace(config.PipeName) || config.PipeName.Length > 128 ||
+            config.PipeName.Contains('\\') || string.IsNullOrWhiteSpace(config.VolumeId) ||
+            config.VolumeId.Length > 64 ||
+            (!development && (!config.RequireWindowsService ||
+                string.IsNullOrWhiteSpace(config.BrokerImage) ||
+                !Path.IsPathFullyQualified(config.BrokerImage) ||
+                string.IsNullOrWhiteSpace(config.ProfilePath) ||
+                !Path.IsPathFullyQualified(config.ProfilePath))))
             throw new InvalidDataException("Invalid broker client configuration.");
         return config;
     }
