@@ -146,8 +146,15 @@ try {
         Set-Acl -LiteralPath $file -AclObject $acl
         Assert-AdminOnly $file
     }
-    New-Service -Name $serviceName -BinaryPathName $serviceCommand -DisplayName 'VEIL Volume Broker' -StartupType Manual | Out-Null
+    New-Service -Name $serviceName -BinaryPathName $serviceCommand -DisplayName 'VEIL Volume Broker' -StartupType Automatic | Out-Null
     $installed = $true
+    # Restart the privileged broker on failure, including an unexpected non-zero service exit.
+    # Its startup gate refuses to accept clients until it has checked and secured any orphaned mount.
+    # The retries are finite; do not make the machine spin indefinitely on a bad registration.
+    sc.exe failure $serviceName reset= 86400 actions= restart/30000/restart/60000/restart/300000 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Service recovery registration failed: $LASTEXITCODE" }
+    sc.exe failureflag $serviceName flag= 1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Service failure flag registration failed: $LASTEXITCODE" }
     $controller = Get-Service -Name $serviceName
     try {
         $controller.Start()

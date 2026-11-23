@@ -46,16 +46,19 @@ internal sealed record BrokerConfig
             throw new InvalidDataException("The configuration's development flag does not match the start mode.");
         if (!development && (Backend != "bitlocker" || AllowUnsignedClients || Fake is not null || LogPath is not null))
             throw new InvalidDataException("Production configuration allows only the BitLocker backend and signed clients.");
-        if (!development && (ClientImages.Length != 1 || ClientSha256 is not { Length: 64 } || !ClientSha256.All(Uri.IsHexDigit)))
+        if (!development && (ClientImages is not { Length: 1 } || ClientSha256 is not { Length: 64 } || !ClientSha256.All(Uri.IsHexDigit)))
             throw new InvalidDataException("Production configuration must pin one signed client image by SHA-256.");
         if (Backend is not ("bitlocker" or "fake") || (Backend == "fake") != (Fake is not null))
             throw new InvalidDataException("Unknown or incomplete backend configuration.");
         if (string.IsNullOrWhiteSpace(VolumeId) || VolumeId.Length > 64 ||
+            string.IsNullOrWhiteSpace(VolumeGuid) ||
             !VolumeGuid.StartsWith(@"\\?\Volume{", StringComparison.OrdinalIgnoreCase) || !VolumeGuid.EndsWith('\\') ||
-            !Path.IsPathFullyQualified(ImagePath) || !Guid.TryParse(ProtectorId, out _) ||
-            !UserSid.StartsWith("S-1-", StringComparison.Ordinal) || ClientImages.Length == 0 ||
-            ClientImages.Any(image => !Path.IsPathFullyQualified(image)) ||
-            PipeName.Length is 0 or > 128 || PipeName.Contains('\\'))
+            string.IsNullOrWhiteSpace(ImagePath) || !Path.IsPathFullyQualified(ImagePath) ||
+            string.IsNullOrWhiteSpace(ProtectorId) || !Guid.TryParse(ProtectorId, out _) ||
+            string.IsNullOrWhiteSpace(UserSid) || !UserSid.StartsWith("S-1-", StringComparison.Ordinal) ||
+            ClientImages is not { Length: > 0 } ||
+            ClientImages.Any(image => string.IsNullOrWhiteSpace(image) || !Path.IsPathFullyQualified(image)) ||
+            string.IsNullOrWhiteSpace(PipeName) || PipeName.Length > 128 || PipeName.Contains('\\'))
             throw new InvalidDataException("Invalid broker configuration value.");
     }
 }
