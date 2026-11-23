@@ -48,6 +48,36 @@
 
 스냅샷에서 시험 VM 준비, 서명된 Release 서비스 설치·복구 드릴, 실제 전원 차단은 관리자가 확인하는 단계다. 전원 차단은 지정된 시험 VM에서 기존 arm/check 러너로 준비와 재시작 후 확인을 진행한다. 성공한 합성 데이터까지 정리하려면 실행 시 `--cleanup-on-pass`를 지정한다. 실패한 데이터는 시험 볼륨에 보존한다. [전원 차단 러너](../tests/phase3/power-loss.mjs)
 
+## 단일 VM 일괄 시험
+
+기능이 안정된 뒤 오프라인 VM 세션 한 번으로 Phase 3·4와 Phase 5 로컬 시험, 그리고 볼륨 밖 쓰기 추적을 함께 실행한다. 아래 절차는 위의 개별 단계를 대신한다. 이미 통과한 항목은 관련 코드나 보안 경계가 바뀌었을 때만 다시 실행한다.
+
+| 단계 | 위치 | 명령 |
+|---|---|---|
+| 0. 번들 | 호스트(일반 사용자) | `node tests/vm/make-bundle.mjs`. 커밋된 트리에서 Debug 데스크톱과 `veil-vault.exe`, 소스, 게스트 스크립트, SHA-256 매니페스트, `VEILBAT.viso`를 만든다. 호스트 시스템 설정은 바꾸지 않는다. |
+| 1. 연결 | 호스트 | VM을 `01-veil-tools-offline` 스냅샷으로 되돌리고 종료한 상태에서, 출력된 `VBoxManage storageattach` 명령으로 DVD를 연결한다. 네트워크 어댑터는 Not attached로 둔다. |
+| 2. 준비 | 게스트 관리자 셸 | `D:\BATCH.PS1 -Stage Prepare -StandardUser <일반 계정>`. 매니페스트 해시 검증 → `C:\VEIL-Batch`에 풀기 → 폐기용 BitLocker VHDX 두 개(V: 1 GiB, W: 256 MiB, XTS-AES-256, 임의 암호는 메모리에만 보관) → 사전 점검 증거 → Procmon 추적 시작(V:와 W:를 보호 볼륨으로 지정). |
+| 3. 실행 | 게스트 일반 사용자 셸 | 2단계가 출력한 `phase34-vm.mjs --run ...` 명령. |
+| 4. 마무리 | 게스트 관리자 셸 | `C:\VEIL-Batch\BATCH.PS1 -Stage Finish`. 추적 종료·분석 → `RESULTS.ZIP`과 결과표 출력. 모두 PASS면 시험 볼륨을 잠그고 분리한 뒤 삭제한다. FAIL이 하나라도 있으면 볼륨과 증거를 그대로 둔다. |
+
+자동 실행 항목(3단계):
+
+- 보호 볼륨 V:의 프로필: `profile-routing`, `engine-kill`, `vault-capture`, `vault-persistence`, `jump-list`, `desktop-crash-cycle`
+- V:의 작업 폴더에서 실행하는 루프백 시험: `network-guard`, `dns-protection`, `smartscreen`. 게스트에 openssl이 없으면 뒤의 두 시험은 사유와 함께 NOT RUN으로 남는다.
+- 작은 볼륨 W:: `profile-disk-full`
+
+4단계 추적 결과는 `physical-writes`로 기록된다.
+
+계속 수동이거나 NOT RUN으로 남는 항목:
+
+- 설치형 Release 서비스(`installed-release`)
+- 복구 드릴(`recovery-backup`)
+- 실제 전원 차단(`power-loss`): 기존 arm/check 러너와 호스트의 `VBoxManage controlvm <vm> poweroff`
+- 금고 디스크 부족(`vault-disk-full`)
+- 인터넷 VM 항목(`internet-*`): DNS 실제 경로, IPv6·WebRTC, 절전·네트워크 전환, 실제 SmartScreen 경고·다운로드 판정·Windows 설정 재정의, 실제 사이트 호환성. 오프라인 VM에서는 실행하지 않는다.
+
+결과는 게스트 `C:\VEIL-Batch\RESULTS.ZIP`에 남는다. 그 안의 `summary.json`, 항목별 로그, `outside-writes.json`, `batch.json`이 SECURITY_STATUS 갱신 근거가 된다.
+
 ## 최소 필수 시나리오
 
 | ID | 테스트 | 기대 결과 |

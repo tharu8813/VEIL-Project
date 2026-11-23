@@ -14,6 +14,14 @@ const mainRunners = [
     ['vault-capture', 'tests/phase4/vault-capture.mjs', []],
     ['vault-persistence', 'tests/phase4/vault-persist.mjs', []],
     ['jump-list', 'tests/security/browse-session.mjs', ['--runs', '1', '--assert-clean']],
+    ['desktop-crash-cycle', 'tests/integration/desktop.mjs', ['--crash-cycle']],
+];
+// Loopback-only runners. They keep evidence under <cwd>/.veil-dev, so they run with the lab folder as the
+// working directory: their engine profiles stay on the protected volume and the write trace covers them.
+const localRunners = [
+    ['network-guard', 'tests/phase5/network-guard.mjs', [], []],
+    ['dns-protection', 'tests/phase5/dns-protection.mjs', [], ['openssl']],
+    ['smartscreen', 'tests/security/smartscreen.mjs', [], ['openssl']],
 ];
 const manual = [
     ['installed-release', 'Signed Release installation, live broker lifecycle, and product startup and lock.'],
@@ -22,17 +30,33 @@ const manual = [
     ['power-loss', 'Arm the dedicated test, cut VM power explicitly, then check after reboot.'],
     ['vault-disk-full', 'Vault operations while the disk is full. The existing disk-full runner covers profile recovery.'],
 ];
+// Need an internet-connected isolated VM (ADR-0004 policy 4), never the offline lab VM.
+const internet = [
+    ['internet-dns-path', 'Real DNS query path with system DNS, public DoH providers and their bootstrap lookup.'],
+    ['internet-ipv6-webrtc', 'External IPv6 and real WebRTC ICE candidates in standard and proxy modes.'],
+    ['internet-sleep-switch', 'Sleep/resume and network changes while proxy protection is on.'],
+    ['internet-smartscreen', 'Real SmartScreen warning page and download verdicts; Windows SmartScreen setting overriding VEIL.'],
+    ['internet-site-compat', 'HTTPS-first and strict tracking prevention on real sites.'],
+];
 
-export function makePlan(primaryParent, diskFullParent) {
+/** Tools a runner needs on PATH; a missing tool leaves that runner NOT RUN with the reason. */
+export function makePlan(primaryParent, diskFullParent, missingTools = []) {
     const commands = mainRunners.map(([id, script, flags]) => ({
         id, lab: primaryParent, args: [script, '--profile-parent', primaryParent, ...flags],
     }));
+    const local = localRunners.map(([id, script, flags, tools]) => {
+        const missing = tools.filter(tool => missingTools.includes(tool));
+        return missing.length ? { id, reason: `Missing on PATH: ${missing.join(', ')}.` }
+            : { id, lab: primaryParent, cwd: primaryParent, args: [script, ...flags] };
+    });
     return [
         ...commands,
+        ...local,
         diskFullParent
             ? { id: 'profile-disk-full', args: ['tests/phase3/disk-full.mjs', '--profile-parent', diskFullParent] }
             : { id: 'profile-disk-full', reason: 'No separately verified small BitLocker volume.' },
         ...manual.map(([id, reason]) => ({ id, reason })),
+        ...internet.map(([id, reason]) => ({ id, reason })),
     ];
 }
 
@@ -130,15 +154,20 @@ async function main() {
     const evidence = await mkdtemp(join(root, 'phase34-vm-'));
     const lab = await makeLabFolder(primary);
     const smallLab = diskFull ? await makeLabFolder(diskFull) : undefined;
-    const plan = makePlan(lab, smallLab);
+    const missingTools = [];
+    for (const tool of ['openssl']) {
+        await run(tool, ['version'], { windowsHide: true }).catch(() => missingTools.push(tool));
+    }
+    const plan = makePlan(lab, smallLab, missingTools);
     const report = join(evidence, 'summary.json');
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^VEIL_(DEV_VAULT|TEST_)/i.test(key)));
     env.VEIL_DESKTOP_DLL = desktop;
     const results = await executePlan(plan, values.only, async test => {
         const log = `${test.id}.log`;
         const before = test.lab ? new Set(await readdir(test.lab)) : null;
-        const result = await run(process.execPath, test.args, {
-            cwd: repo, env, windowsHide: true, maxBuffer: 4 * 1024 ** 2, timeout: 20 * 60_000,
+        const args = test.cwd ? [join(repo, test.args[0]), ...test.args.slice(1)] : test.args;
+        const result = await run(process.execPath, args, {
+            cwd: test.cwd ?? repo, env, windowsHide: true, maxBuffer: 4 * 1024 ** 2, timeout: 20 * 60_000,
         })
             .then(result => ({ ...result, code: 0 }), error => error);
         await writeFile(join(evidence, log), `${result.stdout ?? ''}\n${result.stderr ?? ''}`);
@@ -157,7 +186,7 @@ async function main() {
         }
         return { exitCode: typeof result.code === 'number' ? result.code : 1, log, artifacts };
     }, async tests => {
-        await writeFile(report + '.next', JSON.stringify({ scope: 'Debug probes on protected VM volumes', guest, build, lab, tests }, null, 2));
+        await writeFile(report + '.next', JSON.stringify({ scope: 'Debug probes on protected VM volumes', guest, build, lab, missingTools, tests }, null, 2));
         await rename(report + '.next', report);
     });
     console.log(`Evidence: ${report}`);

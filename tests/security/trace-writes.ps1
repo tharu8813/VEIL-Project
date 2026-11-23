@@ -15,6 +15,8 @@ param(
     [switch]$IsolatedVm,
     [string]$Procmon = 'C:\Tools\Procmon\Procmon64.exe',
     [string]$Volume = 'V:\',
+    # Further protected lab volumes of the same run (e.g. the disk-full volume); writes there count as inside.
+    [string[]]$ExtraVolume = @(),
     [string]$RootCommand = 'tests/integration/desktop.mjs',
     [switch]$Phase34,
     [string]$OutDir = (Join-Path (Resolve-Path "$PSScriptRoot\..\..") '.veil-dev\write-trace')
@@ -40,6 +42,10 @@ $csv = Join-Path $OutDir 'trace.csv'
 $sessionFile = Join-Path $OutDir 'phase34-capture.json'
 
 if ($Action -eq 'Start') {
+    foreach ($extra in $ExtraVolume) {
+        $extraStatus = Get-BitLockerVolume -MountPoint $extra.TrimEnd('\')
+        if ($extraStatus.VolumeStatus -ne 'FullyEncrypted' -or $extraStatus.ProtectionStatus -ne 'On') { throw "$extra is not a fully encrypted, protected volume." }
+    }
     if (-not (Test-Path $Volume)) { throw "Protected volume $Volume is not mounted/unlocked." }
     $status = Get-BitLockerVolume -MountPoint $Volume.TrimEnd('\')
     if ($status.VolumeStatus -ne 'FullyEncrypted' -or $status.ProtectionStatus -ne 'On') {
@@ -85,6 +91,7 @@ if ($Phase34) {
         '--allow-node', (Join-Path $repo '.veil-dev'), '--require-activity', 'true')
 }
 else { $arguments += @('--allow', (Join-Path $repo '.veil-dev')) }
+foreach ($extra in $ExtraVolume) { $arguments += @('--volume', $extra) }
 node (Join-Path $repo 'tests\security\outside-writes.mjs') @arguments
 $code = $LASTEXITCODE
 Write-Host "Report: $report"
