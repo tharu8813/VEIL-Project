@@ -11,6 +11,7 @@ internal sealed record BrokerConfig
     public required string ImagePath { get; init; }
     public required string VolumeGuid { get; init; }
     public required string ProtectorId { get; init; }
+    public string? RecoveryProtectorId { get; init; }
     public required string UserSid { get; init; }
     public required string[] ClientImages { get; init; }
     public string? ClientSha256 { get; init; }
@@ -54,7 +55,9 @@ internal sealed record BrokerConfig
             string.IsNullOrWhiteSpace(VolumeGuid) ||
             !VolumeGuid.StartsWith(@"\\?\Volume{", StringComparison.OrdinalIgnoreCase) || !VolumeGuid.EndsWith('\\') ||
             string.IsNullOrWhiteSpace(ImagePath) || !Path.IsPathFullyQualified(ImagePath) ||
-            string.IsNullOrWhiteSpace(ProtectorId) || !Guid.TryParse(ProtectorId, out _) ||
+            string.IsNullOrWhiteSpace(ProtectorId) || !Guid.TryParse(ProtectorId, out var primary) ||
+            (RecoveryProtectorId is not null && (!Guid.TryParse(RecoveryProtectorId, out var recovery) ||
+                recovery == Guid.Empty || recovery == primary)) ||
             string.IsNullOrWhiteSpace(UserSid) || !UserSid.StartsWith("S-1-", StringComparison.Ordinal) ||
             ClientImages is not { Length: > 0 } ||
             ClientImages.Any(image => string.IsNullOrWhiteSpace(image) || !Path.IsPathFullyQualified(image)) ||

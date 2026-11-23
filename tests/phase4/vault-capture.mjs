@@ -23,8 +23,8 @@ const parent = args.includes('--profile-parent') ? args[args.indexOf('--profile-
 if (parent !== undefined && !isAbsolute(parent)) throw new Error('--profile-parent must be an absolute existing directory');
 const root = resolve('.veil-dev');
 await mkdir(root, { recursive: true });
-const evidence = await mkdtemp(join(root, 'vault-capture-'));
-const profileRoot = parent ? await mkdtemp(join(parent, 'veil-vault-')) : evidence;
+const evidence = await mkdtemp(join(parent ?? root, 'vault-capture-'));
+const profileRoot = evidence;
 const profile = join(profileRoot, 'profile');
 const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
 const downloadsDir = join(homedir(), 'Downloads');

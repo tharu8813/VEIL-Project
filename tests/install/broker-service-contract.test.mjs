@@ -7,6 +7,7 @@ import { readFile } from 'node:fs/promises';
 const source = await readFile('scripts/broker-service.ps1', 'utf8');
 const client = await readFile('apps/desktop/BrokerClient.cs', 'utf8');
 const service = await readFile('apps/broker/Veil.VolumeBroker/BrokerService.cs', 'utf8');
+const backend = await readFile('apps/broker/Veil.VolumeBroker/Backends.cs', 'utf8');
 
 test('production service starts automatically after a reboot', () => {
     assert.match(source, /New-Service\b[^\r\n]*-StartupType\s+Automatic\b/);
@@ -32,4 +33,12 @@ test('uninstall must preserve the user VHDX and refuse an attached image', () =>
     assert.match(source, /Remove-VeilTree\s+\$binRoot/);
     assert.match(source, /Remove-VeilTree\s+\$dataRoot/);
     assert.doesNotMatch(source, /Remove-Item[^\r\n]*\$ImagePath/i);
+});
+
+test('registration requires a verified recovery backup and persists the protector ID only', () => {
+    assert.match(source, /\$recoveryId\s*=\s*Register-VeilRecoveryBackup[^]*?recoveryProtectorId=\$recoveryId\.ToString\('B'\)[^]*?New-Service/);
+    assert.match(source, /Test-VeilRecoveryBackup\s+\$verifiedImage\s+\$registered\.volumeGuid\s+\$recoveryId/);
+    assert.doesNotMatch(source, /NumericalPassword\s*=|RecoveryPassword\s*=/i);
+    assert.match(backend, /KeyProtectorType = \[uint32\]2/);
+    assert.match(backend, /protector &= [^]*?SameProtector\(id, recovery\)/);
 });

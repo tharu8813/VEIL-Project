@@ -86,9 +86,17 @@ internal sealed class WindowsBitLockerBackend(BrokerConfig config) : IBitLockerB
                 @{ attached = $true; volumeGuid = $guid; lock = 1; readyToUnlock = $candidate } | ConvertTo-Json -Compress; exit 0
             }
             $conversion = $v | Invoke-CimMethod -MethodName GetConversionStatus
-            $ids = $v | Invoke-CimMethod -MethodName GetKeyProtectors -Arguments @{ KeyProtectorType = [uint32]0 }
+            $ids = $v | Invoke-CimMethod -MethodName GetKeyProtectors -Arguments @{ KeyProtectorType = [uint32]{{(config.RecoveryProtectorId is null ? 0 : 8)}} }
             if ($protection.ReturnValue -ne 0 -or $conversion.ReturnValue -ne 0 -or $ids.ReturnValue -ne 0) { throw 'BitLocker protection verification failed.' }
-            @{ attached = $true; volumeGuid = $guid; conversion = $conversion.ConversionStatus; protection = $protection.ProtectionStatus; lock = 0; protectors = @($ids.VolumeKeyProtectorID) } | ConvertTo-Json -Compress
+            $recovery = @()
+            if ({{(config.RecoveryProtectorId is not null ? "$true" : "$false")}}) {
+                try {
+                    $numeric = $v | Invoke-CimMethod -MethodName GetKeyProtectors -Arguments @{ KeyProtectorType = [uint32]2 }
+                    if ($numeric.ReturnValue -eq 0) { $recovery = @($numeric.VolumeKeyProtectorID) }
+                }
+                catch { $recovery = @() }
+            }
+            @{ attached = $true; volumeGuid = $guid; conversion = $conversion.ConversionStatus; protection = $protection.ProtectionStatus; lock = 0; protectors = @($ids.VolumeKeyProtectorID); recoveryProtectors = $recovery } | ConvertTo-Json -Compress
             """, null);
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
@@ -96,11 +104,19 @@ internal sealed class WindowsBitLockerBackend(BrokerConfig config) : IBitLockerB
         string? guid = root.TryGetProperty("volumeGuid", out var g) ? g.GetString() : null;
         int Number(string name) => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number ? value.GetInt32() : -1;
         bool protector = root.TryGetProperty("protectors", out var ids) && ids.ValueKind == JsonValueKind.Array &&
-            ids.EnumerateArray().Any(id => string.Equals(id.GetString(), config.ProtectorId, StringComparison.OrdinalIgnoreCase));
+            ids.EnumerateArray().Any(id => SameProtector(id, config.ProtectorId));
+        if (config.RecoveryProtectorId is { } recovery)
+            protector &= ids.ValueKind == JsonValueKind.Array && ids.GetArrayLength() == 1 &&
+                root.TryGetProperty("recoveryProtectors", out var numeric) && numeric.ValueKind == JsonValueKind.Array &&
+                numeric.EnumerateArray().Any(id => SameProtector(id, recovery));
         // ConversionStatus 1 = FullyEncrypted, ProtectionStatus 1 = On, LockStatus 0 = Unlocked.
         return new(true, guid, Number("conversion") == 1, Number("protection") == 1, Number("lock") == 0, protector,
             root.TryGetProperty("readyToUnlock", out var ready) && ready.GetBoolean());
     }
+
+    private static bool SameProtector(JsonElement id, string registered) =>
+        id.ValueKind == JsonValueKind.String && Guid.TryParse(id.GetString(), out var actual) &&
+        Guid.TryParse(registered, out var expected) && actual == expected;
 
     public void Attach()
     {

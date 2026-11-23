@@ -94,6 +94,25 @@ test('a Parent PID column also links children', () => {
     assert.equal(analyze(parseCsv(text), options).outside[0].path, 'C:\\leak.bin');
 });
 
+test('Phase 3/4 trace requires protected writes and exempts only the Node evidence writer', () => {
+    const phase34 = { rootPids: [100], volumes: ['V:\\'], allowNode: ['C:\\evidence'], requireActivity: true };
+    assert.equal(analyze([], phase34).pass, false);
+    assert.equal(analyze(parseCsv(csv([
+        row('node.exe', 100, 'WriteFile', 'V:\\fixture\\summary.json', 'SUCCESS', ''),
+    ])), phase34).pass, false);
+    const writes = [
+        row('node.exe', 100, 'WriteFile', 'C:\\evidence\\summary.json', 'SUCCESS', ''),
+        row('msedgewebview2.exe', 100, 'WriteFile', 'V:\\fixture\\profile.bin', 'SUCCESS', ''),
+        row('browser.exe', 100, 'WriteFile', 'C:\\evidence\\secret.bin', 'SUCCESS', ''),
+    ];
+    const report = analyze(parseCsv(csv(writes)), phase34);
+    assert.equal(report.pass, false);
+    assert.equal(report.writes.allowed, 1);
+    assert.equal(report.outside[0].path, 'C:\\evidence\\secret.bin');
+    assert.equal(analyze(parseCsv(csv(writes.slice(0, 1))), phase34).pass, false);
+    assert.equal(analyze(parseCsv(csv(writes.slice(0, 2))), phase34).pass, true);
+});
+
 test('CLI exits 1 on outside writes and 0 when everything stays on the volume', async () => {
     const run = promisify(execFile);
     await mkdir(resolve('.veil-dev'), { recursive: true });

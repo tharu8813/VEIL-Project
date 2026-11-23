@@ -16,6 +16,7 @@ param(
     [string]$Procmon = 'C:\Tools\Procmon\Procmon64.exe',
     [string]$Volume = 'V:\',
     [string]$RootCommand = 'tests/integration/desktop.mjs',
+    [switch]$Phase34,
     [string]$OutDir = (Join-Path (Resolve-Path "$PSScriptRoot\..\..") '.veil-dev\write-trace')
 )
 $ErrorActionPreference = 'Stop'
@@ -25,10 +26,18 @@ $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIde
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Procmon capture needs an elevated PowerShell in the VM. Run the VEIL harness in a separate non-elevated window.'
 }
+if ($Phase34) {
+    . (Join-Path $PSScriptRoot '..\phase3\phase34-guest-identity.ps1')
+    $guest = Get-VeilPhase34Guest
+    if (-not $guest.virtualBox -or -not $guest.noDefaultRoute -or $Volume.TrimEnd('\') -eq $guest.systemDrive) {
+        throw 'Use the prepared offline VirtualBox guest and its separate lab volume.'
+    }
+}
 if (-not (Test-Path $Procmon)) { throw "Procmon not found at $Procmon" }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $pml = Join-Path $OutDir 'trace.pml'
 $csv = Join-Path $OutDir 'trace.csv'
+$sessionFile = Join-Path $OutDir 'phase34-capture.json'
 
 if ($Action -eq 'Start') {
     if (-not (Test-Path $Volume)) { throw "Protected volume $Volume is not mounted/unlocked." }
@@ -36,23 +45,47 @@ if ($Action -eq 'Start') {
     if ($status.VolumeStatus -ne 'FullyEncrypted' -or $status.ProtectionStatus -ne 'On') {
         throw "$Volume is not fully encrypted with protection on ($($status.VolumeStatus), $($status.ProtectionStatus))."
     }
-    Remove-Item -LiteralPath $pml, $csv -ErrorAction SilentlyContinue
-    Start-Process $Procmon -ArgumentList '/AcceptEula', '/Quiet', '/Minimized', '/BackingFile', "`"$pml`""
+    if ($Phase34) {
+        if ((Test-Path -LiteralPath $pml) -or (Test-Path -LiteralPath $csv) -or (Test-Path -LiteralPath $sessionFile) -or
+            (Get-Process -Name 'Procmon', 'Procmon64', 'Procmon64a' -ErrorAction SilentlyContinue)) {
+            throw 'Use a new capture directory and close any existing Procmon session first.'
+        }
+    }
+    else { Remove-Item -LiteralPath $pml, $csv -ErrorAction SilentlyContinue }
+    Start-Process $Procmon -ArgumentList '/AcceptEula', '/Quiet', '/Minimized', '/BackingFile', "`"$pml`"" -WindowStyle Hidden
     & $Procmon /WaitForIdle
+    if ($Phase34) {
+        @{ uuid = $guest.uuid; boot = $guest.boot; volume = $Volume.TrimEnd('\') } | ConvertTo-Json |
+            Set-Content -LiteralPath $sessionFile -Encoding UTF8
+    }
     Write-Host "Capturing to $pml. Now run the harness in a NON-elevated window, then call -Action Stop."
     return
 }
 
 # Procmon is a GUI program: '&' returns before it finishes, so wait for each step explicitly.
-Start-Process $Procmon -ArgumentList '/Terminate' -Wait
-Start-Process $Procmon -ArgumentList '/AcceptEula', '/Quiet', '/OpenLog', "`"$pml`"", '/SaveAs', "`"$csv`"" -Wait
+if ($Phase34) {
+    if (-not (Test-Path -LiteralPath $pml) -or (Test-Path -LiteralPath $csv)) {
+        throw 'No active Phase 3/4 capture in the requested directory.'
+    }
+    $session = Get-Content -LiteralPath $sessionFile -Raw | ConvertFrom-Json
+    if ($session.uuid -ne $guest.uuid -or $session.boot -ne $guest.boot -or $session.volume -ne $Volume.TrimEnd('\')) {
+        throw 'The trace must use the original VM boot and lab volume.'
+    }
+}
+Start-Process $Procmon -ArgumentList '/Terminate' -Wait -WindowStyle Hidden
+Start-Process $Procmon -ArgumentList '/AcceptEula', '/Quiet', '/OpenLog', "`"$pml`"", '/SaveAs', "`"$csv`"" -Wait -WindowStyle Hidden
 if (-not (Test-Path $csv) -or (Get-Item $csv).Length -eq 0) { throw "Procmon did not export $csv" }
 $repo = Resolve-Path "$PSScriptRoot\..\.."
 $report = Join-Path $OutDir 'outside-writes.json'
 # Windows PowerShell 5.1 turns native stderr into terminating errors under 'Stop'.
 $ErrorActionPreference = 'Continue'
-node (Join-Path $repo 'tests\security\outside-writes.mjs') $csv --root-command $RootCommand --volume $Volume `
-    --allow (Join-Path $repo '.veil-dev') --out $report
+$arguments = @($csv, '--root-command', $RootCommand, '--volume', $Volume, '--out', $report)
+if ($Phase34) {
+    $arguments = @($csv, '--root-command', 'tests/phase3/phase34-vm.mjs', '--volume', $Volume, '--out', $report,
+        '--allow-node', (Join-Path $repo '.veil-dev'), '--require-activity', 'true')
+}
+else { $arguments += @('--allow', (Join-Path $repo '.veil-dev')) }
+node (Join-Path $repo 'tests\security\outside-writes.mjs') @arguments
 $code = $LASTEXITCODE
 Write-Host "Report: $report"
 exit $code

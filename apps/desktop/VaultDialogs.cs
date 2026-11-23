@@ -60,6 +60,7 @@ internal sealed class VaultSetupDialog : VeilDialog
                 var source = new Microsoft.Win32.OpenFileDialog
                 {
                     Title = "금고 백업 선택", Filter = "VEIL 금고 백업 (*.veil-backup)|*.veil-backup",
+                    AddToRecent = false,
                 };
                 if (source.ShowDialog(this) != true) return;
                 var restore = new VaultSetupDialog(this, "금고 백업 복원", askPassphrase: true, issueCode: true,
@@ -182,7 +183,10 @@ internal sealed class VaultWindow : VeilDialog
     private async Task ExportAsync()
     {
         if (Selected is not { } entry) return;
-        var dialog = new Microsoft.Win32.SaveFileDialog { FileName = entry.Name, Title = "금고에서 내보내기", OverwritePrompt = false };
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            FileName = entry.Name, Title = "금고에서 내보내기", OverwritePrompt = false, AddToRecent = false,
+        };
         if (dialog.ShowDialog(this) != true) return;
         try
         {
@@ -199,6 +203,7 @@ internal sealed class VaultWindow : VeilDialog
         {
             Title = "금고 백업 저장", FileName = "VEIL-" + DateTime.Today.ToString("yyyy-MM-dd"),
             DefaultExt = ".veil-backup", Filter = "VEIL 금고 백업 (*.veil-backup)|*.veil-backup", OverwritePrompt = false,
+            AddToRecent = false,
         };
         if (destination.ShowDialog(this) != true) return;
         var setup = new VaultSetupDialog(this, "금고 백업 암호", askPassphrase: true, issueCode: false,
