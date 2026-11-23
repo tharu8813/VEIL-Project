@@ -171,7 +171,12 @@ try {
     // Use a synthetic development-only broker with no trusted-image requirement.
     const stalledName = `VEIL.Test.stalled-${randomBytes(5).toString('hex')}`;
     const stalledPipe = `\\\\.\\pipe\\${stalledName}`;
-    const stalled = createServer(socket => socket.on('data', () => { /* deliberately no reply */ }));
+    const stalledClients = new Set();
+    const stalled = createServer(socket => {
+        stalledClients.add(socket);
+        socket.on('close', () => stalledClients.delete(socket));
+        socket.on('data', () => { /* deliberately no reply */ });
+    });
     try {
         await new Promise((ok, fail) => {
             stalled.once('error', fail);
@@ -184,7 +189,7 @@ try {
         assert.match(evidence.gateStalled.error, /ProfileLocationException/);
         assert.ok(evidence.gateStalledMs < 14000, 'stalled IPC did not time out');
     } finally {
-        stalled.closeAllConnections();
+        for (const socket of stalledClients) socket.destroy();
         await new Promise(ok => stalled.close(ok));
     }
 
