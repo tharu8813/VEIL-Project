@@ -137,11 +137,23 @@ internal sealed class WindowsBitLockerBackend(BrokerConfig config) : IBitLockerB
         using var process = Process.Start(start) ?? throw new InvalidOperationException("PowerShell did not start.");
         if (!stdin.IsEmpty) process.StandardInput.WriteLine(stdin);
         process.StandardInput.Close();
-        string output = process.StandardOutput.ReadToEnd();
-        process.StandardError.ReadToEnd();
-        if (!process.WaitForExit(60_000)) { process.Kill(true); throw new TimeoutException("Volume operation timed out."); }
-        // Error text is discarded: it may echo arguments. Only the exit code is reported.
+        // Start both drains before waiting; ReadToEnd() followed by WaitForExit() could
+        // deadlock if PowerShell filled stderr, bypassing the old 60-second timeout.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
+        Task<string> stderr = process.StandardError.ReadToEndAsync(timeout.Token);
+        try
+        {
+            process.WaitForExitAsync(timeout.Token).GetAwaiter().GetResult();
+            Task.WhenAll(stdout, stderr).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            throw new TimeoutException("Volume operation timed out.");
+        }
+        // Never expose stderr: it might contain script parameters or an unlock secret.
         if (process.ExitCode != 0) throw new InvalidOperationException($"Volume operation failed ({process.ExitCode}).");
-        return output;
+        return stdout.GetAwaiter().GetResult();
     }
 }
