@@ -8,12 +8,12 @@ import { startFixture } from '../integration/fixture.mjs';
 const run = promisify(execFile);
 const parent = resolve('.veil-dev');
 await mkdir(parent, { recursive: true });
-const directory = await mkdtemp(join(parent, 'profile-routing-'));
 const [option, location, ...extra] = process.argv.slice(2);
 if (option !== undefined && (option !== '--profile-parent' || !location || !isAbsolute(location) || extra.length > 0)) {
     throw new Error('Use --profile-parent followed by an existing absolute test directory.');
 }
-const profileRoot = location ? await mkdtemp(join(location, 'veil-synthetic-')) : directory;
+const directory = await mkdtemp(join(location ?? parent, 'profile-routing-'));
+const profileRoot = directory;
 const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
 const { origin, server, requests } = await startFixture();
 

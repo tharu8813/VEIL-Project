@@ -86,13 +86,14 @@ function createsFile(event) {
 }
 
 /** Incremental analyzer: add(event) for each record in trace order, then report(). */
-export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allow = [] }) {
+export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allow = [], allowNode = [], requireActivity = false }) {
     const tree = new Map(rootPids.map(pid => [String(pid), 'root']));
     const volumePrefixes = volumes.map(prefix);
     const allowPrefixes = allow.map(prefix);
-    const commands = rootCommands.map(text => text.toLowerCase());
+    const nodePrefixes = allowNode.map(prefix);
+    const commands = rootCommands.map(normalize);
     const opened = new Set();
-    let inside = 0, allowed = 0;
+    let inside = 0, engineInside = 0, allowed = 0;
     const outside = new Map();
     const metadata = new Map();
     const names = new Map();
@@ -100,8 +101,16 @@ export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allo
     const classify = (path, event, kind) => {
         if (!isDrivePath(path)) return;
         const key = normalize(path);
-        if (volumePrefixes.some(p => key.startsWith(p) || key + '\\' === p)) { inside++; return; }
+        if (volumePrefixes.some(p => key.startsWith(p) || key + '\\' === p)) {
+            inside++;
+            if (/^msedgewebview2\.exe$/i.test(event['Process Name'])) engineInside++;
+            return;
+        }
         if (allowPrefixes.some(p => key.startsWith(p) || key + '\\' === p)) { allowed++; return; }
+        if (/^node(\.exe)?$/i.test(event['Process Name']) && nodePrefixes.some(p => key.startsWith(p) || key + '\\' === p)) {
+            allowed++;
+            return;
+        }
         // NTFS journal/MFT updates follow file operations on that volume; they hold no file data
         // and are listed as side effects. The file operation that caused them is reported itself.
         if (/^[a-z]:\\\$/.test(key)) { metadata.set(path, (metadata.get(path) ?? 0) + 1); return; }
@@ -116,7 +125,7 @@ export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allo
     const add = event => {
         const pid = String(event.PID);
         if (commands.length && event.Operation === 'Process Create' && event.Result === 'SUCCESS' &&
-            commands.some(text => event.Detail.toLowerCase().includes(text))) {
+            commands.some(text => normalize(event.Detail).includes(text))) {
             const root = /PID:\s*(\d+)/.exec(event.Detail)?.[1];
             if (root && !tree.has(root)) tree.set(root, 'root');
         }
@@ -158,10 +167,11 @@ export function createAnalyzer({ rootPids = [], rootCommands = [], volumes, allo
         return {
             processes: [...tree.keys()].map(pid => ({ pid, parent: tree.get(pid), name: names.get(pid) ?? null })),
             writes: { inside, allowed, outside: outsideList.reduce((n, e) => n + e.count, 0) },
+            engineWritesInside: engineInside,
             outside: outsideList,
             metadata: Object.fromEntries(metadata),
             directories,
-            pass: outsideList.length === 0,
+            pass: outsideList.length === 0 && (!requireActivity || engineInside > 0),
         };
     };
     return { add, report };
@@ -184,7 +194,7 @@ export async function analyzeFile(path, options) {
 
 function parseArgs(argv) {
     const [trace, ...rest] = argv;
-    const options = { trace, rootPids: [], rootCommands: [], volumes: [], allow: [], out: null };
+    const options = { trace, rootPids: [], rootCommands: [], volumes: [], allow: [], allowNode: [], out: null };
     for (let i = 0; i < rest.length; i += 2) {
         const [flag, value] = [rest[i], rest[i + 1]];
         if (value === undefined) throw new Error(`Missing value for ${flag}`);
@@ -192,6 +202,8 @@ function parseArgs(argv) {
         else if (flag === '--root-command') options.rootCommands.push(value);
         else if (flag === '--volume') options.volumes.push(value);
         else if (flag === '--allow') options.allow.push(value);
+        else if (flag === '--allow-node') options.allowNode.push(value);
+        else if (flag === '--require-activity' && value === 'true') options.requireActivity = true;
         else if (flag === '--out') options.out = value;
         else throw new Error(`Unknown option ${flag}`);
     }
@@ -205,6 +217,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     const report = await analyzeFile(options.trace, options);
     if (options.out) await writeFile(options.out, JSON.stringify(report, null, 2));
     console.log(`${report.pass ? 'PASS' : 'FAIL'} writes inside=${report.writes.inside} allowed=${report.writes.allowed} outside=${report.writes.outside} processes=${report.processes.length}`);
+    if (options.requireActivity && !report.engineWritesInside) console.log('No WebView2 writes to the protected volume were captured.');
     for (const entry of report.outside.slice(0, 25))
         console.log(`  ${entry.count}\t${entry.kinds.join('+')}\t${entry.path}\t${entry.processes.join(', ')}`);
     const meta = Object.entries(report.metadata);

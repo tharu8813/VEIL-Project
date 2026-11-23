@@ -121,6 +121,18 @@ node tests/integration/desktop.mjs --profile-parent 'V:\VEIL-Lab' --crash-cycle 
 - PASS — `node tests/integration/desktop.mjs`(`.veil-dev/desktop-test-w314hT`), `node tests/integration/desktop.mjs --crash-cycle`(`.veil-dev/desktop-test-bi4rrl`).
 - NOT RUN — 관리자 권한 실행 거부(일반 사용자 셸에서는 재현할 수 없다), `subst`·심볼릭 링크·네트워크 경로, 격리 VM과 BitLocker 볼륨에서의 재실행, 브로커를 통한 보호 상태 조회.
 
+### BitLocker 복구 키 백업과 점검
+
+새 설치는 관리자 전용 경로에 있는 기존 BitLocker VHDX를 등록한다. 설치 스크립트는 분리된 VHDX를 임시 연결하고 지정한 볼륨 GUID와 단일 암호 보호기가 일치하는지 확인한다. 복구 보호기가 없으면 Windows가 숫자 복구 암호를 생성한다. 여러 숫자 보호기 중 하나를 선택할 때는 설치의 `-RecoveryProtectorId`에 그 보호기 ID를 지정한다. [설치 도구](../scripts/broker-service.ps1) · [BitLocker 숫자 암호 보호기](https://learn.microsoft.com/en-us/windows/win32/secprov/protectkeywithnumericalpassword-win32-encryptablevolume)
+
+1. 화면에 표시된 48자리 숫자 암호와 보호기 ID를 별도 장치나 종이에 보관한다. 화면을 닫고 실제로 보관한 사본에서 다시 입력한다.
+2. 설치 도구는 볼륨을 잠근 뒤 입력된 숫자 암호로 해제하고, 지정된 보호기와 일치하는지 확인한다. 재잠금과 분리까지 끝난 뒤에만 등록을 완료한다. `broker.json`에는 보호기 ID를 기록한다. 백업의 실제 외부 보관 위치는 설치 도구가 확인할 수 없다.
+3. 복구 사본을 점검하려면 시험 환경에서 VEIL을 닫고 서비스를 중지한 뒤, 관리자 PowerShell에서 `.\scripts\broker-service.ps1 -VerifyRecovery`를 실행한다. 정상 완료 시 볼륨은 다시 잠기고 분리된다. 실제 드릴은 Phase 3·4 통합 VM에서 실행한다.
+
+볼륨 암호를 분실한 경우 관리자가 같은 VHDX에 대해 Windows BitLocker 복구 암호로 잠금을 해제한다. 보호 프로필 암호를 변경하면 BitLocker가 반환한 새 암호 보호기 ID를 사용해 VEIL을 다시 등록해야 한다. 사전·사후 볼륨 GUID, VHDX 경로, 프로필 경로, 적용할 서명된 패키지를 확인하고, 등록 전에 볼륨을 다시 잠그고 분리한다. 기존 설치 제거나 재등록을 실제로 하기 전에는 복구 사본으로 잠금을 열 수 있음을 확인한다. 금고가 변경 이전의 보호 프로필 암호와 연결되어 있으면 기존 금고 암호 또는 금고 복구 코드로 재연결한다. [BitLocker 복구 암호 해제](https://learn.microsoft.com/en-us/windows/win32/secprov/unlockwithnumericalpassword-win32-encryptablevolume) · [BitLocker 암호 변경과 새 보호기 ID](https://learn.microsoft.com/en-us/windows/win32/secprov/changepassphrase-win32-encryptablevolume) · [금고 키 정책](decisions/ADR-0005-vault-keys-index.md)
+
+복구 보호기를 교체할 때는 새 숫자 보호기를 먼저 추가하고 백업한다. 새 ID로 재등록하고 복구 드릴까지 통과한 뒤 이전 보호기 제거 여부를 결정한다. 설치 도구와 드릴은 기존 보호기를 삭제하지 않는다. 현재 버전은 Windows의 암호 변경이나 이전 보호기 제거를 자동으로 실행하지 않는다.
+
 ### 볼륨 밖 쓰기 추적 (SEC-004)
 
 - **대응** — 앱은 상태 파일을 읽은 뒤, 엔진을 시작하기 전에 프로세스의 `TEMP`/`TMP`를 프로필 아래 `temp` 폴더로 바꾼다. WebView2 하위 프로세스는 이 환경을 상속하는 것으로 예상한다. 폴더가 재분석 지점이면 시작을 거부하고, 시작과 종료 때 내용을 비운다. 거부된 프로필에는 폴더를 만들지 않는다.
@@ -140,3 +152,10 @@ node tests/integration/desktop.mjs --profile-parent 'V:\VEIL-Lab' --crash-cycle 
 - **분석 기준 보정** — 대용량 CSV(최대 145 MB)를 스트리밍으로 처리하고, NTFS 메타데이터와 디렉터리 인덱스에 대한 System 페이징 쓰기를 누출 목록과 분리한다. Procmon 기본 필터로 수집했으며 내보내기는 완료까지 기다린다.
 - **증거** — 게스트 `C:\VEIL-Trace\.veil-dev`(1차)와 `C:\VEIL-Trace-20261123-130538\.veil-dev`(2차)의 `write-trace\trace.pml`, `trace.csv`, `outside-writes.json`, `harness.log`. 시험 볼륨은 잠근 뒤 분리하고 이미지를 삭제했다.
 - **범위 밖** — 충돌 덤프(WER), 페이지 파일·최대 절전 파일, Windows 검색 색인과 같은 OS 기록은 앱이 막을 수 없다. 시스템 드라이브 BitLocker, WER 로컬 덤프 정책 등 배포 정책으로 다룬다.
+
+### 최근 항목과 점프 목록 재검증
+
+- VEIL의 금고 내보내기, 백업, 백업 선택 대화상자는 `AddToRecent = false`를 설정해 선택한 항목을 Windows 최근 문서 목록에 추가하지 않도록 요청한다. 이 속성의 범위는 해당 파일 대화상자다. 대화상자의 실제 셸 쓰기는 통합 VM 검증 대상이다. [WPF 속성](https://learn.microsoft.com/en-us/dotnet/api/microsoft.win32.commonitemdialog.addtorecent?view=windowsdesktop-10.0) · [Win32 파일 대화상자 옵션](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/ne-shobjidl_core-_fileopendialogoptions)
+- 확인한 [WebView2 관리 정책 목록](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-webview-policies)에는 이 엔진의 맞춤 점프 목록 작업을 제어하는 옵션이 없었다. Windows의 최근 항목 정책은 최근·자주 사용한 항목을 대상으로 한다. WebView2가 추가하는 새 창 같은 맞춤 작업에도 적용되는지는 별도로 검증해야 한다. [Windows 시작 메뉴 정책](https://learn.microsoft.com/en-us/windows/configuration/start/policy-settings#hide-recent-jumplists) · [Windows 작업 표시줄 확장](https://learn.microsoft.com/en-us/windows/win32/shell/taskbar-extensions)
+- `node tests/security/browse-session.mjs --runs 1 --assert-clean`을 일반 사용자로 실행한다. 러너는 두 종류의 점프 목록에서 매 실행 뒤 변경된 파일을 비교한다. 시험 전용 프로필 경로·루프백 호스트·무작위 제목 중 하나라도 나오면 증거를 저장하고 종료 코드 1을 반환한다. 원본 점프 목록 내용은 보고서에 저장하지 않는다. 로컬 기준 시험에서는 맞춤 점프 목록 1개에 프로필 경로가 남았고 합성 호스트·제목은 관찰되지 않았다.
+- 통합 세션은 기존 기준 증거를 먼저 활용한다. 정책 비교가 필요하면 격리 VM의 시험 계정에서만 Windows 최근 항목 정책 적용 전후를 비교하고, 정책 적용에 필요한 재시작 뒤 같은 런타임과 시험 빌드를 사용한다. 기존 Procmon 러너의 `-RootCommand 'tests/security/browse-session.mjs'`와 일반 사용자 러너의 `--profile-parent` 옵션으로 시험용 보호 볼륨의 쓰기를 함께 계측한다. 파일 비교는 세션 중 생겼다가 사라진 쓰기를 놓칠 수 있으므로 물리 쓰기 판정에는 Procmon 증거가 필요하다. 정책의 맞춤 작업 차단 효과는 **NOT RUN**이다. [Procmon 러너](../tests/security/trace-writes.ps1)

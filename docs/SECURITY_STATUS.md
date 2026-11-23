@@ -8,9 +8,9 @@
 | SEC-001 | 브라우저 엔진 선정 | TESTED | [ADR-0001](decisions/ADR-0001-developer-engine.md) | 출시 엔진은 암호화 저장 및 다운로드 경로 실증 후 재평가 |
 | SEC-002 | 영구 쿠키·사이트 데이터 복원 | TESTED | [Phase 0 실측](phase0-evidence.md) | 정상 재시작, WebView2 호스트 강제 종료, 저장 도중 엔진 강제 종료(호스트·BitLocker VM 각 5회), 디스크 가득 참 후 복원 확인. 전원 차단·세션 쿠키 정책 시험 |
 | SEC-003 | 잠긴 프로필의 암호화 보호 | IN PROGRESS | [BitLocker VHDX 잠금과 복원 실측](05-encrypted-profile.md#2026-11-23-bitlocker-vhdx-실측), [전체 데스크톱 잠금 시험](05-encrypted-profile.md#전체-데스크톱-상태의-잠금-시험), [ADR-0003](decisions/ADR-0003-volume-broker.md) | 제품 실행 경로에서 보호 볼륨 식별, 자동 잠금 및 강제 종료 복구 |
-| SEC-004 | 프로필 평문 임시 파일 방지 | IN PROGRESS | [Procmon 쓰기 추적](05-encrypted-profile.md#2026-11-23-bitlocker-vhdx-실측), [볼륨 밖 쓰기 추적 도구](05-encrypted-profile.md#볼륨-밖-쓰기-추적-sec-004) | VM 추적: 취소된 다운로드의 `Downloads\*.tmp` 누출 발견 후 수정, 재추적에서 제거 확인. 남은 볼륨 밖 쓰기는 WebView2 점프 목록(프로필 경로 포함) — Chromium 스위치·Edge 기능 플래그·환경 변수 우회 모두 효과 없음, 미해결. 루프백 합성 사이트로 세션 3회 장시간 탐색 VM 추적에서 URL·제목 기록은 관찰되지 않음(실제 인터넷 사이트는 미검증). 덤프·WER·페이지 파일은 OS 정책 대상 |
+| SEC-004 | 프로필 평문 임시 파일 방지 | IN PROGRESS | [Procmon 쓰기 추적](05-encrypted-profile.md#2026-11-23-bitlocker-vhdx-실측), [점프 목록 검사](05-encrypted-profile.md#최근-항목과-점프-목록-재검증) | 취소 다운로드의 Downloads 임시 파일 누출은 수정 후 VM 재추적에서 제거 확인. WebView2 맞춤 점프 목록의 프로필 경로 기록은 로컬에서 재현돼 미해결. VEIL 금고 대화상자는 최근 문서 등록을 끄도록 설정했다. 보호 볼륨에서 대화상자 쓰기와 Windows 정책 효과 확인은 NOT RUN |
 | SEC-005 | Rust 인증 암호화 코어 | TESTED | [Phase 2 실측](phase2-evidence.md) | 독립 코어의 왕복, 변조·잘림, 64 MiB 스트리밍, 강제 종료 시험 통과. 의존성 보안 감사 및 앱 통합 |
-| SEC-006 | 마스터 키·잠금·백업/복구 | IN PROGRESS | [ADR-0002](decisions/ADR-0002-phase2-age.md), [Phase 2 실측](phase2-evidence.md) | 키 봉투와 객체 사본 복원 확인. 브라우저 잠금, 키 회전, 백업 정책, 메모리/OS 노출 검증 |
+| SEC-006 | 마스터 키·잠금·백업/복구 | IN PROGRESS | [ADR-0002](decisions/ADR-0002-phase2-age.md), [BitLocker 복구 절차](05-encrypted-profile.md#bitlocker-복구-키-백업과-점검) | 새 설치에 복구 사본 재입력·실제 잠금 해제 확인 로직과 등록 후 드릴 추가. 가짜 공급자 로컬 PASS. 실제 BitLocker 복구·재등록·OS 노출 확인은 NOT RUN |
 | SEC-007 | 다운로드 스트리밍 보호 | IN PROGRESS | [Phase 4-0 실측](07-download-vault.md#phase-4-0-실측-2026-11-23), [ADR-0004](decisions/ADR-0004-protection-policies.md) | GET·쿠키 인증·리다이렉트를 VEIL이 재요청해 Rust 코어로 스트리밍 봉인(1 KiB~64 MiB, 중단 시 미발행) PASS. 엔진이 취소 전 받은 본문은 보호 볼륨 임시 폴더·캐시에 잠시 존재(삭제·비움 확인). POST·Blob·Data·Service Worker는 차단. 실제 사이트 성공률, VM 볼륨 밖 쓰기 추적, 디스크 부족 중 봉인 미검증 |
 | SEC-008 | 다운로드 금고·내보내기 | IN PROGRESS | [ADR-0005](decisions/ADR-0005-vault-keys-index.md), [금고 지속성 시험](../tests/phase4/vault-persist.mjs), [금고 캡처 시험](../tests/phase4/vault-capture.mjs) | 영구 금고, 인증 정보·내용 키 교체, 보호 프로필 암호 연동, 암호화 백업·복원, Ctrl+J 진행률·취소 로컬 PASS. 실제 설치형 브로커·BitLocker 연동, 보호 볼륨의 쓰기 추적·디스크 부족·전원 차단은 NOT RUN |
 | SEC-009 | 표준 네트워크 보호 | NOT STARTED | 없음 | HTTPS/추적 정책 동작 |
@@ -117,6 +117,12 @@
 - **TEST COVERAGE** — Windows PowerShell 5.1 설치 스크립트 파싱과 비파괴적 Node 정적 정책 검증을 CI에 추가한다. 이는 설치·서비스 동작을 실행한 시험이 아니며 격리 VM에서 설치/재부팅/서비스 충돌 후 재잠금/제거 순서 및 Windows 11 Home 대상 지원 여부를 검증해야 한다.
 - **SECURITY LIMIT** — 브로커 강제 종료 시 이미 열린 브라우저나 WebView2 핸들이 잠금을 거부할 수 있으며, 이 때 재시작이 데이터를 즉시 보호한다는 보장은 없다. 실제 VM 재시작 회복 실측은 미실행. Gate A/B 판정은 그대로 BLOCKED이다.
 
+### BitLocker 복구 사본 등록과 점검
+
+- **IMPLEMENTED** — 등록 전 잠긴 볼륨에서 복구 사본을 확인한다. 새 설치에는 숫자 보호기 ID만 기록하고, 정상 실행 시 해당 보호기 존재를 확인한다. 기존 등록 형식은 유지한다. 복구 사본 확인 기능을 쓰려면 검증된 숫자 보호기 ID가 있는 등록이 필요하다.
+- **PASS — 로컬 가짜 공급자** — 새 보호기 생성·재시도, 미등록 보호기 선택 거부, 틀린 암호 및 다른 유효 보호기 거부, 다른 볼륨 거부, 재잠금 실패 시 등록 중단을 확인했다. 실제 BitLocker 호출과 핵심 서비스 등록은 이 시험에서 실행하지 않는다.
+- **NOT RUN — 실제 복구** — 집계된 VM 세션에서 새 설치와 기존 복구 보호기가 있는 설치, 등록 후 복구 드릴, 암호 변경과 새 보호기 ID 재등록, 기록에 비밀번호가 남는지 확인한다.
+
 ## Phase 4 영구 금고 로컬 검증 (2026-11-23)
 
 - **PASS — 로컬 Windows** — Debug·Release 빌드, 데스크톱 통합 시험, 다운로드 캡처 및 지속성 시험. 브라우저 재시작 후 다운로드 5개를 암호화 목록에서 읽고 바이트 단위로 동일하게 내보냈다. 잘못된 암호를 거부했다.
@@ -129,6 +135,7 @@
 - **PASS — 다운로드 진행률과 취소** — 로컬 Ctrl+J의 WPF 컨트롤로 전체 크기를 아는 전송과 알 수 없는 전송을 취소했다. 대기 항목 하나를 취소했을 때 다른 전송은 계속됐다. 취소 3건은 암호화 객체·목록·스테이징을 남기지 않았고, 같은 금고 세션의 다음 다운로드가 인증됐다.
 - **PASS — 종료 후 파일 검사** — 합성 다운로드 본문은 검사 시점에 프로필 파일에서 검색되지 않았다. 엔진이 취소 전에 보호 경로의 임시 파일에 쓴 양은 별도로 기록했다.
 - **NOT RUN — 통합 VM 시험** — 설치형 브로커와 실제 BitLocker 볼륨에서 한 번의 입력으로 브라우저·금고 잠금 해제, 정상 종료·세션 잠금 후 재잠금, 보호 볼륨에서 Release 금고의 쓰기 추적·디스크 부족·전원 차단과 내보내기 스테이징 잔여물 검증. 내용 키 교체를 중단한 뒤 남은 암호화 파일과 복구도 포함한다. Gate C는 계속 출시 차단 상태다.
+- **IMPLEMENTED — 통합 러너와 계측** — 오프라인 VirtualBox 게스트와 폐기용 BitLocker 볼륨 사전 점검, 일반 사용자 Debug 시험 실행, 항목별 증거 수집, Procmon 활동 확인을 스크립트로 연결했다. 로컬에서는 계획 출력과 실패 격리, 볼륨 경로 전달, 증거 분석을 검증했다. 게스트 실행과 설치형 Release 판정은 **NOT RUN**이다. [통합 VM 실행 절차](10-test-strategy.md#phase-34-통합-vm-실행)
 - **GitHub Actions** — [PR #5의 Windows·Rust 검사](https://github.com/tharu8813/VEIL-Project/actions/runs/45121435499)가 통과했다. 후속 키 교체, 보호 프로필 암호 연동, 백업·복원, 진행률·취소의 원격 검사 결과는 [PR #6의 검사 기록](https://github.com/tharu8813/VEIL-Project/pull/6/checks)에서 확인한다.
 
 ### Rust 코어 강제 종료 테스트 CI 안정화 (2026-11-23)

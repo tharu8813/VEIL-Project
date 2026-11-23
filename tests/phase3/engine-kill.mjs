@@ -21,8 +21,8 @@ if (parent !== undefined && !isAbsolute(parent)) throw new Error('--profile-pare
 
 const root = resolve('.veil-dev');
 await mkdir(root, { recursive: true });
-const evidence = await mkdtemp(join(root, 'engine-kill-'));
-const profileRoot = parent ? await mkdtemp(join(parent, 'veil-engine-kill-')) : evidence;
+const evidence = await mkdtemp(join(parent ?? root, 'engine-kill-'));
+const profileRoot = evidence;
 const profile = join(profileRoot, 'profile');
 const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
 const { server, origin } = await startFixture();

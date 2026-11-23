@@ -1,20 +1,24 @@
 // ADR-0005: persistent vault across VEIL restarts — encrypted index, recovery code, rotation,
 // index/metadata damage recovery, tamper detection and authenticated export.
 //
-//   node tests/phase4/vault-persist.mjs
+//   node tests/phase4/vault-persist.mjs [--profile-parent <existing directory>]
 //
 // Uses only Debug-build test variables (VEIL_DEV_VAULT_*); the passphrases are synthetic.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { startFixture, vaultPayload } from '../integration/fixture.mjs';
 
 const root = resolve('.veil-dev');
+const [option, parent, ...extra] = process.argv.slice(2);
+if (option !== undefined && (option !== '--profile-parent' || !parent || !isAbsolute(parent) || extra.length)) {
+    throw new Error('Use --profile-parent followed by an existing absolute test directory.');
+}
 await mkdir(root, { recursive: true });
-const evidence = await mkdtemp(join(root, 'vault-persist-'));
+const evidence = await mkdtemp(join(parent ?? root, 'vault-persist-'));
 const profile = join(evidence, 'profile');
 const vaultDir = join(profile, 'vault');
 const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');

@@ -2,12 +2,14 @@
 [CmdletBinding(DefaultParameterSetName = 'Install')]
 param(
     [Parameter(Mandatory, ParameterSetName = 'Remove')][switch]$Remove,
+    [Parameter(Mandatory, ParameterSetName = 'VerifyRecovery')][switch]$VerifyRecovery,
     [Parameter(Mandatory, ParameterSetName = 'Install')][string]$BrokerSource,
     [Parameter(Mandatory, ParameterSetName = 'Install')][string]$DesktopSource,
     [Parameter(Mandatory, ParameterSetName = 'Install')][string]$ImagePath,
     [Parameter(Mandatory, ParameterSetName = 'Install')][string]$ProfilePath,
     [Parameter(Mandatory, ParameterSetName = 'Install')][guid]$VolumeGuid,
     [Parameter(Mandatory, ParameterSetName = 'Install')][guid]$ProtectorId,
+    [Parameter(ParameterSetName = 'Install')][guid]$RecoveryProtectorId = [guid]::Empty,
     [Parameter(Mandatory, ParameterSetName = 'Install')][string]$UserSid,
     [Parameter(Mandatory, ParameterSetName = 'Install')][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$SignerThumbprint
 )
@@ -22,6 +24,7 @@ $serviceCommand = '"{0}" --service' -f $brokerImage
 $brokerConfig = Join-Path $dataRoot 'broker.json'
 $clientConfig = Join-Path $dataRoot 'client.json'
 $trusted = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+. (Join-Path $PSScriptRoot 'bitlocker-recovery.ps1')
 
 function Assert-AdminOnly([string]$Path) {
     $item = Get-Item -LiteralPath $Path -Force
@@ -55,6 +58,17 @@ function Assert-Detached([string]$Path) {
     if ((Get-DiskImage -ImagePath $Path).Attached) { throw 'The registered volume is still attached. Close VEIL and secure the volume before removing the service.' }
 }
 
+function Resolve-VeilImagePath([string]$Path) {
+    $image = (Get-Item -LiteralPath $Path).FullName
+    $parent = Split-Path -Parent $image
+    if ([IO.Path]::GetExtension($image) -ne '.vhdx' -or (Split-Path -Parent $parent) -ne $env:ProgramFiles -or $parent -eq $binRoot) {
+        throw 'Place the VHDX in a separate administrator-owned directory directly under Program Files.'
+    }
+    Assert-AdminOnly $parent
+    Assert-AdminOnly $image
+    return $image
+}
+
 function Remove-VeilTree([string]$Path, [string]$ExpectedParent) {
     if (-not (Test-Path -LiteralPath $Path)) { return }
     $resolved = (Get-Item -LiteralPath $Path -Force).FullName
@@ -72,6 +86,22 @@ function Remove-VeilTree([string]$Path, [string]$ExpectedParent) {
 }
 
 $existing = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+if ($VerifyRecovery) {
+    if (-not $existing -or $existing.PathName -ne $serviceCommand -or $existing.State -ne 'Stopped') {
+        throw 'An installed VEIL service must be stopped before testing its recovery backup.'
+    }
+    Assert-AdminOnly $dataRoot
+    Assert-AdminOnly $brokerConfig
+    $registered = Get-Content -LiteralPath $brokerConfig -Raw | ConvertFrom-Json
+    $recoveryId = [guid]::Empty
+    if (-not [guid]::TryParse([string]$registered.recoveryProtectorId, [ref]$recoveryId)) {
+        throw 'The installed registration has no verified recovery protector.'
+    }
+    $verifiedImage = Resolve-VeilImagePath $registered.imagePath
+    Test-VeilRecoveryBackup $verifiedImage $registered.volumeGuid $recoveryId
+    Write-Host 'The recovery backup unlocked the registered volume. The volume is locked and detached.'
+    return
+}
 if ($Remove) {
     if ($existing -and $existing.PathName -ne $serviceCommand) { throw 'The existing service registration does not match VEIL.' }
     if (-not $existing -and -not (Test-Path -LiteralPath $binRoot) -and -not (Test-Path -LiteralPath $dataRoot)) { return }
@@ -103,13 +133,7 @@ if ($existing -or (Test-Path -LiteralPath $binRoot) -or (Test-Path -LiteralPath 
     throw 'An existing VEIL installation or registration is present.'
 }
 
-$ImagePath = (Get-Item -LiteralPath $ImagePath).FullName
-$parent = Split-Path -Parent $ImagePath
-if ([IO.Path]::GetExtension($ImagePath) -ne '.vhdx' -or (Split-Path -Parent $parent) -ne $env:ProgramFiles -or $parent -eq $binRoot) {
-    throw 'Place the VHDX in a separate administrator-owned directory directly under Program Files.'
-}
-Assert-AdminOnly $parent
-Assert-AdminOnly $ImagePath
+$ImagePath = Resolve-VeilImagePath $ImagePath
 Assert-Detached $ImagePath
 $ProfilePath = [IO.Path]::GetFullPath($ProfilePath)
 if ([IO.Path]::GetPathRoot($ProfilePath) -notmatch '^[A-Z]:\\$' -or $ProfilePath -eq [IO.Path]::GetPathRoot($ProfilePath)) {
@@ -132,9 +156,12 @@ try {
     Assert-Signed $brokerImage
     Assert-Signed $desktopImage
     $volumeId = [guid]::NewGuid().ToString('N')
+    $volumePath = '\\?\Volume{' + $VolumeGuid.ToString() + '}\'
+    $recoveryId = Register-VeilRecoveryBackup $ImagePath $volumePath $ProtectorId $RecoveryProtectorId
     @{
-        volumeId=$volumeId; imagePath=$ImagePath; volumeGuid=('\\?\Volume{' + $VolumeGuid.ToString() + '}\');
+        volumeId=$volumeId; imagePath=$ImagePath; volumeGuid=$volumePath;
         protectorId=$ProtectorId.ToString('B'); userSid=$sid.Value; pipeName=$pipe;
+        recoveryProtectorId=$recoveryId.ToString('B');
         clientImages=@($desktopImage); clientSha256=(Get-FileHash -LiteralPath $desktopImage).Hash
     } | ConvertTo-Json | Set-Content -LiteralPath $brokerConfig -Encoding UTF8
     @{

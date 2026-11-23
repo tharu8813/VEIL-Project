@@ -21,6 +21,33 @@
 
 쿠키 세팅/만료, LocalStorage·IndexedDB 저장, Service Worker, CacheStorage, 로그인 시뮬레이션, 파일 업로드, 일반 다운로드, POST 다운로드, 리다이렉트, Content-Disposition, 대용량 다운로드를 재현하는 서버 및 fixture를 구성한다.
 
+## Phase 3·4 통합 VM 실행
+
+로컬에서 `node tests/phase3/phase34-vm.mjs --plan`으로 실행 계획을 확인할 수 있다. 계획에서는 모든 항목이 `NOT RUN`이다. 기존 기준 스냅샷은 보존하고 준비된 오프라인 VirtualBox 시험 VM에서 실행한다. VM에 미리 가져온 Debug 브라우저와 그에 맞는 Rust 금고 도구를 사용한다. 설치형 Release 검증은 별도로 기록한다.
+
+1. **게스트 관리자 셸**에서 시험용 VHDX와 BitLocker 상태를 확인한 뒤 사전 점검 증거를 저장한다. 대상 볼륨은 게스트 시스템 디스크와 별개여야 한다.
+
+   ```powershell
+   .\tests\phase3\phase34-vm-preflight.ps1 -IsolatedVm -ImagePath 'C:\VEIL-Lab\working.vhdx' -ProfileParent 'V:\VEIL-Lab' -Out '.\.veil-dev\phase34-preflight.json'
+   .\tests\security\trace-writes.ps1 -Action Start -IsolatedVm -Phase34 -Volume 'V:\' -OutDir '.\.veil-dev\phase34-trace'
+   ```
+
+2. **게스트 일반 사용자 셸**에서 시험을 실행한다. 같은 게스트 부팅과 볼륨 GUID를 다시 확인한 뒤 프로필 경로, 엔진 종료, 금고 캡처, 금고 지속성, 점프 목록을 순서대로 실행한다. 선택한 항목만 재시험할 때는 `--only <ID>`를 반복해서 지정한다. 항목별 로그, 시험 보고서 사본과 `summary.json`은 게스트 저장소의 `.veil-dev/phase34-vm-*` 아래에 남는다.
+
+   ```powershell
+   node tests/phase3/phase34-vm.mjs --run --isolated-vm --preflight .veil-dev/phase34-preflight.json
+   ```
+
+3. **게스트 관리자 셸**에서 추적을 종료하고 WebView2의 보호 볼륨 쓰기와 볼륨 밖 쓰기를 확인한다. 이 모드에서는 보호 볼륨 밖의 증거 폴더에 대한 Node 러너 쓰기만 예외로 처리한다.
+
+   ```powershell
+   .\tests\security\trace-writes.ps1 -Action Stop -IsolatedVm -Phase34 -Volume 'V:\' -OutDir '.\.veil-dev\phase34-trace'
+   ```
+
+4. **같은 세션의 디스크 부족 시험**은 별도 2 GiB 이하 폐기용 BitLocker VHDX에서 실행한다. 사전 점검에 `-DiskFullImage`와 `-DiskFullParent`를 추가해 새 증거를 만들고 `--only profile-disk-full`로 실행한다. 이 러너는 프로필 복구를 검증한다. 금고가 가득 찬 상태의 내보내기·키 교체에는 별도 시험이 필요하다.
+
+스냅샷에서 시험 VM 준비, 서명된 Release 서비스 설치·복구 드릴, 실제 전원 차단은 관리자가 확인하는 단계다. 전원 차단은 지정된 시험 VM에서 기존 arm/check 러너로 준비와 재시작 후 확인을 진행한다. 성공한 합성 데이터까지 정리하려면 실행 시 `--cleanup-on-pass`를 지정한다. 실패한 데이터는 시험 볼륨에 보존한다. [전원 차단 러너](../tests/phase3/power-loss.mjs)
+
 ## 최소 필수 시나리오
 
 | ID | 테스트 | 기대 결과 |

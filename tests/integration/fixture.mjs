@@ -107,6 +107,7 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
     const host = ipv6 ? '::1' : '127.0.0.1';
     const authority = ipv6 ? '[::1]' : host;
     const requests = new Map();
+    const visitTitleMarker = `VEIL synthetic visit ${randomUUID()}`;
     const server = createServer(async (request, response) => {
         const url = new URL(request.url, 'http://127.0.0.1');
         const hasCookie = (request.headers.cookie ?? '').split(/;\s*/).includes(`veil=${marker}`);
@@ -160,7 +161,7 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
             case '/visit': {
                 // Distinct synthetic pages for the long-session jump-list trace (SEC-004).
                 const n = Number.parseInt(url.searchParams.get('n') ?? '0', 10) || 0;
-                return send(`<title>VEIL synthetic visit ${n}</title><p>visit ${n}</p>`, 'text/html; charset=utf-8');
+                return send(`<title>${visitTitleMarker} ${n}</title><p>visit ${n}</p>`, 'text/html; charset=utf-8');
             }
             case '/probe.js': return send(probe, 'text/javascript');
             case '/login':
@@ -198,7 +199,7 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
         }
     });
     await new Promise((resolve, reject) => server.once('error', reject).listen(port, host, resolve));
-    return { server, requests, origin: `http://${authority}:${server.address().port}` };
+    return { server, requests, origin: `http://${authority}:${server.address().port}`, visitTitleMarker };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
