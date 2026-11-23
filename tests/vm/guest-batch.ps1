@@ -1,5 +1,5 @@
 <#
-Guest side of the single offline VM batch (docs/10-test-strategy.md, "단일 VM 일괄 시험").
+Guest side of the single offline VM batch (docs/10-test-strategy.md, single VM batch section).
 Runs ONLY inside the disposable offline VirtualBox test VM. Three commands in total:
 
   1. Elevated PowerShell (from the attached DVD):
