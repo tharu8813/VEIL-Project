@@ -1,18 +1,22 @@
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Text.Json.Nodes;
 
 namespace Veil.Desktop;
 
 internal enum NetworkMode { Standard, Proxy }
 
 /// <summary>Saved network choice (ADR-0006). Applied when the engine starts, i.e. after a restart.</summary>
-internal sealed record NetworkSettings(NetworkMode Mode = NetworkMode.Standard, string? ProxyScheme = null, string? ProxyHost = null, int ProxyPort = 0)
+internal sealed record NetworkSettings(NetworkMode Mode = NetworkMode.Standard, string? ProxyScheme = null, string? ProxyHost = null, int ProxyPort = 0,
+    string? DnsTemplate = null)
 {
     internal static readonly NetworkSettings Standard = new();
 
     /// <summary>Null when valid. A proxy setting that cannot be used must never degrade to direct.</summary>
     internal string? Problem =>
+        DnsTemplate is not null && !NetworkPolicy.ValidDnsTemplate(DnsTemplate) ? "보안 DNS 주소는 https:// 로 시작하는 DoH 주소여야 합니다." :
         Mode == NetworkMode.Standard ? null :
         ProxyScheme is not ("http" or "socks5") ? "프록시 종류는 HTTP 또는 SOCKS5여야 합니다." :
         string.IsNullOrWhiteSpace(ProxyHost) || ProxyHost.Any(c => char.IsWhiteSpace(c) || c is '/' or '@' or '?' or '#') ? "프록시 주소가 올바르지 않습니다." :
@@ -22,11 +26,54 @@ internal sealed record NetworkSettings(NetworkMode Mode = NetworkMode.Standard, 
         ? new Uri($"{ProxyScheme}://{(ProxyHost!.Contains(':') && !ProxyHost.StartsWith('[') ? $"[{ProxyHost}]" : ProxyHost)}:{ProxyPort}")
         : null;
 
-    internal string Describe() => Mode == NetworkMode.Standard ? "표준 보호" : $"프록시 보호 ({ProxyScheme}://{ProxyHost}:{ProxyPort})";
+    internal string Describe() => (Mode == NetworkMode.Standard ? "표준 보호" : $"프록시 보호 ({ProxyScheme}://{ProxyHost}:{ProxyPort})") +
+        (DnsTemplate is null ? "" : " · 보안 DNS");
 }
 
 internal static class NetworkPolicy
 {
+    /// <summary>Well-known DNS-over-HTTPS resolvers offered in the settings dialog.</summary>
+    internal static readonly (string Name, string Template)[] DnsProviders =
+    [
+        ("Cloudflare", "https://cloudflare-dns.com/dns-query"),
+        ("Quad9", "https://dns.quad9.net/dns-query"),
+        ("Google", "https://dns.google/dns-query"),
+    ];
+
+    internal static bool ValidDnsTemplate(string template) =>
+        Uri.TryCreate(template.Replace("{?dns}", ""), UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps &&
+        uri.UserInfo.Length == 0 && !template.Any(char.IsWhiteSpace);
+
+    /// <summary>
+    /// Secure DNS (ADR-0006 DNS step): writes the engine's secure-DNS preferences into its Local State before
+    /// the engine starts. "secure" mode never falls back to the system resolver. When DoH is requested and the
+    /// file cannot be updated, start is refused rather than resolving names insecurely.
+    /// </summary>
+    internal static void ApplyDns(string userDataFolder, NetworkSettings settings)
+    {
+        string directory = Path.Combine(userDataFolder, "EBWebView");
+        string path = Path.Combine(directory, "Local State");
+        JsonObject state;
+        try
+        {
+            state = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? throw new IOException("Local State is not a JSON object.") : [];
+        }
+        catch (System.Text.Json.JsonException error) when (settings.DnsTemplate is null)
+        {
+            _ = error; // nothing to remove from an unreadable file; the engine handles its own state
+            return;
+        }
+        catch (System.Text.Json.JsonException error) { throw new IOException("Cannot apply secure DNS to the engine state.", error); }
+        if (settings.DnsTemplate is { } template)
+            state["dns_over_https"] = new JsonObject { ["mode"] = "secure", ["templates"] = template };
+        else if (!state.Remove("dns_over_https"))
+            return;
+        Directory.CreateDirectory(directory);
+        string staging = path + ".veil-new";
+        File.WriteAllText(staging, state.ToJsonString());
+        File.Move(staging, path, overwrite: true);
+    }
+
     /// <summary>Engine switches for the mode. Proxy mode: fixed proxy without DIRECT fallback (loopback included),
     /// WebRTC limited to proxied paths, QUIC off.</summary>
     internal static IEnumerable<string> BrowserArguments(NetworkSettings settings)

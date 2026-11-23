@@ -77,6 +77,7 @@ node tests/phase3/engine-kill.mjs --cycles 5
 node tests/phase4/vault-capture.mjs
 node tests/phase4/vault-persist.mjs
 node tests/phase5/network-guard.mjs
+node tests/phase5/dns-protection.mjs
 node --test tests/security/outside-writes.test.mjs
 node tests/security/browse-session.mjs --runs 3
 ```

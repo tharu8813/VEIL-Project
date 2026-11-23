@@ -445,6 +445,18 @@ public partial class BrowserWindow
                         && HttpsBar.Visibility != Visibility.Visible, "native button allows http for that host only");
                     Check(session.Network.Mode == NetworkMode.Standard && NetworkIndicator.Text.StartsWith("표준 보호"), $"indicator: {NetworkIndicator.Text}");
                 }
+                else if (stage == "dns-probe")
+                {
+                    // DNS protection experiments: open VEIL_TEST_DNS_URL and report how it ended.
+                    string target = Environment.GetEnvironmentVariable("VEIL_TEST_DNS_URL") ?? throw new ArgumentException("VEIL_TEST_DNS_URL");
+                    Active!.LastNavigationError = null;
+                    Active.Url = target;
+                    Active.View.CoreWebView2.Navigate(target);
+                    await Task.Delay(500);
+                    for (int i = 0; i < 300 && Active.Loading; i++) await Task.Delay(75);
+                    string title = await Active.View.ExecuteScriptAsync("document.title");
+                    checks.Add($"dns probe: error={Active.LastNavigationError?.ToString() ?? "none"} title={title}");
+                }
                 else if (stage == "network-proxy")
                 {
                     // ADR-0006 proxy mode: browsing and VEIL's own vault requests use only the proxy.

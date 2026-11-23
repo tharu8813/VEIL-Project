@@ -81,18 +81,19 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
     {
         var network = session.Network;
         string saved = (data.Network ?? NetworkSettings.Standard) == network ? "" : " · 변경 사항은 다시 시작하면 적용";
+        string dns = network.DnsTemplate is null ? "" : " · 보안 DNS";
         NetworkIndicator.Text = network.Mode == NetworkMode.Standard
-            ? $"표준 보호 · HTTPS 우선 · 추적 방지 엄격{saved}"
+            ? $"표준 보호 · HTTPS 우선 · 추적 방지 엄격{dns}{saved}"
             : session.ProxyReachable == true
-                ? $"프록시 보호 · 경로 확인됨 ({network.ProxyScheme}){saved}"
-                : $"프록시 보호 · 차단됨: 프록시에 연결할 수 없음 (직접 연결하지 않음){saved}";
+                ? $"프록시 보호 · 경로 확인됨 ({network.ProxyScheme}){dns}{saved}"
+                : $"프록시 보호 · 차단됨: 프록시에 연결할 수 없음 (직접 연결하지 않음){dns}{saved}";
     }
 
     private void NetworkClick(object sender, RoutedEventArgs args)
     {
         var dialog = new NetworkSettingsDialog(this, data.Network ?? NetworkSettings.Standard);
         if (dialog.ShowDialog() != true || dialog.Result is not { } chosen) return;
-        data.Network = chosen.Mode == NetworkMode.Standard ? null : chosen;
+        data.Network = chosen == NetworkSettings.Standard ? null : chosen;
         SaveData();
         UpdateNetworkIndicator();
         Status.Text = $"{chosen.Describe()}을(를) 선택했습니다. VEIL을 다시 시작하면 적용됩니다.";

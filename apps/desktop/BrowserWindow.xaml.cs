@@ -26,6 +26,8 @@ public partial class BrowserWindow : Window
         internal Uri? UpgradedFrom { get; set; }
         /// <summary>The plain-HTTP address the HTTPS warning page offers to open.</summary>
         internal Uri? PendingHttp { get; set; }
+        /// <summary>Result of the last completed navigation (diagnostics and tests).</summary>
+        internal CoreWebView2WebErrorStatus? LastNavigationError { get; set; }
     }
 
     private readonly BrowserSession session;
@@ -282,6 +284,7 @@ public partial class BrowserWindow : Window
     {
         if (closing) return;
         SetTabLoading(tab, false);
+        tab.LastNavigationError = args.IsSuccess ? null : args.WebErrorStatus;
         if (tab.UpgradedFrom is { } plain && args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
         {
             tab.UpgradedFrom = null;
