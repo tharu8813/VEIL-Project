@@ -3,8 +3,12 @@
 </p>
 <h1 align="center">VEIL</h1>
 <p align="center"><strong>익숙한 웹 브라우징, 더 신중한 개인정보 보호.</strong></p>
-<p align="center">Windows 11 · 개인정보 보호 브라우저 · 개발 중</p>
-<p align="center"><a href="LICENSE"><img src="https://img.shields.io/badge/License-MPL%202.0-blue.svg" alt="License: MPL 2.0"></a></p>
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MPL%202.0-blue.svg" alt="License: MPL 2.0"></a>
+  <img src="https://img.shields.io/badge/Platform-Windows%2011-0078D4.svg" alt="Platform: Windows 11">
+  <img src="https://img.shields.io/badge/Focus-Privacy-8B7CFF.svg" alt="Focus: Privacy">
+  <img src="https://img.shields.io/badge/Status-In%20Development-orange.svg" alt="Status: In Development">
+</p>
 
 > [!IMPORTANT]
 > VEIL은 현재 개발자용 프로토타입입니다. 아직 정식 버전이나 공개 베타를 배포하지 않았으며, 보안 검증이 완료되기 전까지 실제 계정이나 민감한 자료를 사용하지 마세요.
