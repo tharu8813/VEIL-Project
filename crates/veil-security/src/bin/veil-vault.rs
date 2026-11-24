@@ -66,7 +66,7 @@ fn password_command(command: &str, path: &Path, input: &mut impl BufRead) -> io:
     use veil_security::password_store;
     let mut encoded = Zeroizing::new(String::new());
     // Bounded hex UTF-8 passphrase line; the following bytes are the JSON payload for writes.
-    if input.take(2050).read_line(&mut encoded)? == 0 || !encoded.ends_with('\n') {
+    if (&mut *input).take(2050).read_line(&mut encoded)? == 0 || !encoded.ends_with('\n') {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid password store request"));
     }
     let passphrase = profile_secret(encoded.trim_end_matches(['\r', '\n']))?;

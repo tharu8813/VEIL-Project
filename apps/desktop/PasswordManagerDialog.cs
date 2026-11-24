@@ -37,7 +37,8 @@ internal sealed class PasswordManagerDialog : VeilDialog
             IsEnabled = origin is not null };
         save.Click += (_, _) =>
         {
-            if (origin is null || string.IsNullOrWhiteSpace(user.Text) || password.SecurePassword.Length == 0) return;
+            using var entered = password.SecurePassword;
+            if (origin is null || string.IsNullOrWhiteSpace(user.Text) || entered.Length == 0) return;
             Selected = new SavedLogin(origin, user.Text, password.Password);
             Action = PasswordAction.Save;
             DialogResult = true;
