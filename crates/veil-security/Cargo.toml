@@ -3,6 +3,7 @@ name = "veil-security"
 version = "0.1.0"
 edition = "2024"
 publish = false
+license = "MPL-2.0"
 
 [dependencies]
 age = { version = "=0.12.1", default-features = false }
