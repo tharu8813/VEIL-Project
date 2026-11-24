@@ -80,6 +80,10 @@ internal sealed class DownloadVault : IDisposable
     internal List<VaultEntry> Entries { get; private set; } = [];
     internal List<VaultResult> Results { get; } = [];
     internal event Action? Changed;
+#if DEBUG
+    // Instance-scoped test barrier; never injects an error or exists in Release.
+    internal Func<string, Task>? SmokeBeforePublication;
+#endif
 
     // ── Opening ─────────────────────────────────────────────────────────────
 
@@ -415,8 +419,14 @@ internal sealed class DownloadVault : IDisposable
             catch { CloseBrokenPipe(); throw; }
             if (reply != $"ok\t{total}") throw SealFailure(reply);
             var entry = new VaultEntry(id, download.Name, total, DateTimeOffset.Now, host);
+#if DEBUG
+            if (SmokeBeforePublication is { } beforeMeta) await beforeMeta("meta");
+#endif
             await SealBytesLockedAsync(Path.Combine(Meta, id + ".veil"), JsonSerializer.SerializeToUtf8Bytes(entry, Json));
             Entries = [entry, .. Entries];
+#if DEBUG
+            if (SmokeBeforePublication is { } beforeIndex) await beforeIndex("index");
+#endif
             await SaveIndexLockedAsync();
             return entry;
         }

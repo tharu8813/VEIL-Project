@@ -106,3 +106,14 @@ test('desktop bridge disk-full requires the separate verified small volume and p
         '--browser-profile-parent', main.parent]);
     assert.equal(item.lab, main.parent);
 });
+
+test('actual publication disk-full modes require a separately verified small volume', () => {
+    for (const publication of ['meta', 'index']) {
+        const id = 'vault-publication-full-' + publication;
+        assert.equal(makePlan(main.parent).find(item => item.id === id).args, undefined);
+        const item = makePlan(main.parent, small.parent).find(item => item.id === id);
+        assert.deepEqual(item.args, ['tests/phase4/vault-bridge-disk-full.mjs', '--profile-parent', small.parent,
+            '--browser-profile-parent', main.parent, '--publication', publication]);
+        assert.equal(item.lab, main.parent);
+    }
+});

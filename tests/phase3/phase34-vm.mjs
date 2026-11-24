@@ -65,6 +65,11 @@ export function makePlan(primaryParent, diskFullParent, missingTools = []) {
             ? { id: 'vault-bridge-disk-full', lab: primaryParent,
                 args: ['tests/phase4/vault-bridge-disk-full.mjs', '--profile-parent', diskFullParent, '--browser-profile-parent', primaryParent] }
             : { id: 'vault-bridge-disk-full', reason: 'No separately verified small BitLocker volume.' },
+        ...['meta', 'index'].map(publication => diskFullParent
+            ? { id: 'vault-publication-full-' + publication, lab: primaryParent,
+                args: ['tests/phase4/vault-bridge-disk-full.mjs', '--profile-parent', diskFullParent,
+                    '--browser-profile-parent', primaryParent, '--publication', publication] }
+            : { id: 'vault-publication-full-' + publication, reason: 'No separately verified small BitLocker volume.' }),
         ...manual.map(([id, reason]) => ({ id, reason })),
         ...internet.map(([id, reason]) => ({ id, reason })),
     ];
@@ -180,7 +185,7 @@ async function main() {
         const log = `${test.id}.log`;
         const before = test.lab ? new Set(await readdir(test.lab)) : null;
         const args = test.cwd ? [join(repo, test.args[0]), ...test.args.slice(1)] : test.args;
-        if (['vault-disk-full', 'vault-bridge-disk-full'].includes(test.id)) args.push('--preflight', resolve(values.preflight));
+        if (['vault-disk-full', 'vault-bridge-disk-full', 'vault-publication-full-meta', 'vault-publication-full-index'].includes(test.id)) args.push('--preflight', resolve(values.preflight));
         const result = await run(process.execPath, args, {
             cwd: test.cwd ?? repo, env, windowsHide: true, maxBuffer: 4 * 1024 ** 2, timeout: 20 * 60_000,
         })

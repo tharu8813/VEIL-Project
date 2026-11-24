@@ -77,6 +77,35 @@ export async function fillToReserve(parent, filler, capacity) {
     return { written, remaining };
 }
 
+// Publication writes may fit in a single allocation unit. Unlike the body test, leave
+// no intentional reserve; a successful vault write is a failed trial, never a PASS.
+export async function fillForPublication(parent, filler, capacity) {
+    const chunk = randomBytes(MiB);
+    let written = 0, step = MiB, exhausted = false;
+    const handle = await open(filler, 'wx');
+    try {
+        while (written < capacity) {
+            const available = await freeBytes(parent);
+            if (available === 0) { exhausted = true; break; }
+            const amount = Math.min(step, available, capacity - written);
+            if (amount <= 0) break;
+            try {
+                const result = await handle.write(chunk, 0, amount);
+                assert.ok(result.bytesWritten > 0 && result.bytesWritten <= amount, 'invalid filler write');
+                written += result.bytesWritten;
+                await handle.sync();
+            } catch (error) {
+                if (error.code !== 'ENOSPC') throw error;
+                if (step <= 4096) { exhausted = true; break; }
+                step = Math.max(4096, Math.floor(step / 16));
+            }
+        }
+    } finally { await handle.close(); }
+    const remaining = await freeBytes(parent);
+    assert.ok(exhausted && written > 0 && remaining <= 64 * 1024, 'Unable to establish exhausted publication volume');
+    return { written, remaining };
+}
+
 export async function verifyLabMount(parent, volume) {
     assertLabChild(parent, volume.parent);
     assert.equal(win32.normalize(await realpath(parent)).toLowerCase(), win32.normalize(parent).toLowerCase());

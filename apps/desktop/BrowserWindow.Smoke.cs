@@ -800,39 +800,100 @@ public partial class BrowserWindow
                         }
                         throw new TimeoutException("disk-full signal missing: " + name);
                     }
-                    File.WriteAllText(Path.Combine(controls, "seed-ready"), "ready");
-                    await WaitSignal("filled");
-                    using (var failed = new BrowserDownload("disk-full-failed.bin"))
+                    string publication = Environment.GetEnvironmentVariable("VEIL_TEST_DISK_FULL_PUBLICATION") ?? "";
+                    Check(publication is "" or "meta" or "index", "known disk-full scenario");
+                    if (publication.Length != 0)
                     {
-                        bool refused = false;
-                        try { _ = await vault.CaptureAsync(new Uri(origin + "/vault-dl?kind=large"), failed, Active!.View.CoreWebView2); }
-                        catch (VaultStorageFullException storageError)
+                        string? retainedId = null;
+                        int barriers = 0;
+                        async Task BeforePublication(string phase)
                         {
-                            refused = true;
-                            Check(DownloadFailurePolicy.Describe(storageError, failed.Phase, true).StartsWith("저장 공간 부족"),
-                                "fixed disk-full failure reason");
+                            if (phase != publication) return;
+                            barriers++;
+                            var added = Before(objects).Except(originals.Keys).ToArray();
+                            Check(added.Length == 1 && Before(meta).Length == (phase == "meta" ? 1 : 2),
+                                "body committed before requested publication boundary");
+                            retainedId = Path.GetFileNameWithoutExtension(added.Single());
+                            File.WriteAllText(Path.Combine(controls, "seed-ready"), phase);
+                            await WaitSignal("filled");
                         }
-                        Check(refused, "actual Rust storage-full reply reached desktop bridge");
+                        vault.SmokeBeforePublication = BeforePublication;
+                        try
+                        {
+                            using var failed = new BrowserDownload("disk-full-publication.bin");
+                            bool refused = false;
+                            try { _ = await vault.CaptureAsync(new Uri(origin + "/vault-dl?kind=large"), failed, Active!.View.CoreWebView2); }
+                            catch (VaultStorageFullException storageError)
+                            {
+                                refused = true;
+                                Check(failed.Phase == DownloadPhase.Publishing &&
+                                    DownloadFailurePolicy.Describe(storageError, failed.Phase, true) == "저장 공간 부족 · 보관 목록 확인 필요",
+                                    "actual storage-full publication failure classified");
+                            }
+                            Check(refused && barriers == 1 && retainedId is not null, "target publication failed with actual storage-full reply");
+                        }
+                        finally { vault.SmokeBeforePublication = null; }
+                        Check(!vault.Unlocked && vault.Entries.Count == 0, "uncertain publication locked the vault");
+                        Check(originals.All(pair => File.Exists(pair.Key) && Digest(pair.Key) == pair.Value) &&
+                            Before(index).SequenceEqual(originals.Keys.Where(p => Path.GetDirectoryName(p) == index).Order()) &&
+                            Before(objects).Length == 2 && Before(meta).Length == (publication == "meta" ? 1 : 2) &&
+                            !Directory.GetFiles(vault.Directory, ".veil-encrypted-*", SearchOption.AllDirectories).Any(),
+                            "old index and original ciphertext preserved; only completed encrypted body retained");
+                        File.WriteAllText(Path.Combine(controls, "failure-checked"), "checked");
+                        await WaitSignal("released");
+                        Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 2,
+                            "reopen rebuilt authenticated inventory");
+                        var recovered = vault.Entries.Single(e => e.Id == retainedId);
+                        Check(recovered.Recovered == (publication == "meta") &&
+                            (publication == "meta" || recovered.Name == "disk-full-publication.bin") &&
+                            await vault.VerifyAsync(recovered) == 8L * 1024 * 1024 &&
+                            await vault.VerifyAsync(vault.Entries.Single(e => e.Id == seed.Id)) == 1024 &&
+                            Digest(originalPath) == originalHash, "recovered object and original authenticate without inventing metadata");
+                        var nextPublication = await Store("small", "disk-full-after-publication.bin");
+                        Check(vault.Entries.Count == 3 && Before(objects).Length == 3 &&
+                            vault.Entries.Select(e => e.Id).Distinct().Count() == 3 && await vault.VerifyAsync(nextPublication) == 1024,
+                            "subsequent explicit request stored once");
+                        File.WriteAllText(Path.ChangeExtension(report, ".vault.json"), JsonSerializer.Serialize(new
+                        {
+                            entries = vault.Entries, originalUnchanged = true, publication,
+                        }));
                     }
-                    Check(vault.Entries.Count == 1 && originals.Keys.Order().SequenceEqual(Inventory()) &&
-                        originals.All(pair => Digest(pair.Key) == pair.Value) &&
-                        !Directory.GetFiles(vault.Directory, ".veil-encrypted-*", SearchOption.AllDirectories).Any(),
-                        "full-volume failure publishes no new object, metadata, index or staging");
-                    Check(await vault.VerifyAsync(seed) == 1024, "existing object still authenticates while full");
-                    File.WriteAllText(Path.Combine(controls, "failure-checked"), "checked");
-                    await WaitSignal("released");
-                    vault.Lock();
-                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 1 &&
-                        await vault.VerifyAsync(vault.Entries.Single()) == 1024, "reopen after freeing space");
-                    var next = await Store("large", "disk-full-explicit-retry.bin");
-                    Check(vault.Entries.Count == 2 && await vault.VerifyAsync(next) == 8L * 1024 * 1024 &&
-                        Digest(originalPath) == originalHash && Before(objects).Length == 2 && Before(meta).Length == 2,
-                        "explicit download after space restored authenticates, no duplicate");
-                    File.WriteAllText(Path.ChangeExtension(report, ".vault.json"), JsonSerializer.Serialize(new
+                    else
                     {
-                        entries = vault.Entries,
-                        originalUnchanged = true,
-                    }));
+                        File.WriteAllText(Path.Combine(controls, "seed-ready"), "ready");
+                        await WaitSignal("filled");
+                        using (var failed = new BrowserDownload("disk-full-failed.bin"))
+                        {
+                            bool refused = false;
+                            try { _ = await vault.CaptureAsync(new Uri(origin + "/vault-dl?kind=large"), failed, Active!.View.CoreWebView2); }
+                            catch (VaultStorageFullException storageError)
+                            {
+                                refused = true;
+                                Check(DownloadFailurePolicy.Describe(storageError, failed.Phase, true).StartsWith("저장 공간 부족"),
+                                    "fixed disk-full failure reason");
+                            }
+                            Check(refused, "actual Rust storage-full reply reached desktop bridge");
+                        }
+                        Check(vault.Entries.Count == 1 && originals.Keys.Order().SequenceEqual(Inventory()) &&
+                            originals.All(pair => Digest(pair.Key) == pair.Value) &&
+                            !Directory.GetFiles(vault.Directory, ".veil-encrypted-*", SearchOption.AllDirectories).Any(),
+                            "full-volume failure publishes no new object, metadata, index or staging");
+                        Check(await vault.VerifyAsync(seed) == 1024, "existing object still authenticates while full");
+                        File.WriteAllText(Path.Combine(controls, "failure-checked"), "checked");
+                        await WaitSignal("released");
+                        vault.Lock();
+                        Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 1 &&
+                            await vault.VerifyAsync(vault.Entries.Single()) == 1024, "reopen after freeing space");
+                        var next = await Store("large", "disk-full-explicit-retry.bin");
+                        Check(vault.Entries.Count == 2 && await vault.VerifyAsync(next) == 8L * 1024 * 1024 &&
+                            Digest(originalPath) == originalHash && Before(objects).Length == 2 && Before(meta).Length == 2,
+                            "explicit download after space restored authenticates, no duplicate");
+                        File.WriteAllText(Path.ChangeExtension(report, ".vault.json"), JsonSerializer.Serialize(new
+                        {
+                            entries = vault.Entries,
+                            originalUnchanged = true,
+                        }));
+                    }
                 }
 #endif
                 else if (stage == "vault")
