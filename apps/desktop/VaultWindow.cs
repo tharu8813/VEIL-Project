@@ -226,6 +226,11 @@ internal sealed class VaultWindow : VeilDialog
     private void ShowAdvanced()
     {
         if (!Ready || busy) return;
+        CreateAdvancedMenu().IsOpen = true;
+    }
+
+    private ContextMenu CreateAdvancedMenu()
+    {
         var menu = new ContextMenu { Style = (Style)FindResource(typeof(ContextMenu)) };
         void Item(string label, Func<Task> action)
         {
@@ -238,7 +243,7 @@ internal sealed class VaultWindow : VeilDialog
         if (!vault.UsesProfilePassword) Item("금고 암호 변경", () => RotateAsync(true));
         Item("복구 코드 재발급", () => RotateAsync(false));
         Item("내용 키 교체", RotateContentAsync);
-        menu.IsOpen = true;
+        return menu;
     }
 
     private async Task BackupAsync()
@@ -249,12 +254,13 @@ internal sealed class VaultWindow : VeilDialog
             DefaultExt = ".veil-backup", Filter = "VEIL 금고 백업 (*.veil-backup)|*.veil-backup",
             OverwritePrompt = false, AddToRecent = false,
         };
-        if (destination.ShowDialog(PromptOwner) != true || !Ready) return;
+        string? path = UserPrompts.PickFile(PromptOwner, destination);
+        if (path is null || !Ready) return;
         var setup = new VaultSetupDialog(PromptOwner, "금고 백업 암호", askPassphrase: true, issueCode: false,
             passwordPrompt: "백업 전용 암호를 정하세요. 복원할 때 이 암호가 필요합니다.");
-        if (setup.ShowDialog() != true || !Ready) return;
+        if (!setup.ShowMaintenanceDialog() || !Ready) return;
         feedback.Text = "암호화 백업을 만드는 중입니다.";
-        long count = await vault.BackupAsync(destination.FileName, setup.Passphrase!);
+        long count = await vault.BackupAsync(path, setup.Passphrase!);
         if (!closed) feedback.Text = $"금고 항목 {count:N0}개를 백업했습니다.";
     }
 
@@ -279,18 +285,18 @@ internal sealed class VaultWindow : VeilDialog
     private async Task RotateAsync(bool askPassphrase)
     {
         var dialog = new VaultSetupDialog(PromptOwner, askPassphrase ? "금고 암호 변경" : "복구 코드 재발급", askPassphrase, issueCode: !askPassphrase);
-        if (dialog.ShowDialog() != true || !Ready) return;
+        if (!dialog.ShowMaintenanceDialog() || !Ready) return;
         bool ok = askPassphrase ? await vault.ChangePassphraseAsync(dialog.Passphrase!) : await vault.ReissueRecoveryCodeAsync(dialog.RecoveryCode!);
         if (!closed) feedback.Text = ok ? (askPassphrase ? "금고 암호를 바꿨습니다." : "새 복구 코드로 바꿨습니다. 이전 코드는 더 이상 쓸 수 없습니다.") : "변경하지 못했습니다.";
     }
 
     private async Task RotateContentAsync()
     {
-        if (MessageBox.Show(PromptOwner, "금고 파일을 새 키로 다시 암호화합니다. 금고 크기만큼의 추가 공간이 필요합니다. 계속할까요?",
-            "금고 내용 키 교체", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes || !Ready) return;
+        if (!UserPrompts.Confirm(PromptOwner, "금고 파일을 새 키로 다시 암호화합니다. 금고 크기만큼의 추가 공간이 필요합니다. 계속할까요?",
+            "금고 내용 키 교체") || !Ready) return;
         var setup = new VaultSetupDialog(PromptOwner, "새 금고 복구 코드", askPassphrase: false, issueCode: true);
-        if (setup.ShowDialog() != true || !Ready) return;
-        char[]? password = ProfileUnlockDialog.Prompt("금고 내용 키 교체", vault.UsesProfilePassword
+        if (!setup.ShowMaintenanceDialog() || !Ready) return;
+        char[]? password = UserPrompts.Secret("금고 내용 키 교체", vault.UsesProfilePassword
             ? "현재 보호 프로필 암호를 입력하세요." : "현재 금고 암호를 입력하세요.", PromptOwner);
         if (password is null) return;
         try
@@ -307,6 +313,101 @@ internal sealed class VaultWindow : VeilDialog
         }
         finally { ProtectedProfileSession.ClearPassword(password); }
     }
+#if DEBUG
+    // Exercise the real native menu item's Click handler with a disposable restored vault.
+    // The shell is not displayed; the browser owns real modal wizard windows.
+    internal static async Task<string> VerifyMaintenanceUiAsync(Window owner, DownloadVault vault, string target,
+        string passphrase, Action<bool, string> check)
+    {
+        var window = new VaultWindow(owner, vault, () => true);
+        window.TakePage(_ => { });
+        string backup = Path.Combine(target, "maintenance-ui.veil-backup");
+        string marker = Path.Combine(vault.Directory, "active-generation");
+        string generation = File.ReadAllText(marker);
+        string? newCode = null;
+        var entries = vault.Entries.OrderBy(e => e.Id).ToArray();
+        var picks = new Queue<string?>();
+        var answers = new Queue<bool>();
+        var inputs = new Queue<(bool Accept, string? Passphrase)>();
+        var secrets = new Queue<string?>();
+        UserPrompts.SmokeFilePicker = save => save ? picks.Dequeue() : throw new InvalidOperationException("Unexpected open picker");
+        UserPrompts.SmokeConfirm = (_, _) => answers.Dequeue();
+        UserPrompts.SmokeSecret = _ => secrets.Dequeue()?.ToCharArray();
+        VaultSetupDialog.SmokeMaintenanceInput = _ => inputs.Dequeue();
+        VaultSetupDialog.SmokeMaintenanceCode = code => newCode = code;
+        async Task Choose(string label)
+        {
+            window.feedback.Text = "";
+            var menu = window.CreateAdvancedMenu();
+            var item = menu.Items.OfType<MenuItem>().Single(i => Equals(i.Header, label));
+            check(window.Ready && !window.busy && item.IsEnabled, "vault maintenance action enabled");
+            item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            for (int i = 0; window.busy && i < 1800; i++) await Task.Delay(100);
+            if (window.busy) throw new TimeoutException("vault maintenance action");
+            check(picks.Count == 0 && answers.Count == 0 && inputs.Count == 0 && secrets.Count == 0,
+                "maintenance prompts consumed");
+        }
+        try
+        {
+            picks.Enqueue(null);
+            await Choose("암호화 백업");
+            check(!File.Exists(backup), "vault backup picker cancellation");
+            picks.Enqueue(backup);
+            inputs.Enqueue((false, null));
+            await Choose("암호화 백업");
+            check(!File.Exists(backup), "vault backup wizard cancellation");
+            picks.Enqueue(backup);
+            inputs.Enqueue((true, "synthetic-vault-ui-backup"));
+            await Choose("암호화 백업");
+            check(File.Exists(backup) && window.feedback.Text.Contains("백업했습니다"), "vault backup via native menu");
+            byte[] archived = File.ReadAllBytes(backup);
+            picks.Enqueue(backup);
+            inputs.Enqueue((true, "synthetic-vault-ui-backup"));
+            await Choose("암호화 백업");
+            check(window.feedback.Text.Contains("완료하지 못했습니다") &&
+                File.ReadAllBytes(backup).SequenceEqual(archived), "vault backup collision preserves file");
+
+            answers.Enqueue(false);
+            await Choose("내용 키 교체");
+            check(File.ReadAllText(marker) == generation && newCode is null, "rotation confirmation cancellation");
+            answers.Enqueue(true);
+            inputs.Enqueue((false, null));
+            await Choose("내용 키 교체");
+            check(File.ReadAllText(marker) == generation && newCode is null, "rotation recovery wizard cancellation");
+            answers.Enqueue(true);
+            inputs.Enqueue((true, null));
+            secrets.Enqueue(null);
+            await Choose("내용 키 교체");
+            check(File.ReadAllText(marker) == generation, "rotation authentication cancellation");
+            answers.Enqueue(true);
+            inputs.Enqueue((true, null));
+            secrets.Enqueue("incorrect-synthetic-password");
+            await Choose("내용 키 교체");
+            check(File.ReadAllText(marker) == generation && window.feedback.Text.Contains("교체하지 못했습니다"),
+                "rotation rejects incorrect current password");
+            answers.Enqueue(true);
+            inputs.Enqueue((true, null));
+            secrets.Enqueue(passphrase);
+            await Choose("내용 키 교체");
+            check(window.feedback.Text.Contains("내용 키와 복구 코드를 교체") &&
+                File.ReadAllText(marker) != generation && newCode is not null, "rotation via native menu");
+            check(vault.Entries.OrderBy(e => e.Id).SequenceEqual(entries), "rotation preserves metadata");
+            check(File.ReadAllBytes(backup).SequenceEqual(archived), "rotation preserves existing backup");
+            return newCode!;
+        }
+        finally
+        {
+            UserPrompts.SmokeFilePicker = null;
+            UserPrompts.SmokeConfirm = null;
+            UserPrompts.SmokeSecret = null;
+            VaultSetupDialog.SmokeMaintenanceInput = null;
+            VaultSetupDialog.SmokeMaintenanceCode = null;
+            window.Close();
+            File.Delete(backup);
+        }
+    }
+#endif
+
 }
 
 internal sealed class VaultTextPreviewDialog : VeilDialog
