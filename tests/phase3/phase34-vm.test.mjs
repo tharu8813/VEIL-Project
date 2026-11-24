@@ -21,6 +21,7 @@ test('dry plan marks every item NOT RUN, including optional and physical tests',
     assert.ok(results.every(item => item.status === 'NOT RUN'));
     assert.equal(results.find(item => item.id === 'profile-disk-full').args, undefined);
     assert.equal(results.find(item => item.id === 'power-loss').args, undefined);
+    assert.equal(results.find(item => item.id === 'rotation-power-loss').args, undefined);
 });
 
 test('keeps separate outcomes and continues after a failed runner', async () => {

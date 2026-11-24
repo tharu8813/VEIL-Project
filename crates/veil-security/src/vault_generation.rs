@@ -260,6 +260,56 @@ mod tests {
         panic!("rotation completed without reaching the requested checkpoint");
     }
 
+    // Explicit fixture mode for the isolated VM runner. Never compiled into a product executable.
+    #[test]
+    fn rotation_vm_fixture() {
+        let Ok(mode) = std::env::var("VEIL_UNIT_ROTATION_FIXTURE") else {
+            return;
+        };
+        let root = PathBuf::from(std::env::var_os(ROOT_ENV).expect("synthetic fixture root"));
+        assert!(root.is_absolute());
+        assert_eq!(root.file_name().and_then(|name| name.to_str()), Some("profile"));
+        match mode.as_str() {
+            "prepare" => {
+                assert!(fs::read_dir(&root).unwrap().next().is_none());
+                for folder in ["objects", "meta", "index"] {
+                    fs::create_dir(root.join(folder)).unwrap();
+                }
+                let keys = vault_credentials::create(
+                    &root, SecretString::from(PASSWORD), SecretString::from(OLD_CODE),
+                ).unwrap();
+                for (file, bytes) in FILES {
+                    keys.seal_new(Purpose::Download, &root.join(file), bytes).unwrap();
+                }
+                println!("ROTATION_FIXTURE_PREPARED");
+            }
+            "check" => {
+                let phase = std::env::var(PHASE_ENV).unwrap();
+                assert!(matches!(phase.as_str(), "before-marker" | "after-marker"));
+                let _lock = lock_session(&root).unwrap();
+                let chosen = active(&root).unwrap();
+                let switched = phase == "after-marker";
+                assert_eq!(chosen != root, switched);
+                let old = vault_credentials::unlock(&root, SecretString::from(OLD_CODE), true).unwrap();
+                let accepted = if switched { NEW_CODE } else { OLD_CODE };
+                let rejected = if switched { OLD_CODE } else { NEW_CODE };
+                let reopened = vault_credentials::unlock(&chosen, SecretString::from(accepted), true).unwrap();
+                assert!(vault_credentials::unlock(&chosen, SecretString::from(rejected), true).is_err());
+                assert!(vault_credentials::unlock(&chosen, SecretString::from(PASSWORD), false).is_ok());
+                for (file, bytes) in FILES {
+                    assert_eq!(&*old.read_small(Purpose::Download, &root.join(file)).unwrap(), bytes);
+                    let path = chosen.join(file);
+                    assert_eq!(&*reopened.read_small(Purpose::Download, &path).unwrap(), bytes);
+                    if switched {
+                        assert!(old.verify(Purpose::Download, &path).is_err());
+                    }
+                }
+                println!("ROTATION_FIXTURE_RECOVERED");
+            }
+            _ => panic!("Unknown rotation fixture operation"),
+        }
+    }
+
     fn interrupt_at(root: &Path, phase: &str) {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "vault_generation::tests::rotation_interruption_child"])

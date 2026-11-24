@@ -50,3 +50,20 @@ test('vault arm requires a pending encrypted stream and cannot satisfy profile p
         checks: checks.filter(x => x !== missing) }, 0));
     assert.throws(() => checkVaultRecovery(proof, { error: null, checks }, 1));
 });
+
+
+test('rotation receipts bind exact checkpoint, test binary, protected path and original ciphertext inventory', async () => {
+    const { validateRotationReceipt } = await import('../phase4/rotation-power-loss.mjs');
+    const identity = { ...current, phase: 'before-marker', testSha256: 'a'.repeat(64) };
+    const proof = { ...identity, schema: 1, kind: 'rotation', boot: 'boot-1', originals: {
+        'objects/1234567890abcdef1234567890abcdef.veil': 'b'.repeat(64),
+        'meta/1234567890abcdef1234567890abcdef.veil': 'c'.repeat(64),
+        'index/202611250102030123456.veil': 'd'.repeat(64),
+    } };
+    validateRotationReceipt(proof, identity, true);
+    assert.throws(() => validateRotationReceipt(proof, identity, false));
+    for (const change of [{ boot: proof.boot }, { phase: 'after-marker' }, { testSha256: 'different' },
+        { volumeId: 'other' }, { profile: 'V:\\other' }])
+        assert.throws(() => validateRotationReceipt(proof, { ...identity, ...change }, true));
+    assert.throws(() => validateRotationReceipt({ ...proof, originals: {} }, identity, true));
+});

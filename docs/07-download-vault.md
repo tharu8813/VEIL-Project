@@ -150,3 +150,26 @@ VEIL은 Ctrl+J에서 대기 및 전송 중인 항목별로 받은 용량과 취�
 ### 내용 키 교체 프로세스 중단 회귀 (2026-11-25)
 
 Rust 단위 시험 전용 실행 파일에서 새 암호화 세대 준비 후 활성 세대 마커 교체 직전, 그리고 마커 교체 후 이전 세대 삭제 직전에 각각 자식 프로세스를 강제 종료한다. 재시작 시 활성 세대 선택, 기존/신규 복구 코드의 올바른 수락·거부, 현재 암호, 본문·메타데이터·인덱스 인증, 이전 암호문 보존과 세션 잠금 해제를 확인한다. 이전 암호화 세대가 남는 것은 의도적으로 보존하며 삭제 완료 또는 과거 복구 코드의 모든 사본 무효화를 주장하지 않는다. 중단 지점은 `cfg(test)`로 제품 Debug/Release 바이너리에 포함하지 않는다. 실제 VM 전원 차단과 저장장치 내구성은 **NOT RUN**, C2는 변경하지 않는다.
+
+
+### 내용 키 교체 전원 차단 준비 (C2)
+
+프로필/다운로드 스트리밍 시험과 별도로 폐기용 오프라인 VirtualBox VM의 보호 볼륨에서 실행한다. 호스트의 동일 커밋에서 다음 명령으로 Rust 라이브러리 단위 시험 실행 파일을 만든다.
+
+```powershell
+cargo test --locked --manifest-path crates/veil-security/Cargo.toml --lib --no-run
+```
+
+출력된 라이브러리 시험 실행 파일(veil_security-해시.exe)을 시험 번들과 함께 읽기 전용 매체로 게스트에 전달한다. 제품 실행 파일이나 일반 Debug 바이너리는 사용할 수 없다. 예시는 등록된 ProfileParent가 V:\lab인 경우이다. 현재 부팅의 관리자 preflight와 일반 사용자 게스트 셸이 필요하다.
+
+```powershell
+node tests/phase4/rotation-power-loss.mjs --arm --isolated-vm --phase before-marker --preflight C:\lab\preflight-before.json --evidence V:\lab\power-loss-rotation-before --test-exe C:\lab\veil_security-test.exe
+```
+
+ARMED 이후 45초 이내에 운영자가 지정된 폐기용 VM의 전원 차단을 수행한다. 정상 종료/시간 초과는 disarmed 증거로 남고 재사용하지 않는다. 재부팅하고 같은 VHDX를 다시 연결 및 잠금 해제한 후 새로운 preflight를 생성한다.
+
+```powershell
+node tests/phase4/rotation-power-loss.mjs --check --isolated-vm --confirm-power-cut --phase before-marker --preflight C:\lab\preflight-after.json --evidence V:\lab\power-loss-rotation-before --test-exe C:\lab\veil_security-test.exe
+```
+
+두 번째 시험은 새로운 증거 폴더 power-loss-rotation-after와 --phase after-marker로 양쪽 명령을 실행한다. 두 시험 모두 VM UUID, 다른 부팅, 동일 보호 볼륨/경로/실행 파일 해시, 정확한 중단 시점, 기존 객체/메타데이터/인덱스 암호문 해시를 연결한다. 재부팅 후 활성 세대 선택, 올바른 복구 코드와 현재 암호, 인증된 내용, 이전 암호문 보존을 검사한다. 이전 세대 잔존은 삭제 완료로 간주하지 않는다. 실제 호스트 전원 차단 기록은 운영자가 별도로 보존한다. **NOT RUN**: 실제 Windows VM 실행, 제품 Release 통합, 물리 저장장치 내구성. C2 미통과 유지.
