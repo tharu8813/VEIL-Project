@@ -5,3 +5,10 @@ The existing WPF management controls are hosted in the browser tab area, not in 
 Routes: settings (including search, network, security, permissions and site-data), bookmarks, history, passwords, vault, tabs. Ctrl+J keeps the existing downloads progress tab; Ctrl+Shift+J opens the vault. Existing native unlock/re-authentication, site permission prompts, destructive confirmations, OS file pickers and authenticated text preview remain separate trusted dialogs. Password management cancels on tab selection loss; fill must still pass the existing origin, active-tab and navigation-epoch checks. Close/navigation/transfer cancel the management surface.
 
 Pending: Windows interactive and VM regression, all routes and shortcuts, direct input and repeated invocation, multiwindow/restore, close/transfer, password and vault cleanup, protected shutdown, download progress, DPI/IME. CI compilation and core checks are not proof of interactive or security verification. No release gate changes.
+
+
+## Stage 1 stabilization: internal tab session persistence
+
+- Assign the internal route and title before inserting/selecting the tab, so a synchronous selection save cannot publish a blank route. Save background internal tabs explicitly and initialize their hidden native landing surfaces without performing authentication or privileged actions.
+- Extend the desktop smoke suite to check persisted selected/background native routes and removal on close. Align the download cancellation assertion with the persistent download manager panel: the active list must disappear, not the manager controls.
+- Source review only; Windows interactive smoke and protected-profile VM regression remain NOT RUN. No security gate is changed.

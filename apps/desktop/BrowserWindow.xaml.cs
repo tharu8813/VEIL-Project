@@ -244,15 +244,19 @@ public partial class BrowserWindow : Window
             {
                 if (tab.Owner.Active == tab) tab.Owner.SetFullScreen(web.ContainsFullScreenElement, page: true);
             };
+            // SelectionChanged can synchronously save the session. Publish an internal route
+            // before inserting the item, since native pages may never navigate the WebView.
+            if (IsInternalUrl(url))
+            {
+                tab.Url = url!;
+                tab.Title = InternalTitle(tab.Url);
+                tab.Header.Label.Text = tab.Title;
+            }
             Tabs.Items.Insert(TabInsertionIndex(tab.Pinned, index ?? Tabs.Items.Count), item);
             LayoutTabs(item);
             if (select || Tabs.SelectedItem is null) Tabs.SelectedItem = item;
             if (IsInternalUrl(url))
             {
-                tab.Url = url!;
-                tab.Title = InternalTitle(tab.Url);
-                UpdateTabToolTip(tab);
-                tab.Header.Label.Text = tab.Title;
                 if (!IsManagementUrl(url)) engineView.ShowInternalHtml(BuildInternalPage(url));
             }
             else if (url is not null && url != "about:blank")
@@ -262,6 +266,12 @@ public partial class BrowserWindow : Window
             }
             UpdateTabToolTip(tab);
             if (Active == tab) RefreshChrome();
+            else if (IsInternalUrl(url))
+            {
+                // Background internal tabs have no selection event to persist them.
+                UpdateManagementVisibility();
+                SaveTabs();
+            }
             return tab;
         }
         catch (Exception)
