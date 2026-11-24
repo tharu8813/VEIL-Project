@@ -96,11 +96,13 @@ public partial class BrowserWindow
                     await ReadyAt("/");
                     BookmarkClick(this, new RoutedEventArgs());
                     Check(data.Bookmarks.Count == 1, "bookmark created");
-                    // The native modal manager has separate interactive coverage.
-                    // Keep testing the legacy internal URL and its session restoration here.
+                    // Restored management tabs have a native surface, not a privileged web page.
+                    Check(IsManagementUrl("veil://settings") && !IsManagementUrl("veil://settings/unknown"), "management route allowlist");
                     Check(await OpenTab("veil://bookmarks") is not null, "bookmark library tab created");
                     await WaitFor(() => Active?.Url == "veil://bookmarks", "bookmark library opened in tab");
                     Check(Active?.Title == "북마크", "bookmark library tab title");
+                    Check(Active?.ManagementSurface is not null && Active.View.Visibility == System.Windows.Visibility.Hidden,
+                        "bookmark management uses native tab surface");
                     CloseTab((TabItem)Tabs.SelectedItem);
                     await ReadyAt("/");
                     Check(await OpenTab("veil://history") is not null, "history tab created");

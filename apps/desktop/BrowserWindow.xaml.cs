@@ -25,6 +25,8 @@ public partial class BrowserWindow : Window
         internal TabHeader Header { get; set; } = null!;
         internal bool Loading { get; set; }
         internal bool Pinned { get; set; }
+        internal FrameworkElement? ManagementSurface { get; set; }
+        internal Action? CancelManagement { get; set; }
         internal long NavigationEpoch { get; set; }
         /// <summary>HTTPS-first: the plain-HTTP address this tab is currently trying as HTTPS.</summary>
         internal Uri? UpgradedFrom { get; set; }
@@ -94,6 +96,8 @@ public partial class BrowserWindow : Window
                 if (item.Tag is BrowserTab tab && IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
             SaveSession();
         }
+        foreach (var tab in Tabs.Items.OfType<TabItem>().Select(item => (BrowserTab)item.Tag).ToArray())
+            ClearManagement(tab);
         foreach (var view in Pages.Children.OfType<WebView2>())
             view.Dispose();
     }
@@ -244,7 +248,7 @@ public partial class BrowserWindow : Window
                 tab.Title = InternalTitle(tab.Url);
                 UpdateTabToolTip(tab);
                 tab.Header.Label.Text = tab.Title;
-                engineView.ShowInternalHtml(BuildInternalPage(url));
+                if (!IsManagementUrl(url)) engineView.ShowInternalHtml(BuildInternalPage(url));
             }
             else if (url is not null && url != "about:blank")
             {
@@ -270,6 +274,12 @@ public partial class BrowserWindow : Window
     private void OnNavigationStarting(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
     {
         tab.NavigationEpoch++;
+        // Internal management routes are browser-chrome commands, never web navigation.
+        if (args.Uri.StartsWith("veil:", StringComparison.OrdinalIgnoreCase) || IsManagementUrl(tab.Url))
+        {
+            args.Cancel = true;
+            return;
+        }
         if (HandleHttpsFirst(tab, args)) return;
         if (HandleThreat(tab, args)) return;
         args.Cancel = args.Uri != "about:blank" &&
@@ -621,6 +631,7 @@ public partial class BrowserWindow : Window
         if (protectPinned && tab.Pinned) return;
         if (!await AnimateTabClose(item) || closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
         if (IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
+        ClearManagement(tab);
         Tabs.Items.Remove(item);
         Pages.Children.Remove(tab.View);
         tab.EngineView.Dispose();
@@ -639,8 +650,7 @@ public partial class BrowserWindow : Window
         if (!IsLoaded || args.OriginalSource != Tabs || closing) return;
         CloseAddressSuggestions();
         SetAddressText(Active?.Url is null or "about:blank" ? "" : Active.Url);
-        foreach (TabItem item in Tabs.Items)
-            ((BrowserTab)item.Tag).View.Visibility = item == Tabs.SelectedItem ? Visibility.Visible : Visibility.Hidden;
+        UpdateManagementVisibility();
         if (fullScreen && fullScreenFromPage && Active?.View.CoreWebView2?.ContainsFullScreenElement != true) SetFullScreen(false);
         RefreshChrome();
         SyncProgress();
@@ -654,8 +664,7 @@ public partial class BrowserWindow : Window
         if (!Address.IsKeyboardFocusWithin)
             SetAddressText(Active?.Url is null or "about:blank" ? "" : Active.Url);
         Home.Visibility = Active?.Url is null or "about:blank" ? Visibility.Visible : Visibility.Collapsed;
-        if (Active is not null)
-            Active.View.Visibility = Home.Visibility == Visibility.Visible ? Visibility.Hidden : Visibility.Visible;
+        UpdateManagementVisibility();
         UpdateNavigationButtons();
         UpdateBookmarkGlyph();
         RefreshDownloadProgress();
@@ -677,8 +686,8 @@ public partial class BrowserWindow : Window
 
     private void UpdateNavigationButtons()
     {
-        Back.IsEnabled = Active?.EngineView.CanGoBack == true;
-        Forward.IsEnabled = Active?.EngineView.CanGoForward == true;
+        Back.IsEnabled = !IsManagementUrl(Active?.Url) && Active?.EngineView.CanGoBack == true;
+        Forward.IsEnabled = !IsManagementUrl(Active?.Url) && Active?.EngineView.CanGoForward == true;
         Reload.IsEnabled = IsWebUrl(Active?.Url);
     }
 
@@ -689,13 +698,14 @@ public partial class BrowserWindow : Window
         (url.Scheme is "http" or "https") && !string.IsNullOrEmpty(url.Host) && url.UserInfo.Length == 0;
 
     internal static bool IsInternalUrl(string? value) =>
-        value is "veil://bookmarks" or "veil://history" or "veil://downloads" or HttpsWarningUrl or ThreatWarningUrl;
+        IsManagementUrl(value) || value is "veil://downloads" or HttpsWarningUrl or ThreatWarningUrl;
 
     private static string InternalTitle(string? value) => value switch
     {
         "veil://bookmarks" => "북마크",
         "veil://history" => "방문 기록",
         "veil://downloads" => "다운로드",
+        "veil://settings" => "설정",
         HttpsWarningUrl => "안전하지 않은 연결",
         ThreatWarningUrl => "위험한 사이트",
         _ => "새 탭",
@@ -836,6 +846,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && text.Length > 0 && !text.Contains('.') &&
             !text.Contains(':') && !text.Contains('/') && !text.Any(char.IsWhiteSpace))
             text = $"www.{text}.com";
+        if (IsManagementUrl(text)) { OpenManagementRoute(text); return; }
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
         {
             // Alt+Enter opens the address in a new tab next to the current one.
@@ -849,6 +860,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private void NavigateAddress(string input)
     {
         CloseAddressSuggestions();
+        if (IsManagementUrl(input.Trim())) { OpenManagementRoute(input.Trim()); return; }
         var url = ResolveAddress(input, data.SearchEngine);
         if (url is null)
         {
@@ -856,10 +868,11 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             return;
         }
         if (Active is not { } tab) return;
+        ClearManagement(tab);
         SetAddressText(url.AbsoluteUri);
-        if (IsInternalUrl(url.AbsoluteUri))
+        if (IsInternalUrl(url.OriginalString))
         {
-            tab.Url = url.AbsoluteUri;
+            tab.Url = url.OriginalString;
             tab.Title = InternalTitle(tab.Url);
             tab.Header.Label.Text = tab.Title;
             tab.View.Visibility = Visibility.Visible;
@@ -941,6 +954,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private void GoHome()
     {
         if (Active is not { } tab) return;
+        ClearManagement(tab);
         tab.Url = "about:blank";
         tab.EngineView.Navigate("about:blank");
         RefreshChrome();
@@ -976,14 +990,16 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private async Task ShowLibraryAsync(bool editable)
     {
         if (closing || restoring || session.IsEnding || session.EngineLost) return;
+        string internalUrl = editable ? "veil://bookmarks" : "veil://history";
+        if (FocusManagementPage(internalUrl)) return;
         var entries = editable ? data.Bookmarks : data.History;
-        bool changed = false;
         bool SaveLibrary()
         {
             try
             {
                 data.Save(statePath);
-                changed = true;
+                if (editable)
+                    foreach (var window in session.Windows.ToArray()) if (!window.closing) window.UpdateBookmarkGlyph();
                 return true;
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -993,27 +1009,8 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         }
 
         var dialog = new LibraryWindow(this, editable ? "북마크 관리" : "방문 기록", entries, editable, SaveLibrary);
-        bool open = dialog.ShowDialog() == true;
-        if (closing || session.IsEnding || session.EngineLost) return;
-        if (changed)
-        {
-            string internalUrl = editable ? "veil://bookmarks" : "veil://history";
-            foreach (var window in session.Windows.ToArray())
-            {
-                if (window.closing) continue;
-                if (editable) window.UpdateBookmarkGlyph();
-                // Keep already-open legacy read-only library tabs in sync.
-                foreach (var tab in window.Tabs.Items.OfType<TabItem>().Select(item => item.Tag).OfType<BrowserTab>())
-                {
-                    if (tab.Url != internalUrl || tab.View.CoreWebView2 is not { } web) continue;
-                    try { web.NavigateToString(window.BuildInternalPage(internalUrl)); }
-                    catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException)
-                    {
-                        window.Status.Text = "목록 탭을 새로고침하지 못했습니다.";
-                    }
-                }
-            }
-        }
+        bool open = await ShowManagementPageAsync(internalUrl, dialog);
+        if (!SettingsReady()) return;
         if (open && dialog.SelectedUrl is { } url && IsWebUrl(url))
             _ = await OpenTab(url);
     }

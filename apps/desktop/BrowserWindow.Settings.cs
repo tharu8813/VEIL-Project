@@ -6,8 +6,9 @@ public partial class BrowserWindow
 {
     private bool SettingsReady() => !closing && !restoring && !session.IsEnding && !session.EngineLost;
 
-    private void SettingsClick(object sender, RoutedEventArgs args)
+    private async void SettingsClick(object sender, RoutedEventArgs args)
     {
+        if (FocusManagementPage("veil://settings")) return;
         if (!SettingsReady() || session.SettingsUiOpen || session.PasswordUiOpen || session.PermissionUiOpen)
             return;
         session.SettingsUiOpen = true;
@@ -16,7 +17,7 @@ public partial class BrowserWindow
         try
         {
             var settings = new BrowserSettingsDialog(this, BrowserSettingsCatalog.Build(session));
-            if (settings.ShowDialog() == true)
+            if (await ShowManagementPageAsync("veil://settings", settings))
                 destination = settings.Destination;
         }
         finally

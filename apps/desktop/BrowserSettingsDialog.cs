@@ -89,7 +89,7 @@ internal sealed class BrowserSettingsDialog : VeilDialog
                     open.Click += (_, _) =>
                     {
                         Destination = destination;
-                        DialogResult = true;
+                        Complete(true);
                     };
                     content.Children.Add(open);
                 }
@@ -113,8 +113,8 @@ internal sealed class BrowserSettingsDialog : VeilDialog
         };
         search.TextChanged += (_, _) => Render();
         nav.SelectedIndex = 0;
-        AddFooterButton("닫기", Close, primary: true);
-        Loaded += (_, _) => Keyboard.Focus(search);
+        AddFooterButton("닫기", Dismiss, primary: true);
+        OnContentLoaded(() => Keyboard.Focus(search));
         Render();
     }
 }

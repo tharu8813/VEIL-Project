@@ -328,6 +328,7 @@ public partial class BrowserWindow
         move.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
         move.X = 0;
         Panel.SetZIndex(item, 0);
+        ClearManagement(tab);
         Tabs.Items.Remove(item);
         Pages.Children.Remove(tab.View);
         if (Tabs.Items.Count == 0) Close();
