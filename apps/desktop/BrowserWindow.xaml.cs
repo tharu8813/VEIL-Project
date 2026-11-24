@@ -541,8 +541,7 @@ public partial class BrowserWindow : Window
                 MessageBox.Show(this, "다운로드 금고가 잠겨 있습니다. VEIL을 다시 시작하고 보호 프로필 잠금 해제 단계에서 금고를 여세요.",
                     "다운로드 금고", MessageBoxButton.OK, MessageBoxImage.Information);
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException
-            or System.ComponentModel.Win32Exception or System.Text.Json.JsonException)
+        catch (Exception error) when (RecoverableFailure.Is(error))
         {
             if (SettingsReady()) Status.Text = "다운로드 금고를 열지 못했습니다.";
         }
@@ -612,10 +611,14 @@ public partial class BrowserWindow : Window
         using var deferral = args.GetDeferral();
         args.Handled = true;
         if (args.Uri != "about:blank" && !IsWebUrl(args.Uri)) return;
-        // Like other browsers, tabs opened from a page appear right after their opener.
-        var popup = await OpenTab(null, args.IsUserInitiated, Tabs.Items.IndexOf(opener.Item) + 1);
-        if (popup is not null && !closing)
-            args.NewWindow = popup.View.CoreWebView2;
+        try
+        {
+            // Like other browsers, tabs opened from a page appear right after their opener.
+            var popup = await OpenTab(null, args.IsUserInitiated, Tabs.Items.IndexOf(opener.Item) + 1);
+            if (popup is not null && !closing)
+                args.NewWindow = popup.View.CoreWebView2;
+        }
+        catch (Exception error) when (RecoverableFailure.Is(error)) { if (!closing) Status.Text = "새 창 요청을 열지 못했습니다."; }
     }
 
     private void UpdateAudio(BrowserTab tab)
@@ -644,7 +647,11 @@ public partial class BrowserWindow : Window
 
     // ── Tab lifetime ─────────────────────────────────────────────────────────
 
-    private async void CloseTab(TabItem item) => await CloseTabAsync(item);
+    private async void CloseTab(TabItem item)
+    {
+        try { await CloseTabAsync(item); }
+        catch (Exception error) when (RecoverableFailure.Is(error)) { if (!closing) Status.Text = "탭을 닫지 못했습니다."; }
+    }
 
     private async Task CloseTabAsync(TabItem item, bool protectPinned = false)
     {
@@ -867,20 +874,25 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         }
         if (key != Key.Enter) return;
         args.Handled = true;
+        SubmitAddress(Keyboard.Modifiers);
+    }
+
+    private void SubmitAddress(ModifierKeys modifiers)
+    {
         if (AddressSuggestionsPopup.IsOpen && AddressSuggestionsList.SelectedItem is AddressSuggestion selected &&
-            !Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            !modifiers.HasFlag(ModifierKeys.Control))
         {
-            OpenAddressSuggestion(selected, Keyboard.Modifiers.HasFlag(ModifierKeys.Alt));
+            OpenAddressSuggestion(selected, modifiers.HasFlag(ModifierKeys.Alt));
             return;
         }
         CloseAddressSuggestions();
         string text = Address.Text.Trim();
         // Ctrl+Enter completes a bare name to www.<name>.com, as in Chrome and Edge.
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && text.Length > 0 && !text.Contains('.') &&
+        if (modifiers.HasFlag(ModifierKeys.Control) && text.Length > 0 && !text.Contains('.') &&
             !text.Contains(':') && !text.Contains('/') && !text.Any(char.IsWhiteSpace))
             text = $"www.{text}.com";
         if (IsManagementUrl(text)) { OpenManagementRoute(text); return; }
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
+        if (modifiers.HasFlag(ModifierKeys.Alt))
         {
             // Alt+Enter opens the address in a new tab next to the current one.
             if (ResolveAddress(text, data.SearchEngine) is { } url && Active is { } current)
@@ -943,7 +955,8 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private async void NewTabClick(object sender, RoutedEventArgs args)
     {
-        if (await OpenTab("about:blank") is not null) FocusAddress();
+        try { if (await OpenTab("about:blank") is not null) FocusAddress(); }
+        catch (Exception error) when (RecoverableFailure.Is(error)) { if (!closing) Status.Text = "탭을 열 수 없습니다."; }
     }
 
     private void FullScreenClick(object sender, RoutedEventArgs args) => SetFullScreen(!fullScreen);
@@ -955,7 +968,13 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private async void RestoreClick(object sender, RoutedEventArgs args)
     {
-        if (closedTabs.TryPop(out var closed) && await OpenTab(closed.Url, pinned: closed.Pinned) is null) closedTabs.Push(closed);
+        if (!closedTabs.TryPop(out var closed)) return;
+        try { if (await OpenTab(closed.Url, pinned: closed.Pinned) is null) closedTabs.Push(closed); }
+        catch (Exception error) when (RecoverableFailure.Is(error))
+        {
+            closedTabs.Push(closed);
+            if (!closing) Status.Text = "닫은 탭을 다시 열지 못했습니다.";
+        }
     }
 
     private void BackClick(object sender, RoutedEventArgs args) { if (Back.IsEnabled) Active?.EngineView.GoBack(); }
@@ -972,9 +991,10 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         if (Active is not { } tab || !IsWebUrl(tab.Url)) return;
         Motion.Spin((System.Windows.Media.RotateTransform)ReloadGlyph.RenderTransform);
         try { await tab.View.CoreWebView2.CallDevToolsProtocolMethodAsync("Page.reload", "{\"ignoreCache\":true}"); }
-        catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException)
+        catch (Exception error) when (RecoverableFailure.Is(error))
         {
-            tab.EngineView.Reload();
+            try { tab.EngineView.Reload(); }
+            catch (Exception again) when (RecoverableFailure.Is(again)) { if (!closing) Status.Text = "페이지를 새로 고치지 못했습니다."; }
         }
     }
 
@@ -1027,10 +1047,17 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         else Status.Text = "이미 북마크에 있습니다.";
     }
 
-    private async void BookmarksClick(object sender, RoutedEventArgs args) =>
-        await ShowLibraryAsync(editable: true);
-    private async void HistoryClick(object sender, RoutedEventArgs args) =>
-        await ShowLibraryAsync(editable: false);
+    private async void BookmarksClick(object sender, RoutedEventArgs args) => await GuardLibraryAsync(editable: true);
+    private async void HistoryClick(object sender, RoutedEventArgs args) => await GuardLibraryAsync(editable: false);
+
+    private async Task GuardLibraryAsync(bool editable)
+    {
+        try { await ShowLibraryAsync(editable); }
+        catch (Exception error) when (RecoverableFailure.Is(error))
+        {
+            if (!closing) Status.Text = editable ? "북마크 관리를 완료하지 못했습니다." : "방문 기록 관리를 완료하지 못했습니다.";
+        }
+    }
 
     private async Task ShowLibraryAsync(bool editable)
     {
@@ -1064,7 +1091,8 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         DownloadPopup.IsOpen = false;
         var existing = Tabs.Items.OfType<TabItem>().FirstOrDefault(item => item.Tag is BrowserTab { Url: "veil://downloads" } && !closingTabs.Contains(item));
         if (existing is not null) { Tabs.SelectedItem = existing; return; }
-        _ = await OpenTab("veil://downloads");
+        try { _ = await OpenTab("veil://downloads"); }
+        catch (Exception error) when (RecoverableFailure.Is(error)) { if (!closing) Status.Text = "다운로드 목록을 열지 못했습니다."; }
     }
 
     // ── Find in page ─────────────────────────────────────────────────────────
@@ -1097,6 +1125,6 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             string result = await tab.View.ExecuteScriptAsync($"window.find({text}, false, {reverse}, true)");
             Status.Text = result == "true" ? "일치하는 텍스트를 찾았습니다." : "일치하는 텍스트가 없습니다.";
         }
-        catch (InvalidOperationException) { Status.Text = "페이지에서 검색할 수 없습니다."; }
+        catch (Exception error) when (RecoverableFailure.Is(error)) { if (!closing) Status.Text = "페이지에서 검색할 수 없습니다."; }
     }
 }

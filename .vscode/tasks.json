@@ -40,6 +40,16 @@
             "dependsOn": "build: desktop",
             "group": "test",
             "problemMatcher": []
+        },
+        {
+            "label": "test: phase 6 management pages",
+            "type": "process",
+            "command": "node",
+            "args": ["tests/phase6/phase6.mjs"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "dependsOn": "build: desktop",
+            "group": "test",
+            "problemMatcher": []
         }
     ]
 }

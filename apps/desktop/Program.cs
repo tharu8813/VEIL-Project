@@ -181,6 +181,9 @@ internal static class Program
         // Test-only: trust one test server key (local DoH responder). Never present in Release builds.
         if (Environment.GetEnvironmentVariable("VEIL_TEST_TRUSTED_SPKI") is { Length: > 0 } spki && spki.All(c => char.IsAsciiLetterOrDigit(c) || c is '+' or '/' or '='))
             arguments.Add($"--ignore-certificate-errors-spki-list={spki}");
+        // Test-only: offline smoke runs resolve nothing but loopback, so no test name reaches a real resolver.
+        if (Environment.GetEnvironmentVariable("VEIL_TEST_OFFLINE_HOSTS") == "1")
+            arguments.Add("--host-resolver-rules=\"MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE localhost\"");
 #endif
         // SEC-004: engine processes inherit TEMP when the environment is created. The desktop app has
         // already moved it into the profile; any other caller (the Debug-only --probe experiments) gets a

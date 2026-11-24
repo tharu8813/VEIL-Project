@@ -26,12 +26,16 @@ internal sealed record NetworkSettings(NetworkMode Mode = NetworkMode.Standard, 
         ? new Uri($"{ProxyScheme}://{(ProxyHost!.Contains(':') && !ProxyHost.StartsWith('[') ? $"[{ProxyHost}]" : ProxyHost)}:{ProxyPort}")
         : null;
 
-    internal string Describe() => (Mode == NetworkMode.Standard ? "표준 보호" : $"프록시 보호 ({ProxyScheme}://{ProxyHost}:{ProxyPort})") +
+    internal string Describe() => (Mode == NetworkMode.Standard ? "표준 보호" : $"{NetworkPolicy.ProxyName} ({ProxyScheme}://{ProxyHost}:{ProxyPort})") +
         (DnsTemplate is null ? "" : " · 보안 DNS");
 }
 
 internal static class NetworkPolicy
 {
+    /// <summary>ADR-0010: proxy protection ships as experimental; every surface that names it uses this label.</summary>
+    internal const string ProxyName = "프록시 보호 (실험적)";
+    internal const string ProxyCaveat = "실험적 기능이며 고강도 익명성 보호가 아닙니다. OS 수준 차단(방화벽), 절전 후 복귀, 외부 IPv6, VEIL 엔진 밖 프로그램의 연결은 검증되지 않았습니다.";
+
     /// <summary>Well-known DNS-over-HTTPS resolvers offered in the settings dialog.</summary>
     internal static readonly (string Name, string Template)[] DnsProviders =
     [

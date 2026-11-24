@@ -19,6 +19,10 @@ public partial class BrowserWindow
                 closing || session.IsEnding || session.EngineLost) return;
             ChangeSecurity(chosen);
         }
+        catch (Exception error) when (RecoverableFailure.Is(error))
+        {
+            if (!closing) Status.Text = "보안 설정 작업을 완료하지 못했습니다.";
+        }
         finally
         {
             session.SettingsUiOpen = false;

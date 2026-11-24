@@ -34,7 +34,7 @@ public partial class BrowserWindow
                 origin = null;
 
             bool exists = store.Exists;
-            password = ProfileUnlockDialog.Prompt("비밀번호 관리자",
+            password = UserPrompts.Secret("비밀번호 관리자",
                 exists ? "비밀번호 관리자 전용 암호를 입력하세요." :
                 "별도의 긴 암호(12자 이상)를 설정하세요. 잊으면 저장된 계정을 복구할 수 없습니다.", this);
             if (password is null || !PasswordWindowReady()) return;
@@ -45,7 +45,7 @@ public partial class BrowserWindow
                     Status.Text = "비밀번호 관리자 암호는 12자 이상이어야 합니다.";
                     return;
                 }
-                confirmation = ProfileUnlockDialog.Prompt("비밀번호 관리자 암호 확인", "동일한 암호를 다시 입력하세요.", this);
+                confirmation = UserPrompts.Secret("비밀번호 관리자 암호 확인", "동일한 암호를 다시 입력하세요.", this);
                 if (confirmation is null || !password.AsSpan().SequenceEqual(confirmation) || !PasswordWindowReady())
                 {
                     Status.Text = "암호가 일치하지 않거나 설정이 취소되었습니다.";
@@ -79,14 +79,14 @@ public partial class BrowserWindow
                     if (PasswordWindowReady()) Status.Text = "선택한 계정을 삭제했습니다.";
                     break;
                 case PasswordAction.Reveal:
-                    reauth = ProfileUnlockDialog.Prompt("비밀번호 열람 인증", "관리자 전용 암호를 다시 입력하세요.", this);
+                    reauth = UserPrompts.Secret("비밀번호 열람 인증", "관리자 전용 암호를 다시 입력하세요.", this);
                     if (reauth is null || !PasswordWindowReady()) return;
                     var verified = await store.ReadAsync(reauth);
                     try
                     {
                         if (PasswordWindowReady() && verified.FirstOrDefault(entry =>
                                 entry.Origin == selected.Origin && entry.UserName == selected.UserName) is { } login)
-                            new PasswordRevealDialog(this, login).ShowDialog();
+                            UserPrompts.ShowModal(new PasswordRevealDialog(this, login), "비밀번호 확인");
                     }
                     finally { verified.Clear(); }
                     break;
@@ -97,8 +97,9 @@ public partial class BrowserWindow
                     break;
             }
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException
-            or COMException or JsonException or OperationCanceledException or System.ComponentModel.Win32Exception)
+        // InvalidDataException (wrong passphrase, tampered or invalid store) is not an IOException; an
+        // unhandled exception in this async void handler would terminate the browser.
+        catch (Exception error) when (RecoverableFailure.Is(error))
         {
             if (PasswordWindowReady())
                 Status.Text = "비밀번호 작업을 완료하지 못했습니다. 암호, 저장소 상태 및 현재 페이지를 확인하세요.";

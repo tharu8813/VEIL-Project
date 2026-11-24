@@ -54,8 +54,14 @@ public partial class BrowserWindow
                     web.CookieManager.DeleteCookie(cookie);
                     requested++;
                 }
-                var remaining = (await web.CookieManager.GetCookiesAsync("")).Count(cookie =>
-                    SiteDataPolicy.SameCookieDomain(cookie.Domain, domain));
+                // DeleteCookie returns before the engine applies it; recheck briefly before reporting.
+                int remaining = int.MaxValue;
+                for (int attempt = 0; attempt < 20 && remaining != 0 && SiteDataReady(); attempt++)
+                {
+                    if (attempt > 0) await Task.Delay(100);
+                    remaining = (await web.CookieManager.GetCookiesAsync("")).Count(cookie =>
+                        SiteDataPolicy.SameCookieDomain(cookie.Domain, domain));
+                }
                 if (SiteDataReady())
                     Status.Text = remaining == 0 ? $"선택 도메인 쿠키 삭제 확인 ({requested}개 요청)." :
                         "일부 쿠키가 남아 있거나 다시 생성되었습니다. 관련 탭을 닫고 다시 시도하세요.";
@@ -72,8 +78,8 @@ public partial class BrowserWindow
                     using var json = JsonDocument.Parse(response);
                     if (json.RootElement.TryGetProperty("usage", out var usage) &&
                         usage.TryGetDouble(out double bytes) && double.IsFinite(bytes) && bytes >= 0)
-                        MessageBox.Show(this, $"{origin}\n엔진 보고 저장소 사용량: {bytes:N0}바이트\n쿠키 및 모든 저장 유형의 총량을 의미하지 않습니다.",
-                            "사이트 저장소 사용량", MessageBoxButton.OK, MessageBoxImage.Information);
+                        UserPrompts.Notice(this, $"{origin}\n엔진 보고 저장소 사용량: {bytes:N0}바이트\n쿠키 및 모든 저장 유형의 총량을 의미하지 않습니다.",
+                            "사이트 저장소 사용량", MessageBoxImage.Information);
                     else Status.Text = "사이트 저장소 사용량을 확인할 수 없습니다.";
                     return;
                 }
@@ -91,8 +97,7 @@ public partial class BrowserWindow
             await web.Profile.ClearBrowsingDataAsync(kinds);
             if (SiteDataReady()) Status.Text = "선택한 프로필 데이터의 삭제 요청을 완료했습니다. 열린 페이지에서 다시 생성될 수 있습니다.";
         }
-        catch (Exception error) when (error is COMException or InvalidOperationException or
-            System.IO.IOException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException)
+        catch (Exception error) when (RecoverableFailure.Is(error))
         {
             if (SiteDataReady())
                 Status.Text = "사이트 데이터 작업을 완료하지 못했습니다. 일부 변경이 이미 적용되었을 수 있습니다. 범위를 넓혀 다시 삭제하지 않습니다.";

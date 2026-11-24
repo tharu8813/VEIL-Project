@@ -2,14 +2,8 @@
 // A throwaway self-signed certificate for 127.0.0.1 is trusted only through the Debug-only
 // VEIL_TEST_TRUSTED_SPKI hook. *.test names resolve to 127.0.0.1; every other name gets NXDOMAIN.
 // Every query name is recorded so tests can see which names the engine looked up.
-import { execFile } from 'node:child_process';
-import { X509Certificate, createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:https';
-import { join } from 'node:path';
-import { promisify } from 'node:util';
-
-const run = promisify(execFile);
+import { testCertificate } from './test-cert.mjs';
 
 function answer(query, queried) {
     let offset = 12;
@@ -30,15 +24,11 @@ function answer(query, queried) {
     return Buffer.concat([header, question, records]);
 }
 
-/** Starts the responder. Needs openssl on PATH (e.g. Git for Windows). */
+/** Starts the responder. Needs openssl on PATH (e.g. Git for Windows) or a shipped VEIL_TEST_CERT_DIR. */
 export async function startDoh(directory) {
-    const key = join(directory, 'doh-key.pem'), cert = join(directory, 'doh-cert.pem');
-    await run('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1',
-        '-subj', '/CN=127.0.0.1', '-addext', 'subjectAltName=IP:127.0.0.1']);
-    const pem = await readFile(cert);
-    const spki = createHash('sha256').update(new X509Certificate(pem).publicKey.export({ type: 'spki', format: 'der' })).digest('base64');
+    const { key, cert, spki } = await testCertificate(directory, 'doh');
     const queried = [];
-    const server = createServer({ key: await readFile(key), cert: pem }, (request, response) => {
+    const server = createServer({ key, cert }, (request, response) => {
         const send = query => {
             try { response.writeHead(200, { 'Content-Type': 'application/dns-message', 'Cache-Control': 'max-age=0' }).end(answer(query, queried)); }
             catch { response.writeHead(400).end(); }

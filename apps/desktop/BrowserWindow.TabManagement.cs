@@ -60,6 +60,10 @@ public partial class BrowserWindow
             var dialog = new TabSearchDialog(this, rows);
             if (await ShowManagementPageAsync("veil://tabs", dialog) == true) selected = dialog.SelectedId;
         }
+        catch (Exception error) when (RecoverableFailure.Is(error))
+        {
+            if (!closing) Status.Text = "탭 검색을 완료하지 못했습니다.";
+        }
         finally
         {
             session.SettingsUiOpen = false;

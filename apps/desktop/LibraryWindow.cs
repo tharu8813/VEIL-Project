@@ -108,8 +108,7 @@ internal sealed class LibraryWindow : VeilDialog
                 entries.Clear();
                 entries.AddRange(previous);
                 Refresh();
-                MessageBox.Show(PromptOwner, "변경사항을 저장하지 못했습니다. 기존 목록을 유지합니다.",
-                    title, MessageBoxButton.OK, MessageBoxImage.Warning);
+                UserPrompts.Notice(PromptOwner, "변경사항을 저장하지 못했습니다. 기존 목록을 유지합니다.", title);
                 return;
             }
             Refresh();
@@ -128,9 +127,9 @@ internal sealed class LibraryWindow : VeilDialog
             var targets = entries.Where(entry => InRange(entry, cutoff)).ToArray();
             if (targets.Length == 0) return;
             string scope = range.SelectedItem as string ?? "전체 기간";
-            if (MessageBox.Show(PromptOwner,
+            if (!UserPrompts.Confirm(PromptOwner,
                 $"{scope}의 VEIL 방문 기록 {targets.Length}개를 삭제할까요?\n검색어와 관계없이 이 기간의 항목을 삭제합니다. 쿠키, 사이트 데이터 및 엔진 기록은 지우지 않습니다.",
-                "방문 기록 삭제", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
+                "방문 기록 삭제"))
                 return;
             Commit(() =>
             {
