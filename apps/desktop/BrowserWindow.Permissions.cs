@@ -33,7 +33,7 @@ public partial class BrowserWindow
     private bool PermissionContextMatches(BrowserTab tab, string origin, long epoch)
     {
         if (closing || restoring || session.IsEnding || session.EngineLost ||
-            tab.Owner != this || Active != tab || !IsActive || tab.NavigationEpoch != epoch ||
+            tab.Owner != this || Active != tab || !IsActive || closingTabs.Contains(tab.Item) || tab.NavigationEpoch != epoch ||
             tab.PendingHttp is not null || tab.PendingThreat is not null ||
             SitePermissionPolicy.Origin(tab.Url) != origin)
             return false;

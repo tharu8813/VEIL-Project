@@ -84,3 +84,32 @@ internal sealed class PasswordRevealDialog : VeilDialog
         Closed += (_, _) => secret.Text = "";
     }
 }
+
+
+/// <summary>Native selection, current origin only. Never displays password values.</summary>
+internal sealed class LoginPickerDialog : VeilDialog
+{
+    internal SavedLogin? Selected { get; private set; }
+
+    internal LoginPickerDialog(Window owner, string origin, List<SavedLogin> entries)
+        : base(owner, "로그인 정보 채우기", "", 500, 360)
+    {
+        Subtitle.Text = origin;
+        var list = new ListBox { Style = (Style)FindResource("VeilList") };
+        foreach (var entry in entries.Where(e => e.Origin == origin).OrderBy(e => e.UserName))
+            list.Items.Add(new ListBoxItem { Tag = entry, Content = Row("", entry.UserName, origin) });
+        System.Windows.Automation.AutomationProperties.SetName(list, "현재 사이트 계정");
+        SetBody(list);
+        AddFooterButton("취소", Dismiss);
+        var fill = AddFooterButton("채우기", () =>
+        {
+            if ((list.SelectedItem as ListBoxItem)?.Tag is SavedLogin login && login.Origin == origin)
+            {
+                Selected = login;
+                Complete(true);
+            }
+        }, primary: true);
+        fill.IsEnabled = false;
+        list.SelectionChanged += (_, _) => fill.IsEnabled = list.SelectedItem is not null;
+    }
+}

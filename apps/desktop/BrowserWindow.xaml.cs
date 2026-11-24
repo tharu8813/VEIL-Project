@@ -28,6 +28,7 @@ public partial class BrowserWindow : Window
         internal FrameworkElement? ManagementSurface { get; set; }
         internal Action? CancelManagement { get; set; }
         internal long NavigationEpoch { get; set; }
+        internal bool LoginFormDetected { get; set; }
         /// <summary>HTTPS-first: the plain-HTTP address this tab is currently trying as HTTPS.</summary>
         internal Uri? UpgradedFrom { get; set; }
         /// <summary>The plain-HTTP address the HTTPS warning page offers to open.</summary>
@@ -293,6 +294,8 @@ public partial class BrowserWindow : Window
     private void OnNavigationStarting(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
     {
         tab.NavigationEpoch++;
+        tab.LoginFormDetected = false;
+        if (Active == tab) UpdateLoginAction();
         // Internal management routes are browser-chrome commands, never web navigation.
         if (args.Uri.StartsWith("veil:", StringComparison.OrdinalIgnoreCase) || IsManagementUrl(tab.Url))
         {
@@ -361,7 +364,11 @@ public partial class BrowserWindow : Window
                 Status.Text = args.IsSuccess ? "준비" : $"페이지를 불러오지 못했습니다 ({args.WebErrorStatus}).";
             UpdateNavigationButtons();
         }
-        if (args.IsSuccess) SaveTabs();
+        if (args.IsSuccess)
+        {
+            SaveTabs();
+            if (Active == tab) _ = ProbeLoginFormAsync(tab);
+        }
     }
 
     /// <summary>Engine browser exit ends the session cleanly (app state saved once, every window closed so the
@@ -703,6 +710,7 @@ public partial class BrowserWindow : Window
         UpdateManagementVisibility();
         if (fullScreen && fullScreenFromPage && Active?.View.CoreWebView2?.ContainsFullScreenElement != true) SetFullScreen(false);
         RefreshChrome();
+        if (Active is { } selected) _ = ProbeLoginFormAsync(selected);
         SyncProgress();
         SaveTabs();
     }
@@ -717,6 +725,7 @@ public partial class BrowserWindow : Window
         UpdateManagementVisibility();
         UpdateNavigationButtons();
         UpdateBookmarkGlyph();
+        UpdateLoginAction();
         RefreshDownloadProgress();
     }
 

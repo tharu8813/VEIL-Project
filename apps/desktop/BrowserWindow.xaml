@@ -148,6 +148,18 @@
                                 </TextBlock.RenderTransform>
                             </TextBlock>
                         </Button>
+                        <Button x:Name="LoginActionButton" Style="{StaticResource IconButton}" Content="&#xE72E;"
+                                Visibility="Collapsed" ToolTip="로그인 정보 저장 또는 채우기" AutomationProperties.Name="로그인 정보"
+                                Click="LoginActionClick" WindowChrome.IsHitTestVisibleInChrome="True">
+                            <Button.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="입력한 로그인 정보 저장" Click="SavePageLoginClick"/>
+                                    <MenuItem Header="저장된 로그인 정보 채우기" Click="FillPageLoginClick"/>
+                                    <Separator/>
+                                    <MenuItem Header="비밀번호 관리자" Click="PasswordsClick"/>
+                                </ContextMenu>
+                            </Button.ContextMenu>
+                        </Button>
                         <Button x:Name="DownloadButton" Style="{StaticResource IconButton}"
                                 ToolTip="최근 다운로드" AutomationProperties.Name="최근 다운로드"
                                 Click="DownloadToolbarClick" WindowChrome.IsHitTestVisibleInChrome="True">
@@ -236,6 +248,8 @@
                                     <MenuItem Header="다운로드" InputGestureText="Ctrl+J" Click="DownloadsClick" />
                                     <MenuItem Header="다운로드 금고" InputGestureText="Ctrl+Shift+J" Click="VaultClick" />
                                     <MenuItem Header="비밀번호 관리자" Click="PasswordsClick" />
+                                    <MenuItem Header="입력한 로그인 정보 저장" Click="SavePageLoginClick"/>
+                                    <MenuItem Header="저장된 로그인 정보 채우기" Click="FillPageLoginClick"/>
                                     <MenuItem Header="페이지 내 검색" InputGestureText="Ctrl+F" Click="FindClick" />
                                     <Separator />
                                     <MenuItem Header="설정" InputGestureText="Ctrl+," Click="SettingsClick" />

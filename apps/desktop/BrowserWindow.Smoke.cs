@@ -81,6 +81,14 @@ public partial class BrowserWindow
                     BookmarkHtml.Export(importedBookmarks.Folders, importedBookmarks.Entries)), []);
                 Check(roundTrip.Folders[0].Name == "Study & Code" && roundTrip.Entries[0].Url == importedBookmarks.Entries[0].Url &&
                     roundTrip.Entries[0].FolderId == roundTrip.Folders[0].Id, "bookmark HTML round trip preserves hierarchy and URL");
+                Check(LoginFormPolicy.Decode("https://example.test", """{"UserName":"synthetic","Password":"synthetic-pass"}""")?.Origin == "https://example.test" &&
+                    LoginFormPolicy.Decode("http://example.test", """{"UserName":"synthetic","Password":"synthetic-pass"}""") is null &&
+                    LoginFormPolicy.Decode("https://example.test", """{"UserName":"","Password":"synthetic-pass"}""") is null,
+                    "login capture rejects invalid origin and empty username");
+                Check(LoginFormPolicy.Probe("https://example.test").Contains("return true;") &&
+                    !LoginFormPolicy.Probe("https://example.test").Contains("pass.value") &&
+                    !LoginFormPolicy.Fill(new SavedLogin("https://example.test", "synthetic", "synthetic-pass")).Contains(".submit("),
+                    "login probe reads no password and fill does not submit");
                 var rule = new SitePermissionRule("https://example.test", "camera", SitePermissionPolicy.Ask);
                 Check(SitePermissionPolicy.ValidRules([rule]) &&
                     !SitePermissionPolicy.ValidRules([rule, rule]) &&
