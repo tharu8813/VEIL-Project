@@ -891,9 +891,54 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     }
 
     private async void BookmarksClick(object sender, RoutedEventArgs args) =>
-        _ = await OpenTab("veil://bookmarks");
+        await ShowLibraryAsync(editable: true);
     private async void HistoryClick(object sender, RoutedEventArgs args) =>
-        _ = await OpenTab("veil://history");
+        await ShowLibraryAsync(editable: false);
+
+    private async Task ShowLibraryAsync(bool editable)
+    {
+        if (closing || restoring || session.IsEnding || session.EngineLost) return;
+        var entries = editable ? data.Bookmarks : data.History;
+        bool changed = false;
+        bool SaveLibrary()
+        {
+            try
+            {
+                data.Save(statePath);
+                changed = true;
+                return true;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
+        var dialog = new LibraryWindow(this, editable ? "북마크 관리" : "방문 기록", entries, editable, SaveLibrary);
+        bool open = dialog.ShowDialog() == true;
+        if (closing || session.IsEnding || session.EngineLost) return;
+        if (changed)
+        {
+            string internalUrl = editable ? "veil://bookmarks" : "veil://history";
+            foreach (var window in session.Windows.ToArray())
+            {
+                if (window.closing) continue;
+                if (editable) window.UpdateBookmarkGlyph();
+                // Keep already-open legacy read-only library tabs in sync.
+                foreach (var tab in window.Tabs.Items.OfType<TabItem>().Select(item => item.Tag).OfType<BrowserTab>())
+                {
+                    if (tab.Url != internalUrl || tab.View.CoreWebView2 is not { } web) continue;
+                    try { web.NavigateToString(window.BuildInternalPage(internalUrl)); }
+                    catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException)
+                    {
+                        window.Status.Text = "목록 탭을 새로고침하지 못했습니다.";
+                    }
+                }
+            }
+        }
+        if (open && dialog.SelectedUrl is { } url && IsWebUrl(url))
+            _ = await OpenTab(url);
+    }
     private async void DownloadsClick(object sender, RoutedEventArgs args)
     {
         DownloadPopup.IsOpen = false;
