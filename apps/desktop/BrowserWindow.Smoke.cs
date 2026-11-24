@@ -92,6 +92,8 @@ public partial class BrowserWindow
 
                 if (stage == "write")
                 {
+                    VaultSetupDialog.VerifySetupWizard(this);
+                    checks.Add("vault setup wizard rejects invalid credentials and completes all three steps");
                     NavigateAddress(origin);
                     await ReadyAt("/");
                     BookmarkClick(this, new RoutedEventArgs());

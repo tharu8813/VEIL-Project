@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace Veil.Desktop;
 
@@ -15,6 +16,7 @@ internal sealed class VaultSetupDialog : VeilDialog
     internal string? Passphrase { get; private set; }
     internal string? RecoveryCode { get; private set; }
     internal VaultBackupSource? Backup { get; private set; }
+    private readonly Action exerciseWizard;
 
     internal VaultSetupDialog(Window? owner, string title, bool askPassphrase, bool issueCode,
         bool allowRestore = false, string? passwordPrompt = null)
@@ -30,7 +32,7 @@ internal sealed class VaultSetupDialog : VeilDialog
 
         if (askPassphrase)
             steps.Add(() => Page(passwordPrompt ?? "금고 암호를 정하세요. 8자 이상, 다른 곳에서 쓰지 않는 암호를 권장합니다.",
-                Labeled("새 암호", first), Labeled("새 암호 확인", second), error));
+                Labeled("새 암호", first), Labeled("새 암호 확인", second)));
         if (issueCode)
         {
             steps.Add(() => Page("복구 코드입니다. 암호를 잊으면 이 코드로만 금고를 열 수 있습니다. 종이나 별도 장치 등 이 컴퓨터 밖에 보관하세요. 이 화면을 닫으면 다시 표시되지 않으며 VEIL은 이 코드를 저장하지 않습니다.",
@@ -40,11 +42,17 @@ internal sealed class VaultSetupDialog : VeilDialog
                     Padding = new Thickness(12), Background = Res("RaisedBrush"), Foreground = Res("TextBrush"),
                     BorderBrush = Res("LineBrush"), TextWrapping = TextWrapping.Wrap,
                 }));
-            steps.Add(() => Page("보관한 복구 코드를 그대로 입력해 확인하세요.", confirm, error));
+            steps.Add(() => Page("보관한 복구 코드를 그대로 입력해 확인하세요.", confirm));
         }
 
         var host = new ContentControl();
-        SetBody(host);
+        // The validation message belongs to a stable parent, not to any replaceable step.
+        // WPF does not allow a UIElement to be added to two logical parents.
+        var layout = new DockPanel();
+        DockPanel.SetDock(error, Dock.Bottom);
+        layout.Children.Add(error);
+        layout.Children.Add(new ScrollViewer { Content = host, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        SetBody(layout);
         Button? next = null;
         void Show()
         {
@@ -88,6 +96,56 @@ internal sealed class VaultSetupDialog : VeilDialog
             DialogResult = true;
         }, primary: true);
         Show();
+        Closed += (_, _) => { first.Clear(); second.Clear(); confirm.Clear(); };
+
+        // Invoked only by the explicit developer smoke harness, with synthetic credentials.
+        // Exercise the real button handlers, including failed validation and the 2 -> 3 transition.
+        exerciseWizard = () =>
+        {
+            if (!askPassphrase || !issueCode || index != 0)
+                throw new InvalidOperationException("Unexpected initial wizard state.");
+            void Press() => next.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            void Require(bool condition, string step)
+            {
+                if (!condition) throw new InvalidOperationException("Vault wizard regression: " + step);
+            }
+            Press();
+            Require(index == 0 && error.Text.Length != 0, "empty password rejected");
+            first.Password = "synthetic-test-only";
+            second.Password = "synthetic-mismatch";
+            Press();
+            Require(index == 0 && error.Text.Length != 0, "mismatched password rejected");
+            second.Password = first.Password;
+            Press();
+            Require(index == 1 && error.Text.Length == 0, "recovery code displayed");
+            Press();
+            Require(index == 2 && Equals(next.Content, "완료") && error.Text.Length == 0,
+                "recovery confirmation displayed without reparenting");
+            confirm.Text = "INVALID";
+            Press();
+            Require(index == 2 && error.Text.Length != 0, "incorrect recovery code rejected");
+            confirm.Text = code.ToLowerInvariant().Replace("-", "");
+            Press();
+            Require(Passphrase == "synthetic-test-only" && RecoveryCode == code, "confirmed credentials accepted");
+        };
+    }
+
+    internal static void VerifySetupWizard(Window owner)
+    {
+        var setup = new VaultSetupDialog(owner, "금고 설정 테스트", askPassphrase: true, issueCode: true, allowRestore: true);
+        Exception? failure = null;
+        setup.Loaded += (_, _) => setup.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try { setup.exerciseWizard(); }
+            catch (Exception ex)
+            {
+                failure = ex;
+                if (setup.IsVisible) setup.Close();
+            }
+        }), DispatcherPriority.Background);
+        bool accepted = setup.ShowDialog() == true;
+        if (failure is not null) throw new InvalidOperationException("Vault wizard smoke failed.", failure);
+        if (!accepted) throw new InvalidOperationException("Vault wizard did not finish.");
     }
 
     private UIElement Page(string text, params UIElement[] children)

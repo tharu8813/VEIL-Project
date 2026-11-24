@@ -392,7 +392,14 @@ public partial class BrowserWindow : Window
             ShowDownloadOutcome(fileName, $"{DownloadVault.Blocked}: {unsupported}", $"{fileName}: 보호 저장을 지원하지 않는 다운로드라 차단했습니다.");
             return;
         }
-        _ = CaptureAsync(tab.View.CoreWebView2, uri!, fileName, engineReceived, engineOnDisk);
+        // WebView2 callbacks cannot safely run a nested modal message loop. Schedule capture
+        // after DownloadStarting returns, keeping the original request cancelled and protected.
+        var web = tab.View.CoreWebView2;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!closing && !session.IsEnding && !session.EngineLost)
+                _ = CaptureAsync(web, uri!, fileName, engineReceived, engineOnDisk);
+        }), DispatcherPriority.Normal);
     }
 
     private async Task CaptureAsync(CoreWebView2 web, Uri uri, string fileName, long engineReceived, long engineOnDisk)
@@ -414,6 +421,7 @@ public partial class BrowserWindow : Window
         bool open = false;
         try
         {
+            download.WaitForVault();
             open = await EnsureVaultOpenAsync(download.Token);
             download.Token.ThrowIfCancellationRequested();
             if (!open)
@@ -421,6 +429,7 @@ public partial class BrowserWindow : Window
                 Report(DownloadVault.Blocked, "금고 잠김", $"{fileName}: 금고를 열지 않아 저장하지 않았습니다.");
                 return;
             }
+            download.WaitForTransfer();
             var entry = await vault.CaptureAsync(uri, download, web);
             Report(DownloadVault.Stored, null, $"{fileName}을(를) 암호화 금고에 보관했습니다.", entry);
         }
@@ -451,7 +460,12 @@ public partial class BrowserWindow : Window
     private async Task<bool> EnsureVaultOpenAsync(CancellationToken cancellation = default)
     {
         await session.VaultOpenGate.WaitAsync(cancellation);
-        try { return await OpenVaultAsync(); }
+        try
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (closing || session.IsEnding || session.EngineLost) return false;
+            return await OpenVaultAsync();
+        }
         finally { session.VaultOpenGate.Release(); }
     }
 
@@ -467,11 +481,15 @@ public partial class BrowserWindow : Window
         {
             var setup = new VaultSetupDialog(this, "다운로드 금고 만들기", askPassphrase: true, issueCode: true, allowRestore: true);
             if (setup.ShowDialog() != true) return false;
-            if (setup.Backup is not { } backup) return await vault.CreateAsync(setup.Passphrase!, setup.RecoveryCode!) is null;
-            string? restoreFailure = await vault.RestoreAsync(backup);
-            if (restoreFailure is not null)
-                MessageBox.Show(this, restoreFailure, "금고 백업 복원", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return restoreFailure is null;
+            bool restoringBackup = setup.Backup is not null;
+            Status.Text = restoringBackup ? "암호화 금고를 복원하는 중입니다." : "암호화 금고를 만드는 중입니다.";
+            string? failure = setup.Backup is { } backup
+                ? await vault.RestoreAsync(backup)
+                : await vault.CreateAsync(setup.Passphrase!, setup.RecoveryCode!);
+            if (failure is not null && !closing && !session.IsEnding)
+                MessageBox.Show(this, failure, restoringBackup ? "금고 백업 복원" : "다운로드 금고 만들기",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            return failure is null;
         }
         string? error = null;
         for (int attempt = 0; attempt < 5; attempt++)
