@@ -47,6 +47,7 @@ public partial class BrowserWindow : Window
     private bool restoring = true;
     private bool smokeRun;
     private bool openingDownloads;
+    private LibraryWindow? bookmarkLibrary;
 
     private BrowserData data => session.Data;
     private Stack<ClosedTab> closedTabs => session.ClosedTabs;
@@ -477,38 +478,40 @@ public partial class BrowserWindow : Window
         {
             cancellation.ThrowIfCancellationRequested();
             if (closing || session.IsEnding || session.EngineLost) return false;
-            return await OpenVaultAsync();
+            return await OpenVaultAsync(cancellation);
         }
         finally { session.VaultOpenGate.Release(); }
     }
 
-    private async Task<bool> OpenVaultAsync()
+    private async Task<bool> OpenVaultAsync(CancellationToken cancellation)
     {
+        bool CanContinue() => !closing && !session.IsEnding && !session.EngineLost && !cancellation.IsCancellationRequested;
+        if (!CanContinue()) return false;
         var vault = session.Vault;
         if (vault.Unlocked) return true;
         if (vault.UsesProfilePassword) return false;
         if (!vault.Available) return false;
-        if (await vault.TryOpenFromDevelopmentEnvironmentAsync()) return true;
-        if (smokeRun) return false;
+        if (await vault.TryOpenFromDevelopmentEnvironmentAsync()) return CanContinue();
+        if (smokeRun || !CanContinue()) return false;
         if (!vault.Exists)
         {
             var setup = new VaultSetupDialog(this, "다운로드 금고 만들기", askPassphrase: true, issueCode: true, allowRestore: true);
-            if (setup.ShowDialog() != true) return false;
+            if (setup.ShowDialog() != true || !CanContinue()) return false;
             bool restoringBackup = setup.Backup is not null;
             Status.Text = restoringBackup ? "암호화 금고를 복원하는 중입니다." : "암호화 금고를 만드는 중입니다.";
             string? failure = setup.Backup is { } backup
                 ? await vault.RestoreAsync(backup)
                 : await vault.CreateAsync(setup.Passphrase!, setup.RecoveryCode!);
-            if (failure is not null && !closing && !session.IsEnding)
+            if (failure is not null && CanContinue())
                 MessageBox.Show(this, failure, restoringBackup ? "금고 백업 복원" : "다운로드 금고 만들기",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
-            return failure is null;
+            return failure is null && CanContinue();
         }
         string? error = null;
-        for (int attempt = 0; attempt < 5; attempt++)
+        for (int attempt = 0; attempt < 5 && CanContinue(); attempt++)
         {
             var unlock = new VaultUnlockDialog(this, error);
-            if (unlock.ShowDialog() != true) return false;
+            if (unlock.ShowDialog() != true || !CanContinue()) return false;
             if (unlock.RecoveryCode is { } code)
             {
                 error = await vault.RecoverAsync(code);
@@ -516,10 +519,12 @@ public partial class BrowserWindow : Window
                 bool resetSaved = false;
                 try
                 {
+                    // A recovered vault must be relocked if shutdown/cancellation wins before credential reset.
+                    if (!CanContinue()) return false;
                     var reset = new VaultSetupDialog(this, "복구 후 새 암호와 복구 코드", askPassphrase: true, issueCode: true);
-                    if (reset.ShowDialog() != true) return false;
+                    if (reset.ShowDialog() != true || !CanContinue()) return false;
                     resetSaved = await vault.CompleteRecoveryAsync(reset.Passphrase!, reset.RecoveryCode!);
-                    if (resetSaved) return true;
+                    if (resetSaved) return CanContinue();
                     error = "새 인증 정보를 모두 저장하지 못했습니다. 다시 잠금을 해제하세요.";
                 }
                 finally
@@ -529,8 +534,9 @@ public partial class BrowserWindow : Window
                 continue;
             }
             error = await vault.UnlockAsync(unlock.Passphrase!);
-            if (error is null) return true;
-            await Task.Delay(500 * (attempt + 1)); // slow down repeated guesses
+            if (error is null) return CanContinue();
+            if (!CanContinue()) return false;
+            await Task.Delay(500 * (attempt + 1), cancellation); // slow down repeated guesses
         }
         return false;
     }
@@ -563,15 +569,7 @@ public partial class BrowserWindow : Window
         {
             session.VaultUiOpen = false;
             session.PermissionUiOpen = false;
-            if (SettingsReady())
-                foreach (var window in session.Windows.ToArray())
-                {
-                    if (window.closing) continue;
-                    foreach (var tab in window.Tabs.Items.OfType<TabItem>().Select(item => item.Tag).OfType<BrowserTab>())
-                        if (tab.Url == "veil://downloads" && tab.View.CoreWebView2 is { } web)
-                            try { web.NavigateToString(window.BuildInternalPage("veil://downloads")); }
-                            catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
-                }
+            RefreshSharedDownloadPages();
         }
     }
 
@@ -610,14 +608,27 @@ public partial class BrowserWindow : Window
         Status.Text = message + " Ctrl+J에서 확인할 수 있습니다.";
         Dispatcher.BeginInvoke(() =>
         {
-            if (closing) return;
-            DownloadButton.Visibility = Visibility.Visible;
-            foreach (var window in session.Windows.ToArray())
-                if (!window.closing) window.RefreshDownloadProgress();
-            if (Active?.Url == "veil://downloads")
-                Active.View.CoreWebView2.NavigateToString(BuildInternalPage("veil://downloads"));
-            Motion.Pop(Motion.Transforms(DownloadButton).Scale, 1.35);
+            RefreshSharedDownloadPages();
+            if (!closing && !session.IsEnding && !session.EngineLost)
+                Motion.Pop(Motion.Transforms(DownloadButton).Scale, 1.35);
         }, System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    // Results and vault visibility belong to the profile, not the originating window.
+    private void RefreshSharedDownloadPages()
+    {
+        if (session.IsEnding || session.EngineLost) return;
+        foreach (var window in session.Windows.ToArray())
+        {
+            if (window.closing) continue;
+            window.RefreshDownloadProgress();
+            foreach (var tab in window.Tabs.Items.OfType<TabItem>().Select(item => item.Tag).OfType<BrowserTab>().ToArray())
+            {
+                if (tab.Url != "veil://downloads" || window.closingTabs.Contains(tab.Item)) continue;
+                try { tab.View.CoreWebView2?.NavigateToString(window.BuildInternalPage("veil://downloads")); }
+                catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
+            }
+        }
     }
 
     private async void OnNewWindowRequested(BrowserTab opener, CoreWebView2NewWindowRequestedEventArgs args)
@@ -1024,7 +1035,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void BookmarkClick(object sender, RoutedEventArgs args)
     {
-        if (Active is not { } tab || !IsWebUrl(tab.Url)) return;
+        if (!SettingsReady() || Active is not { } tab || closingTabs.Contains(tab.Item) || !IsWebUrl(tab.Url)) return;
         if (data.Bookmarks.All(entry => entry.Url != tab.Url))
         {
             data.Bookmarks.Add(new PageEntry(tab.Title, tab.Url, DateTimeOffset.Now));
@@ -1053,13 +1064,14 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         string internalUrl = editable ? "veil://bookmarks" : "veil://history";
         if (FocusManagementPage(internalUrl)) return;
         var entries = editable ? data.Bookmarks : data.History;
+        LibraryWindow? dialog = null;
         bool SaveLibrary()
         {
             try
             {
                 data.Save(statePath);
                 if (editable)
-                    RefreshBookmarkBars();
+                    RefreshBookmarkBars(dialog);
                 return true;
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -1068,11 +1080,19 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             }
         }
 
-        var dialog = new LibraryWindow(this, editable ? "북마크 관리" : "방문 기록", entries, editable, SaveLibrary);
-        bool open = await ShowManagementPageAsync(internalUrl, dialog);
-        if (!SettingsReady()) return;
-        if (open && dialog.SelectedUrl is { } url && IsWebUrl(url))
-            _ = await OpenTab(url);
+        dialog = new LibraryWindow(this, editable ? "북마크 관리" : "방문 기록", entries, editable, SaveLibrary);
+        if (editable) bookmarkLibrary = dialog;
+        try
+        {
+            bool open = await ShowManagementPageAsync(internalUrl, dialog);
+            if (!SettingsReady()) return;
+            if (open && dialog.SelectedUrl is { } url && IsWebUrl(url))
+                _ = await OpenTab(url);
+        }
+        finally
+        {
+            if (ReferenceEquals(bookmarkLibrary, dialog)) bookmarkLibrary = null;
+        }
     }
     private async void DownloadsClick(object sender, RoutedEventArgs args)
     {

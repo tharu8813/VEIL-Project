@@ -8,6 +8,8 @@ namespace Veil.Desktop;
 internal sealed class LibraryWindow : VeilDialog
 {
     internal string? SelectedUrl { get; private set; }
+    private Action? refreshEntries;
+    internal void RefreshEntries() => refreshEntries?.Invoke();
 
     internal LibraryWindow(Window owner, string title, List<PageEntry> entries, bool editable, Func<bool> save)
         : base(owner, title, editable ? "" : "", 760, 540)
@@ -74,12 +76,14 @@ internal sealed class LibraryWindow : VeilDialog
             var matches = entries.Where(entry => InRange(entry, cutoff) &&
                 (entry.Title.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
                  entry.Url.Contains(filter, StringComparison.OrdinalIgnoreCase))).ToArray();
+            var selected = Selected();
             list.Items.Clear();
             foreach (var entry in matches)
             {
                 var row = new ListBoxItem { Tag = entry, Content = Row(rowGlyph, entry.Title, entry.Url, When(entry.Visited)) };
                 System.Windows.Automation.AutomationProperties.SetName(row, $"{entry.Title} {entry.Url}");
                 list.Items.Add(row);
+                if (selected is not null && entry == selected) list.SelectedItem = row;
             }
             Subtitle.Text = filter.Length == 0 && cutoff is null ? $"{entries.Count}개 항목" : $"{matches.Length}개 일치 · 전체 {entries.Count}개";
             ((TextBlock)((StackPanel)empty.Child).Children[1]).Text = entries.Count == 0
@@ -92,7 +96,7 @@ internal sealed class LibraryWindow : VeilDialog
 
         void Open()
         {
-            if (Selected() is not { } entry) return;
+            if (Selected() is not { } entry || !entries.Contains(entry)) return;
             SelectedUrl = entry.Url;
             Complete(true);
         }
@@ -117,7 +121,7 @@ internal sealed class LibraryWindow : VeilDialog
 
         void Remove()
         {
-            if (Selected() is not { } entry) return;
+            if (Selected() is not { } entry || !entries.Contains(entry)) return;
             Commit(() => entries.Remove(entry));
         }
 
@@ -174,6 +178,7 @@ internal sealed class LibraryWindow : VeilDialog
         list.KeyDown += (_, args) => { if (args.Key == Key.Enter) Open(); };
         OnContentLoaded(() => { Refresh(); search.Focus(); });
         OnContentVisible(Refresh);
+        refreshEntries = Refresh;
         Refresh();
     }
 
