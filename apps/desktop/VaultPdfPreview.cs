@@ -138,8 +138,8 @@ internal static class VaultPdfPreview
             await page.RenderToStreamAsync(destination, new PdfPageRenderOptions
             {
                 DestinationWidth = (uint)size.Width, DestinationHeight = (uint)size.Height,
-                BitmapEncoderId = BitmapEncoder.PngEncoderId,
-                BackgroundColor = Windows.UI.Colors.White,
+                BitmapEncoderId = Windows.Graphics.Imaging.BitmapEncoder.PngEncoderId,
+                BackgroundColor = Windows.UI.Color.FromArgb(255, 255, 255, 255),
                 IsIgnoringHighContrast = true,
             });
             if (destination.Size == 0 || destination.Size > MaxOutput) throw new InvalidDataException("PDF raster size.");
