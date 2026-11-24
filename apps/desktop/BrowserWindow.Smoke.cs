@@ -137,7 +137,11 @@ public partial class BrowserWindow
                     await WaitFor(() => Active?.Url == "veil://settings" && Active.CancelManagement is not null, "settings opened in native tab");
                     Check(BrowserData.Load(statePath).Tabs.Contains("veil://settings"),
                         "selected native route persisted without WebView navigation");
-                    CloseTab((TabItem)Tabs.SelectedItem);
+                    var closingSettings = Active!;
+                    var settingsClose = CloseTabAsync(closingSettings.Item);
+                    Check(closingSettings.CancelManagement is null && closingSettings.ManagementSurface is null,
+                        "closing native manager cancels its action before animation completes");
+                    await settingsClose;
                     await ReadyAt("/");
                     await WaitFor(() => !session.SettingsUiOpen && !session.PermissionUiOpen, "closing settings releases manager guards");
                     var selectedBeforeBackground = Active;
@@ -880,8 +884,12 @@ public partial class BrowserWindow
                         Check(DownloadPopup.IsOpen && Active == before && Tabs.Items.Count == tabCount,
                             "toolbar download click opens recent popup without navigating");
                         DownloadsClick(this, new RoutedEventArgs());
-                        await WaitFor(() => Active?.Url == "veil://downloads" && !DownloadPopup.IsOpen, "all downloads opened in tab");
+                        DownloadsClick(this, new RoutedEventArgs());
+                        await WaitFor(() => Active?.Url == "veil://downloads" && !DownloadPopup.IsOpen && !openingDownloads,
+                            "all downloads opened in tab");
                         Check(Active?.Title == "다운로드", "downloads tab title");
+                        Check(Tabs.Items.OfType<TabItem>().Count(item => item.Tag is BrowserTab { Url: "veil://downloads" }) == 1,
+                            "repeated download manager invocation opens only one tab");
                         CloseTab((TabItem)Tabs.SelectedItem);
                         CloseTab(downloadTab);
                         Tabs.SelectedItem = original;

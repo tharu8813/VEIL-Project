@@ -12,3 +12,9 @@ Pending: Windows interactive and VM regression, all routes and shortcuts, direct
 - Assign the internal route and title before inserting/selecting the tab, so a synchronous selection save cannot publish a blank route. Save background internal tabs explicitly and initialize their hidden native landing surfaces without performing authentication or privileged actions.
 - Extend the desktop smoke suite to check persisted selected/background native routes and removal on close. Align the download cancellation assertion with the persistent download manager panel: the active list must disappear, not the manager controls.
 - Source review only; Windows interactive smoke and protected-profile VM regression remain NOT RUN. No security gate is changed.
+
+## Stage 1 stabilization: native page close and repeated invocation
+
+- Cancel the native page's pending action before the tab-close animation yields. Reject activation/completion on a closing, transferred, or rerouted tab. Do not recreate landing controls on a closing tab or navigate it while closing.
+- Guard download-manager tab creation against repeated invocations during WebView initialization. Clear both active-download list bindings when a window closes to release the shared collection from the retired UI.
+- Add Windows smoke assertions for immediate native-page cancellation and repeated download-manager invocation. Source review only; interactive Windows and VM tests remain NOT RUN. No cryptographic, authentication, or network policy changes; all release gates remain unchanged.
