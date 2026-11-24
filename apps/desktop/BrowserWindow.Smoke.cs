@@ -147,6 +147,18 @@ public partial class BrowserWindow
                     "download retry only permits initial transient failures and restricted HTTPS addresses");
                 Check(!DownloadFailurePolicy.Describe(new IOException("synthetic-secret"), DownloadPhase.Streaming, true)
                     .Contains("synthetic-secret"), "download failure detail does not expose raw exceptions");
+                Check(InlineDownloadPolicy.Decode("data:application/octet-stream;base64,c3ludGhldGlj").SequenceEqual("synthetic"u8.ToArray()) &&
+                    InlineDownloadPolicy.Decode("data:text/plain;charset=utf-8,a%20b+%00").SequenceEqual(new byte[] { 97, 32, 98, 43, 0 }) &&
+                    InlineDownloadPolicy.SourceAllowed(new Uri("https://example.test/")) &&
+                    !InlineDownloadPolicy.SourceAllowed(new Uri("http://example.test/")), "bounded inline data decode and source policy");
+                foreach (string invalidData in new[] { "data:text/plain,%GG", "data:;base64,YQ==#fragment",
+                    "data:;base64, YQ=", "data:;unknown=1,x", "data:," + new string('a', InlineDownloadPolicy.MaxBytes + 1) })
+                {
+                    bool refusedData = false;
+                    try { InlineDownloadPolicy.Decode(invalidData); }
+                    catch (InvalidDataException) { refusedData = true; }
+                    Check(refusedData, "invalid inline data rejected");
+                }
                 var overviewIssue = new DownloadIssue(Guid.NewGuid(), "synthetic-failed.bin", DownloadVault.Failed, "DNS", DateTimeOffset.Now);
                 Check(DownloadOverviewPolicy.Filter([previewEntry], [overviewIssue], "dns", DownloadFilter.Failed, VaultSort.Recent).Single().Outcome == DownloadVault.Failed &&
                     DownloadOverviewPolicy.Filter([], [overviewIssue], "", DownloadFilter.Stored, VaultSort.Recent).Count == 0 &&
@@ -1003,10 +1015,16 @@ public partial class BrowserWindow
                     string expected = type switch
                     {
                         "get" or "auth" or "redirect" or "large" => DownloadVault.Stored,
+                        "data" when InlineDownloadPolicy.Enabled => DownloadVault.Stored,
                         "sw" => DownloadVault.Failed, // VEIL refetches from the network, where /sw-file does not exist
                         _ => DownloadVault.Blocked,
                     };
                     Check(downloads[0].StartsWith($"veil-phase0-{type}.bin · {expected}"), $"download {expected} ({type}): {downloads[0]}");
+                    if (type == "data" && InlineDownloadPolicy.Enabled)
+                    {
+                        var entry = session.Vault.Entries.First(e => e.Name == "veil-phase0-data.bin");
+                        Check(await session.Vault.VerifyAsync(entry) == 9, "inline data authenticated size");
+                    }
                     Check(Active!.View.CoreWebView2.Profile.DefaultDownloadFolderPath.StartsWith(
                         Path.Combine(session.Root, ProfileScratch.FolderName), StringComparison.OrdinalIgnoreCase),
                         $"download scratch inside profile ({type})");

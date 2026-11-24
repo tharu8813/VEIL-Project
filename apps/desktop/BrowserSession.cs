@@ -94,6 +94,7 @@ internal sealed class BrowserSession
     internal List<string> Downloads { get; } = [];
     internal List<DownloadIssue> RecentDownloadIssues { get; } = [];
     internal ObservableCollection<BrowserDownload> ActiveDownloads { get; } = [];
+    internal bool InlineCapturePending { get; set; }
     internal List<BrowserWindow> Windows { get; } = [];
     // The first release has exactly one production backend. No fallback or runtime switching.
     internal IBrowserEngine EngineHost { get; } = new WebView2BrowserEngine();

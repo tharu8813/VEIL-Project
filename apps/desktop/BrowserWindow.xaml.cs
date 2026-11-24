@@ -319,6 +319,7 @@ public partial class BrowserWindow : Window
                 web.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Document);
                 web.WebResourceRequested += (_, args) =>
                 {
+                    if (!IsWebUrl(args.Request.Uri)) return;
                     session.Vault.NoteRequest(args.Request.Method, args.Request.Uri);
                     tab.LastDownloadRequest = (args.Request.Method, args.Request.Uri, tab.NavigationEpoch);
                 };
@@ -498,7 +499,44 @@ public partial class BrowserWindow : Window
         // The engine has already received (and HTTP-cached) the start of the body before this event.
         _ = PurgeEngineCacheAsync(tab.View.CoreWebView2);
         var vault = session.Vault;
-        string? unsupported = Uri.TryCreate(operation.Uri, UriKind.Absolute, out var uri) ? vault.Unsupported(uri) : "미지원 방식";
+        string raw = operation.Uri;
+        if (raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            string webSource = tab.View.CoreWebView2.Source;
+            long epoch = tab.NavigationEpoch;
+            bool sourceReady = Uri.TryCreate(webSource, UriKind.Absolute, out var origin) && InlineDownloadPolicy.SourceAllowed(origin);
+            bool allowed = InlineDownloadPolicy.Enabled && vault.Available && !session.InlineCapturePending &&
+                sourceReady && raw.Length <= InlineDownloadPolicy.MaxUriChars && CanUseTab(tab.Item) && Active == tab &&
+                !IsInternalUrl(tab.Url);
+            if (!allowed)
+            {
+                const string detail = "Data 다운로드 미지원 또는 제한 초과";
+                vault.Results.Add(new VaultResult(fileName, DownloadVault.Blocked, 0, detail, null, engineReceived, engineOnDisk));
+                ShowDownloadOutcome(fileName, DownloadVault.Blocked, detail, "Data 다운로드를 안전하게 처리할 수 없어 차단했습니다.");
+                return;
+            }
+            session.InlineCapturePending = true;
+            bool ContextReady() => CanUseTab(tab.Item) && tab.NavigationEpoch == epoch &&
+                tab.View.CoreWebView2?.Source == webSource && !IsInternalUrl(tab.Url);
+            Dispatcher.BeginInvoke(new Action(async () =>
+            {
+                try
+                {
+                    if (ContextReady())
+                        await CaptureAsync(tab.View.CoreWebView2, origin!, fileName, engineReceived, engineOnDisk,
+                            inlinePayload: raw, inlineReady: ContextReady);
+                    else
+                    {
+                        const string detail = "원래 다운로드 페이지 변경";
+                        vault.Results.Add(new VaultResult(fileName, DownloadVault.Blocked, 0, detail, null, engineReceived, engineOnDisk));
+                        if (!closing) ShowDownloadOutcome(fileName, DownloadVault.Blocked, detail, "원래 페이지에서 다시 다운로드하세요.");
+                    }
+                }
+                finally { session.InlineCapturePending = false; }
+            }), DispatcherPriority.Normal);
+            return;
+        }
+        string? unsupported = Uri.TryCreate(raw, UriKind.Absolute, out var uri) ? vault.Unsupported(uri) : "미지원 방식";
         if (unsupported is not null)
         {
             vault.Results.Add(new VaultResult(fileName, DownloadVault.Blocked, 0, unsupported, null, engineReceived, engineOnDisk));
@@ -524,7 +562,7 @@ public partial class BrowserWindow : Window
     }
 
     private async Task CaptureAsync(CoreWebView2 web, Uri uri, string fileName, long engineReceived, long engineOnDisk,
-        RetryDownload? candidate = null, bool retry = false)
+        RetryDownload? candidate = null, bool retry = false, string? inlinePayload = null, Func<bool>? inlineReady = null)
     {
         var vault = session.Vault;
         using var download = new BrowserDownload(fileName);
@@ -557,7 +595,13 @@ public partial class BrowserWindow : Window
                 Report(DownloadVault.Blocked, "원래 다운로드 페이지 변경", "원래 페이지에서 다시 다운로드하세요.");
                 return;
             }
-            var entry = await vault.CaptureAsync(uri, download, web, retry);
+            if (inlinePayload is not null && inlineReady?.Invoke() != true)
+            {
+                Report(DownloadVault.Blocked, "원래 다운로드 페이지 변경", "원래 페이지에서 다시 다운로드하세요.");
+                return;
+            }
+            var entry = inlinePayload is null ? await vault.CaptureAsync(uri, download, web, retry) :
+                await vault.CaptureInlineAsync(inlinePayload, uri, download);
             Report(DownloadVault.Stored, null, $"{fileName}을(를) 암호화 금고에 보관했습니다.", entry);
         }
         catch (OperationCanceledException) when (download.Token.IsCancellationRequested)
@@ -567,6 +611,10 @@ public partial class BrowserWindow : Window
         catch (ThreatBlockedException threat)
         {
             Report(DownloadVault.Blocked, "VEIL 위협 목록", $"{fileName}: {threat.Message}. 저장하지 않았습니다.");
+        }
+        catch (InvalidDataException) when (inlinePayload is not null)
+        {
+            Report(DownloadVault.Blocked, "Data 형식 또는 크기 제한", "지원하지 않는 Data 다운로드를 차단했습니다.");
         }
         catch (Exception error) when (error is IOException or System.Net.Http.HttpRequestException or InvalidOperationException
             or OperationCanceledException or UnauthorizedAccessException or System.ComponentModel.Win32Exception
