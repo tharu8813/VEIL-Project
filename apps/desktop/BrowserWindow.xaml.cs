@@ -22,6 +22,7 @@ public partial class BrowserWindow : Window
         internal string Url { get; set; } = "about:blank";
         internal TabHeader Header { get; set; } = null!;
         internal bool Loading { get; set; }
+        internal bool Pinned { get; set; }
         internal long NavigationEpoch { get; set; }
         /// <summary>HTTPS-first: the plain-HTTP address this tab is currently trying as HTTPS.</summary>
         internal Uri? UpgradedFrom { get; set; }
@@ -36,6 +37,7 @@ public partial class BrowserWindow : Window
     private readonly BrowserSession session;
     private readonly IReadOnlyList<string>? initialUrls;
     private readonly int initialSelected;
+    private readonly int initialPinnedCount;
     private readonly TabItem? adopted;
     private bool closing;
     private bool restoring = true;
@@ -43,7 +45,7 @@ public partial class BrowserWindow : Window
     private DispatcherTimer? downloadPopupTimer;
 
     private BrowserData data => session.Data;
-    private Stack<string> closedTabs => session.ClosedTabs;
+    private Stack<ClosedTab> closedTabs => session.ClosedTabs;
     private List<string> downloads => session.Downloads;
     private string statePath => session.StatePath;
     private CoreWebView2Environment? engine => session.Engine;
@@ -54,11 +56,12 @@ public partial class BrowserWindow : Window
     internal BrowserWindow(string root, DownloadVault vault) : this(new BrowserSession(root, vault), null, 0, null) { }
 
     /// <summary>Additional window: restores <paramref name="urls"/>, or adopts a tab dragged out of another window.</summary>
-    private BrowserWindow(BrowserSession session, IReadOnlyList<string>? urls, int selected, TabItem? adopt)
+    private BrowserWindow(BrowserSession session, IReadOnlyList<string>? urls, int selected, TabItem? adopt, int pinnedCount = 0)
     {
         this.session = session;
         initialUrls = urls;
         initialSelected = selected;
+        initialPinnedCount = pinnedCount;
         adopted = adopt;
         session.Windows.Add(this);
         InitializeComponent();
@@ -86,7 +89,7 @@ public partial class BrowserWindow : Window
         {
             // Closing one of several windows closes its tabs; they stay reopenable.
             foreach (TabItem item in Tabs.Items)
-                if (IsWebUrl(((BrowserTab)item.Tag).Url)) closedTabs.Push(((BrowserTab)item.Tag).Url);
+                if (item.Tag is BrowserTab tab && IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
             SaveSession();
         }
         foreach (var view in Pages.Children.OfType<WebView2>())
@@ -123,13 +126,18 @@ public partial class BrowserWindow : Window
                 var urls = primary ? data.Tabs : initialUrls!;
                 int selected = primary ? data.Selected : initialSelected;
                 string[] list = urls.Count == 0 ? ["about:blank"] : urls.ToArray();
-                foreach (string url in list)
-                    await OpenTab(IsWebUrl(url) || IsInternalUrl(url) ? url : "about:blank");
+                int savedPins = primary ? data.PinnedCount : initialPinnedCount;
+                int pins = savedPins >= 0 && savedPins <= urls.Count ? savedPins : 0;
+                for (int i = 0; i < list.Length; i++)
+                {
+                    string url = list[i];
+                    await OpenTab(IsWebUrl(url) || IsInternalUrl(url) ? url : "about:blank", pinned: i < pins);
+                }
                 if (closing) return;
                 if (Tabs.Items.Count > 0)
                     Tabs.SelectedIndex = Math.Clamp(selected, 0, Tabs.Items.Count - 1);
                 if (primary && data.Windows is { } others)
-                    foreach (var other in others) OpenWindow(other.Tabs, other.Selected, cascade: true);
+                    foreach (var other in others) OpenWindow(other.Tabs, other.Selected, cascade: true, pinnedCount: other.PinnedCount);
             }
             restoring = false;
             Status.Text = "준비";
@@ -143,10 +151,10 @@ public partial class BrowserWindow : Window
 
     /// <summary>Opens another window sharing this profile's engine and data.</summary>
     private BrowserWindow OpenWindow(IReadOnlyList<string> urls, int selected, bool cascade = false,
-        TabItem? adopt = null, Point? at = null)
+        TabItem? adopt = null, Point? at = null, int pinnedCount = 0)
     {
         var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
-        var window = new BrowserWindow(session, urls, selected, adopt)
+        var window = new BrowserWindow(session, urls, selected, adopt, pinnedCount)
         {
             WindowStartupLocation = WindowStartupLocation.Manual,
             Width = bounds.Width,
@@ -163,14 +171,15 @@ public partial class BrowserWindow : Window
     internal IEnumerable<CoreWebView2> CoreViews() => Tabs.Items.OfType<TabItem>()
         .Select(item => (item.Tag as BrowserTab)?.View.CoreWebView2).OfType<CoreWebView2>();
 
-    private async Task<BrowserTab?> OpenTab(string? url, bool select = true, int? index = null)
+    private async Task<BrowserTab?> OpenTab(string? url, bool select = true, int? index = null, bool pinned = false)
     {
         if (engine is null || closing) return null;
         var view = new WebView2 { Visibility = Visibility.Hidden };
-        var tab = new BrowserTab(view, this);
+        var tab = new BrowserTab(view, this) { Pinned = pinned };
         var item = new TabItem { Tag = tab };
         tab.Item = item;
         tab.Header = CreateTabHeader(item, tab);
+        UpdatePinnedHeader(tab);
         Pages.Children.Add(view);
         try
         {
@@ -218,7 +227,7 @@ public partial class BrowserWindow : Window
             {
                 if (tab.Owner.Active == tab) tab.Owner.SetFullScreen(web.ContainsFullScreenElement, page: true);
             };
-            Tabs.Items.Insert(Math.Clamp(index ?? Tabs.Items.Count, 0, Tabs.Items.Count), item);
+            Tabs.Items.Insert(TabInsertionIndex(tab.Pinned, index ?? Tabs.Items.Count), item);
             LayoutTabs(item);
             if (select || Tabs.SelectedItem is null) Tabs.SelectedItem = item;
             if (IsInternalUrl(url))
@@ -556,17 +565,24 @@ public partial class BrowserWindow : Window
         if (tab.View.CoreWebView2 is { } web) web.IsMuted = !web.IsMuted;
     }
 
-    private static void UpdateTabToolTip(BrowserTab tab) =>
-        tab.Item.ToolTip = tab.Url == "about:blank" ? tab.Title : $"{tab.Title}\n{tab.Url}";
+    private static void UpdateTabToolTip(BrowserTab tab)
+    {
+        string title = (tab.Pinned ? "[고정] " : "") + tab.Title;
+        tab.Item.ToolTip = tab.Url == "about:blank" ? title : $"{title}\n{tab.Url}";
+        System.Windows.Automation.AutomationProperties.SetName(tab.Item, title);
+    }
 
     // ── Tab lifetime ─────────────────────────────────────────────────────────
 
-    private async void CloseTab(TabItem item)
+    private async void CloseTab(TabItem item) => await CloseTabAsync(item);
+
+    private async Task CloseTabAsync(TabItem item, bool protectPinned = false)
     {
-        if (closing || !Tabs.Items.Contains(item)) return;
-        if (!await AnimateTabClose(item) || closing || !Tabs.Items.Contains(item)) return;
+        if (closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
         var tab = (BrowserTab)item.Tag;
-        if (IsWebUrl(tab.Url)) closedTabs.Push(tab.Url);
+        if (protectPinned && tab.Pinned) return;
+        if (!await AnimateTabClose(item) || closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
+        if (IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
         Tabs.Items.Remove(item);
         Pages.Children.Remove(tab.View);
         tab.View.Dispose();
@@ -851,7 +867,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private async void RestoreClick(object sender, RoutedEventArgs args)
     {
-        if (closedTabs.TryPop(out string? url) && await OpenTab(url) is null) closedTabs.Push(url);
+        if (closedTabs.TryPop(out var closed) && await OpenTab(closed.Url, pinned: closed.Pinned) is null) closedTabs.Push(closed);
     }
 
     private void BackClick(object sender, RoutedEventArgs args) { if (Back.IsEnabled) Active?.View.GoBack(); }

@@ -40,7 +40,7 @@ public partial class BrowserWindow
             if (args.ChangedButton == MouseButton.Middle && TabAt(args.OriginalSource) is { } item)
             {
                 args.Handled = true;
-                CloseTab(item);
+                if (item.Tag is BrowserTab { Pinned: false }) CloseTab(item);
             }
         };
         Tabs.PreviewMouseRightButtonUp += (_, args) =>
@@ -87,6 +87,7 @@ public partial class BrowserWindow
             (Ctrl, Key.W) or (Ctrl, Key.F4) => () => { if (Tabs.SelectedItem is TabItem item) CloseTab(item); },
             (Ctrl | Shift, Key.W) => Close,
             (Ctrl | Shift, Key.T) => () => RestoreClick(this, args),
+            (Ctrl | Shift, Key.A) => () => TabSearchClick(this, args),
             (Ctrl, Key.Tab) or (Ctrl, Key.PageDown) => () => CycleTab(1),
             (Ctrl | Shift, Key.Tab) or (Ctrl, Key.PageUp) => () => CycleTab(-1),
             (Ctrl, >= Key.D1 and <= Key.D8) => () => SelectTab(key - Key.D1),
@@ -154,19 +155,26 @@ public partial class BrowserWindow
         Add("새로고침", "Ctrl+R", () => tab.View.Reload(), IsWebUrl(tab.Url));
         Add("탭 복제", "", () => _ = OpenTab(tab.Url, index: index + 1), IsWebUrl(tab.Url));
         Add(tab.View.CoreWebView2?.IsMuted == true ? "사이트 음소거 해제" : "사이트 음소거", "", () => ToggleMute(tab));
-        Add("탭을 새 창으로 이동", "", () => MoveTabToNewWindow(item), Tabs.Items.Count > 1);
+        Add(tab.Pinned ? "탭 고정 해제" : "탭 고정", "", () => SetTabPinned(item, !tab.Pinned), !closingTabs.Contains(item));
+        Add("탭을 새 창으로 이동", "", () => MoveTabToNewWindow(item), Tabs.Items.Count > 1 && !closingTabs.Contains(item));
         Separate();
         Add("탭 닫기", "Ctrl+W", () => CloseTab(item));
-        Add("다른 탭 닫기", "", () => CloseTabs(Tabs.Items.Cast<TabItem>().Where(other => other != item)), Tabs.Items.Count > 1);
-        Add("오른쪽 탭 닫기", "", () => CloseTabs(Tabs.Items.Cast<TabItem>().Skip(index + 1)), index < Tabs.Items.Count - 1);
+        Add("다른 탭 닫기", "", () => CloseTabs(Tabs.Items.Cast<TabItem>().Where(other => other != item)),
+            Tabs.Items.Cast<TabItem>().Any(other => other != item && other.Tag is BrowserTab { Pinned: false }));
+        Add("오른쪽 탭 닫기", "", () => CloseTabs(Tabs.Items.Cast<TabItem>().Skip(Tabs.Items.IndexOf(item) + 1)),
+            Tabs.Items.Cast<TabItem>().Skip(index + 1).Any(other => other.Tag is BrowserTab { Pinned: false }));
         Separate();
         Add("닫은 탭 다시 열기", "Ctrl+Shift+T", () => RestoreClick(this, new RoutedEventArgs()), closedTabs.Count > 0);
         menu.IsOpen = true;
     }
 
-    private void CloseTabs(IEnumerable<TabItem> items)
+    private async void CloseTabs(IEnumerable<TabItem> items)
     {
-        foreach (var item in items.ToList()) CloseTab(item);
+        foreach (var item in items.ToList())
+        {
+            if (closing || session.IsEnding) break;
+            await CloseTabAsync(item, protectPinned: true);
+        }
     }
 
     // ── Moving tabs ──────────────────────────────────────────────────────────
@@ -175,7 +183,7 @@ public partial class BrowserWindow
     {
         if (Tabs.SelectedItem is not TabItem item) return;
         int from = Tabs.Items.IndexOf(item), to = from + direction;
-        if (to < 0 || to >= Tabs.Items.Count) return;
+        if (to < 0 || to >= Tabs.Items.Count || !CanSwapTabs(item, (TabItem)Tabs.Items[to])) return;
         SwapNeighbor(item, from, to);
         SaveTabs();
     }
@@ -185,6 +193,7 @@ public partial class BrowserWindow
     private void SwapNeighbor(TabItem dragged, int from, int to)
     {
         var neighbor = (TabItem)Tabs.Items[to];
+        if (!CanSwapTabs(dragged, neighbor)) return;
         double before = SlotLeft(neighbor);
         Tabs.Items.RemoveAt(to);
         Tabs.Items.Insert(from, neighbor);
@@ -208,13 +217,13 @@ public partial class BrowserWindow
     private void TabPress(object sender, MouseButtonEventArgs args)
     {
         pressedTab = TabAt(args.OriginalSource);
-        if (pressedTab is null) return;
+        if (pressedTab is null || closingTabs.Contains(pressedTab)) { pressedTab = null; return; }
         pressPoint = args.GetPosition(TabRow);
     }
 
     private void TabDrag(object sender, MouseEventArgs args)
     {
-        if (pressedTab is not { } item || args.LeftButton != MouseButtonState.Pressed) return;
+        if (pressedTab is not { } item || closingTabs.Contains(item) || !Tabs.Items.Contains(item) || args.LeftButton != MouseButtonState.Pressed) return;
         var point = args.GetPosition(TabRow);
         if (!draggingTab)
         {
@@ -274,7 +283,7 @@ public partial class BrowserWindow
 
     private void TearOff(TabItem item)
     {
-        if (closing || !Tabs.Items.Contains(item)) return;
+        if (closing || closingTabs.Contains(item) || !Tabs.Items.Contains(item)) return;
         if (Tabs.Items.Count == 1)
         {
             // A lone tab carries its whole window, and can be dropped onto another window's tabs.
@@ -330,7 +339,7 @@ public partial class BrowserWindow
         var tab = (BrowserTab)item.Tag;
         tab.Owner = this;
         Pages.Children.Add(tab.View);
-        Tabs.Items.Insert(Math.Clamp(index, 0, Tabs.Items.Count), item);
+        Tabs.Items.Insert(TabInsertionIndex(tab.Pinned, index), item);
         LayoutTabs(item);
         Tabs.SelectedItem = item;
         foreach (TabItem other in Tabs.Items)

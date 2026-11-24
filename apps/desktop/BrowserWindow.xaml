@@ -144,6 +144,7 @@
                                     <MenuItem Header="새 탭" InputGestureText="Ctrl+T" Click="NewTabClick" />
                                     <MenuItem Header="새 창" InputGestureText="Ctrl+N" Click="NewWindowClick" />
                                     <MenuItem Header="닫은 탭 복원" InputGestureText="Ctrl+Shift+T" Click="RestoreClick" />
+                                    <MenuItem Header="탭 검색" InputGestureText="Ctrl+Shift+A" Click="TabSearchClick" />
                                     <Separator />
                                     <MenuItem Header="북마크 추가" InputGestureText="Ctrl+D" Click="BookmarkClick" />
                                     <MenuItem Header="북마크 관리" InputGestureText="Ctrl+B" Click="BookmarksClick" />

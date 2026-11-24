@@ -9,7 +9,8 @@ internal sealed record PageEntry(string Title, string Url, DateTimeOffset Visite
 }
 
 /// <summary>Tabs of an additional browser window.</summary>
-internal sealed record WindowTabs(List<string> Tabs, int Selected);
+internal sealed record WindowTabs(List<string> Tabs, int Selected, int PinnedCount = 0);
+internal sealed record ClosedTab(string Url, bool Pinned);
 
 internal sealed class BrowserData
 {
@@ -17,6 +18,7 @@ internal sealed class BrowserData
     public List<PageEntry> History { get; init; } = [];
     public List<string> Tabs { get; set; } = [];
     public int Selected { get; set; }
+    public int PinnedCount { get; set; }
     /// <summary>Windows other than the primary one; null when only one window was open.</summary>
     public List<WindowTabs>? Windows { get; set; }
     /// <summary>Network mode chosen by the user (ADR-0006); null means standard protection.</summary>
@@ -47,6 +49,11 @@ internal sealed class BrowserData
             data.Tabs.Any(url => url is null) ||
             (data.Windows is not null && data.Windows.Any(window => window?.Tabs is null || window.Tabs.Any(url => url is null))))
             throw new JsonException("Invalid VEIL developer profile state.");
+        // The prefix count is optional for older profiles. Invalid counts never pin unrelated tabs.
+        if (data.PinnedCount < 0 || data.PinnedCount > data.Tabs.Count) data.PinnedCount = 0;
+        if (data.Windows is { } windows)
+            data.Windows = windows.Select(window => window.PinnedCount < 0 || window.PinnedCount > window.Tabs.Count
+                ? window with { PinnedCount = 0 } : window).ToList();
         // Missing policy means deny. Corrupted rules must never grant a permission.
         if (!SitePermissionPolicy.ValidRules(data.SitePermissions))
             data.SitePermissions = null;

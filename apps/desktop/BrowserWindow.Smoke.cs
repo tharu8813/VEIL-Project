@@ -111,12 +111,20 @@ public partial class BrowserWindow
                     RestoreClick(this, new RoutedEventArgs());
                     await ReadyAt("/second");
                     Check(Tabs.Items.Count == 3, "closed tab restored");
+                    SetTabPinned((TabItem)Tabs.Items[0], true);
+                    Check(PinnedTabCount == 1 && ((BrowserTab)Tabs.Items[0].Tag).Pinned, "tab pinned");
                     Tabs.SelectedIndex = 1;
+                    MoveSelectedTab(-1);
+                    Check(Tabs.SelectedIndex == 1, "normal tab cannot cross pinned boundary");
                     SaveTabs();
+                    Check(BrowserData.Load(statePath).PinnedCount == 1, "pinned count persisted");
                 }
                 else if (stage is "read" or "crash")
                 {
                     Check(Tabs.Items.Count == 3 && Tabs.SelectedIndex == 1, "tabs and selection restored");
+                    Check(PinnedTabCount == 1, "pinned tab restored");
+                    // Restore the original test layout before existing cross-window reorder checks.
+                    SetTabPinned((TabItem)Tabs.Items[0], false);
                     await ReadyAt("/");
                     Check(data.Bookmarks.Count == 1 && data.Bookmarks[0].Url == origin + "/", "bookmark restored");
                     Check(data.History.Any(entry => entry.Url.EndsWith("/second")), "history restored");

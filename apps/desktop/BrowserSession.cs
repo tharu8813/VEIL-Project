@@ -50,7 +50,7 @@ internal sealed class BrowserSession
     internal string Root { get; }
     internal string StatePath { get; }
     internal BrowserData Data { get; }
-    internal Stack<string> ClosedTabs { get; } = new();
+    internal Stack<ClosedTab> ClosedTabs { get; } = new();
     internal List<string> Downloads { get; } = [];
     internal ObservableCollection<BrowserDownload> ActiveDownloads { get; } = [];
     internal List<BrowserWindow> Windows { get; } = [];
@@ -67,8 +67,13 @@ internal sealed class BrowserSession
         var (tabs, selected) = open[0].Snapshot();
         Data.Tabs = tabs;
         Data.Selected = selected;
+        Data.PinnedCount = open[0].PinnedTabCount;
         Data.Windows = open.Count == 1 ? null :
-            open.Skip(1).Select(window => window.Snapshot()).Select(s => new WindowTabs(s.Tabs, s.Selected)).ToList();
+            open.Skip(1).Select(window =>
+            {
+                var snapshot = window.Snapshot();
+                return new WindowTabs(snapshot.Tabs, snapshot.Selected, window.PinnedTabCount);
+            }).ToList();
         Data.Save(StatePath);
     }
 }
