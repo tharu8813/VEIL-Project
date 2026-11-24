@@ -230,11 +230,15 @@ public partial class BrowserWindow
 
     private async void CloseTabs(IEnumerable<TabItem> items)
     {
-        foreach (var item in items.ToArray())
+        try
         {
-            if (closing || session.IsEnding || session.EngineLost) break;
-            if (CanUseTab(item)) await CloseTabAsync(item, protectPinned: true);
+            foreach (var item in items.ToArray())
+            {
+                if (closing || session.IsEnding || session.EngineLost) break;
+                if (CanUseTab(item)) await CloseTabAsync(item, protectPinned: true);
+            }
         }
+        catch (Exception error) when (RecoverableFailure.Is(error)) { if (!closing) Status.Text = "일부 탭을 닫지 못했습니다."; }
     }
 
     // ── Moving tabs ──────────────────────────────────────────────────────────

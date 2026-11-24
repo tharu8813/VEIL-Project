@@ -62,8 +62,7 @@ internal sealed class PasswordManagerDialog : VeilDialog
         {
             if ((list.SelectedItem as ListBoxItem)?.Tag is not SavedLogin entry) return;
             if (action == PasswordAction.Fill && entry.Origin != origin) return;
-            if (action == PasswordAction.Remove && MessageBox.Show(PromptOwner, "선택한 계정을 삭제할까요?",
-                    "비밀번호 삭제", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            if (action == PasswordAction.Remove && !UserPrompts.Confirm(PromptOwner, "선택한 계정을 삭제할까요?", "비밀번호 삭제")) return;
             Selected = entry;
             Action = action;
             Complete(true);

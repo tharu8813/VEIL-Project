@@ -12,7 +12,9 @@ internal sealed class NetworkSettingsDialog : VeilDialog
     {
         Subtitle.Text = "변경 사항은 VEIL을 다시 시작하면 적용됩니다.";
         var standard = new RadioButton { Content = "표준 보호 — 직접 연결, HTTPS 우선, 추적 방지. IP 주소를 숨기지 않습니다.", Foreground = Res("TextBrush"), Margin = new Thickness(0, 0, 0, 8) };
-        var proxy = new RadioButton { Content = "프록시 보호 — 지정한 프록시로만 연결합니다. 프록시가 끊기면 직접 연결하지 않고 차단합니다.", Foreground = Res("TextBrush") };
+        var proxy = new RadioButton { Content = NetworkPolicy.ProxyName + " — 지정한 프록시로만 연결합니다. 프록시가 끊기면 직접 연결하지 않고 차단합니다.", Foreground = Res("TextBrush") };
+        System.Windows.Automation.AutomationProperties.SetName(proxy, NetworkPolicy.ProxyName);
+        var caveat = new TextBlock { Text = NetworkPolicy.ProxyCaveat, TextWrapping = TextWrapping.Wrap, Foreground = Res("AmberBrush"), Margin = new Thickness(24, 6, 0, 0) };
         foreach (var option in new[] { standard, proxy }) option.Resources.Add(typeof(TextBlock), new Style(typeof(TextBlock)) { Setters = { new Setter(TextBlock.TextWrappingProperty, TextWrapping.Wrap) } });
         var scheme = new ComboBox { ItemsSource = new[] { "socks5", "http" }, SelectedItem = current.ProxyScheme ?? "socks5", Width = 110, Margin = new Thickness(0, 0, 8, 0) };
         var host = new TextBox { Text = current.ProxyHost ?? "127.0.0.1", Style = (Style)FindResource("PillTextBox"), Height = 32, Width = 220, ToolTip = "프록시 주소", Tag = "" };
@@ -51,7 +53,7 @@ internal sealed class NetworkSettingsDialog : VeilDialog
         standard.Checked += (_, _) => Sync();
         proxy.Checked += (_, _) => Sync();
         Sync();
-        SetBody(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = new StackPanel { Children = { standard, proxy, fields, dnsPanel, note, error } } });
+        SetBody(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = new StackPanel { Children = { standard, proxy, caveat, fields, dnsPanel, note, error } } });
         AddFooterButton("취소", () => Complete(false));
         AddFooterButton("저장", () =>
         {

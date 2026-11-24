@@ -29,8 +29,7 @@ internal sealed class SiteDataDialog : VeilDialog
         }
         void Choose(SiteDataSelection value, string message)
         {
-            if (!value.InspectUsage && MessageBox.Show(PromptOwner, message, "사이트 데이터 삭제",
-                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            if (!value.InspectUsage && !UserPrompts.Confirm(PromptOwner, message, "사이트 데이터 삭제")) return;
             Result = value;
             Complete(true);
         }

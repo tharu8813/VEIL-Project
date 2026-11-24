@@ -856,6 +856,9 @@ public partial class BrowserWindow
                     var settings = session.Network;
                     Check(settings.Mode == NetworkMode.Proxy, "proxy mode applied from saved settings");
                     checks.Add($"indicator: {NetworkIndicator.Text}");
+                    Check(NetworkIndicator.Text.StartsWith(NetworkPolicy.ProxyName) && NetworkPolicy.ProxyName.Contains("실험적") &&
+                        BrowserSettingsCatalog.Build(session).Any(item => item.State?.Contains(NetworkPolicy.ProxyName) == true),
+                        "proxy protection is labeled experimental in the status bar and settings (ADR-0010)");
                     checks.Add($"proxy reachable: {session.ProxyReachable}");
                     NavigateAddress(origin + "/second");
                     for (int i = 0; i < 200 && Active?.Loading != false; i++) await Task.Delay(75);
@@ -907,6 +910,12 @@ public partial class BrowserWindow
                         Check(session.EngineLost, "engine loss detected");
                     }
                 }
+#if DEBUG
+                else if (IsPhase6Stage(stage))
+                {
+                    await Phase6StageAsync(stage, uri, checks);
+                }
+#endif
                 else throw new ArgumentException("Unknown desktop smoke stage.");
 
                 async Task<JsonElement> Evaluate(string expression)

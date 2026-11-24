@@ -426,8 +426,7 @@ public partial class BrowserWindow
                 }
             }
         }
-        catch (Exception error) when (error is IOException or NotSupportedException or InvalidOperationException
-            or System.Runtime.InteropServices.COMException or FileFormatException) { }
+        catch (Exception error) when (RecoverableFailure.Is(error)) { }
         if (tab.Owner.closing) return;
         tab.Header.Favicon.Source = source;
         tab.Owner.SetTabLoading(tab, tab.Loading);

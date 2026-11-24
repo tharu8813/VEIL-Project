@@ -37,6 +37,38 @@ await copyFile(vault, join(desktop, 'veil-vault.exe'));
 const powershell = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 await run(powershell, ['-NoProfile', '-NonInteractive', '-Command',
     `Compress-Archive -Path '${desktop}\\*' -DestinationPath '${join(out, 'DESKTOP.ZIP')}'`]);
+
+// ADR-0010 E1/E2: unsigned Release payloads in the package layout (Desktop/, Broker/) for three internal
+// versions, built exactly like scripts/build-package.ps1 except signing and the manifest, which
+// tests/vm/guest-package.ps1 does in the VM with a disposable certificate (no host trust-store change).
+const common = join(repo, 'scripts/package-common.ps1').replace(/'/g, "''");
+for (const version of ['1.0.0-alpha.1', '1.0.0-alpha.2', '1.0.0-alpha.3']) {
+    const { stdout } = await run(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+        `. '${common}'; (Assert-VeilInternalVersion '${version}').ToString()`]);
+    const fileVersion = stdout.trim();
+    const payload = join(out, 'build', `payload-${version}`);
+    for (const [project, folder] of [['apps/desktop/Veil.Desktop.csproj', 'Desktop'], ['apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj', 'Broker']]) {
+        await run('dotnet', ['restore', join(repo, project), '--locked-mode', '-v', 'q'], { cwd: repo, maxBuffer: 16 * 1024 ** 2 });
+        await run('dotnet', ['publish', join(repo, project), '-c', 'Release', '--no-restore', '--self-contained', 'false', '-nologo', '-v', 'q',
+            '-o', join(payload, folder), `-p:Version=${version}`, `-p:FileVersion=${fileVersion}`, `-p:InformationalVersion=${version}+${commit}`, '-p:IncludeSourceRevisionInInformationalVersion=false'],
+            { cwd: repo, maxBuffer: 16 * 1024 ** 2 });
+    }
+    await copyFile(vault, join(payload, 'Desktop', 'veil-vault.exe'));
+    for (const notice of ['LICENSE', 'NOTICE']) await copyFile(join(repo, notice), join(payload, 'Desktop', notice));
+    await run(process.execPath, [join(repo, 'scripts/third-party.mjs'), '--notices', join(payload, 'Desktop', 'THIRD-PARTY-NOTICES.md'),
+        '--sbom', join(payload, 'Desktop', 'sbom.cdx.json'), '--version', version, '--commit', commit], { cwd: repo, maxBuffer: 16 * 1024 ** 2 });
+    await run(powershell, ['-NoProfile', '-NonInteractive', '-Command',
+        `Compress-Archive -Path '${payload}\\*' -DestinationPath '${join(out, `PAYLOAD-${version}.ZIP`)}'`]);
+    console.log(`payload ${version} (file version ${fileVersion})`);
+}
+
+// Throwaway loopback TLS certificate (the offline guest has no openssl). Test-only, valid 7 days.
+const certDir = join(out, 'build', 'testcert');
+await mkdir(certDir, { recursive: true });
+await run(process.execPath, [join(repo, 'tests/integration/test-cert.mjs'), certDir], { cwd: repo });
+await run(powershell, ['-NoProfile', '-NonInteractive', '-Command',
+    `Compress-Archive -Path '${certDir}\\*' -DestinationPath '${join(out, 'TESTCERT.ZIP')}'`]);
+
 await rm(join(out, 'build'), { recursive: true });
 await copyFile(join(repo, 'tests/vm/guest-batch.ps1'), join(out, 'BATCH.PS1'));
 

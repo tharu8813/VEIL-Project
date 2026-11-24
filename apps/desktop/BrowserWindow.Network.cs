@@ -86,8 +86,8 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
         NetworkIndicator.Text = network.Mode == NetworkMode.Standard
             ? $"표준 보호 · HTTPS 우선 · 추적 방지 엄격{dns}{saved}"
             : session.ProxyReachable == true
-                ? $"프록시 보호 · 경로 확인됨 ({network.ProxyScheme}){dns}{saved}"
-                : $"프록시 보호 · 차단됨: 프록시에 연결할 수 없음 (직접 연결하지 않음){dns}{saved}";
+                ? $"{NetworkPolicy.ProxyName} · 경로 확인됨 ({network.ProxyScheme}){dns}{saved}"
+                : $"{NetworkPolicy.ProxyName} · 차단됨: 프록시에 연결할 수 없음 (직접 연결하지 않음){dns}{saved}";
     }
 
     private async void NetworkClick(object sender, RoutedEventArgs args)
@@ -121,6 +121,10 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
             Status.Text = chosen == session.Network
                 ? "현재 적용된 네트워크 설정을 유지합니다."
                 : "네트워크 설정을 저장했습니다. VEIL을 다시 시작하면 적용됩니다.";
+        }
+        catch (Exception error) when (RecoverableFailure.Is(error))
+        {
+            if (!closing) Status.Text = "네트워크 설정 작업을 완료하지 못했습니다.";
         }
         finally
         {

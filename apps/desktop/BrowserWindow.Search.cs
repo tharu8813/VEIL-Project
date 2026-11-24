@@ -118,6 +118,10 @@ public partial class BrowserWindow
             }
             Status.Text = "검색 및 주소창 설정을 저장했습니다.";
         }
+        catch (Exception error) when (RecoverableFailure.Is(error))
+        {
+            if (!closing) Status.Text = "검색 설정 작업을 완료하지 못했습니다.";
+        }
         finally
         {
             session.SettingsUiOpen = false;

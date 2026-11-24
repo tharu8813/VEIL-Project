@@ -30,7 +30,7 @@ internal static class BrowserSettingsCatalog
         var chosen = session.Data.Network ?? NetworkSettings.Standard;
         var applied = session.Network;
         static string Mode(NetworkSettings settings) =>
-            (settings.Mode == NetworkMode.Standard ? "표준 보호" : "프록시 보호") +
+            (settings.Mode == NetworkMode.Standard ? "표준 보호" : NetworkPolicy.ProxyName) +
             (settings.DnsTemplate is null ? " · 시스템 DNS" : " · 보안 DNS");
         string networkState = "현재: " + Mode(applied);
         if (chosen != applied) networkState += "\n저장된 설정: " + Mode(chosen) + " (재시작 필요)";

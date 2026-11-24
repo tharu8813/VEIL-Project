@@ -40,6 +40,10 @@ jobs:
           dotnet restore apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj --locked-mode
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Third-party license policy (ADR-0010)
+        shell: pwsh
+        run: node scripts/third-party.mjs --check
+
       - name: Compile Debug and Release
         shell: pwsh
         run: |
@@ -72,7 +76,7 @@ jobs:
 
       - name: Check service installer safety invariants
         shell: pwsh
-        run: node --test tests/install/broker-service-contract.test.mjs tests/install/package-maintenance-contract.test.mjs
+        run: node --test tests/install/broker-service-contract.test.mjs tests/install/package-maintenance-contract.test.mjs tests/install/package-version.test.mjs tests/install/package-manifest.test.mjs
 
       - name: Test BitLocker recovery flow with a fake provider
         shell: powershell
@@ -81,7 +85,7 @@ jobs:
       # SEC-004: the Procmon trace analyzer is pure parsing; the capture itself runs only in the VM.
       - name: Check local-write evidence analyzers
         shell: pwsh
-        run: node --test tests/security/outside-writes.test.mjs tests/security/jump-list-evidence.test.mjs tests/phase3/phase34-vm.test.mjs tests/vm/internet-batch.test.mjs
+        run: node --test tests/security/async-handlers.test.mjs tests/security/outside-writes.test.mjs tests/security/jump-list-evidence.test.mjs tests/phase3/phase34-vm.test.mjs tests/vm/internet-batch.test.mjs
 
       # Hosted runners may be elevated and do not provide an interactive desktop.
       # Running the WPF smoke suite or broker authorization test here would

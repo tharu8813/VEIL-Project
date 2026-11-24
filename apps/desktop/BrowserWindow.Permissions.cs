@@ -27,6 +27,10 @@ public partial class BrowserWindow
             }
             Status.Text = "사이트 권한을 저장했습니다. 다음 권한 요청부터 적용됩니다.";
         }
+        catch (Exception error) when (RecoverableFailure.Is(error))
+        {
+            if (!closing) Status.Text = "사이트 권한 작업을 완료하지 못했습니다.";
+        }
         finally { session.PermissionUiOpen = false; }
     }
 
@@ -75,9 +79,8 @@ public partial class BrowserWindow
                         SitePermissionPolicy.ModeFor(data.SitePermissions, origin, kind) != SitePermissionPolicy.Ask)
                         return;
                     string label = SitePermissionPolicy.Kinds.First(item => item.Key == kind).Label;
-                    bool accepted = MessageBox.Show(this,
-                        $"{origin}\n이 사이트에 {label} 권한을 이번 요청에 한해 허용할까요?",
-                        "사이트 권한 요청", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes;
+                    bool accepted = UserPrompts.Confirm(this,
+                        $"{origin}\n이 사이트에 {label} 권한을 이번 요청에 한해 허용할까요?", "사이트 권한 요청", MessageBoxImage.Question);
                     // Navigation, window transfer, close or lock may occur during the nested message loop.
                     if (accepted && PermissionContextMatches(tab, origin, epoch) &&
                         SitePermissionPolicy.ModeFor(data.SitePermissions, origin, kind) == SitePermissionPolicy.Ask)

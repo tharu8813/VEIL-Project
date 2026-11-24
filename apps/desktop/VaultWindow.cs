@@ -142,9 +142,7 @@ internal sealed class VaultWindow : VeilDialog
         busy = true;
         UpdateSelection();
         try { await action(); }
-        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or
-            NotSupportedException or ArgumentException or System.ComponentModel.Win32Exception or System.Runtime.InteropServices.COMException or
-            System.Text.Json.JsonException or OverflowException or FormatException)
+        catch (Exception error) when (RecoverableFailure.Is(error))
         {
             if (!closed) feedback.Text = "작업을 완료하지 못했습니다. 금고 상태, 파일 무결성 및 저장 위치를 확인하세요. 일부 변경이 적용되었을 수 있습니다.";
         }

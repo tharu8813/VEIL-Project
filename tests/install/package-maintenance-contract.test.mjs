@@ -22,6 +22,14 @@ test('removal preserves registered data and volume',()=>{
     assert.match(maintenance,/Assert-ClosedAndDetached/);
     assert.match(maintenance,/Binaries removed; encrypted VHDX and registration retained/);
 });
+test('packages carry ADR-0010 versions, notices and SBOM',async()=>{
+    const build = await readFile('scripts/build-package.ps1','utf8');
+    assert.match(build,/Assert-VeilInternalVersion \$Version/);
+    assert.match(build,/-p:FileVersion=\$fileVersion/);
+    assert.match(build,/third-party\.mjs --notices[^\n]*THIRD-PARTY-NOTICES\.md[^\n]*--sbom[^\n]*sbom\.cdx\.json/);
+    assert.match(maintenance,/Assert-VeilInternalVersion \$manifest\.version/);
+    assert.doesNotMatch(build + maintenance,/Major -ne 0/);
+});
 
 test('browser candidate is explicitly registered from verified installed package, not forced default',()=>{
     assert.match(maintenance,/if \(\$RegisterBrowser\)[\s\S]*?Read-VeilPackage \$bin \$SignerThumbprint[\s\S]*?Installed client pin mismatch[\s\S]*?Register-VeilBrowser/);
