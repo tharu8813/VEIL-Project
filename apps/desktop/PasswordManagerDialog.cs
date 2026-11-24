@@ -3,7 +3,7 @@ using System.Windows.Controls;
 
 namespace Veil.Desktop;
 
-internal enum PasswordAction { None, Save, Remove, Reveal, Fill }
+internal enum PasswordAction { None, Save, Remove, Reveal, Fill, Rotate, Backup, Restore }
 
 /// <summary>Native manager; passwords are never included in list rows, search, or tooltips.</summary>
 internal sealed class PasswordManagerDialog : VeilDialog
@@ -45,6 +45,18 @@ internal sealed class PasswordManagerDialog : VeilDialog
         };
         panel.Children.Add(save);
         panel.Children.Add(Text("자동완성은 현재 사이트와 출처가 일치하는 단일 로그인 폼만 지원합니다. 비밀번호를 자동 제출하거나 다른 사이트로 보내지 않습니다."));
+        var maintenance = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+        void Maintenance(string label, PasswordAction action)
+        {
+            var button = new Button { Content = label, Height = 32, Padding = new Thickness(10, 0, 10, 0),
+                Margin = new Thickness(0, 0, 6, 6), Style = (Style)FindResource("GhostButton") };
+            button.Click += (_, _) => { Action = action; Complete(true); };
+            maintenance.Children.Add(button);
+        }
+        Maintenance("관리자 암호 변경", PasswordAction.Rotate);
+        Maintenance("암호화 백업", PasswordAction.Backup);
+        Maintenance("백업 복원", PasswordAction.Restore);
+        panel.Children.Add(maintenance);
         SetBody(new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
         void Choose(PasswordAction action)
         {

@@ -89,6 +89,11 @@ public partial class BrowserWindow
                     !LoginFormPolicy.Probe("https://example.test").Contains("pass.value") &&
                     !LoginFormPolicy.Fill(new SavedLogin("https://example.test", "synthetic", "synthetic-pass")).Contains(".submit("),
                     "login probe reads no password and fill does not submit");
+                var savedAccount = new SavedLogin("https://example.test", "synthetic", "original");
+                var mergedAccounts = PasswordStore.MergeBackup([savedAccount],
+                    [savedAccount with { Password = "different" }, new SavedLogin("https://example.test", "second", "synthetic")]);
+                Check(mergedAccounts.Count == 2 && mergedAccounts[0] == savedAccount && mergedAccounts[1].UserName == "second",
+                    "credential backup merge preserves existing account on conflict");
                 var rule = new SitePermissionRule("https://example.test", "camera", SitePermissionPolicy.Ask);
                 Check(SitePermissionPolicy.ValidRules([rule]) &&
                     !SitePermissionPolicy.ValidRules([rule, rule]) &&

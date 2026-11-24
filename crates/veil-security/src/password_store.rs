@@ -37,12 +37,23 @@ pub fn write(path: &Path, passphrase: SecretString, input: impl Read, replace: b
     if replace {
         drop(read(path, SecretString::from(passphrase.expose_secret().to_owned()))?);
     }
+    publish(path, passphrase, &plain, replace)
+}
+
+/// Authenticate the current envelope before changing its passphrase. Only ciphertext is staged.
+pub fn rotate(path: &Path, old: SecretString, new: SecretString) -> io::Result<()> {
+    require_passphrase(&new)?;
+    let plain = read(path, old)?;
+    publish(path, new, &plain, true)
+}
+
+fn publish(path: &Path, passphrase: SecretString, plain: &[u8], replace: bool) -> io::Result<()> {
     let write = |staging: &mut File| {
         let mut recipient = scrypt::Recipient::new(passphrase);
         recipient.set_work_factor(SCRYPT_LOG_N);
         let mut encrypted = make_encryptor(&recipient)?.wrap_output(staging)?;
         encrypted.write_all(MAGIC)?;
-        encrypted.write_all(&plain)?;
+        encrypted.write_all(plain)?;
         encrypted.finish()?;
         Ok(())
     };
