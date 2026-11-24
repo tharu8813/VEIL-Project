@@ -714,10 +714,13 @@ public partial class BrowserWindow
                         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream));
                     }
                     string originalHash = Digest(originalPath);
-                    string objects = Path.Combine(vault.Directory, "objects"), meta = Path.Combine(vault.Directory, "meta"),
-                        index = Path.Combine(vault.Directory, "index");
+                    string objects = Path.GetDirectoryName(originalPath)!;
+                    string activeGeneration = Path.GetDirectoryName(objects)!;
+                    string meta = Path.Combine(activeGeneration, "meta"), index = Path.Combine(activeGeneration, "index");
                     string[] Before(string directory) => Directory.GetFiles(directory, "*.veil").Order().ToArray();
                     string[] Inventory() => Before(objects).Concat(Before(meta)).Concat(Before(index)).Order().ToArray();
+                    Check(Before(objects).Length == 1 && Before(meta).Length == 1 && Before(index).Length >= 1,
+                        "seed object, metadata and index exist before fault injection");
                     var originals = Inventory().ToDictionary(path => path, Digest);
                     string controls = Path.GetDirectoryName(report)!;
                     async Task WaitSignal(string name)
@@ -735,10 +738,10 @@ public partial class BrowserWindow
                     {
                         bool refused = false;
                         try { _ = await vault.CaptureAsync(new Uri(origin + "/vault-dl?kind=large"), failed, Active!.View.CoreWebView2); }
-                        catch (VaultStorageFullException error)
+                        catch (VaultStorageFullException storageError)
                         {
                             refused = true;
-                            Check(DownloadFailurePolicy.Describe(error, failed.Phase, true).StartsWith("저장 공간 부족"),
+                            Check(DownloadFailurePolicy.Describe(storageError, failed.Phase, true).StartsWith("저장 공간 부족"),
                                 "fixed disk-full failure reason");
                         }
                         Check(refused, "actual Rust storage-full reply reached desktop bridge");
