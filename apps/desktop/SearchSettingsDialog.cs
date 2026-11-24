@@ -30,7 +30,7 @@ internal sealed class SearchSettingsDialog : VeilDialog
                 providers, local,
                 new TextBlock
                 {
-                    Text = "주소 추천은 이 프로필의 기록과 북마크만 사용합니다. 입력 중인 글자를 외부 서버로 전송하지 않습니다. 실제 검색 시 선택한 서비스의 개인정보 정책이 적용됩니다.",
+                    Text = "주소 추천은 이 프로필의 기록과 북마크만 사용합니다. 입력 중인 글자를 외부 서버로 전송하지 않습니다. 실제 검색 시 선택한 서비스의 개인정보 정책이 적용됩니다.\n\n? 검색어: 기본 엔진으로 강제 검색\n@google, @bing, @naver, @duckduckgo + 검색어: 이번 검색만 해당 엔진 사용",
                     TextWrapping = TextWrapping.Wrap, Foreground = Res("MutedBrush"),
                 },
             },

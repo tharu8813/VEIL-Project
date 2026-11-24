@@ -41,6 +41,16 @@ public partial class BrowserWindow
                 Check(SearchPolicy.Suggest(localData, "synthetic").Count == 1 &&
                     SearchPolicy.Suggest(localData, "synthetic")[0].Url == "https://example.test/",
                     "local suggestions deduplicate and exclude sensitive URL forms");
+                localData.Bookmarks.Add(new PageEntry("CSharp Reference", "https://www.docs.example.test/guide", DateTimeOffset.Now));
+                Check(SearchPolicy.Suggest(localData, "docs.example.test").FirstOrDefault()?.SourceLabel == "북마크" &&
+                    SearchPolicy.Suggest(localData, "reference guide").Any(item => item.Url.EndsWith("/guide")),
+                    "local suggestions support www-free host and multiple terms");
+                Check(SearchPolicy.Suggest(localData, "? synthetic").Count == 0 &&
+                    SearchPolicy.Suggest(localData, "@google synthetic").Count == 0 &&
+                    ResolveAddress("? example.test", "bing")?.Host == "www.bing.com" &&
+                    ResolveAddress("@naver 한글 검색", "google")?.Host == "search.naver.com" &&
+                    ResolveAddress("@google") is null, "explicit search selects provider only at submission");
+                localData.Bookmarks.RemoveAt(1);
                 localData.LocalAddressSuggestions = false;
                 Check(SearchPolicy.Suggest(localData, "synthetic").Count == 0, "local suggestions disabled");
                 var parentFolder = new BookmarkFolder(Guid.NewGuid(), "Parent");
