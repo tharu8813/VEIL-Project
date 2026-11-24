@@ -844,6 +844,152 @@ public partial class BrowserWindow
                 checks.Add("password secrets: " + JsonSerializer.Serialize(new[] { master, secret }).Length);
                 break;
             }
+            case "p6-password-maintenance":
+            {
+                const string master = "p6-synthetic-master-passphrase";
+                const string next = "p6-synthetic-rotated-master-72";
+                const string backupPass = "p6-synthetic-backup-pass-83";
+                const string oldSecret = "P6-Maintenance-Old-Secret-19";
+                const string newSecret = "P6-Maintenance-New-Secret-20";
+                const string missingSecret = "P6-Maintenance-Missing-Secret-21";
+                const string fixtureOrigin = "https://password-fixture.test";
+                var store = new PasswordStore(session.Root);
+                Check(store.Available, "password store tool present");
+                async Task<List<SavedLogin>> Read(string pass)
+                {
+                    char[] chars = pass.ToCharArray();
+                    try { return await store.ReadAsync(chars); }
+                    finally { ProtectedProfileSession.ClearPassword(chars); }
+                }
+                async Task Write(List<SavedLogin> entries, bool replace)
+                {
+                    char[] chars = master.ToCharArray();
+                    try { await store.WriteAsync(chars, entries, replace); }
+                    finally { ProtectedProfileSession.ClearPassword(chars); }
+                }
+                async Task<FrameworkElement?> OpenManager(string pass)
+                {
+                    await WaitFor(() => !session.PasswordUiOpen && !session.PermissionUiOpen, "password guards released");
+                    await Activated();
+                    harness.Secrets.Enqueue(pass);
+                    PasswordsClick(this, new RoutedEventArgs());
+                    for (int i = 0; i < 200; i++)
+                    {
+                        if (FindManagementTab("veil://passwords") is { CancelManagement: not null, ManagementSurface: { } surface })
+                        { await Settle(); return surface; }
+                        if (!session.PasswordUiOpen) return null;
+                        await Task.Delay(75);
+                    }
+                    throw new TimeoutException("password maintenance page");
+                }
+                async Task Act(string pass, string label, params string?[] secrets)
+                {
+                    var page = await OpenManager(pass);
+                    Check(page is not null, "authenticated maintenance page");
+                    foreach (var value in secrets) harness.Secrets.Enqueue(value);
+                    Status.Text = "p6 maintenance pending";
+                    Click(ButtonText(page!, label), label);
+                    await WaitFor(() => !session.PasswordUiOpen && !session.PermissionUiOpen,
+                        "maintenance finished: " + label, attempts: 1600);
+                    Check(harness.Secrets.Count == 0, "all expected secret prompts consumed");
+                }
+                if (store.Exists)
+                    Check((await Read(master)).Count == 0, "previous password smoke left an empty synthetic store");
+                var old = new SavedLogin(fixtureOrigin, "p6-maintenance-existing", oldSecret);
+                var missing = new SavedLogin(fixtureOrigin, "p6-maintenance-missing", missingSecret);
+                await Write([old, missing], store.Exists);
+                string temp = Path.Combine(session.Root, "p6-password-maintenance-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(temp);
+                string backup = Path.Combine(temp, "backup.age");
+                string tampered = Path.Combine(temp, "tampered.age");
+                string storePath = Path.Combine(session.Root, "passwords.age");
+                var picks = new Queue<(bool Save, string? Path)>();
+                UserPrompts.SmokeFilePicker = save =>
+                {
+                    Check(picks.Count > 0, "expected maintenance file picker");
+                    var pick = picks.Dequeue();
+                    Check(pick.Save == save, "correct maintenance picker kind");
+                    return pick.Path;
+                };
+                try
+                {
+                    byte[] original = File.ReadAllBytes(storePath);
+                    await Act(master, "암호화 백업", backupPass, backupPass + "x");
+                    Check(!File.Exists(backup) && File.ReadAllBytes(storePath).SequenceEqual(original), "backup confirmation mismatch preserves store");
+                    picks.Enqueue((true, null));
+                    await Act(master, "암호화 백업", backupPass, backupPass);
+                    Check(!File.Exists(backup), "cancelled backup picker creates no file");
+                    picks.Enqueue((true, backup));
+                    await Act(master, "암호화 백업", backupPass, backupPass);
+                    Check(File.Exists(backup) && Status.Text.Contains("암호화 백업을 생성"), "encrypted backup created");
+                    byte[] archived = File.ReadAllBytes(backup);
+                    picks.Enqueue((true, backup));
+                    await Act(master, "암호화 백업", backupPass, backupPass);
+                    Check(File.ReadAllBytes(backup).SequenceEqual(archived) && Status.Text.Contains("완료하지 못했습니다"), "backup collision refused");
+                    Check(File.ReadAllBytes(storePath).SequenceEqual(original), "backup operations preserve live ciphertext");
+
+                    var current = old with { Password = newSecret };
+                    await Write([current], replace: true);
+                    byte[] beforeRestore = File.ReadAllBytes(storePath);
+                    byte[] damaged = archived.ToArray();
+                    damaged[damaged.Length - 1] ^= 0x55;
+                    File.WriteAllBytes(tampered, damaged);
+                    picks.Enqueue((false, backup));
+                    await Act(master, "백업 복원", "p6-incorrect-backup-password");
+                    Check(Status.Text.Contains("완료하지 못했습니다") && File.ReadAllBytes(storePath).SequenceEqual(beforeRestore), "wrong backup password refused");
+                    picks.Enqueue((false, tampered));
+                    await Act(master, "백업 복원", backupPass);
+                    Check(Status.Text.Contains("완료하지 못했습니다") && File.ReadAllBytes(storePath).SequenceEqual(beforeRestore), "tampered backup refused");
+                    picks.Enqueue((false, backup));
+                    harness.Answers.Enqueue(false);
+                    await Act(master, "백업 복원", backupPass);
+                    Check(File.ReadAllBytes(storePath).SequenceEqual(beforeRestore), "cancelled restore preserves ciphertext");
+                    picks.Enqueue((false, backup));
+                    harness.Answers.Enqueue(true);
+                    await Act(master, "백업 복원", backupPass);
+                    Check(Status.Text.Contains("계정 1개를 복원") && (await Read(master)).SequenceEqual(new[] { current, missing }),
+                        "restore adds missing account and preserves existing credential");
+                    byte[] restored = File.ReadAllBytes(storePath);
+                    picks.Enqueue((false, backup));
+                    await Act(master, "백업 복원", backupPass);
+                    Check(Status.Text.Contains("추가할 계정이 없습니다") && File.ReadAllBytes(storePath).SequenceEqual(restored),
+                        "duplicate-only restore leaves ciphertext unchanged");
+
+                    await Act(master, "관리자 암호 변경", "short");
+                    Check(File.ReadAllBytes(storePath).SequenceEqual(restored), "short replacement refused");
+                    await Act(master, "관리자 암호 변경", next, next + "x");
+                    Check(File.ReadAllBytes(storePath).SequenceEqual(restored), "rotation confirmation mismatch preserves ciphertext");
+                    await Act(master, "관리자 암호 변경", next, next);
+                    Check(Status.Text.Contains("관리자 암호를 변경") && !File.ReadAllBytes(storePath).SequenceEqual(restored), "rotation publishes new ciphertext");
+                    Check(await OpenManager(master) is null && Status.Text.Contains("완료하지 못했습니다"), "old master password refused");
+                    Check((await Read(next)).SequenceEqual(new[] { current, missing }), "new master authenticates unchanged credentials");
+                    char[] backupChars = backupPass.ToCharArray();
+                    try { Check((await store.ReadBackupAsync(backup, backupChars)).SequenceEqual(new[] { old, missing }), "old backup remains independently decryptable"); }
+                    finally { ProtectedProfileSession.ClearPassword(backupChars); }
+                    Check(File.ReadAllBytes(backup).SequenceEqual(archived), "rotation leaves old backup ciphertext unchanged");
+                    Check(picks.Count == 0 && harness.Answers.Count == 0, "all scripted prompts consumed");
+                }
+                finally
+                {
+                    UserPrompts.SmokeFilePicker = null;
+                    Directory.Delete(temp, recursive: true);
+                }
+                break;
+            }
+            case "p6-password-maintenance-read":
+            {
+                var store = new PasswordStore(session.Root);
+                char[] pass = "p6-synthetic-rotated-master-72".ToCharArray();
+                try
+                {
+                    var entries = await store.ReadAsync(pass);
+                    Check(entries.Count == 2 && entries.Any(e => e.UserName == "p6-maintenance-existing" && e.Password == "P6-Maintenance-New-Secret-20") &&
+                        entries.Any(e => e.UserName == "p6-maintenance-missing" && e.Password == "P6-Maintenance-Missing-Secret-21"),
+                        "rotated store and restored credentials survive restart");
+                }
+                finally { ProtectedProfileSession.ClearPassword(pass); }
+                break;
+            }
             case "p6-settings":
             {
                 Check(new Exception[] { new InvalidDataException(), new System.Runtime.InteropServices.COMException(), new TimeoutException(),

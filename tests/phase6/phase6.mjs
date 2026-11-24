@@ -18,7 +18,7 @@ import { startHttpsFixtures } from './https-fixture.mjs';
 
 const run = promisify(execFile);
 const all = ['p6-library', 'p6-library-read', 'p6-bookmark-folders', 'p6-bookmark-folders-read', 'p6-tabs', 'p6-search', 'p6-search-read', 'p6-permissions',
-    'p6-permissions-read', 'p6-sitedata', 'p6-passwords', 'p6-settings'];
+    'p6-permissions-read', 'p6-sitedata', 'p6-passwords', 'p6-password-maintenance', 'p6-password-maintenance-read', 'p6-settings'];
 const selected = process.argv.slice(2);
 const stages = selected.length ? all.filter(stage => selected.includes(stage)) : all;
 assert.ok(stages.length > 0, `unknown stage; choose from ${all.join(', ')}`);
@@ -37,7 +37,8 @@ const env = {
     VEIL_TEST_HTTPS_B: https.origins[1],
     VEIL_TEST_OFFLINE_HOSTS: '1',
 };
-const secrets = ['p6-synthetic-master-passphrase', 'P6-Synthetic-Site-Secret-41'];
+const secrets = ['p6-synthetic-master-passphrase', 'P6-Synthetic-Site-Secret-41', 'p6-synthetic-rotated-master-72',
+    'p6-synthetic-backup-pass-83', 'P6-Maintenance-Old-Secret-19', 'P6-Maintenance-New-Secret-20', 'P6-Maintenance-Missing-Secret-21'];
 
 async function scan(directory, found = []) {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -61,7 +62,7 @@ try {
         const started = Date.now();
         let output = '';
         try {
-            const { stdout, stderr } = await run('dotnet', [desktop, '--smoke', profile, origin, stage, report], { timeout: 240_000, env });
+            const { stdout, stderr } = await run('dotnet', [desktop, '--smoke', profile, origin, stage, report], { timeout: stage === 'p6-password-maintenance' ? 480_000 : 240_000, env });
             output = stdout + stderr;
         } catch (error) {
             output = String(error.stdout ?? '') + String(error.stderr ?? '');
@@ -89,7 +90,7 @@ try {
 
     const typed = [...requests.keys(), ...https.requests].filter(path => path.includes('p6marker'));
     assert.deepEqual(typed, [], 'typing in the address bar reached a server');
-    if (stages.includes('p6-passwords') && !failed) {
+    if (stages.some(stage => stage.startsWith('p6-password')) && !failed) {
         const leaks = await scan(evidence);
         await writeFile(join(evidence, 'secret-scan.json'), JSON.stringify(leaks, null, 2));
         assert.deepEqual(leaks, [], `synthetic password-manager secrets found on disk:\n${leaks.join('\n')}`);
