@@ -24,6 +24,8 @@ internal sealed class BrowserData
     /// <summary>Security policy (ADR-0007); null means the safe defaults (SmartScreen on).</summary>
     public SecuritySettings? Security { get; set; }
 
+    public List<SitePermissionRule>? SitePermissions { get; set; }
+
     internal static BrowserData Load(string path)
     {
         BrowserData? data;
@@ -43,6 +45,9 @@ internal sealed class BrowserData
             data.Tabs.Any(url => url is null) ||
             (data.Windows is not null && data.Windows.Any(window => window?.Tabs is null || window.Tabs.Any(url => url is null))))
             throw new JsonException("Invalid VEIL developer profile state.");
+        // Missing policy means deny. Corrupted rules must never grant a permission.
+        if (!SitePermissionPolicy.ValidRules(data.SitePermissions))
+            data.SitePermissions = null;
         return data;
     }
 

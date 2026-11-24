@@ -22,6 +22,7 @@ public partial class BrowserWindow : Window
         internal string Url { get; set; } = "about:blank";
         internal TabHeader Header { get; set; } = null!;
         internal bool Loading { get; set; }
+        internal long NavigationEpoch { get; set; }
         /// <summary>HTTPS-first: the plain-HTTP address this tab is currently trying as HTTPS.</summary>
         internal Uri? UpgradedFrom { get; set; }
         /// <summary>The plain-HTTP address the HTTPS warning page offers to open.</summary>
@@ -194,11 +195,7 @@ public partial class BrowserWindow : Window
             web.Profile.DefaultDownloadFolderPath = downloadScratch;
             // ADR-0006 standard protection: strict tracking prevention for every profile.
             web.Profile.PreferredTrackingPreventionLevel = CoreWebView2TrackingPreventionLevel.Strict;
-            web.PermissionRequested += (_, args) =>
-            {
-                args.SavesInProfile = false;
-                args.State = CoreWebView2PermissionState.Deny;
-            };
+            web.PermissionRequested += (_, args) => tab.Owner.OnSitePermissionRequested(tab, args);
             web.LaunchingExternalUriScheme += (_, args) => args.Cancel = true;
             web.NavigationStarting += (_, args) => tab.Owner.OnNavigationStarting(tab, args);
             web.SourceChanged += (_, _) => tab.Owner.OnSourceChanged(tab);
@@ -253,6 +250,7 @@ public partial class BrowserWindow : Window
 
     private void OnNavigationStarting(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
     {
+        tab.NavigationEpoch++;
         if (HandleHttpsFirst(tab, args)) return;
         if (HandleThreat(tab, args)) return;
         args.Cancel = args.Uri != "about:blank" &&
