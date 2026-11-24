@@ -281,7 +281,8 @@ internal sealed class DownloadVault : IDisposable
     }
 
     /// <summary>Fetches the URL with the page's cookies and seals the body as a new vault item.</summary>
-    internal async Task<VaultEntry> CaptureAsync(Uri uri, BrowserDownload download, CoreWebView2 web, bool retry = false)
+    internal async Task<VaultEntry> CaptureAsync(Uri uri, BrowserDownload download, CoreWebView2 web, bool retry = false,
+        Func<bool>? retryReady = null)
     {
         CancellationToken cancel = download.Token;
         download.WaitForSlot();
@@ -290,7 +291,7 @@ internal sealed class DownloadVault : IDisposable
         {
             if (!Unlocked) throw new InvalidOperationException("The vault is locked.");
             download.WaitForTransfer();
-            using var response = await GetFollowingRedirectsAsync(uri, web, cancel, retry);
+            using var response = await GetFollowingRedirectsAsync(uri, web, cancel, retry, retryReady);
             using var body = await response.Content.ReadAsStreamAsync(cancel);
             return await SealCaptureAsync(body, response.Content.Headers.ContentLength, uri.Host, download);
         }
@@ -736,13 +737,23 @@ internal sealed class DownloadVault : IDisposable
         if (result.Verdict == ThreatVerdict.Malicious) throw new ThreatBlockedException(result.Reason);
     }
 
-    private async Task<HttpResponseMessage> GetFollowingRedirectsAsync(Uri uri, CoreWebView2 web, CancellationToken cancel, bool retry)
+    private async Task<HttpResponseMessage> GetFollowingRedirectsAsync(Uri uri, CoreWebView2 web, CancellationToken cancel,
+        bool retry, Func<bool>? retryReady)
     {
+        // Called after acquiring the capture slot, and again after asynchronous threat/cookie lookups.
+        // A confirmed retry is not permission to replay a request from a changed or closed document.
+        void RequireLiveRetry()
+        {
+            if (retry && (!DownloadFailurePolicy.SafeRetryAddress(uri) || retryReady?.Invoke() != true))
+                throw new DownloadRequestFailure("원래 다운로드 페이지 변경 · 다시 다운로드하세요.", false);
+        }
+        RequireLiveRetry();
         for (int hop = 0; hop <= MaxRedirects; hop++)
         {
             if (uri.Scheme is not ("http" or "https")) throw new HttpRequestException("Redirect left HTTP(S).");
             // Every hop is checked before VEIL requests it, so a redirect cannot route around the list.
             await RejectThreatAsync(threats?.CheckAsync(uri, TimeSpan.FromSeconds(2), cancel));
+            RequireLiveRetry();
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.TryAddWithoutValidation("User-Agent", web.Settings.UserAgent);
             // Cookies are looked up per hop so each origin only receives its own cookies.
@@ -752,6 +763,7 @@ internal sealed class DownloadVault : IDisposable
             HttpResponseMessage response;
             using var headers = CancellationTokenSource.CreateLinkedTokenSource(cancel);
             headers.CancelAfter(TimeSpan.FromSeconds(HeaderTimeoutSeconds));
+            RequireLiveRetry();
             try { response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, headers.Token); }
             catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
             { throw new DownloadRequestFailure("서버 응답 대기 시간 초과", hop == 0 && !retry); }

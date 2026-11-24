@@ -87,6 +87,10 @@ jobs:
         shell: pwsh
         run: node --test tests/security/async-handlers.test.mjs tests/security/outside-writes.test.mjs tests/security/jump-list-evidence.test.mjs tests/phase3/phase34-vm.test.mjs tests/vm/internet-batch.test.mjs
 
+      - name: Check download retry context contract
+        shell: pwsh
+        run: node --test tests/security/download-retry-contract.test.mjs
+
       # Hosted runners may be elevated and do not provide an interactive desktop.
       # Running the WPF smoke suite or broker authorization test here would
       # incorrectly test the runner, not a regular Windows user's security token.
