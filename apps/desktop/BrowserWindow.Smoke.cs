@@ -135,9 +135,22 @@ public partial class BrowserWindow
                     await ReadyAt("/");
                     SettingsClick(this, new RoutedEventArgs());
                     await WaitFor(() => Active?.Url == "veil://settings" && Active.CancelManagement is not null, "settings opened in native tab");
+                    Check(BrowserData.Load(statePath).Tabs.Contains("veil://settings"),
+                        "selected native route persisted without WebView navigation");
                     CloseTab((TabItem)Tabs.SelectedItem);
                     await ReadyAt("/");
                     await WaitFor(() => !session.SettingsUiOpen && !session.PermissionUiOpen, "closing settings releases manager guards");
+                    var selectedBeforeBackground = Active;
+                    var backgroundSettings = await OpenTab("veil://settings", select: false)
+                        ?? throw new InvalidOperationException("background settings tab did not open");
+                    Check(Active == selectedBeforeBackground && backgroundSettings.ManagementSurface is not null &&
+                        backgroundSettings.CancelManagement is null &&
+                        backgroundSettings.ManagementSurface.Visibility == Visibility.Collapsed &&
+                        backgroundSettings.View.Visibility == Visibility.Hidden &&
+                        BrowserData.Load(statePath).Tabs.Contains("veil://settings"),
+                        "background native tab persisted without selecting or opening privileged controls");
+                    await CloseTabAsync(backgroundSettings.Item);
+                    Check(!BrowserData.Load(statePath).Tabs.Contains("veil://settings"), "closed background native route removed from state");
                     NavigateAddress(origin + "/second");
                     await ReadyAt("/second");
                     await WaitFor(() => Back.IsEnabled, "back button");
@@ -335,8 +348,10 @@ public partial class BrowserWindow
                             var cancelButton = FindProgressElement<Button>(ActiveDownloadsList)!;
                             Check(cancelButton.IsEnabled, $"download cancel enabled ({kind})");
                             cancelButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                            await WaitFor(() => session.Vault.Results.Count == count + 1 && !DownloadProgressPanel.IsVisible,
-                                $"cancelled transfer leaves progress panel ({kind})");
+                            await WaitFor(() => session.Vault.Results.Count == count + 1 &&
+                                session.ActiveDownloads.Count == 0 && ActiveDownloadsList.Visibility == Visibility.Collapsed &&
+                                DownloadProgressPanel.IsVisible,
+                                $"cancelled transfer clears active list but keeps download manager visible ({kind})");
                             CloseTab((TabItem)Tabs.SelectedItem);
                         }
                         for (int i = 0; i < 1600 && session.Vault.Results.Count == count; i++) await Task.Delay(75);
