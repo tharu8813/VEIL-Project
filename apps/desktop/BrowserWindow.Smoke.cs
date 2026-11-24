@@ -47,12 +47,14 @@ public partial class BrowserWindow
                     await ReadyAt("/");
                     BookmarkClick(this, new RoutedEventArgs());
                     Check(data.Bookmarks.Count == 1, "bookmark created");
-                    BookmarksClick(this, new RoutedEventArgs());
+                    // The native modal manager has separate interactive coverage.
+                    // Keep testing the legacy internal URL and its session restoration here.
+                    Check(await OpenTab("veil://bookmarks") is not null, "bookmark library tab created");
                     await WaitFor(() => Active?.Url == "veil://bookmarks", "bookmark library opened in tab");
                     Check(Active?.Title == "북마크", "bookmark library tab title");
                     CloseTab((TabItem)Tabs.SelectedItem);
                     await ReadyAt("/");
-                    HistoryClick(this, new RoutedEventArgs());
+                    Check(await OpenTab("veil://history") is not null, "history tab created");
                     await WaitFor(() => Active?.Url == "veil://history", "history opened in tab");
                     Check(Active?.Title == "방문 기록", "history tab title");
                     CloseTab((TabItem)Tabs.SelectedItem);

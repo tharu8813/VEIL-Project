@@ -9,8 +9,8 @@ internal sealed class LibraryWindow : VeilDialog
 {
     internal string? SelectedUrl { get; private set; }
 
-    internal LibraryWindow(Window owner, string title, List<PageEntry> entries, bool editable, Action save)
-        : base(owner, title, editable ? "" : "", 680, 500)
+    internal LibraryWindow(Window owner, string title, List<PageEntry> entries, bool editable, Func<bool> save)
+        : base(owner, title, editable ? "" : "", 760, 540)
     {
         string rowGlyph = editable ? "" : "";
         var search = new TextBox
@@ -28,6 +28,39 @@ internal sealed class LibraryWindow : VeilDialog
         var panel = new DockPanel();
         DockPanel.SetDock(search, Dock.Top);
         panel.Children.Add(search);
+
+        // History scope is independent of the text query: bulk deletion always names its scope.
+        var range = new ComboBox { Width = 130, Height = 32, VerticalContentAlignment = VerticalAlignment.Center };
+        foreach (string label in new[] { "전체 기간", "최근 1시간", "최근 24시간", "최근 7일", "최근 30일" })
+            range.Items.Add(label);
+        range.SelectedIndex = 0;
+        System.Windows.Automation.AutomationProperties.SetName(range, "방문 기록 기간");
+        DateTimeOffset? Cutoff() => range.SelectedIndex switch
+        {
+            1 => DateTimeOffset.Now.AddHours(-1),
+            2 => DateTimeOffset.Now.AddDays(-1),
+            3 => DateTimeOffset.Now.AddDays(-7),
+            4 => DateTimeOffset.Now.AddDays(-30),
+            _ => null,
+        };
+        bool InRange(PageEntry entry, DateTimeOffset? cutoff) => cutoff is null || entry.Visited >= cutoff.Value;
+        if (!editable)
+        {
+            var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
+            var clear = new Button
+            {
+                Content = "선택 기간 삭제",
+                Style = (Style)FindResource("GhostButton"),
+                Height = 32,
+                Padding = new Thickness(12, 0, 12, 0),
+                Margin = new Thickness(8, 0, 0, 0),
+            };
+            clear.Click += (_, _) => ClearRange();
+            bar.Children.Add(range);
+            bar.Children.Add(clear);
+            DockPanel.SetDock(bar, Dock.Top);
+            panel.Children.Add(bar);
+        }
         var listArea = new Grid { Children = { list, empty } };
         panel.Children.Add(listArea);
         SetBody(panel);
@@ -37,8 +70,10 @@ internal sealed class LibraryWindow : VeilDialog
         void Refresh()
         {
             string filter = search.Text.Trim();
-            var matches = entries.Where(entry => entry.Title.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                entry.Url.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToArray();
+            var cutoff = editable ? null : Cutoff();
+            var matches = entries.Where(entry => InRange(entry, cutoff) &&
+                (entry.Title.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                 entry.Url.Contains(filter, StringComparison.OrdinalIgnoreCase))).ToArray();
             list.Items.Clear();
             foreach (var entry in matches)
             {
@@ -46,10 +81,10 @@ internal sealed class LibraryWindow : VeilDialog
                 System.Windows.Automation.AutomationProperties.SetName(row, $"{entry.Title} {entry.Url}");
                 list.Items.Add(row);
             }
-            Subtitle.Text = filter.Length == 0 ? $"{entries.Count}개 항목" : $"{matches.Length}개 일치 · 전체 {entries.Count}개";
+            Subtitle.Text = filter.Length == 0 && cutoff is null ? $"{entries.Count}개 항목" : $"{matches.Length}개 일치 · 전체 {entries.Count}개";
             ((TextBlock)((StackPanel)empty.Child).Children[1]).Text = entries.Count == 0
                 ? (editable ? "저장한 북마크가 없습니다.\nCtrl+D로 현재 페이지를 추가하세요." : "방문 기록이 없습니다.")
-                : "검색어와 일치하는 항목이 없습니다.";
+                : "선택한 기간 또는 검색어와 일치하는 항목이 없습니다.";
             empty.Visibility = matches.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
             if (matches.Length == 0) Motion.Enter(empty, 0, dy: 10, scale: 0.96, ms: 500);
             Cascade(list);
@@ -62,19 +97,45 @@ internal sealed class LibraryWindow : VeilDialog
             DialogResult = true;
         }
 
-        async void Remove()
+        void Commit(Action change)
         {
-            if (Selected() is not { } entry || list.SelectedItem is not ListBoxItem row) return;
-            if (Motion.Enabled)
+            // The list is shared by all windows. Do not report success if the protected state
+            // could not be saved; restore the in-memory list before showing the error.
+            var previous = entries.ToArray();
+            change();
+            if (!save())
             {
-                var (_, move) = Motion.Transforms(row);
-                move.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, Motion.To(40, 200));
-                row.BeginAnimation(OpacityProperty, Motion.To(0, 180));
-                await Task.Delay(190);
+                entries.Clear();
+                entries.AddRange(previous);
+                Refresh();
+                MessageBox.Show(this, "변경사항을 저장하지 못했습니다. 기존 목록을 유지합니다.",
+                    title, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
             }
-            entries.Remove(entry);
-            save();
             Refresh();
+        }
+
+        void Remove()
+        {
+            if (Selected() is not { } entry) return;
+            Commit(() => entries.Remove(entry));
+        }
+
+        void ClearRange()
+        {
+            if (editable) return;
+            var cutoff = Cutoff();
+            var targets = entries.Where(entry => InRange(entry, cutoff)).ToArray();
+            if (targets.Length == 0) return;
+            string scope = range.SelectedItem as string ?? "전체 기간";
+            if (MessageBox.Show(this,
+                $"{scope}의 VEIL 방문 기록 {targets.Length}개를 삭제할까요?\n검색어와 관계없이 이 기간의 항목을 삭제합니다. 쿠키, 사이트 데이터 및 엔진 기록은 지우지 않습니다.",
+                "방문 기록 삭제", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
+                return;
+            Commit(() =>
+            {
+                foreach (var entry in targets) entries.Remove(entry);
+            });
         }
 
         AddFooterButton("선택 항목 삭제", Remove);
@@ -94,15 +155,17 @@ internal sealed class LibraryWindow : VeilDialog
             AddFooterButton("이름 저장", () =>
             {
                 if (Selected() is not { } entry || string.IsNullOrWhiteSpace(name.Text)) return;
-                entries[entries.IndexOf(entry)] = entry with { Title = name.Text.Trim() };
-                save();
-                Refresh();
+                int index = entries.IndexOf(entry);
+                if (index < 0) return;
+                string newTitle = name.Text.Trim();
+                Commit(() => entries[index] = entry with { Title = newTitle });
             });
         }
         AddFooterButton("닫기", Close);
         AddFooterButton("열기", Open, primary: true);
 
         search.TextChanged += (_, _) => Refresh();
+        range.SelectionChanged += (_, _) => Refresh();
         list.MouseDoubleClick += (_, args) =>
         {
             if (args.OriginalSource is DependencyObject element &&
