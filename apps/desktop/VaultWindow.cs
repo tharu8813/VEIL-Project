@@ -69,7 +69,7 @@ internal sealed class VaultWindow : VeilDialog
         }
         var advanced = AddFooterButton("금고 관리", ShowAdvanced);
         actions.Add(advanced);
-        preview = Add("텍스트 미리보기", PreviewAsync);
+        preview = Add("미리보기", PreviewAsync);
         verify = Add("파일 검사", VerifySelectedAsync);
         delete = Add("삭제", DeleteAsync);
         export = Add("내보내기", ExportAsync, true);
@@ -129,7 +129,7 @@ internal sealed class VaultWindow : VeilDialog
         preview.IsEnabled = enabled && selected is not null && VaultPresentation.CanPreview(selected);
         verify.IsEnabled = delete.IsEnabled = export.IsEnabled = enabled && selected is not null;
         preview.ToolTip = selected is not null && VaultPresentation.CanPreview(selected) ?
-            "인증된 UTF-8 텍스트를 메모리에서 표시합니다." : "복구되지 않은 256 KiB 이하 .txt 파일만 지원합니다.";
+            "인증 후 메모리에서 읽기 전용으로 표시합니다." : "복구되지 않은 TXT(256 KiB), PNG/JPEG(8 MiB 이하)만 지원합니다.";
         details.Text = selected is null ? "파일을 선택하세요." :
             $"{selected.Name} · {VaultPresentation.Size(selected.Bytes)}\n" +
             (selected.Recovered ? "복구 항목 · 원래 메타데이터가 없을 수 있습니다." : "보관 상태 · 무결성은 파일 검사에서 확인할 수 있습니다.");
@@ -141,8 +141,8 @@ internal sealed class VaultWindow : VeilDialog
         busy = true;
         UpdateSelection();
         try { await action(); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or
-            ArgumentException or System.ComponentModel.Win32Exception or System.Runtime.InteropServices.COMException or
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or
+            NotSupportedException or ArgumentException or System.ComponentModel.Win32Exception or System.Runtime.InteropServices.COMException or
             System.Text.Json.JsonException or OverflowException or FormatException)
         {
             if (!closed) feedback.Text = "작업을 완료하지 못했습니다. 금고 상태, 파일 무결성 및 저장 위치를 확인하세요. 일부 변경이 적용되었을 수 있습니다.";
@@ -162,9 +162,19 @@ internal sealed class VaultWindow : VeilDialog
         try
         {
             if (!Ready) return;
-            string text = VaultPresentation.DecodeText(bytes);
-            if (Ready) new VaultTextPreviewDialog(PromptOwner, entry.Name, text).ShowDialog();
-            if (Ready) feedback.Text = "텍스트 미리보기를 닫았습니다.";
+            var kind = VaultPresentation.PreviewKind(entry);
+            if (kind == VaultPreviewKind.Text)
+            {
+                string text = VaultPresentation.DecodeText(bytes);
+                if (Ready) new VaultTextPreviewDialog(PromptOwner, entry.Name, text).ShowDialog();
+            }
+            else
+            {
+                var bitmap = await Task.Run(() => VaultImagePreview.Decode(bytes, kind));
+                if (Ready && Selected?.Id == entry.Id)
+                    new VaultImagePreviewDialog(PromptOwner, entry.Name, bitmap).ShowDialog();
+            }
+            if (Ready) feedback.Text = "미리보기를 닫았습니다.";
         }
         finally { CryptographicOperations.ZeroMemory(bytes); }
     }
@@ -310,5 +320,25 @@ internal sealed class VaultTextPreviewDialog : VeilDialog
         SetBody(root);
         AddFooterButton("닫기", Dismiss, primary: true);
         Closed += (_, _) => content.Text = "";
+    }
+}
+
+
+internal sealed class VaultImagePreviewDialog : VeilDialog
+{
+    internal VaultImagePreviewDialog(Window owner, string name, System.Windows.Media.Imaging.BitmapSource bitmap)
+        : base(owner, "이미지 미리보기", "", 860, 650)
+    {
+        Subtitle.Text = $"읽기 전용 · {bitmap.PixelWidth:N0} × {bitmap.PixelHeight:N0} · 외부 파일 열기 없음";
+        var label = new TextBlock { Text = name, TextTrimming = TextTrimming.CharacterEllipsis,
+            Margin = new Thickness(0, 0, 0, 8) };
+        var image = new Image { Source = bitmap, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly };
+        var root = new DockPanel();
+        DockPanel.SetDock(label, Dock.Top);
+        root.Children.Add(label);
+        root.Children.Add(new Border { Background = Res("SurfaceBrush"), Padding = new Thickness(8), Child = image });
+        SetBody(root);
+        AddFooterButton("닫기", Dismiss, primary: true);
+        Closed += (_, _) => image.Source = null;
     }
 }

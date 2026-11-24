@@ -1,0 +1,7 @@
+# 31. Vault raster preview (Stage 3-1a)
+
+- Keep existing UTF-8 text preview (256 KiB). Add static PNG and baseline/progressive JPEG, maximum 8 MiB compressed bytes, 8192 per dimension, 12 million pixels. No recovered items, SVG, HTML, GIF, PDF, external file/URI, or shell launch.
+- Separate Rust read-preview pipe command with fixed 8 MiB authenticated read; metadata read stays at 1 MiB. No success header or partial plaintext on authentication/size failure. C# checks exact indexed length and current unlocked context.
+- Native image preflight checks signature, bounded chunk/segment traversal and dimensions before WIC decode; PNG rejects animation and compressed metadata chunks. Native decoder gets only an in-memory stream; output uses copied pixels without metadata. No plaintext staging. Raw byte/pixel arrays cleared where possible, visual reference released on close. Managed/native decoder memory, swap, crash dumps and screen capture are not guaranteed erased.
+- WIC is an attack surface: authenticated ciphertext is not evidence of a trustworthy image. Limits are defense in depth, not a decoder sandbox. Actual malformed-image, UI, lock/shutdown and Procmon checks NOT RUN. PDF needs a dedicated bounded rendering design; do not enable WebView/OS PDF viewer as a plaintext-file fallback.
+- Rust pipe integration test covers >1 MiB preview, unchanged small-read limit, corruption, oversize and continued protocol synchronization. Desktop smoke covers format/size and PNG preflight. No release gate change.

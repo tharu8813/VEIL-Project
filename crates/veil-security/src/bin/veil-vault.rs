@@ -158,7 +158,11 @@ fn serve(dir: &Path, input: &mut impl BufRead) -> io::Result<()> {
             ["backup", dest, password] => secret_str(password)
                 .and_then(|secret| vault_backup::export(&keys, &active, Path::new(dest), secret))
                 .map(|count| format!("ok\t{count}")),
-            ["read", path] => match keys.read_small(Purpose::Download, Path::new(path)) {
+            [command @ ("read" | "read-preview"), path] => match if *command == "read" {
+                keys.read_small(Purpose::Download, Path::new(path))
+            } else {
+                keys.read_preview(Path::new(path))
+            } {
                 Ok(bytes) => {
                     writeln!(out, "ok\t{}", bytes.len())?;
                     out.write_all(&bytes)?;

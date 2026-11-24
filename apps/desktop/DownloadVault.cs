@@ -366,7 +366,7 @@ internal sealed class DownloadVault : IDisposable
         return reply.StartsWith("ok\t") ? long.Parse(reply[3..]) : throw new IOException("The item failed authentication.");
     }
 
-    /// <summary>Authenticates a bounded text object before returning bytes to native UI. No plaintext file.</summary>
+    /// <summary>Authenticates a bounded preview object before returning bytes to native UI. No plaintext file.</summary>
     internal async Task<byte[]> ReadPreviewAsync(VaultEntry entry)
     {
         await gate.WaitAsync();
@@ -375,9 +375,12 @@ internal sealed class DownloadVault : IDisposable
             if (!Unlocked || !Guid.TryParseExact(entry.Id, "N", out _) ||
                 !Entries.Contains(entry) || !VaultPresentation.CanPreview(entry))
                 throw new IOException("Preview unavailable.");
-            var bytes = await ReadSmallLockedAsync(ObjectPath(entry));
+            bool text = VaultPresentation.PreviewKind(entry) == VaultPreviewKind.Text;
+            int limit = text ? VaultPresentation.PreviewLimit : VaultPresentation.ImagePreviewLimit;
+            var bytes = await ReadBoundedLockedAsync(ObjectPath(entry), text ? "read" : "read-preview",
+                text ? 1024 * 1024 : limit);
             if (bytes is null) throw new IOException("Preview authentication failed.");
-            if (bytes.Length != entry.Bytes || bytes.Length > VaultPresentation.PreviewLimit)
+            if (bytes.Length != entry.Bytes || bytes.Length > limit)
             {
                 CryptographicOperations.ZeroMemory(bytes);
                 throw new IOException("Preview size mismatch.");
@@ -526,12 +529,14 @@ internal sealed class DownloadVault : IDisposable
         if (reply != $"ok\t{data.Length}") throw new IOException($"The vault did not store metadata ({reply}).");
     }
 
-    private async Task<byte[]?> ReadSmallLockedAsync(string path)
+    private Task<byte[]?> ReadSmallLockedAsync(string path) => ReadBoundedLockedAsync(path, "read", 1024 * 1024);
+
+    private async Task<byte[]?> ReadBoundedLockedAsync(string path, string command, int limit)
     {
         if (!File.Exists(path)) return null;
-        string reply = await CommandLockedAsync($"read\t{path}");
+        string reply = await CommandLockedAsync($"{command}\t{path}");
         if (!reply.StartsWith("ok\t")) return null;
-        if (!int.TryParse(reply.AsSpan(3), out int length) || length < 0 || length > 1024 * 1024)
+        if (!int.TryParse(reply.AsSpan(3), out int length) || length < 0 || length > limit)
         {
             CloseBrokenPipe();
             throw new IOException("Invalid vault response size.");

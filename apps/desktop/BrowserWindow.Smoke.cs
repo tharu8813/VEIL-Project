@@ -118,6 +118,19 @@ public partial class BrowserWindow
                     !VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.html" }) &&
                     !VaultPresentation.CanPreview(previewEntry with { Bytes = VaultPresentation.PreviewLimit + 1 }) &&
                     !VaultPresentation.CanPreview(previewEntry with { Recovered = true }), "text preview allowlist");
+                Check(VaultPresentation.PreviewKind(previewEntry with { Name = "synthetic.PNG" }) == VaultPreviewKind.Png &&
+                    VaultPresentation.PreviewKind(previewEntry with { Name = "synthetic.jpg" }) == VaultPreviewKind.Jpeg &&
+                    !VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.svg" }) &&
+                    !VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.png", Bytes = VaultPresentation.ImagePreviewLimit + 1 }),
+                    "image preview format and byte limits");
+                byte[] tinyPng = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR1sAAAAASUVORK5CYII=");
+                Check(VaultImagePreview.Dimensions(tinyPng, VaultPreviewKind.Png) == (1, 1), "PNG header size");
+                var oversizedPng = tinyPng.ToArray();
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(oversizedPng.AsSpan(16), 100000);
+                bool rejectedImage = false;
+                try { VaultImagePreview.Dimensions(oversizedPng, VaultPreviewKind.Png); }
+                catch (InvalidDataException) { rejectedImage = true; }
+                Check(rejectedImage, "oversized PNG rejected before decoder");
                 Check(VaultPresentation.DecodeText("synthetic"u8.ToArray()) == "synthetic" &&
                     VaultPresentation.ExportName(previewEntry with { Name = "CON.txt" }) == "VEIL-download.bin" &&
                     VaultPresentation.Filter([previewEntry], "example", VaultSort.Recent, false).Count == 1,
