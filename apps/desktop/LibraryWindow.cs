@@ -1,3 +1,7 @@
+using System.IO;
+using System.Text;
+using System.Text.RegularExpressions;
+using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -17,7 +21,7 @@ internal sealed class LibraryWindow : VeilDialog
     }
 
     internal LibraryWindow(Window owner, string title, List<PageEntry> entries, bool editable, Func<bool> save,
-        List<BookmarkFolder>? folders = null)
+        List<BookmarkFolder>? folders = null, Func<bool>? canEdit = null)
         : base(owner, title, editable ? "" : "", 760, 540)
     {
         string rowGlyph = editable ? "" : "";
@@ -111,6 +115,10 @@ internal sealed class LibraryWindow : VeilDialog
             ActionButton(second, "북마크 ↓", () => ShiftBookmark(1));
             controls.Children.Add(first);
             controls.Children.Add(second);
+            var interchange = new WrapPanel { Margin = new Thickness(0, 5, 0, 0) };
+            ActionButton(interchange, "HTML 가져오기", ImportBookmarks);
+            ActionButton(interchange, "HTML 내보내기", ExportBookmarks);
+            controls.Children.Add(interchange);
             DockPanel.SetDock(controls, Dock.Top);
             panel.Children.Add(controls);
             folderView.SelectionChanged += (_, _) =>
@@ -177,8 +185,9 @@ internal sealed class LibraryWindow : VeilDialog
             Complete(true);
         }
 
-        void Commit(Action change)
+        bool Commit(Action change)
         {
+            if (canEdit is not null && !canEdit()) return false;
             // The list is shared by all windows. Do not report success if the protected state
             // could not be saved; restore the in-memory list before showing the error.
             var previous = entries.ToArray();
@@ -196,9 +205,54 @@ internal sealed class LibraryWindow : VeilDialog
                 Refresh();
                 MessageBox.Show(PromptOwner, "변경사항을 저장하지 못했습니다. 기존 목록을 유지합니다.",
                     title, MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
+                return false;
             }
             Refresh();
+            return true;
+        }
+
+        void ImportBookmarks()
+        {
+            if (folders is null || canEdit?.Invoke() != true) return;
+            var picker = new OpenFileDialog { Filter = "북마크 HTML (*.html;*.htm)|*.html;*.htm", CheckFileExists = true };
+            if (picker.ShowDialog(PromptOwner) != true || canEdit?.Invoke() != true) return;
+            try
+            {
+                var imported = BookmarkHtml.Read(picker.FileName, entries);
+                if (imported.Entries.Count == 0 && imported.Folders.Count == 0)
+                {
+                    MessageBox.Show(PromptOwner, "가져올 새 북마크가 없습니다.", title);
+                    return;
+                }
+                if (Commit(() => { folders.AddRange(imported.Folders); entries.AddRange(imported.Entries); }))
+                    MessageBox.Show(PromptOwner, $"북마크 {imported.Entries.Count}개, 폴더 {imported.Folders.Count}개 가져옴. 건너뜀 {imported.Skipped}개.", title);
+            }
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or DecoderFallbackException or RegexMatchTimeoutException)
+            {
+                MessageBox.Show(PromptOwner, "북마크 HTML을 읽지 못했습니다. UTF-8 북마크 파일과 크기를 확인하세요.", title,
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        void ExportBookmarks()
+        {
+            if (folders is null || canEdit?.Invoke() != true) return;
+            if (MessageBox.Show(PromptOwner, "내보낸 HTML에는 북마크 주소와 이름이 평문으로 저장됩니다. 계속할까요?",
+                "북마크 내보내기", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes ||
+                canEdit?.Invoke() != true) return;
+            var picker = new SaveFileDialog { Filter = "북마크 HTML (*.html)|*.html", DefaultExt = ".html",
+                FileName = "veil-bookmarks.html", AddExtension = true, OverwritePrompt = false };
+            if (picker.ShowDialog(PromptOwner) != true || canEdit?.Invoke() != true) return;
+            try
+            {
+                BookmarkHtml.WriteNew(picker.FileName, BookmarkHtml.Export(folders, entries));
+                MessageBox.Show(PromptOwner, "북마크를 내보냈습니다.", title);
+            }
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                MessageBox.Show(PromptOwner, "내보내지 못했습니다. 기존 파일을 덮어쓰지 않습니다. 다른 이름과 저장 위치를 확인하세요.",
+                    title, MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
 
         BookmarkFolder? Current() => folders?.FirstOrDefault(f => f.Id == currentFolder);

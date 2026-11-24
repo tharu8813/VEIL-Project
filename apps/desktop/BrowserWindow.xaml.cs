@@ -1076,7 +1076,9 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         }
 
         dialog = new LibraryWindow(this, editable ? "북마크 관리" : "방문 기록", entries, editable, SaveLibrary,
-            editable ? data.BookmarkFolders : null);
+            editable ? data.BookmarkFolders : null, editable ? () =>
+                SettingsReady() && Active is { Url: "veil://bookmarks", CancelManagement: not null } active &&
+                !closingTabs.Contains(active.Item) && ReferenceEquals(bookmarkLibrary, dialog) : null);
         if (editable) bookmarkLibrary = dialog;
         try
         {
