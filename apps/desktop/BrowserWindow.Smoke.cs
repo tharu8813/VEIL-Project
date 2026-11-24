@@ -145,6 +145,19 @@ public partial class BrowserWindow
                     !DownloadFailurePolicy.SafeRetryAddress(new Uri("https://example.test/file.bin?token=synthetic")) &&
                     !DownloadFailurePolicy.SafeRetryAddress(new Uri("http://example.test/file.bin")),
                     "download retry only permits initial transient failures and restricted HTTPS addresses");
+                foreach (int status in new[] { 408, 429, 500, 502, 503, 504, 401, 403, 404, 410, 501, 505 })
+                {
+                    bool allowed = status is 408 or 429 or 500 or 502 or 503 or 504;
+                    Check(DownloadFailurePolicy.HttpStatus((System.Net.HttpStatusCode)status, true).Retryable == allowed &&
+                        !DownloadFailurePolicy.HttpStatus((System.Net.HttpStatusCode)status, false).Retryable,
+                        $"retry HTTP status policy ({status})");
+                }
+                foreach (string address in new[] { "https://user:pass@example.test/file.bin",
+                    "https://example.test/file.bin#fragment", "https://example.test/file.bin?token=synthetic",
+                    "http://example.test/file.bin", "file:///synthetic.bin",
+                    "https://example.test/" + new string('a', 8192) })
+                    Check(!DownloadFailurePolicy.SafeRetryAddress(new Uri(address)), "unsafe retry address rejected");
+
                 Check(!DownloadFailurePolicy.Describe(new IOException("synthetic-secret"), DownloadPhase.Streaming, true)
                     .Contains("synthetic-secret"), "download failure detail does not expose raw exceptions");
                 Check(InlineDownloadPolicy.Decode("data:application/octet-stream;base64,c3ludGhldGlj").SequenceEqual("synthetic"u8.ToArray()) &&
