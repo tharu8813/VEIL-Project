@@ -37,6 +37,17 @@ internal sealed class LibraryWindow : VeilDialog
         DockPanel.SetDock(search, Dock.Top);
         panel.Children.Add(search);
 
+        // Folder controls are only present for bookmarks, not the history library.
+        var folderView = new ComboBox { MinWidth = 170, MaxWidth = 320, Height = 32 };
+        var destination = new ComboBox { MinWidth = 170, MaxWidth = 320, Height = 32 };
+        var folderName = new TextBox { Width = 145, Height = 32, Style = (Style)FindResource("PillTextBox"),
+            ToolTip = "폴더 이름" };
+        System.Windows.Automation.AutomationProperties.SetName(folderView, "현재 폴더");
+        System.Windows.Automation.AutomationProperties.SetName(destination, "이동할 폴더");
+        System.Windows.Automation.AutomationProperties.SetName(folderName, "폴더 이름");
+        Guid? currentFolder = null;
+        bool refreshing = false;
+
         // History scope is independent of the text query: bulk deletion always names its scope.
         var range = new ComboBox { Width = 130, Height = 32, VerticalContentAlignment = VerticalAlignment.Center };
         foreach (string label in new[] { "전체 기간", "최근 1시간", "최근 24시간", "최근 7일", "최근 30일" })
@@ -69,16 +80,6 @@ internal sealed class LibraryWindow : VeilDialog
             DockPanel.SetDock(bar, Dock.Top);
             panel.Children.Add(bar);
         }
-        // Folder controls are only present for bookmarks, not the history library.
-        var folderView = new ComboBox { MinWidth = 170, MaxWidth = 320, Height = 32 };
-        var destination = new ComboBox { MinWidth = 170, MaxWidth = 320, Height = 32 };
-        var folderName = new TextBox { Width = 145, Height = 32, Style = (Style)FindResource("PillTextBox"),
-            ToolTip = "폴더 이름" };
-        System.Windows.Automation.AutomationProperties.SetName(folderView, "현재 폴더");
-        System.Windows.Automation.AutomationProperties.SetName(destination, "이동할 폴더");
-        System.Windows.Automation.AutomationProperties.SetName(folderName, "폴더 이름");
-        Guid? currentFolder = null;
-        bool refreshing = false;
         if (folders is not null)
         {
             var controls = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
