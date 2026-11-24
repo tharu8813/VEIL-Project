@@ -689,6 +689,74 @@ public partial class BrowserWindow
                 }
 #endif
 #if DEBUG
+                else if (stage is "vault-power-arm" or "vault-power-check")
+                {
+                    var vault = session.Vault;
+                    bool arming = stage == "vault-power-arm";
+                    Check(vault.Available && vault.Exists != arming, "expected synthetic vault initial state");
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync(), "synthetic power loss vault opened");
+                    NavigateAddress(origin);
+                    await ReadyAt("/");
+                    async Task<VaultEntry> Store(string kind, string name)
+                    {
+                        using var download = new BrowserDownload(name);
+                        return await vault.CaptureAsync(new Uri(origin + "/vault-dl?kind=" + kind), download, Active!.View.CoreWebView2);
+                    }
+                    string Digest(string path)
+                    {
+                        using var stream = File.OpenRead(path);
+                        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream));
+                    }
+                    string Meta(VaultEntry entry) => Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(vault.ObjectPath(entry))!)!,
+                        "meta", entry.Id + ".veil");
+                    string[] Objects(VaultEntry entry) => Directory.GetFiles(Path.GetDirectoryName(vault.ObjectPath(entry))!, "*.veil");
+                    string[] Staging() => Directory.GetFiles(vault.Directory, ".veil-encrypted-*", SearchOption.AllDirectories);
+                    if (arming)
+                    {
+                        Check(vault.Entries.Count == 0, "fresh vault");
+                        var seed = await Store("small", "power-seed.bin");
+                        Check(await vault.VerifyAsync(seed) == 1024 && Objects(seed).Length == 1, "seed authenticated and published");
+                        string seedHash = Digest(vault.ObjectPath(seed)), metaHash = Digest(Meta(seed));
+                        using var pending = new BrowserDownload("power-uncommitted.bin");
+                        var transfer = vault.CaptureAsync(new Uri(origin + "/vault-dl?kind=slow-power"), pending, Active!.View.CoreWebView2);
+                        try
+                        {
+                            for (int i = 0; i < 600 && !transfer.IsCompleted && pending.Bytes < 1024 * 1024; i++)
+                                await Task.Delay(100);
+                            Check(!transfer.IsCompleted && pending.Phase == DownloadPhase.Streaming &&
+                                pending.Bytes >= 1024 * 1024 && pending.Bytes < 32L * 1024 * 1024 &&
+                                Staging().Length > 0 && Objects(seed).Length == 1, "uncommitted staging observed while streaming");
+                            File.WriteAllText(report, JsonSerializer.Serialize(new
+                            {
+                                vaultPowerReady = true, seedId = seed.Id, seedHash, metaHash,
+                                streamed = pending.Bytes, stagingObserved = true,
+                            }));
+                            await Task.WhenAny(transfer, Task.Delay(TimeSpan.FromSeconds(150)));
+                            throw new InvalidOperationException("Power cut not observed during stream");
+                        }
+                        finally
+                        {
+                            pending.Cancel();
+                            try { await transfer; }
+                            catch (Exception failure) when (RecoverableFailure.Is(failure)) { }
+                        }
+                    }
+                    else
+                    {
+                        using var receipt = JsonDocument.Parse(File.ReadAllText(Path.Combine(Path.GetDirectoryName(report)!, "armed.json")));
+                        var proof = receipt.RootElement;
+                        Check(vault.Entries.Count == 1 && vault.Entries[0].Id == proof.GetProperty("seedId").GetString(), "only committed seed restored");
+                        var seed = vault.Entries.Single();
+                        Check(seed.Name == "power-seed.bin" && !seed.Recovered && seed.Bytes == 1024 &&
+                            await vault.VerifyAsync(seed) == 1024 && Digest(vault.ObjectPath(seed)) == proof.GetProperty("seedHash").GetString() &&
+                            Digest(Meta(seed)) == proof.GetProperty("metaHash").GetString(), "vault power seed authenticated and unchanged");
+                        Check(Objects(seed).Length == 1 && Staging().Length == 0, "vault power interrupted object absent and staging cleaned");
+                        var retry = await Store("large", "power-explicit-retry.bin");
+                        Check(vault.Entries.Count == 2 && Objects(seed).Length == 2 && retry.Id != seed.Id &&
+                            await vault.VerifyAsync(retry) == 8L * 1024 * 1024 && Digest(vault.ObjectPath(seed)) == proof.GetProperty("seedHash").GetString(),
+                            "vault power explicit retry authenticated without duplicate");
+                    }
+                }
                 else if (stage == "vault-bridge-disk-full")
                 {
                     // External runner verifies the offline VM and separate small VHDX. This Debug
