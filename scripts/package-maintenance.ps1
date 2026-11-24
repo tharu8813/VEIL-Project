@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory,ParameterSetName='Update')][switch]$Update,
     [Parameter(Mandatory,ParameterSetName='Recover')][switch]$RecoverInterruptedUpdate,
     [Parameter(Mandatory,ParameterSetName='Remove')][switch]$Remove,
+    [Parameter(Mandatory,ParameterSetName='RegisterBrowser')][switch]$RegisterBrowser,
     [Parameter(Mandatory,ParameterSetName='Install')]
     [Parameter(Mandatory,ParameterSetName='Update')][string]$Package,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$SignerThumbprint,
@@ -34,6 +35,43 @@ $journal=Join-Path $data 'update-transaction'
 $backup=Join-Path $journal 'broker.previous.json'
 $committed=Join-Path $journal 'committed'
 $serviceCommand='"{0}" --service' -f $broker
+
+# Registration is opt-in for an authenticated installed package. Windows owns the actual default.
+$browserCapabilities='Software\VEIL\Capabilities'
+$browserClass='HKLM:\Software\Classes\VEIL.Url'
+$registeredApps='HKLM:\Software\RegisteredApplications'
+$browserCommand='"{0}" --open-url "%1"' -f $client
+function Get-VeilBrowserCommand {
+    $key=Get-Item -LiteralPath (Join-Path $browserClass 'shell\open\command') -ErrorAction SilentlyContinue
+    if ($key) { return $key.GetValue('') }
+}
+function Register-VeilBrowser {
+    $existing=(Get-ItemProperty -LiteralPath $registeredApps -Name 'VEIL' -ErrorAction SilentlyContinue).VEIL
+    if ($existing -and $existing -ne $browserCapabilities) { throw 'Foreign RegisteredApplications entry.' }
+    $command=Get-VeilBrowserCommand
+    if ((Test-Path -LiteralPath $browserClass) -and $command -ne $browserCommand) { throw 'Foreign VEIL.Url registration.' }
+    $cap='HKLM:\'+$browserCapabilities
+    if ((Test-Path -LiteralPath $cap) -and $existing -ne $browserCapabilities) { throw 'Unowned capabilities registration.' }
+    foreach ($key in @($browserClass,(Join-Path $browserClass 'shell\open\command'),$cap,(Join-Path $cap 'URLAssociations'),$registeredApps)) {
+        if (-not (Test-Path -LiteralPath $key)) { [void](New-Item -Path $key -Force) }
+    }
+    Set-Item -LiteralPath $browserClass -Value 'VEIL web link'
+    New-ItemProperty -LiteralPath $browserClass -Name 'URL Protocol' -Value '' -PropertyType String -Force | Out-Null
+    Set-Item -LiteralPath (Join-Path $browserClass 'shell\open\command') -Value $browserCommand
+    New-ItemProperty -LiteralPath $cap -Name ApplicationName -Value 'VEIL' -PropertyType String -Force | Out-Null
+    New-ItemProperty -LiteralPath $cap -Name ApplicationDescription -Value 'VEIL protected-profile browser (internal development build)' -PropertyType String -Force | Out-Null
+    New-ItemProperty -LiteralPath (Join-Path $cap 'URLAssociations') -Name http -Value 'VEIL.Url' -PropertyType String -Force | Out-Null
+    New-ItemProperty -LiteralPath (Join-Path $cap 'URLAssociations') -Name https -Value 'VEIL.Url' -PropertyType String -Force | Out-Null
+    New-ItemProperty -LiteralPath $registeredApps -Name 'VEIL' -Value $browserCapabilities -PropertyType String -Force | Out-Null
+}
+function Remove-VeilBrowserRegistration {
+    $existing=(Get-ItemProperty -LiteralPath $registeredApps -Name 'VEIL' -ErrorAction SilentlyContinue).VEIL
+    if ($existing -eq $browserCapabilities -and (Get-VeilBrowserCommand) -eq $browserCommand) {
+        Remove-ItemProperty -LiteralPath $registeredApps -Name 'VEIL'
+        Remove-Item -LiteralPath ('HKLM:\'+$browserCapabilities) -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $browserClass -Recurse -Force
+    }
+}
 
 function Assert-Tree([string]$Root) { [void]@(Get-VeilTreeFiles $Root -Restricted) }
 function Remove-RestrictedTree([string]$Root) {
@@ -170,6 +208,15 @@ try {
     foreach ($path in @($journal,$previous,$stage,$failed)) {
         if (Test-Path -LiteralPath $path) { throw 'Unresolved maintenance state. Inspect or recover before continuing.' }
     }
+    if ($RegisterBrowser) {
+        Assert-RegisteredService
+        [void](Read-VeilPackage $bin $SignerThumbprint)
+        $current=Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
+        if ($current.clientSha256 -ne (Get-FileHash -LiteralPath $client -Algorithm SHA256).Hash) { throw 'Installed client pin mismatch.' }
+        Register-VeilBrowser
+        Write-Host 'VEIL registered as a browser candidate. Select it explicitly in Windows Default apps.'
+        return
+    }
     if ($Remove) {
         Assert-RegisteredService
         Assert-ClosedAndDetached
@@ -179,6 +226,7 @@ try {
         Assert-ClosedAndDetached
         sc.exe delete $service | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Service removal failed.' }
+        Remove-VeilBrowserRegistration
         Remove-RestrictedTree $bin
         Write-Host 'Binaries removed; encrypted VHDX and registration retained. Re-registration requires administrator recovery.'
         return
