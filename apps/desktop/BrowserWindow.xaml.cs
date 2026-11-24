@@ -774,6 +774,7 @@ public partial class BrowserWindow : Window
     {
         input = input.Trim();
         if (input.Length == 0) return null;
+        if (SearchPolicy.TryExplicitSearch(input, searchEngine, out var search)) return search;
         if (IsInternalUrl(input)) return new Uri(input);
         if (Uri.TryCreate(input, UriKind.Absolute, out var absolute) && IsWebUrl(absolute)) return absolute;
         if (input.Contains("://") || input.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) return null;
@@ -898,6 +899,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         string text = Address.Text.Trim();
         // Ctrl+Enter completes a bare name to www.<name>.com, as in Chrome and Edge.
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && text.Length > 0 && !text.Contains('.') &&
+            !text.StartsWith('?') && !text.StartsWith('@') &&
             !text.Contains(':') && !text.Contains('/') && !text.Any(char.IsWhiteSpace))
             text = $"www.{text}.com";
         if (IsManagementUrl(text)) { OpenManagementRoute(text); return; }
