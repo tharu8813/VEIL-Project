@@ -172,7 +172,8 @@ internal sealed class LibraryWindow : VeilDialog
                 ItemsControl.ContainerFromElement(list, element) is ListBoxItem) Open();
         };
         list.KeyDown += (_, args) => { if (args.Key == Key.Enter) Open(); };
-        OnContentLoaded(() => search.Focus());
+        OnContentLoaded(() => { Refresh(); search.Focus(); });
+        OnContentVisible(Refresh);
         Refresh();
     }
 

@@ -43,6 +43,7 @@ internal class VeilDialog : Window
     }
 
     protected void OnContentLoaded(Action action) => shell.Loaded += (_, _) => action();
+    protected void OnContentVisible(Action action) => shell.IsVisibleChanged += (_, _) => { if (shell.IsVisible) action(); };
 
     protected VeilDialog(Window? owner, string title, string glyph, double width, double height)
     {

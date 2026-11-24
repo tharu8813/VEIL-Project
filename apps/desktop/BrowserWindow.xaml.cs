@@ -512,7 +512,7 @@ public partial class BrowserWindow : Window
             {
                 if (SettingsReady())
                     await ShowManagementPageAsync("veil://vault", new VaultWindow(this, session.Vault,
-                        () => SettingsReady() && Active?.Url == "veil://vault" && IsActive));
+                        () => SettingsReady() && Active?.Url == "veil://vault"));
             }
             else if (SettingsReady() && session.Vault.UsesProfilePassword)
                 MessageBox.Show(this, "다운로드 금고가 잠겨 있습니다. VEIL을 다시 시작하고 보호 프로필 잠금 해제 단계에서 금고를 여세요.",
@@ -863,7 +863,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         {
             // Alt+Enter opens the address in a new tab next to the current one.
             if (ResolveAddress(text, data.SearchEngine) is { } url && Active is { } current)
-                _ = OpenTab(url.AbsoluteUri, index: Tabs.Items.IndexOf(current.Item) + 1);
+                _ = OpenTab(IsInternalUrl(url.OriginalString) ? url.OriginalString : url.AbsoluteUri, index: Tabs.Items.IndexOf(current.Item) + 1);
             return;
         }
         NavigateAddress(text);
@@ -881,6 +881,9 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         }
         if (Active is not { } tab) return;
         ClearManagement(tab);
+        tab.PendingHttp = null;
+        tab.PendingThreat = null;
+        tab.UpgradedFrom = null;
         SetAddressText(url.AbsoluteUri);
         if (IsInternalUrl(url.OriginalString))
         {
@@ -967,6 +970,9 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     {
         if (Active is not { } tab) return;
         ClearManagement(tab);
+        tab.PendingHttp = null;
+        tab.PendingThreat = null;
+        tab.UpgradedFrom = null;
         tab.Url = "about:blank";
         tab.EngineView.Navigate("about:blank");
         RefreshChrome();

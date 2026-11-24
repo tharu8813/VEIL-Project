@@ -87,6 +87,8 @@ internal sealed class VaultWindow : VeilDialog
                 _ = RunAsync(PreviewAsync);
             }
         };
+        OnContentLoaded(Refresh);
+        OnContentVisible(Refresh);
         vault.Changed += Refresh;
         Closed += (_, _) => { closed = true; vault.Changed -= Refresh; };
         Refresh();

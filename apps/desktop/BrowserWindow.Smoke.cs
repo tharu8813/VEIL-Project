@@ -99,18 +99,23 @@ public partial class BrowserWindow
                     // Restored management tabs have a native surface, not a privileged web page.
                     Check(IsManagementUrl("veil://settings") && IsManagementUrl("veil://vault") && IsManagementUrl("veil://passwords") &&
                         !IsManagementUrl("veil://settings/unknown"), "management route allowlist");
-                    Check(await OpenTab("veil://bookmarks") is not null, "bookmark library tab created");
-                    await WaitFor(() => Active?.Url == "veil://bookmarks", "bookmark library opened in tab");
+                    BookmarksClick(this, new RoutedEventArgs());
+                    await WaitFor(() => Active?.Url == "veil://bookmarks" && Active.CancelManagement is not null, "bookmark manager opened in native tab");
                     Check(Active?.Title == "북마크", "bookmark library tab title");
                     Check(Active?.ManagementSurface is not null && Active.View.Visibility == System.Windows.Visibility.Hidden,
                         "bookmark management uses native tab surface");
                     CloseTab((TabItem)Tabs.SelectedItem);
                     await ReadyAt("/");
-                    Check(await OpenTab("veil://history") is not null, "history tab created");
-                    await WaitFor(() => Active?.Url == "veil://history", "history opened in tab");
+                    HistoryClick(this, new RoutedEventArgs());
+                    await WaitFor(() => Active?.Url == "veil://history" && Active.CancelManagement is not null, "history manager opened in native tab");
                     Check(Active?.Title == "방문 기록", "history tab title");
                     CloseTab((TabItem)Tabs.SelectedItem);
                     await ReadyAt("/");
+                    SettingsClick(this, new RoutedEventArgs());
+                    await WaitFor(() => Active?.Url == "veil://settings" && Active.CancelManagement is not null, "settings opened in native tab");
+                    CloseTab((TabItem)Tabs.SelectedItem);
+                    await ReadyAt("/");
+                    await WaitFor(() => !session.SettingsUiOpen && !session.PermissionUiOpen, "closing settings releases manager guards");
                     NavigateAddress(origin + "/second");
                     await ReadyAt("/second");
                     await WaitFor(() => Back.IsEnabled, "back button");

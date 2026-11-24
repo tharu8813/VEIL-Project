@@ -104,7 +104,8 @@ public partial class BrowserWindow
             reserved = openingManagement.Add(route);
             if (!reserved) return false;
             tab = FindManagementTab(route) ?? await OpenTab(route);
-            if (tab is null || !SettingsReady() || tab.Owner != this || !Tabs.Items.Contains(tab.Item)) return false;
+            if (tab is null || !SettingsReady() || tab.Owner != this || !Tabs.Items.Contains(tab.Item) ||
+                closingTabs.Contains(tab.Item)) return false;
             ClearManagement(tab);
             var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             page = dialog.TakePage(accepted =>
@@ -117,6 +118,8 @@ public partial class BrowserWindow
             Tabs.SelectedItem = tab.Item;
             RefreshChrome();
             bool accepted = await completion.Task;
+            // Cancel if the page was detached or left between the native click and its continuation.
+            accepted = accepted && tab.ManagementSurface == page && Active == tab && IsActive && SettingsReady();
             if (tab.ManagementSurface == page)
             {
                 ClearManagement(tab);
