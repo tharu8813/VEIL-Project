@@ -29,6 +29,7 @@ internal sealed class BrowserData
     public List<SitePermissionRule>? SitePermissions { get; set; }
     public string? SearchEngine { get; set; }
     public bool? LocalAddressSuggestions { get; set; }
+    public bool ShowBookmarksBar { get; set; } = true;
 
     internal static BrowserData Load(string path)
     {

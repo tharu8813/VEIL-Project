@@ -46,7 +46,6 @@ public partial class BrowserWindow : Window
     private bool closing;
     private bool restoring = true;
     private bool smokeRun;
-    private DispatcherTimer? downloadPopupTimer;
 
     private BrowserData data => session.Data;
     private Stack<ClosedTab> closedTabs => session.ClosedTabs;
@@ -70,6 +69,9 @@ public partial class BrowserWindow : Window
         session.Windows.Add(this);
         InitializeComponent();
         ActiveDownloadsList.ItemsSource = session.ActiveDownloads;
+        PopupActiveDownloads.ItemsSource = session.ActiveDownloads;
+        InitializeDownloadToolbar();
+        RefreshBookmarkBar();
         RefreshDownloadProgress();
         InitializeMotion(playIntro: adopt is null);
         InitializeWindowFeatures();
@@ -87,6 +89,9 @@ public partial class BrowserWindow : Window
         if (last || session.IsEnding)
             foreach (var download in session.ActiveDownloads.ToArray()) download.Cancel();
         closing = true;
+        DownloadPopup.IsOpen = false;
+        downloadRingTimer.Stop();
+        RecentDownloadsList.ItemsSource = null;
         CloseAddressSuggestions();
         session.Windows.Remove(this);
         if (!last && !session.IsEnding)
@@ -566,24 +571,21 @@ public partial class BrowserWindow : Window
     private void ShowDownloadOutcome(string fileName, string label, string message)
     {
         downloads.Insert(0, $"{fileName} · {label}");
+        if (label != DownloadVault.Stored)
+        {
+            session.RecentDownloadIssues.Insert(0, (DateTimeOffset.Now, $"{fileName} · {label}"));
+            if (session.RecentDownloadIssues.Count > 20) session.RecentDownloadIssues.RemoveAt(20);
+        }
         Status.Text = message + " Ctrl+J에서 확인할 수 있습니다.";
         Dispatcher.BeginInvoke(() =>
         {
             if (closing) return;
             DownloadButton.Visibility = Visibility.Visible;
-            DownloadPopupText.Text = message;
-            DownloadPopup.IsOpen = true;
+            foreach (var window in session.Windows.ToArray())
+                if (!window.closing) window.RefreshDownloadProgress();
             if (Active?.Url == "veil://downloads")
                 Active.View.CoreWebView2.NavigateToString(BuildInternalPage("veil://downloads"));
             Motion.Pop(Motion.Transforms(DownloadButton).Scale, 1.35);
-            downloadPopupTimer?.Stop();
-            downloadPopupTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-            downloadPopupTimer.Tick += (_, _) =>
-            {
-                downloadPopupTimer.Stop();
-                DownloadPopup.IsOpen = false;
-            };
-            downloadPopupTimer.Start();
         }, System.Windows.Threading.DispatcherPriority.Input);
     }
 
@@ -677,7 +679,8 @@ public partial class BrowserWindow : Window
     private void RefreshDownloadProgress()
     {
         bool hasDownloads = session.ActiveDownloads.Count > 0;
-        if (hasDownloads) DownloadButton.Visibility = Visibility.Visible;
+        DownloadButton.Visibility = Visibility.Visible;
+        UpdateDownloadToolbar();
         DownloadProgressPanel.Visibility = Active?.Url == "veil://downloads"
             ? Visibility.Visible : Visibility.Collapsed;
         ActiveDownloadsList.Visibility = hasDownloads ? Visibility.Visible : Visibility.Collapsed;
@@ -993,8 +996,14 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         {
             data.Bookmarks.Add(new PageEntry(tab.Title, tab.Url, DateTimeOffset.Now));
             Status.Text = "북마크에 추가했습니다.";
-            SaveData();
-            UpdateBookmarkGlyph();
+            try { data.Save(statePath); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                data.Bookmarks.RemoveAt(data.Bookmarks.Count - 1);
+                Status.Text = "북마크를 저장하지 못했습니다.";
+                return;
+            }
+            RefreshBookmarkBars();
             Motion.Pop((System.Windows.Media.ScaleTransform)BookmarkGlyph.RenderTransform, 1.6);
         }
         else Status.Text = "이미 북마크에 있습니다.";
@@ -1017,7 +1026,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             {
                 data.Save(statePath);
                 if (editable)
-                    foreach (var window in session.Windows.ToArray()) if (!window.closing) window.UpdateBookmarkGlyph();
+                    RefreshBookmarkBars();
                 return true;
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -1035,6 +1044,8 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private async void DownloadsClick(object sender, RoutedEventArgs args)
     {
         DownloadPopup.IsOpen = false;
+        var existing = Tabs.Items.OfType<TabItem>().FirstOrDefault(item => item.Tag is BrowserTab { Url: "veil://downloads" } && !closingTabs.Contains(item));
+        if (existing is not null) { Tabs.SelectedItem = existing; return; }
         _ = await OpenTab("veil://downloads");
     }
 

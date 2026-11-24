@@ -124,17 +124,75 @@
                                 </TextBlock.RenderTransform>
                             </TextBlock>
                         </Button>
-                        <Button x:Name="DownloadButton" Style="{StaticResource IconButton}" Content="&#xE896;"
-                                Visibility="Collapsed" ToolTip="다운로드 (Ctrl+J)"
-                                AutomationProperties.Name="다운로드" Click="DownloadsClick"
-                                WindowChrome.IsHitTestVisibleInChrome="True" />
+                        <Button x:Name="DownloadButton" Style="{StaticResource IconButton}"
+                                ToolTip="최근 다운로드" AutomationProperties.Name="최근 다운로드"
+                                Click="DownloadToolbarClick" WindowChrome.IsHitTestVisibleInChrome="True">
+                            <Grid Width="28" Height="28" IsHitTestVisible="False">
+                                <Ellipse x:Name="DownloadRingTrack" Margin="2" Stroke="{StaticResource LineBrush}"
+                                         StrokeThickness="2" Visibility="Collapsed" />
+                                <Path x:Name="DownloadRingArc" Stroke="{StaticResource AccentBrush}" StrokeThickness="2.4"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Visibility="Collapsed" />
+                                <TextBlock Text="&#xE896;" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Grid>
+                        </Button>
                         <Popup x:Name="DownloadPopup" PlacementTarget="{Binding ElementName=DownloadButton}"
-                               Placement="Bottom" AllowsTransparency="True" StaysOpen="False">
-                            <Border CornerRadius="10" Background="{StaticResource SurfaceBrush}"
-                                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
-                                    Padding="14,10" MaxWidth="420">
-                                <TextBlock x:Name="DownloadPopupText" Foreground="{StaticResource TextBrush}"
-                                           TextWrapping="Wrap" />
+                               Placement="Bottom" HorizontalOffset="-318" VerticalOffset="6"
+                               AllowsTransparency="True" StaysOpen="False"
+                               Opened="DownloadPopupOpened" Closed="DownloadPopupClosed">
+                            <Border Width="354" CornerRadius="12" Background="{StaticResource SurfaceBrush}"
+                                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1" Padding="14"
+                                    KeyboardNavigation.TabNavigation="Cycle" PreviewKeyDown="DownloadPopupKeyDown">
+                                <DockPanel>
+                                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="28" Height="28"
+                                                Content="&#xE8BB;" Click="CloseDownloadPopupClick" AutomationProperties.Name="최근 다운로드 닫기" />
+                                        <TextBlock Text="최근 다운로드" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    </DockPanel>
+                                    <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+                                        <Button Style="{StaticResource GhostButton}" Content="다운로드 금고 열기"
+                                                Click="PopupVaultClick" Margin="0,0,0,6" />
+                                        <Button Style="{StaticResource PrimaryButton}" Content="모든 다운로드 보기" Click="DownloadsClick" />
+                                    </StackPanel>
+                                    <ScrollViewer MaxHeight="390" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <StackPanel>
+                                            <ItemsControl x:Name="PopupActiveDownloads" AutomationProperties.Name="진행 중인 다운로드">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid Margin="0,0,0,10">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel Margin="0,0,8,0">
+                                                                <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />
+                                                                <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource MutedBrush}" FontSize="12" />
+                                                                <ProgressBar Height="4" Margin="0,5,0,0" Maximum="100"
+                                                                             Value="{Binding Percent, Mode=OneWay}" IsIndeterminate="{Binding IsIndeterminate}"
+                                                                             Foreground="{StaticResource AccentBrush}" />
+                                                            </StackPanel>
+                                                            <Button Grid.Column="1" Style="{StaticResource GhostButton}" Content="취소"
+                                                                    IsEnabled="{Binding CanCancel}" Click="CancelDownloadClick" />
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <ItemsControl x:Name="RecentDownloadsList" AutomationProperties.Name="최근 다운로드 결과">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1" Padding="0,8">
+                                                            <TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="{StaticResource TextBrush}" />
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <TextBlock x:Name="DownloadPopupEmpty" Text="최근 다운로드가 없습니다."
+                                                       Foreground="{StaticResource MutedBrush}" Margin="0,12" TextWrapping="Wrap" />
+                                            <TextBlock x:Name="DownloadPopupLocked" Text="금고를 열면 보관된 다운로드를 확인할 수 있습니다."
+                                                       Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0" />
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </DockPanel>
                             </Border>
                         </Popup>
                         <Button x:Name="MenuButton" Style="{StaticResource IconButton}" Content="&#xE700;" ToolTip="브라우저 메뉴 (Alt+F)"
@@ -148,6 +206,8 @@
                                     <Separator />
                                     <MenuItem Header="북마크 추가" InputGestureText="Ctrl+D" Click="BookmarkClick" />
                                     <MenuItem Header="북마크 관리" InputGestureText="Ctrl+B" Click="BookmarksClick" />
+                                    <MenuItem x:Name="BookmarkBarMenuItem" Header="북마크 바 표시" IsCheckable="True"
+                                              InputGestureText="Ctrl+Shift+B" Click="ToggleBookmarkBarClick" />
                                     <MenuItem Header="방문 기록" InputGestureText="Ctrl+H" Click="HistoryClick" />
                                     <MenuItem Header="다운로드" InputGestureText="Ctrl+J" Click="DownloadsClick" />
                                     <MenuItem Header="다운로드 금고" InputGestureText="Ctrl+Shift+J" Click="VaultClick" />
@@ -186,6 +246,38 @@
 
             <!-- The developer warning stays visible on every page. -->
             <StackPanel Grid.Row="2">
+            <Border x:Name="BookmarkBar" Background="{StaticResource InkBrush}" BorderBrush="{StaticResource LineBrush}"
+                    BorderThickness="0,0,0,1" Padding="10,2" Visibility="Collapsed">
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="30" Height="28"
+                            Content="&#xE734;" ToolTip="북마크 관리" Click="BookmarksClick" AutomationProperties.Name="모든 북마크" />
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                                  PanningMode="HorizontalOnly">
+                        <StackPanel Orientation="Horizontal">
+                            <ItemsControl x:Name="BookmarkBarItems" AutomationProperties.Name="북마크 바">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Style="{StaticResource GhostButton}" Height="26" Margin="0,0,4,0" Padding="8,0"
+                                                ToolTip="{Binding Url}" Click="BookmarkBarItemClick"
+                                                AutomationProperties.Name="{Binding Title}">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE734;" FontFamily="{StaticResource IconFont}" FontSize="11"
+                                                           Foreground="{StaticResource MutedBrush}" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding Title}" MaxWidth="155" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock x:Name="BookmarkBarEmpty" Text="Ctrl+D로 북마크를 추가하세요."
+                                       Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="5,0" />
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
             <Border x:Name="Notice" Background="#14F2B84B" BorderBrush="#33F2B84B"
                     BorderThickness="0,1,0,1" Padding="14,5">
                 <StackPanel Orientation="Horizontal">

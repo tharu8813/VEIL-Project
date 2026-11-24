@@ -16,6 +16,7 @@ internal sealed class BrowserDownload(string name) : INotifyPropertyChanged, IDi
     public bool IsIndeterminate => totalBytes is not > 0;
     public double Percent => totalBytes is > 0 ? Math.Clamp(100d * Bytes / totalBytes.Value, 0, 100) : 0;
     internal long Bytes { get; private set; }
+    internal long? TotalBytes => totalBytes;
     internal CancellationToken Token => cancellation.Token;
     public event PropertyChangedEventHandler? PropertyChanged;
 

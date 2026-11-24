@@ -96,6 +96,26 @@ public partial class BrowserWindow
                     await ReadyAt("/");
                     BookmarkClick(this, new RoutedEventArgs());
                     Check(data.Bookmarks.Count == 1, "bookmark created");
+                    Check(BookmarkBar.Visibility == System.Windows.Visibility.Visible && BookmarkBarItems.Items.Count == 1,
+                        "bookmark bar reflects saved bookmark");
+                    ToggleBookmarkBarClick(this, new RoutedEventArgs());
+                    Check(!data.ShowBookmarksBar && BookmarkBar.Visibility == System.Windows.Visibility.Collapsed,
+                        "bookmark bar can be hidden");
+                    ToggleBookmarkBarClick(this, new RoutedEventArgs());
+                    Check(data.ShowBookmarksBar && BookmarkBar.Visibility == System.Windows.Visibility.Visible,
+                        "bookmark bar can be shown");
+                    using (var first = new BrowserDownload("synthetic-first"))
+                    using (var second = new BrowserDownload("synthetic-second"))
+                    {
+                        first.Report(50, 100);
+                        second.Report(100, 300);
+                        var progress = AggregateDownloadProgress(new[] { first, second });
+                        Check(progress is { Indeterminate: false } && Math.Abs(progress.Fraction - 0.375) < 0.001,
+                            "download ring uses byte-weighted progress");
+                        second.Report(0, null);
+                        Check(AggregateDownloadProgress(new[] { first, second }).Indeterminate,
+                            "unknown download length produces indeterminate ring");
+                    }
                     // Restored management tabs have a native surface, not a privileged web page.
                     Check(IsManagementUrl("veil://settings") && IsManagementUrl("veil://vault") && IsManagementUrl("veil://passwords") &&
                         !IsManagementUrl("veil://settings/unknown"), "management route allowlist");
@@ -168,6 +188,7 @@ public partial class BrowserWindow
                     if (stage == "read") SetTabPinned((TabItem)Tabs.Items[0], false);
                     await ReadyAt("/");
                     Check(data.Bookmarks.Count == 1 && data.Bookmarks[0].Url == origin + "/", "bookmark restored");
+                    Check(data.ShowBookmarksBar && BookmarkBarItems.Items.Count == 1, "bookmark bar restored");
                     Check(data.History.Any(entry => entry.Url.EndsWith("/second")), "history restored");
                     await Active!.View.ExecuteScriptAsync("probe('read').then(result => window.smoke = Object.values(result).every(Boolean)); null;");
                     await WaitForScript("window.smoke === true", "five site storage types restored");
@@ -836,8 +857,13 @@ public partial class BrowserWindow
                     if (type == "get")
                     {
                         await WaitFor(() => DownloadButton.Visibility == Visibility.Visible, "download toolbar icon shown");
+                        var before = Active;
+                        int tabCount = Tabs.Items.Count;
+                        DownloadToolbarClick(DownloadButton, new RoutedEventArgs());
+                        Check(DownloadPopup.IsOpen && Active == before && Tabs.Items.Count == tabCount,
+                            "toolbar download click opens recent popup without navigating");
                         DownloadsClick(this, new RoutedEventArgs());
-                        await WaitFor(() => Active?.Url == "veil://downloads", "downloads opened in tab");
+                        await WaitFor(() => Active?.Url == "veil://downloads" && !DownloadPopup.IsOpen, "all downloads opened in tab");
                         Check(Active?.Title == "다운로드", "downloads tab title");
                         CloseTab((TabItem)Tabs.SelectedItem);
                         CloseTab(downloadTab);
