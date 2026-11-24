@@ -4,6 +4,10 @@
 
 Windows용 개발자 브라우저 프로토타입입니다. 테스트용 북마크, 방문 기록, 탭과 사이트 데이터가 재실행 후 유지됩니다. 현재 프로필은 일반 디스크에 기록되므로 실제 계정이나 민감한 자료는 사용하지 마세요. 파일 다운로드 요청은 취소되며 Ctrl+J에서 확인할 수 있습니다.
 
+## 라이선스
+
+VEIL 자체 코드에는 [MPL 2.0](../LICENSE)이 적용된다. 개발·재배포 시 [라이선스 안내](LICENSING.md)를 참고한다.
+
 ## 빌드 및 실행
 
 Windows 11 x64, .NET 10 SDK, Microsoft Edge WebView2 Evergreen Runtime이 필요합니다. 저장소 루트의 일반 PowerShell에서 실행하세요.
