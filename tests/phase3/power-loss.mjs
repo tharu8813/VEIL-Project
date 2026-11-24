@@ -32,9 +32,31 @@ export function validateArmed(armed, current, confirmed) {
         assert.equal(normal(armed[key]), normal(current[key]), 'Arm/check mismatch: ' + key);
     for (const key of ['desktopSha256', 'vaultSha256', 'origin'])
         assert.equal(armed[key], current[key], 'Arm/check mismatch: ' + key);
-    assert.ok(Number.isSafeInteger(armed.before) && armed.before >= 0 &&
+    assert.equal(armed.kind ?? 'profile', current.kind ?? 'profile', 'Different power-loss scenario');
+    if (current.kind === 'vault') validateVaultArm(armed);
+    else assert.ok(Number.isSafeInteger(armed.before) && armed.before >= 0 &&
         Number.isSafeInteger(armed.committed) && armed.committed >= armed.before + 100,
         'Invalid committed-record watermark');
+}
+
+export function validateVaultArm(armed) {
+    assert.match(armed.seedId ?? '', /^[a-f0-9]{32}$/i);
+    assert.match(armed.seedHash ?? '', /^[a-f0-9]{64}$/i);
+    assert.match(armed.metaHash ?? '', /^[a-f0-9]{64}$/i);
+    assert.ok(Number.isSafeInteger(armed.streamed) && armed.streamed >= 1024 * 1024 &&
+        armed.streamed < 32 * 1024 * 1024 && armed.stagingObserved === true,
+        'No evidence of an incomplete encrypted stream');
+}
+
+export function checkVaultRecovery(armed, result, exitCode) {
+    assert.equal(exitCode, 0, 'Vault check process failed');
+    assert.equal(result.error, null, result.error);
+    validateVaultArm(armed);
+    const required = ['vault power seed authenticated and unchanged',
+        'vault power interrupted object absent and staging cleaned',
+        'vault power explicit retry authenticated without duplicate'];
+    for (const name of required) assert.ok(result.checks.includes(name), 'Missing recovery evidence: ' + name);
+    return { checks: required };
 }
 
 export function checkRecovery(armed, result, exitCode) {
@@ -60,7 +82,7 @@ async function writeNew(path, data) {
 
 async function main() {
     const { values } = parseArgs({ options: {
-        arm: { type: 'boolean' }, check: { type: 'boolean' }, 'isolated-vm': { type: 'boolean' },
+        arm: { type: 'boolean' }, check: { type: 'boolean' }, vault: { type: 'boolean' }, 'isolated-vm': { type: 'boolean' },
         'confirm-power-cut': { type: 'boolean' }, preflight: { type: 'string' },
         profile: { type: 'string' }, evidence: { type: 'string' }, port: { type: 'string', default: '47391' },
     } });
@@ -84,7 +106,8 @@ async function main() {
     const desktop = process.env.VEIL_DESKTOP_DLL ?? join(repo, 'apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
     assert.ok(isAbsolute(desktop), 'Prebuilt Debug DLL path required');
     const hash = async path => createHash('sha256').update(await readFile(path)).digest('hex');
-    const identity = { uuid: guest.uuid, boot: guest.boot, volumeId: primary.volumeId, image: primary.image,
+    const kind = values.vault ? 'vault' : 'profile';
+    const identity = { kind, uuid: guest.uuid, boot: guest.boot, volumeId: primary.volumeId, image: primary.image,
         profile, evidence, desktopSha256: await hash(desktop), vaultSha256: await hash(join(dirname(desktop), 'veil-vault.exe')),
         origin: 'http://127.0.0.1:' + port };
     const armPath = join(evidence, 'armed.json');
@@ -98,17 +121,26 @@ async function main() {
         await canonical(profile);
         armed = JSON.parse(await readFile(armPath, 'utf8'));
         validateArmed(armed, identity, values['confirm-power-cut']);
+        if (kind === 'vault') {
+            const disarmed = await lstat(join(evidence, 'disarmed.json')).then(() => true, error => {
+                if (error.code !== 'ENOENT') throw error;
+                return false;
+            });
+            assert.ok(!disarmed, 'Arm session returned without a power cut');
+        }
         JSON.parse(await readFile(join(profile, 'browser-state.json'), 'utf8'));
     }
     const { server, origin } = await startFixture(port);
     assert.equal(origin, identity.origin);
     const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^VEIL_(DEV_VAULT|TEST_|STORM_HOLD)/i.test(name)));
     env.VEIL_TEST_OFFLINE_HOSTS = '1';
-    let child;
+    if (kind === 'vault') Object.assign(env, { VEIL_DEV_VAULT_PASSPHRASE: 'synthetic-power-loss-vault-only',
+        VEIL_DEV_VAULT_RECOVERY: 'AAAAA-BBBBB-CCCCC-DDDDD-EEEEE-FFFFF-GGGGG-HHHHH' });
+    let child, publishedArm = false;
     try {
         if (values.arm) {
             const report = join(evidence, 'arm-stage.json');
-            child = spawn('dotnet', [desktop, '--smoke', profile, origin, 'storm', report], {
+            child = spawn('dotnet', [desktop, '--smoke', profile, origin, kind === 'vault' ? 'vault-power-arm' : 'storm', report], {
                 windowsHide: true, stdio: 'ignore', env: { ...env, VEIL_STORM_HOLD_SECONDS: '600' },
             });
             let exited = false, spawnError;
@@ -119,14 +151,18 @@ async function main() {
                 if (exited) throw new Error('Writer exited before arming');
                 const ready = await readFile(report, 'utf8').then(JSON.parse).catch(() => null);
                 if (ready?.error) throw new Error('Writer failed before arming');
-                if (ready?.stormReady) {
-                    const proof = { schema: 2, ...identity, before: ready.before, committed: ready.committed,
-                        armedAt: new Date().toISOString() };
-                    assert.ok(Number.isSafeInteger(proof.before) && proof.before >= 0 &&
+                if (kind === 'vault' ? ready?.vaultPowerReady : ready?.stormReady) {
+                    const proof = { schema: 2, ...identity, armedAt: new Date().toISOString(),
+                        ...(kind === 'vault' ? { seedId: ready.seedId, seedHash: ready.seedHash, metaHash: ready.metaHash,
+                            streamed: ready.streamed, stagingObserved: ready.stagingObserved } : { before: ready.before, committed: ready.committed }) };
+                    if (kind === 'vault') validateVaultArm(proof);
+                    else assert.ok(Number.isSafeInteger(proof.before) && proof.before >= 0 &&
                         Number.isSafeInteger(proof.committed) && proof.committed >= proof.before + 100);
                     await writeNew(armPath, proof);
-                    console.log('ARMED: confirmed records >= ' + proof.committed + '. Operator may power off this disposable VM.');
-                    for (let j = 0; j < 6000 && !exited && !spawnError; j++) await delay(100);
+                    publishedArm = true;
+                    console.log(kind === 'vault' ? 'ARMED: encrypted stream pending. Operator may power off the disposable VM within 120 seconds.'
+                        : 'ARMED: confirmed records >= ' + proof.committed + '. Operator may power off this disposable VM.');
+                    for (let j = 0; j < (kind === 'vault' ? 1200 : 6000) && !exited && !spawnError; j++) await delay(100);
                     throw new Error('No verified power cut during the arm session');
                 }
                 await delay(100);
@@ -136,16 +172,20 @@ async function main() {
         const report = join(evidence, 'check-stage.json');
         // A failed check or a successful previous check must not be silently overwritten.
         await writeNew(join(evidence, 'check-started.json'), { ...identity, at: new Date().toISOString() });
-        await run('dotnet', [desktop, '--smoke', profile, origin, 'storm-check', report], { timeout: 120_000, env });
+        await run('dotnet', [desktop, '--smoke', profile, origin, kind === 'vault' ? 'vault-power-check' : 'storm-check', report], { timeout: 120_000, env });
         const result = JSON.parse(await readFile(report, 'utf8'));
-        const recovered = checkRecovery(armed, result, 0);
+        const recovered = kind === 'vault' ? checkVaultRecovery(armed, result, 0) : checkRecovery(armed, result, 0);
         await writeNew(join(evidence, 'power-check.json'), { armed, check: identity, ...recovered,
             recovery: 'PASS', powerCut: 'operator-confirmed; different guest boot observed, host action not independently verified' });
-        console.log('PASS post-reboot recovery with operator-confirmed power cut: ' + recovered.stored);
+        console.log('PASS post-reboot recovery with operator-confirmed power cut: ' + (recovered.stored ?? 'vault seed, cleanup and retry'));
     } finally {
-        if (child && child.exitCode === null && child.signalCode === null) child.kill();
-        server.closeAllConnections?.();
-        server.close();
+        try {
+            if (kind === 'vault' && publishedArm) await writeNew(join(evidence, 'disarmed.json'), { reason: 'Arm session returned without a power cut' });
+        } finally {
+            if (child && child.exitCode === null && child.signalCode === null) child.kill();
+            server.closeAllConnections?.();
+            server.close();
+        }
     }
 }
 

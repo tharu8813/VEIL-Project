@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { validatePaths, validateArmed, checkRecovery } from './power-loss.mjs';
+import { validatePaths, validateArmed, checkRecovery, checkVaultRecovery } from './power-loss.mjs';
 
 const primary = { parent: 'V:\\lab' };
 const evidence = 'V:\\lab\\power-loss-1';
@@ -32,4 +32,21 @@ test('recovery cannot pass after process failure, missing evidence or loss of co
     assert.throws(() => checkRecovery(armed, { ...good, error: 'failed' }, 0));
     assert.throws(() => checkRecovery(armed, { ...good, checks: [] }, 0));
     assert.throws(() => checkRecovery(armed, { ...good, checks: ['storm records contiguous (max 114, localStorage 114)'] }, 0));
+});
+
+test('vault arm requires a pending encrypted stream and cannot satisfy profile proof', () => {
+    const v = { ...current, kind: 'vault' };
+    const proof = { ...armed, kind: 'vault', seedId: 'a'.repeat(32), seedHash: 'b'.repeat(64),
+        metaHash: 'c'.repeat(64), streamed: 2 * 1024 * 1024, stagingObserved: true };
+    validateArmed(proof, v, true);
+    assert.throws(() => validateArmed(proof, current, true));
+    for (const change of [{ seedId: '../other' }, { seedHash: '' }, { metaHash: '' }, { streamed: 0 },
+        { streamed: 32 * 1024 * 1024 }, { stagingObserved: false }])
+        assert.throws(() => validateArmed({ ...proof, ...change }, v, true));
+    const checks = ['vault power seed authenticated and unchanged', 'vault power interrupted object absent and staging cleaned',
+        'vault power explicit retry authenticated without duplicate'];
+    assert.deepEqual(checkVaultRecovery(proof, { error: null, checks }, 0).checks, checks);
+    for (const missing of checks) assert.throws(() => checkVaultRecovery(proof, { error: null,
+        checks: checks.filter(x => x !== missing) }, 0));
+    assert.throws(() => checkVaultRecovery(proof, { error: null, checks }, 1));
 });

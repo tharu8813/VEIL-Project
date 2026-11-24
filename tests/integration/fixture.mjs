@@ -146,7 +146,7 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
                 const kind = url.searchParams.get('kind');
                 const sizes = { small: 1024, large: 8 * 1024 ** 2, huge: 64 * 1024 ** 2, auth: 4096, redirected: 2048,
                     drop: 4 * 1024 ** 2, post: 2048, slow: 32 * 1024 ** 2, 'slow-unknown': 32 * 1024 ** 2,
-                    'slow-queued': 32 * 1024 ** 2 };
+                    'slow-queued': 32 * 1024 ** 2, 'slow-power': 32 * 1024 ** 2 };
                 if (kind === 'redirect') return response.writeHead(302, { Location: '/vault-dl?kind=redirected' }).end();
                 if (!(kind in sizes)) return response.writeHead(400).end();
                 if (kind === 'auth' && !hasCookie) return response.writeHead(401).end();
@@ -161,7 +161,7 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
                 const block = Buffer.alloc(64 * 1024, vaultPayload);
                 const limit = kind === 'drop' ? size / 4 : size; // drop: cut the connection a quarter of the way in
                 for (let sent = 0; sent < limit;) {
-                    if (kind.startsWith('slow')) await new Promise(resolve => setTimeout(resolve, 35));
+                    if (kind.startsWith('slow')) await new Promise(resolve => setTimeout(resolve, kind === 'slow-power' ? 1000 : 35));
                     if (response.destroyed) return;
                     const chunk = block.subarray(0, Math.min(block.length, limit - sent));
                     sent += chunk.length;
