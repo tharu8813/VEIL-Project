@@ -58,15 +58,51 @@ export function plan(only = []) {
 
 /** Parses an ICE candidate line: transport, address, type. */
 export function candidate(line) {
-    const parts = line.replace(/^candidate:/, '').split(' ');
-    return { transport: (parts[2] ?? '').toLowerCase(), address: parts[4] ?? '', type: parts[parts.indexOf('typ') + 1] ?? '' };
+    const parts = typeof line === 'string' && /^candidate:\S+\s/.test(line) ? line.trim().split(/\s+/) : [];
+    const transport = (parts[2] ?? '').toLowerCase();
+    if (parts.length < 8 || !/^[1-9]\d*$/.test(parts[1]) || !/^\d+$/.test(parts[3]) ||
+        !['udp', 'tcp'].includes(transport) || !parts[4] || !/^\d+$/.test(parts[5]) ||
+        Number(parts[5]) > 65535 || parts[6] !== 'typ' || !['host', 'srflx', 'prflx', 'relay'].includes(parts[7]))
+        return { transport: '', address: '', type: '' };
+    return { transport, address: parts[4], type: parts[7] };
 }
 
 /** webrtc-proxy rule: no UDP candidates (host, srflx or relay) may be gathered. */
 export function judgeProxyCandidates(lines) {
     if (!Array.isArray(lines)) return { status: 'FAIL', detail: 'no candidate list' };
-    const udp = lines.map(candidate).filter(c => c.transport === 'udp');
+    const parsed = lines.map(candidate);
+    if (parsed.some(c => !c.transport)) return { status: 'FAIL', detail: 'invalid ICE candidate or gathering error' };
+    const udp = parsed.filter(c => c.transport === 'udp');
     return udp.length ? { status: 'FAIL', detail: `${udp.length} UDP candidate(s): ${udp.map(c => c.type).join(',')}` } : { status: 'PASS', detail: `${lines.length} candidate(s), none UDP` };
+}
+
+// Require actual successful HTTPS navigation and an explicit measured transport.
+export function measuredProtocol(page, target) {
+    if (!page || page.error !== null || page.navError !== 'none') return null;
+    try {
+        const actual = new URL(page.url), expected = new URL(target);
+        if (actual.protocol !== 'https:' || actual.origin !== expected.origin) return null;
+        const protocol = JSON.parse(page.eval ?? 'null');
+        return typeof protocol === 'string' && /^(h3(?:-\d+)?|h2|http\/1\.1)$/.test(protocol) ? protocol : null;
+    } catch { return null; }
+}
+
+export function judgeQuic(controlPage, proxyPage, target, viaProxy) {
+    const control = measuredProtocol(controlPage, target), measured = measuredProtocol(proxyPage, target);
+    if (measured?.startsWith('h3')) return { status: 'FAIL', detail: 'proxy protection used HTTP/3' };
+    if (!viaProxy || !measured) return { status: 'FAIL', detail: 'successful proxy navigation and measured protocol not established' };
+    if (!control?.startsWith('h3')) return { status: 'OBSERVED', detail: 'standard control did not demonstrate HTTP/3; proxy ' + measured };
+    return { status: 'PASS', detail: 'standard ' + control + '; proxy ' + measured };
+}
+
+export function judgeWebRtc(control, proxied, { viaProxy, directRequests }) {
+    const verdict = judgeProxyCandidates(proxied);
+    if (verdict.status !== 'PASS') return verdict;
+    if (!viaProxy || directRequests !== 0) return { status: 'FAIL', detail: 'proxy route or zero-direct-request evidence missing' };
+    if (!Array.isArray(control) || control.some(line => !candidate(line).transport) ||
+        !control.some(line => candidate(line).transport === 'udp'))
+        return { status: 'OBSERVED', detail: 'standard control did not demonstrate UDP; ' + verdict.detail };
+    return verdict;
 }
 
 /** dns-path rule from the raw capture bytes (DNS labels are plain ASCII in port-53 packets). */
@@ -119,7 +155,7 @@ async function main() {
     const evidence = await mkdtemp(join(root, 'internet-vm-'));
     const summaryPath = join(evidence, 'summary.json');
     const save = () => writeFile(summaryPath, JSON.stringify({ scope: 'Gate D internet VM', desktop, tests }, null, 2));
-    const { server: fixture, origin } = await startFixture();
+    const { server: fixture, origin, direct } = await startFixture();
     const selected = id => tests.find(t => t.id === id && !t.reason);
     let n = 0;
 
@@ -133,8 +169,9 @@ async function main() {
         const report = join(evidence, `${n}-${label}.json`);
         await run('dotnet', [desktop, '--smoke', profile, origin, 'visit', report], {
             timeout: 180_000, env: { ...process.env, VEIL_TEST_URL: url, VEIL_TEST_EVAL: evalExpr ?? '' },
-        }).catch(async error => { if (!(await readFile(report).catch(() => null))) throw error; });
+        });
         const result = JSON.parse(await readFile(report, 'utf8'));
+        if (result.error !== null || !Array.isArray(result.checks)) throw new Error('Desktop visit failed: ' + (result.error ?? 'missing checks'));
         const field = name => result.checks.find(c => c.startsWith(`visit: ${name}=`))?.slice(`visit: ${name}=`.length);
         return { error: result.error, url: field('url'), navError: field('error'), title: field('title'), eval: field('eval'), profile };
     }
@@ -155,19 +192,25 @@ async function main() {
             return { status: 'PENDING-CAPTURE', names: { systemName, dohName }, detail: `system ${system.navError}, doh ${doh.navError}` };
         });
         const webrtcUrl = `${origin}/webrtc?stun=${encodeURIComponent(STUN)}`;
+        let controlCandidates = null;
         await guard('webrtc-standard', async () => {
             const page = await visit('webrtc-standard', webrtcUrl, { evalExpr: 'window.veilCandidates' });
-            const lines = JSON.parse(page.eval ?? 'null') ?? [];
+            const lines = JSON.parse(page.eval ?? 'null');
+            if (page.navError !== 'none' || page.url !== webrtcUrl || !Array.isArray(lines) || lines.some(line => !candidate(line).transport))
+                return { status: 'FAIL', detail: 'standard ICE gathering failed or incomplete' };
+            controlCandidates = lines;
             const parsed = lines.map(candidate);
             return { status: 'OBSERVED', candidates: parsed.map(c => `${c.transport}/${c.type}/${c.address.includes(':') ? 'ipv6' : c.address.endsWith('.local') ? 'mdns' : 'ipv4'}`), detail: `${lines.length} candidate(s)` };
         });
         await guard('webrtc-proxy', async () => {
             const { proxy, seen, port } = await startProxy();
             try {
+                const before = direct.get('/webrtc') ?? 0;
                 const page = await visit('webrtc-proxy', webrtcUrl, { network: { Mode: 1, ProxyScheme: 'http', ProxyHost: '127.0.0.1', ProxyPort: port }, evalExpr: 'window.veilCandidates' });
-                const verdict = judgeProxyCandidates(JSON.parse(page.eval ?? 'null'));
-                if (!seen.some(path => path.startsWith('/webrtc'))) return { status: 'FAIL', detail: 'page did not go through the proxy' };
-                return verdict;
+                if (page.navError !== 'none' || page.url !== webrtcUrl) return { status: 'FAIL', detail: 'proxy ICE page did not load' };
+                return judgeWebRtc(controlCandidates, JSON.parse(page.eval ?? 'null'), {
+                    viaProxy: seen.some(path => path === '/webrtc'), directRequests: (direct.get('/webrtc') ?? 0) - before,
+                });
             } finally { proxy.close(); }
         });
         await guard('smartscreen-demo', async () => {
@@ -212,17 +255,16 @@ async function main() {
             const protocol = 'performance.getEntriesByType("navigation")[0]?.nextHopProtocol || null';
             const first = await visit('quic-standard-1', QUIC_SITE, { evalExpr: protocol });
             const second = await visit('quic-standard-2', QUIC_SITE, { evalExpr: protocol, reuse: first.profile });
-            const { proxy, port } = await startProxy();
-            let proxied;
+            const { proxy, port, seen } = await startProxy();
+            let proxied, viaProxy = false;
             try {
                 const network = { Mode: 1, ProxyScheme: 'http', ProxyHost: '127.0.0.1', ProxyPort: port };
                 const p1 = await visit('quic-proxy-1', QUIC_SITE, { network, evalExpr: protocol });
+                const before = seen.length;
                 proxied = await visit('quic-proxy-2', QUIC_SITE, { network, evalExpr: protocol, reuse: p1.profile });
+                viaProxy = seen.slice(before).some(target => target === 'CONNECT ' + new URL(QUIC_SITE).hostname + ':443');
             } finally { proxy.close(); }
-            const control = JSON.parse(second.eval ?? 'null'), measured = JSON.parse(proxied.eval ?? 'null');
-            if (measured === 'h3') return { status: 'FAIL', detail: `proxy protection used h3 (standard control ${control})` };
-            if (control !== 'h3') return { status: 'OBSERVED', detail: `standard control did not reach h3 (${control}); proxy ${measured}: QUIC cannot be shown here` };
-            return { status: 'PASS', detail: `standard second load h3, proxy second load ${measured}` };
+            return judgeQuic(second, proxied, QUIC_SITE, viaProxy);
         });
         await guard('https-downgrade-redirect', async () => {
             const page = await visit('https-downgrade', DOWNGRADE);

@@ -129,15 +129,23 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
                 (async () => {
                     const stun = new URLSearchParams(location.search).get('stun');
                     const found = [];
+                    let pc;
                     try {
-                        const pc = new RTCPeerConnection({ iceServers: stun ? [{ urls: stun }] : [] });
+                        pc = new RTCPeerConnection({ iceServers: stun ? [{ urls: stun }] : [] });
                         pc.createDataChannel('veil');
                         pc.onicecandidate = event => { if (event.candidate?.candidate) found.push(event.candidate.candidate); };
                         await pc.setLocalDescription(await pc.createOffer());
-                        await new Promise(done => { pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && done(); setTimeout(done, 8000); });
-                        pc.close();
+                        await new Promise((done, reject) => {
+                            const timer = setTimeout(() => reject(new Error('ICE gathering timeout')), 15000);
+                            const completed = () => {
+                                if (pc.iceGatheringState === 'complete') { clearTimeout(timer); done(); }
+                            };
+                            pc.onicegatheringstatechange = completed;
+                            completed();
+                        });
                         window.veilCandidates = found;
                     } catch (error) { window.veilCandidates = ['error ' + error.name]; }
+                    finally { pc?.close(); }
                 })();
             </script>`, 'text/html; charset=utf-8');
             case '/storm': return send(stormPage, 'text/html; charset=utf-8');

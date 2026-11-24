@@ -20,7 +20,7 @@ const root = resolve('.veil-dev');
 await mkdir(root, { recursive: true });
 const evidence = await mkdtemp(join(root, 'webrtc-guard-'));
 const desktop = process.env.VEIL_DESKTOP_DLL ?? resolve('apps/desktop/bin/Debug/net10.0-windows/Veil.Desktop.dll');
-const { server, origin } = await startFixture();
+const { server, origin, direct } = await startFixture();
 const { proxy, seen, port } = await startProxy();
 
 async function candidates(label, network) {
@@ -30,21 +30,24 @@ async function candidates(label, network) {
     const report = join(evidence, `${label}.json`);
     await run('dotnet', [desktop, '--smoke', profile, origin, 'visit', report], {
         timeout: 180_000, env: { ...process.env, VEIL_TEST_URL: `${origin}/webrtc`, VEIL_TEST_EVAL: 'window.veilCandidates' },
-    }).catch(async error => { if (!(await readFile(report).catch(() => null))) throw error; });
+    });
     const result = JSON.parse(await readFile(report, 'utf8'));
     assert.equal(result.error, null, `${label}: ${result.error}`);
+    assert.ok(result.checks.includes('visit: error=none') && result.checks.includes('visit: url=' + origin + '/webrtc'), 'fixture navigation must succeed');
     return JSON.parse(result.checks.find(c => c.startsWith('visit: eval=')).slice('visit: eval='.length));
 }
 
 try {
     const control = await candidates('standard', null);
-    assert.ok(Array.isArray(control) && control.some(line => candidate(line).transport === 'udp'),
+    assert.ok(Array.isArray(control) && control.every(line => candidate(line).transport) && control.some(line => candidate(line).transport === 'udp'),
         `control gathered no UDP candidate (${JSON.stringify(control)}); the check would prove nothing`);
     console.log(`control (standard): ${control.length} candidate(s), UDP present`);
+    const before = direct.get('/webrtc') ?? 0;
     const proxied = await candidates('proxy', { Mode: 1, ProxyScheme: 'http', ProxyHost: '127.0.0.1', ProxyPort: port });
     const verdict = judgeProxyCandidates(proxied);
     assert.equal(verdict.status, 'PASS', verdict.detail);
-    assert.ok(seen.some(path => path.startsWith('/webrtc')), 'page did not come through the proxy');
+    assert.ok(seen.some(path => path === '/webrtc'), 'page did not come through the proxy');
+    assert.equal(direct.get('/webrtc') ?? 0, before, 'direct fixture request in proxy mode');
     console.log(`proxy protection: ${verdict.detail}`);
     console.log(`PASS webrtc guard · evidence ${evidence}`);
 } finally {
