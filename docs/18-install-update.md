@@ -7,7 +7,7 @@
 - Windows PowerShell 5.1 x64, 관리자 유지보수 작업. 데스크톱 앱은 일반 사용자 실행.
 - 기존 BitLocker VHDX 및 확인된 복구 보호기 등록을 재사용한다. 설치 전 볼륨 준비는 별도 기존 절차를 따른다.
 - 신뢰하는 관리자 관리 코드 서명 인증서가 필요하다. 인증서 지문은 패키지가 아닌 별도 신뢰 경로에서 제공한다. 공식 인증서, 서명 서비스, 업데이트 서버는 아직 마련되지 않았다.
-- `build-package.ps1`: 잠금된 의존성으로 Release 빌드, Rust vault 포함, 세 실행 파일 Authenticode 서명, 모든 파일의 SHA-256/길이 목록과 분리 CMS 서명 생성. 내부 채널의 숫자 0.x 버전만 허용한다.
+- `build-package.ps1`: 잠금된 의존성으로 Release 빌드, Rust vault 포함, 세 실행 파일 Authenticode 서명, 모든 파일의 SHA-256/길이 목록과 분리 CMS 서명 생성. 내부 채널의 0.x 개발 버전 및 허용된 사전 릴리스만 지원한다(아래 버전 정책 참조).
 - `package-maintenance.ps1`: 신뢰된 로컬 관리자 스크립트에서 설치/업데이트/제거/중단 복구. 패키지의 스크립트는 실행하지 않는다. 입력 폴더의 모든 파일을 제한된 staging에 복사한 뒤 정확한 파일 목록 및 서명/해시를 검증한다.
 - .NET 10 Desktop Runtime x64 및 WebView2 Evergreen은 별도로 검증된 공식 설치 경로로 준비한다. 자체 포함 런타임과 EXE/MSI GUI 설치 프로그램, 시작 메뉴 등록, 자동 업데이트 다운로드는 후속 단계다.
 - MPL 소스 커밋 및 LICENSE/NOTICE 포함. `scripts/third-party.mjs`로 `THIRD-PARTY-NOTICES.md`와 CycloneDX `sbom.cdx.json`을 생성해 Desktop 폴더에 넣는다. 허용 목록 밖 라이선스가 있으면 빌드가 실패한다. 재배포 법률 검토는 공개 출시 전 별도로 필요하다.
@@ -34,7 +34,7 @@
 
 최초 설치는 -Install과 Package, ImagePath, ProfilePath, VolumeGuid, ProtectorId, UserSid, 필요 시 RecoveryProtectorId를 지정한다. 기존 broker-service.ps1 복구 키 확인 절차를 그대로 사용한다. 유지보수 스크립트 자체의 배포/서명 및 안전한 관리자 실행은 별도 신뢰 경로가 필요하다. 레거시 스크립트와 동시 실행 금지.
 
-제거는 브로커 서비스 및 실행 파일만 제거하고 VHDX, 프로필, ProgramData 등록(복구 보호기 ID 포함)을 보존한다. 재설치/재등록 자동화는 아직 없으며 관리자 복구 절차가 필요하다. 기존 broker-service.ps1 -Remove는 레거시 정리 경로로 유지되며 등록까지 제거하므로 신규 패키지 유지보수에는 사용하지 않는다.
+제거는 브로커 서비스 및 실행 파일만 제거하고 VHDX, 프로필, ProgramData 등록(복구 보호기 ID 포함)을 보존한다. 재설치/재등록 자동화는 아직 없으며 [Alpha 관리자 런북](37-alpha-admin-runbook.md)의 검증 대상이다. 기존 broker-service.ps1 -Remove는 레거시 정리 경로로 유지되며 등록까지 제거하므로 신규 패키지 유지보수에는 사용하지 않는다.
 
 ## 검증 및 남은 작업
 
