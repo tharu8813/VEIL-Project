@@ -108,12 +108,12 @@ ADR-0004 정책 4에 따라 인터넷에 연결된 **별도의 격리 시험 VM*
 |---|---|
 | `dns-path` | PASS 조건: 시스템 DNS 대조 이름이 평문 DNS(포트 53)에 보이고, 보안 DNS(Cloudflare)로 찾은 이름은 보이지 않는다. 대조 이름이 없으면 캡처를 믿을 수 없으므로 FAIL. DoH 제공자 이름의 부트스트랩 조회는 `public-doh-bootstrap`에 기록한다. |
 | `webrtc-standard` | 기록만(OBSERVED). STUN을 쓴 ICE 후보 종류(host/srflx, IPv4/IPv6/mDNS). |
-| `webrtc-proxy` | PASS 조건: 프록시 보호에서 UDP 후보가 하나도 없고, 페이지가 프록시를 거친다. |
+| `webrtc-proxy` | PASS 조건: 표준 모드에서 실제 UDP 후보를 관찰하고, 프록시 보호에서 ICE 수집 완료 후 유효 후보 목록에 UDP가 없으며, 페이지가 프록시를 거치고 직접 fixture 요청이 0건이다. 대조군 UDP 미관찰은 OBSERVED, 수집 오류·시간 초과·잘못된 후보는 FAIL. |
 | `smartscreen-demo` | Microsoft SmartScreen 데모 피싱 페이지를 켜기·끄기로 비교한다. 켰을 때 차단되고 껐을 때 열리면 PASS, 그 밖에는 OBSERVED. |
 | `site-compat` | 실제 사이트 8개가 HTTPS 우선·추적 방지 엄격 상태에서 열리고, HTTP 전용 사이트는 경고 페이지를 보여야 PASS. |
 | `ipv6-reachability` | 기록만. IPv6 전용 사이트에 도달하는지. |
 | `proxy-doh` | 프록시 보호 + Cloudflare DoH. 실제 사이트와 DoH 서버가 모두 로컬 프록시의 CONNECT로 나가야 하고, 합성 이름이 같은 캡처의 평문 DNS에 없어야 PASS(대조 이름은 `dns-path`와 공유). |
-| `quic-proxy` | 같은 프로필로 두 번 연 페이지의 `nextHopProtocol`. 표준 모드 대조군이 `h3`에 도달하고 프록시 보호가 `h3`가 아니면 PASS. 프록시에서 `h3`면 FAIL. 대조군이 `h3`에 못 미치면 OBSERVED. |
+| `quic-proxy` | 같은 프로필로 두 번 연 페이지의 `nextHopProtocol`. 표준 대조군의 성공한 HTTPS 탐색에서 h3 계열을 관찰하고, 프록시의 성공한 동일 출처 HTTPS 탐색에서 실제 CONNECT 기록 및 h2/http/1.1 측정이 있을 때만 PASS. 프록시 h3 또는 측정·경로 증거 누락은 FAIL, 대조군 h3 미관찰은 OBSERVED. |
 | `https-downgrade-redirect` | HTTPS에서 HTTP로 리다이렉트하는 페이지(httpbin)가 HTTPS 경고 페이지로 끝나면 PASS, HTTP 페이지가 그대로 열리면 FAIL, 리다이렉트 서비스 문제면 OBSERVED. |
 | 수동(NOT RUN) | 절전·네트워크 전환, Windows "Microsoft Edge용 SmartScreen" 끄기에 따른 재정의(게스트 설정 변경 필요). |
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { candidate, judgeCapture, judgeProxyCandidates, plan } from './internet-batch.mjs';
+import { candidate, judgeCapture, judgeProxyCandidates, judgeWebRtc, judgeQuic, plan } from './internet-batch.mjs';
 
 test('plan lists every Gate D item as NOT RUN and rejects unknown IDs', () => {
     const items = plan();
@@ -30,4 +30,28 @@ test('dns-path needs the control name in the capture and fails when the secure-D
     assert.equal(judgeCapture(packet('veil-aaaa', 'example', 'com', 'veil-bbbb'), names).status, 'FAIL');
     assert.match(judgeCapture(Buffer.alloc(10), names).detail, /not trustworthy/);
     assert.deepEqual(judgeCapture(packet('veil-aaaa', 'cloudflare-dns', 'com'), names).bootstrap, ['cloudflare-dns']);
+});
+
+
+test('ICE errors, malformed candidates, missing control and direct requests cannot pass', () => {
+    const udp = 'candidate:1 1 udp 2122260223 192.168.1.5 54321 typ host';
+    for (const lines of [['error OperationError'], ['garbage'], [null], ['candidate:1 1 udp']])
+        assert.equal(judgeProxyCandidates(lines).status, 'FAIL');
+    assert.equal(judgeWebRtc([udp], [], { viaProxy: true, directRequests: 0 }).status, 'PASS');
+    assert.equal(judgeWebRtc([], [], { viaProxy: true, directRequests: 0 }).status, 'OBSERVED');
+    assert.equal(judgeWebRtc([udp], [], { viaProxy: true, directRequests: 1 }).status, 'FAIL');
+    assert.equal(judgeWebRtc([udp], [], { viaProxy: false, directRequests: 0 }).status, 'FAIL');
+});
+test('QUIC requires a real HTTP/3 control, successful proxy load, route and measured protocol', () => {
+    const target = 'https://www.google.com/';
+    const page = protocol => ({ error: null, url: target, navError: 'none', eval: JSON.stringify(protocol) });
+    assert.equal(judgeQuic(page('h3'), page('h2'), target, true).status, 'PASS');
+    assert.equal(judgeQuic(page('h3-29'), page('http/1.1'), target, true).status, 'PASS');
+    assert.equal(judgeQuic(page('h3'), page('h3-29'), target, true).status, 'FAIL');
+    assert.equal(judgeQuic(page('h2'), page('h2'), target, true).status, 'OBSERVED');
+    for (const bad of [page(null), page(''), page('unknown'), { ...page('h2'), navError: 'Timeout' },
+        { ...page('h2'), url: 'veil://https-warning' }, { ...page('h2'), error: 'failed' },
+        { ...page('h2'), url: 'https://other.test/' }])
+        assert.equal(judgeQuic(page('h3'), bad, target, true).status, 'FAIL');
+    assert.equal(judgeQuic(page('h3'), page('h2'), target, false).status, 'FAIL');
 });
