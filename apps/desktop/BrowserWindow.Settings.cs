@@ -4,7 +4,7 @@ namespace Veil.Desktop;
 
 public partial class BrowserWindow
 {
-    private bool SettingsReady() => !closing && !restoring && !session.IsEnding && !session.EngineLost;
+    private bool SettingsReady() => !session.IsPrivate && !closing && !restoring && !session.IsEnding && !session.EngineLost;
 
     private async void SettingsClick(object sender, RoutedEventArgs args)
     {

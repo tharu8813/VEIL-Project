@@ -127,7 +127,7 @@ public partial class BrowserWindow
             (Ctrl, Key.P) => () => Status.Text = "인쇄와 PDF 저장은 다운로드 금고 검증 전까지 사용할 수 없습니다.",
             (Ctrl, Key.S) => () => Status.Text = "페이지 저장은 다운로드 금고 검증 전까지 사용할 수 없습니다.",
             (Ctrl, Key.U) => () => Status.Text = "소스 보기는 개발자용 빌드에서 사용할 수 없습니다.",
-            (Ctrl | Shift, Key.N) => () => Status.Text = "InPrivate 창은 아직 지원하지 않습니다.",
+            (Ctrl | Shift, Key.N) => () => PrivateWindowClick(this, args),
             _ => null,
         };
         if (command is null) return;
@@ -158,7 +158,7 @@ public partial class BrowserWindow
         Add("탭 복제", "", () => _ = OpenTab(tab.Url, index: index + 1), IsWebUrl(tab.Url));
         Add(tab.View.CoreWebView2?.IsMuted == true ? "사이트 음소거 해제" : "사이트 음소거", "", () => ToggleMute(tab));
         Add(tab.Pinned ? "탭 고정 해제" : "탭 고정", "", () => SetTabPinned(item, !tab.Pinned), !closingTabs.Contains(item));
-        Add("탭을 새 창으로 이동", "", () => MoveTabToNewWindow(item), Tabs.Items.Count > 1 && !closingTabs.Contains(item));
+        Add("탭을 새 창으로 이동", "", () => MoveTabToNewWindow(item), !session.IsPrivate && Tabs.Items.Count > 1 && !closingTabs.Contains(item));
         Separate();
         Add("탭 닫기", "Ctrl+W", () => CloseTab(item));
         Add("다른 탭 닫기", "", () => CloseTabs(Tabs.Items.Cast<TabItem>().Where(other => other != item)),
@@ -285,7 +285,7 @@ public partial class BrowserWindow
 
     private void TearOff(TabItem item)
     {
-        if (closing || closingTabs.Contains(item) || !Tabs.Items.Contains(item)) return;
+        if (session.IsPrivate || closing || closingTabs.Contains(item) || !Tabs.Items.Contains(item)) return;
         if (Tabs.Items.Count == 1)
         {
             // A lone tab carries its whole window, and can be dropped onto another window's tabs.

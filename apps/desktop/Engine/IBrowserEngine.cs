@@ -13,7 +13,7 @@ internal interface IBrowserEngine
     string? RuntimeVersion { get; }
     bool IsReady { get; }
     Task InitializeAsync(string protectedProfileRoot, NetworkSettings network);
-    IBrowserEngineView CreateView();
+    IBrowserEngineView CreateView(string? privateProfileName = null);
 }
 
 /// <summary>Common presentation and navigation operations; privileged native features are intentionally absent.</summary>
