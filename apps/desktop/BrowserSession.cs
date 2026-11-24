@@ -92,7 +92,7 @@ internal sealed class BrowserSession
         foreach (var entry in recent) ClosedTabs.Push(entry);
     }
     internal List<string> Downloads { get; } = [];
-    internal List<(DateTimeOffset At, string Text)> RecentDownloadIssues { get; } = [];
+    internal List<DownloadIssue> RecentDownloadIssues { get; } = [];
     internal ObservableCollection<BrowserDownload> ActiveDownloads { get; } = [];
     internal List<BrowserWindow> Windows { get; } = [];
     // The first release has exactly one production backend. No fallback or runtime switching.

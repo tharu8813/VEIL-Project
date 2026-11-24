@@ -149,7 +149,9 @@ public partial class BrowserWindow
         var stored = visible ? session.Vault.Entries.Select(entry =>
             (At: entry.SavedAt, Text: $"{entry.Name} · 금고 보관 · {VaultPresentation.Size(entry.Bytes)}"))
             : Enumerable.Empty<(DateTimeOffset At, string Text)>();
-        var rows = stored.Concat(session.RecentDownloadIssues).OrderByDescending(item => item.At)
+        var rows = stored.Concat(session.RecentDownloadIssues.Select(issue =>
+            (At: issue.At, Text: $"{issue.Name} · {issue.Outcome}" + (issue.Detail is null ? "" : $": {issue.Detail}"))))
+            .OrderByDescending(item => item.At)
             .Take(8).Select(item => item.Text).ToArray();
         if (!popupRows.SequenceEqual(rows))
         {
