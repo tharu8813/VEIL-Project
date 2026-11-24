@@ -92,16 +92,16 @@ internal sealed class SitePermissionsDialog : VeilDialog
             Result.RemoveAll(rule => rule.Origin == origin);
             Render();
         });
-        AddFooterButton("취소", () => DialogResult = false);
+        AddFooterButton("취소", () => Complete(false));
         AddFooterButton("저장", () =>
         {
             bool newAllow = Result.Any(rule => rule.Mode == SitePermissionPolicy.Allow &&
                 SitePermissionPolicy.ModeFor(saved, rule.Origin, rule.Kind) != SitePermissionPolicy.Allow);
-            if (newAllow && MessageBox.Show(this,
+            if (newAllow && MessageBox.Show(PromptOwner,
                 "선택한 사이트에 반복적으로 권한을 허용합니다. 신뢰하는 사이트인지 확인하세요.",
                 "사이트 권한 허용", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
                 return;
-            DialogResult = true;
+            Complete(true);
         }, primary: true);
     }
 }

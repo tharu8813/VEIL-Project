@@ -12,6 +12,7 @@ public partial class BrowserWindow
 
     private async void SiteDataClick(object sender, RoutedEventArgs args)
     {
+        if (FocusManagementPage("veil://settings/site-data")) return;
         if (!SiteDataReady() || session.SettingsUiOpen || session.PasswordUiOpen || session.PermissionUiOpen) return;
         if (session.ActiveDownloads.Count != 0)
         {
@@ -36,7 +37,7 @@ public partial class BrowserWindow
                 .Concat(data.History.Select(entry => entry.Url));
             var origins = SiteDataPolicy.Origins(urls);
             var dialog = new SiteDataDialog(this, domains, origins, SiteDataPolicy.Origin(Active?.Url));
-            if (dialog.ShowDialog() != true || dialog.Result is not { } selection ||
+            if (await ShowManagementPageAsync("veil://settings/site-data", dialog) != true || dialog.Result is not { } selection ||
                 !SiteDataReady() || session.ActiveDownloads.Count != 0) return;
 
             // The manager never accepts arbitrary commands, URLs, scripts, cookie values or file paths.

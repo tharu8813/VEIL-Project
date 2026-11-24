@@ -9,7 +9,8 @@ public partial class BrowserWindow
     private readonly HashSet<string> openingManagement = new(StringComparer.Ordinal);
 
     internal static bool IsManagementUrl(string? url) => url is
-        "veil://settings" or "veil://bookmarks" or "veil://history";
+        "veil://settings" or "veil://bookmarks" or "veil://history" or
+        "veil://settings/network" or "veil://settings/security" or "veil://settings/search" or "veil://settings/site-data" or "veil://settings/permissions" or "veil://tabs";
 
     private BrowserTab? FindManagementTab(string route) => Tabs.Items.OfType<TabItem>()
         .Select(item => (BrowserTab)item.Tag).FirstOrDefault(tab => tab.Url == route && !closingTabs.Contains(tab.Item));
@@ -32,6 +33,12 @@ public partial class BrowserWindow
             case "veil://settings": SettingsClick(this, args); break;
             case "veil://bookmarks": BookmarksClick(this, args); break;
             case "veil://history": HistoryClick(this, args); break;
+            case "veil://settings/network": NetworkClick(this, args); break;
+            case "veil://settings/security": SecurityClick(this, args); break;
+            case "veil://settings/search": SearchSettingsClick(this, args); break;
+            case "veil://settings/site-data": SiteDataClick(this, args); break;
+            case "veil://settings/permissions": SitePermissionsClick(this, args); break;
+            case "veil://tabs": TabSearchClick(this, args); break;
         }
     }
 

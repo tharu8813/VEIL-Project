@@ -52,7 +52,7 @@ internal sealed class NetworkSettingsDialog : VeilDialog
         proxy.Checked += (_, _) => Sync();
         Sync();
         SetBody(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = new StackPanel { Children = { standard, proxy, fields, dnsPanel, note, error } } });
-        AddFooterButton("취소", () => DialogResult = false);
+        AddFooterButton("취소", () => Complete(false));
         AddFooterButton("저장", () =>
         {
             string? template = dns.SelectedIndex == 0 ? null
@@ -63,7 +63,7 @@ internal sealed class NetworkSettingsDialog : VeilDialog
                 : new NetworkSettings(DnsTemplate: template);
             if (chosen.Problem is { } problem) { error.Text = problem; return; }
             Result = chosen;
-            DialogResult = true;
+            Complete(true);
         }, primary: true);
     }
 }

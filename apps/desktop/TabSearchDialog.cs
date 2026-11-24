@@ -52,7 +52,7 @@ internal sealed class TabSearchDialog : VeilDialog
         {
             if ((list.SelectedItem as ListBoxItem)?.Tag is not TabSearchRow tab) return;
             SelectedId = tab.Id;
-            DialogResult = true;
+            Complete(true);
         }
 
         search.TextChanged += (_, _) => Refresh();
@@ -75,9 +75,9 @@ internal sealed class TabSearchDialog : VeilDialog
             if (args.OriginalSource is DependencyObject element &&
                 ItemsControl.ContainerFromElement(list, element) is ListBoxItem) Open();
         };
-        AddFooterButton("닫기", Close);
+        AddFooterButton("닫기", Dismiss);
         AddFooterButton("탭으로 이동", Open, primary: true);
-        Loaded += (_, _) => search.Focus();
+        OnContentLoaded(() => search.Focus());
         Refresh();
     }
 }

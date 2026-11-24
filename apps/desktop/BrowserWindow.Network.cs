@@ -90,30 +90,42 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
                 : $"프록시 보호 · 차단됨: 프록시에 연결할 수 없음 (직접 연결하지 않음){dns}{saved}";
     }
 
-    private void NetworkClick(object sender, RoutedEventArgs args)
+    private async void NetworkClick(object sender, RoutedEventArgs args)
     {
+        if (FocusManagementPage("veil://settings/network")) return;
         if (closing || restoring || session.IsEnding || session.EngineLost) return;
-        var dialog = new NetworkSettingsDialog(this, data.Network ?? NetworkSettings.Standard);
-        if (dialog.ShowDialog() != true || dialog.Result is not { } chosen ||
-            closing || session.IsEnding || session.EngineLost) return;
-        if (chosen.Problem is not null)
+        if (session.SettingsUiOpen || session.PasswordUiOpen || session.PermissionUiOpen) return;
+        session.SettingsUiOpen = true;
+        session.PermissionUiOpen = true;
+        try
         {
-            Status.Text = "네트워크 설정이 올바르지 않습니다.";
-            return;
+            var dialog = new NetworkSettingsDialog(this, data.Network ?? NetworkSettings.Standard);
+            if (await ShowManagementPageAsync("veil://settings/network", dialog) != true || dialog.Result is not { } chosen ||
+                closing || session.IsEnding || session.EngineLost) return;
+            if (chosen.Problem is not null)
+            {
+                Status.Text = "네트워크 설정이 올바르지 않습니다.";
+                return;
+            }
+            var previous = data.Network;
+            data.Network = chosen == NetworkSettings.Standard ? null : chosen;
+            try { data.Save(statePath); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                data.Network = previous;
+                Status.Text = "네트워크 설정을 저장하지 못했습니다. 이전 설정을 유지합니다.";
+                return;
+            }
+            foreach (var window in session.Windows.ToArray())
+                if (!window.closing) window.UpdateNetworkIndicator();
+            Status.Text = chosen == session.Network
+                ? "현재 적용된 네트워크 설정을 유지합니다."
+                : "네트워크 설정을 저장했습니다. VEIL을 다시 시작하면 적용됩니다.";
         }
-        var previous = data.Network;
-        data.Network = chosen == NetworkSettings.Standard ? null : chosen;
-        try { data.Save(statePath); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        finally
         {
-            data.Network = previous;
-            Status.Text = "네트워크 설정을 저장하지 못했습니다. 이전 설정을 유지합니다.";
-            return;
+            session.SettingsUiOpen = false;
+            session.PermissionUiOpen = false;
         }
-        foreach (var window in session.Windows.ToArray())
-            if (!window.closing) window.UpdateNetworkIndicator();
-        Status.Text = chosen == session.Network
-            ? "현재 적용된 네트워크 설정을 유지합니다."
-            : "네트워크 설정을 저장했습니다. VEIL을 다시 시작하면 적용됩니다.";
     }
 }

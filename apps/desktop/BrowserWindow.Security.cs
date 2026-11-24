@@ -5,13 +5,25 @@ namespace Veil.Desktop;
 
 public partial class BrowserWindow
 {
-    private void SecurityClick(object sender, RoutedEventArgs args)
+    private async void SecurityClick(object sender, RoutedEventArgs args)
     {
+        if (FocusManagementPage("veil://settings/security")) return;
         if (closing || restoring || session.IsEnding || session.EngineLost) return;
-        var dialog = new SecuritySettingsDialog(this, session.Security);
-        if (dialog.ShowDialog() != true || dialog.Result is not { } chosen ||
-            closing || session.IsEnding || session.EngineLost) return;
-        ChangeSecurity(chosen);
+        if (session.SettingsUiOpen || session.PasswordUiOpen || session.PermissionUiOpen) return;
+        session.SettingsUiOpen = true;
+        session.PermissionUiOpen = true;
+        try
+        {
+            var dialog = new SecuritySettingsDialog(this, session.Security);
+            if (await ShowManagementPageAsync("veil://settings/security", dialog) != true || dialog.Result is not { } chosen ||
+                closing || session.IsEnding || session.EngineLost) return;
+            ChangeSecurity(chosen);
+        }
+        finally
+        {
+            session.SettingsUiOpen = false;
+            session.PermissionUiOpen = false;
+        }
     }
 
     /// <summary>Saves first, then applies to every open view; failures are shown, never ignored.</summary>
