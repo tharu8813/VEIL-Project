@@ -98,3 +98,11 @@ test('publication recovery runs on the verified primary volume', () => {
     assert.deepEqual(item.args, ['tests/phase4/vault-publication.mjs', '--profile-parent', main.parent]);
     assert.equal(item.lab, main.parent);
 });
+
+test('desktop bridge disk-full requires the separate verified small volume and preserves primary evidence', () => {
+    assert.equal(makePlan(main.parent).find(item => item.id === 'vault-bridge-disk-full').args, undefined);
+    const item = makePlan(main.parent, small.parent).find(item => item.id === 'vault-bridge-disk-full');
+    assert.deepEqual(item.args, ['tests/phase4/vault-bridge-disk-full.mjs', '--profile-parent', small.parent,
+        '--browser-profile-parent', main.parent]);
+    assert.equal(item.lab, main.parent);
+});

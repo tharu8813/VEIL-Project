@@ -48,12 +48,12 @@ function session(exe, vault, first, commands) {
     return replies;
 }
 
-const freeBytes = async path => {
+export const freeBytes = async path => {
     const s = await statfs(path);
     return s.bavail * s.bsize;
 };
 
-async function fillToReserve(parent, filler, capacity) {
+export async function fillToReserve(parent, filler, capacity) {
     const reserve = 2 * MiB;
     const chunk = randomBytes(MiB);
     let written = 0;
@@ -77,26 +77,37 @@ async function fillToReserve(parent, filler, capacity) {
     return { written, remaining };
 }
 
+export async function verifyLabMount(parent, volume) {
+    assertLabChild(parent, volume.parent);
+    assert.equal(win32.normalize(await realpath(parent)).toLowerCase(), win32.normalize(parent).toLowerCase());
+    assert.ok(!(await lstat(parent)).isSymbolicLink());
+    const mounted = await run(join(process.env.SystemRoot, 'System32', 'mountvol.exe'), [volume.drive + '\\', '/L']);
+    assert.equal(mounted.stdout.trim().toLowerCase(), volume.volumeId.toLowerCase());
+}
+
+export async function verifiedDiskFullLab(parent, receiptPath) {
+    if (process.platform !== 'win32' || !parent || !isAbsolute(parent) || !receiptPath)
+        throw new Error('Run only through phase34-vm in a prepared offline Windows VM.');
+    const receipt = JSON.parse((await readFile(receiptPath, 'utf8')).replace(/^\uFEFF/, ''));
+    const ps = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const { stdout } = await run(ps, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned', '-File',
+        join(repo, 'tests/phase3/phase34-guest-identity.ps1'), '-Json']);
+    const { primary, diskFull } = validatePreflight(receipt, JSON.parse(stdout));
+    assert.ok(diskFull, 'No verified disk-full volume');
+    await verifyLabMount(parent, diskFull);
+    const fs = await statfs(parent);
+    const capacity = fs.blocks * fs.bsize;
+    assert.ok(capacity > 0 && capacity <= 2 * 1024 ** 3, 'Refusing large or invalid volume');
+    assert.ok(await freeBytes(parent) > 24 * MiB, 'Insufficient initial free space for test');
+    return { primary, diskFull, capacity };
+}
+
 async function main() {
     const { values } = parseArgs({ options: { 'profile-parent': { type: 'string' }, preflight: { type: 'string' } } });
     const parent = values['profile-parent'];
     if (process.platform !== 'win32' || !parent || !isAbsolute(parent) || !values.preflight)
         throw new Error('Run only through phase34-vm in a prepared offline Windows VM.');
-    const receipt = JSON.parse((await readFile(values.preflight, 'utf8')).replace(/^\uFEFF/, ''));
-    const ps = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    const { stdout } = await run(ps, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned', '-File',
-        join(repo, 'tests/phase3/phase34-guest-identity.ps1'), '-Json']);
-    const { diskFull } = validatePreflight(receipt, JSON.parse(stdout));
-    assert.ok(diskFull, 'No verified disk-full volume');
-    assertLabChild(parent, diskFull.parent);
-    assert.equal(win32.normalize(await realpath(parent)).toLowerCase(), win32.normalize(parent).toLowerCase());
-    assert.ok(!(await lstat(parent)).isSymbolicLink());
-    const mounted = await run(join(process.env.SystemRoot, 'System32', 'mountvol.exe'), [diskFull.drive + '\\', '/L']);
-    assert.equal(mounted.stdout.trim().toLowerCase(), diskFull.volumeId.toLowerCase());
-    const fs = await statfs(parent);
-    const capacity = fs.blocks * fs.bsize;
-    assert.ok(capacity > 0 && capacity <= 2 * 1024 ** 3, 'Refusing large or invalid volume');
-    assert.ok(await freeBytes(parent) > 24 * MiB, 'Insufficient initial free space for test');
+    const { capacity } = await verifiedDiskFullLab(parent, values.preflight);
 
     const desktop = process.env.VEIL_DESKTOP_DLL;
     assert.ok(desktop && isAbsolute(desktop), 'Use the VM batch prebuilt desktop path');

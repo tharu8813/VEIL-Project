@@ -107,7 +107,7 @@ Alpha를 막지 않지만, 문서화해서 테스터에게 알리는 항목이�
    - ~~D2 프록시 "실험적" 표시~~ (2026-11-24 구현)
    - ~~E6 고지와 SBOM 생성~~ (2026-11-24 구현). 표준 본문으로 대체한 6개 구성 요소의 사람 검토가 남았다
    - [내부 서명 인증서 지문 전달 및 재설치·재등록 관리자 런북](../37-alpha-admin-runbook.md) 작성. 실제 관리자 실행 및 VM 검증은 NOT RUN.
-2. ~~VM 번들 갱신~~ (2026-11-24): Phase 6 smoke, 시험 인증서, 패키지 서명·변조·설치·업데이트·중단 복구·제거, 인터넷 항목 3개 추가. 금고 디스크 부족 Rust 코어 전용 러너를 추가했다(`tests/phase4/vault-disk-full.mjs`, 실제 VM NOT RUN). 메타데이터/인덱스 쓰기 실패 후 목록 복구를 검사하는 Debug 러너도 추가했다([시험 범위](../07-download-vault.md)). 모두 실제 VM NOT RUN. 브라우저 다운로드 경로 실제 공간 부족·발행 순간 ENOSPC·전원 차단 검증은 별도로 남으며 C2는 계속 NOT RUN.
+2. ~~VM 번들 갱신~~ (2026-11-24): Phase 6 smoke, 시험 인증서, 패키지 서명·변조·설치·업데이트·중단 복구·제거, 인터넷 항목 3개 추가. 금고 디스크 부족 Rust 코어 전용 러너를 추가했다(`tests/phase4/vault-disk-full.mjs`, 실제 VM NOT RUN). 메타데이터/인덱스 쓰기 실패 후 목록 복구를 검사하는 Debug 러너도 추가했다([시험 범위](../07-download-vault.md)). 모두 실제 VM NOT RUN. C# HTTP/파이프/Rust 경로의 실제 공간 부족 러너도 추가했다. 실제 VM NOT RUN. WebView2 DownloadStarting부터의 공간 부족·발행 순간 ENOSPC·전원 차단 검증은 별도로 남으며 C2는 계속 NOT RUN.
 3. 오프라인 VM 일괄 ②: A1~A4, B2·B3, C2, E1·E2
 4. 인터넷 VM 일괄 ③: D2의 남은 항목
 5. 수동 점검 E4
