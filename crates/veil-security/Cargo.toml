@@ -8,7 +8,7 @@ license = "MPL-2.0"
 [dependencies]
 age = { version = "=0.12.1", default-features = false }
 tempfile = "=3.27.0"
-zeroize = "=1.9.0"
+zeroize = "=1.9.2"
 
 # Dev/test builds only: compile the dependencies (age, scrypt, ChaCha20-Poly1305, ...) with
 # optimizations so tests run the real scrypt work factor (log_n = 17) at native speed instead of
