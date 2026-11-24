@@ -21,7 +21,7 @@
 
 두 기본 프로필은 Gate A의 구현 후보에서 제외한다. 마커가 발견된 경로에는 별도 암호화 계층이 필요하다. 검색 범위에 없던 Cookies 파일의 값, TEMP·로그·덤프·페이지 파일, 순간적으로 생성된 다운로드 임시 파일의 보호 여부는 이 실험으로 알 수 없다.
 
-처음 제한된 도구 실행에서는 WebView2 탐색이 `Unknown`으로 실패했고 Qt는 프로필 생성에서 `0x80000003`으로 종료했다. 일반 사용자 권한에서 같은 시험을 재실행해 위 결과를 얻었다. 엔진 샌드박스 설정과 Windows 보안 설정은 변경하지 않았다. 실행기와 증거 위치는 [README](../README.MD)에 기록한다.
+처음 제한된 도구 실행에서는 WebView2 탐색이 `Unknown`으로 실패했고 Qt는 프로필 생성에서 `0x80000003`으로 종료했다. 일반 사용자 권한에서 같은 시험을 재실행해 위 결과를 얻었다. 엔진 샌드박스 설정과 Windows 보안 설정은 변경하지 않았다. 실행기와 증거 위치는 [개발 및 테스트 가이드](DEVELOPMENT.md)에 기록한다.
 
 `node tests/phase0/run.mjs`의 대표 결과는 `.veil-dev/phase0-pbURdK/evidence.json`에, `node tests/phase0/proxy.mjs`의 엔진 결과는 `.veil-dev/proxy-nfwyzw/evidence.json`에 저장했다. 파일은 작업 트리의 무시 경로이며 실행하면 새로 생성된다.
 
