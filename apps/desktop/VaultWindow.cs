@@ -129,7 +129,8 @@ internal sealed class VaultWindow : VeilDialog
         preview.IsEnabled = enabled && selected is not null && VaultPresentation.CanPreview(selected);
         verify.IsEnabled = delete.IsEnabled = export.IsEnabled = enabled && selected is not null;
         preview.ToolTip = selected is not null && VaultPresentation.CanPreview(selected) ?
-            "인증 후 메모리에서 읽기 전용으로 표시합니다." : "복구되지 않은 TXT(256 KiB), PNG/JPEG(8 MiB 이하)만 지원합니다.";
+            "인증 후 메모리에서 읽기 전용으로 표시합니다." : "복구되지 않은 TXT(256 KiB), PNG/JPEG(8 MiB 이하)" +
+            (VaultPdfPreview.Enabled ? ", 개발용 PDF(8 MiB 이하)만 지원합니다." : "만 지원합니다.");
         details.Text = selected is null ? "파일을 선택하세요." :
             $"{selected.Name} · {VaultPresentation.Size(selected.Bytes)}\n" +
             (selected.Recovered ? "복구 항목 · 원래 메타데이터가 없을 수 있습니다." : "보관 상태 · 무결성은 파일 검사에서 확인할 수 있습니다.");
@@ -167,6 +168,11 @@ internal sealed class VaultWindow : VeilDialog
             {
                 string text = VaultPresentation.DecodeText(bytes);
                 if (Ready) new VaultTextPreviewDialog(PromptOwner, entry.Name, text).ShowDialog();
+            }
+            else if (kind == VaultPreviewKind.Pdf)
+            {
+                if (Ready && Selected?.Id == entry.Id)
+                    new VaultPdfPreviewDialog(PromptOwner, entry.Name, bytes, () => Ready && Selected?.Id == entry.Id).ShowDialog();
             }
             else
             {

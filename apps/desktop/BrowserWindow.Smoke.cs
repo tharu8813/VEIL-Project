@@ -131,6 +131,13 @@ public partial class BrowserWindow
                 try { VaultImagePreview.Dimensions(oversizedPng, VaultPreviewKind.Png); }
                 catch (InvalidDataException) { rejectedImage = true; }
                 Check(rejectedImage, "oversized PNG rejected before decoder");
+                Check(VaultPdfPreview.ValidHeader("%PDF-1.7\nsynthetic"u8) &&
+                    !VaultPdfPreview.ValidHeader("<html>synthetic</html>"u8) &&
+                    VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.pdf" }) == VaultPdfPreview.Enabled,
+                    "PDF preview header and development gate");
+                Check(VaultPdfPreview.RenderSize(612, 792) is (1391, 1800) &&
+                    VaultPdfPreview.RenderSize(double.NaN, 100) is null &&
+                    VaultPdfPreview.RenderSize(100000, 1) is null, "PDF render dimension limits");
                 Check(DownloadFailurePolicy.HttpStatus(System.Net.HttpStatusCode.ServiceUnavailable, true).Retryable &&
                     !DownloadFailurePolicy.HttpStatus(System.Net.HttpStatusCode.Forbidden, true).Retryable &&
                     !DownloadFailurePolicy.HttpStatus(System.Net.HttpStatusCode.ServiceUnavailable, false).Retryable &&
