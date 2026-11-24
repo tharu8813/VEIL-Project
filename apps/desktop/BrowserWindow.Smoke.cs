@@ -1230,16 +1230,23 @@ public partial class BrowserWindow
                     if (stage == "storm")
                     {
                         await Active!.View.ExecuteScriptAsync($"stormStart({max}); null");
+                        int committed = max;
                         for (int i = 0; i < 400; i++)
                         {
-                            if (int.TryParse(await Active!.View.ExecuteScriptAsync("window.stormGen"), out int gen) && gen >= max + 100) break;
+                            if (int.TryParse(await Active!.View.ExecuteScriptAsync("window.stormGen"), out int gen) && gen >= max + 100)
+                            {
+                                committed = gen;
+                                break;
+                            }
                             await Task.Delay(75);
                         }
+                        Check(committed >= max + 100, "writer confirmed at least 100 completed transactions before arming");
                         File.WriteAllText(report, JsonSerializer.Serialize(new
                         {
                             stormReady = true,
                             browserPid = Active!.View.CoreWebView2.BrowserProcessId,
                             before = max,
+                            committed,
                         }));
                         // VEIL_STORM_HOLD_SECONDS keeps the writer running longer for the VM power-cut test.
                         int hold = int.TryParse(Environment.GetEnvironmentVariable("VEIL_STORM_HOLD_SECONDS"), out int seconds) ? seconds : 30;

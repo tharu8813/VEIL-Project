@@ -108,7 +108,7 @@ Alpha를 막지 않지만, 문서화해서 테스터에게 알리는 항목이�
    - ~~E6 고지와 SBOM 생성~~ (2026-11-24 구현). 표준 본문으로 대체한 6개 구성 요소의 사람 검토가 남았다
    - [내부 서명 인증서 지문 전달 및 재설치·재등록 관리자 런북](../37-alpha-admin-runbook.md) 작성. 실제 관리자 실행 및 VM 검증은 NOT RUN.
 2. ~~VM 번들 갱신~~ (2026-11-24): Phase 6 smoke, 시험 인증서, 패키지 서명·변조·설치·업데이트·중단 복구·제거, 인터넷 항목 3개 추가. 금고 디스크 부족 Rust 코어 전용 러너를 추가했다(`tests/phase4/vault-disk-full.mjs`, 실제 VM NOT RUN). 메타데이터/인덱스 쓰기 실패 후 목록 복구를 검사하는 Debug 러너도 추가했다([시험 범위](../07-download-vault.md)). 모두 실제 VM NOT RUN. C# HTTP/파이프/Rust 경로의 실제 공간 부족 러너도 추가했다. 실제 VM NOT RUN. WebView2 DownloadStarting부터의 공간 부족·발행 순간 ENOSPC·전원 차단 검증은 별도로 남으며 C2는 계속 NOT RUN.
-3. 오프라인 VM 일괄 ②: A1~A4, B2·B3, C2, E1·E2
+3. 오프라인 VM 일괄 ②: A1~A4, B2·B3, C2, E1·E2. B2 전원 차단 arm/check의 VM·부팅·보호 볼륨·빌드·커밋 증거 연결을 강화했다([시험 절차](../10-test-strategy.md#프로필-전원-차단-증거-연결-b2)). 실제 운영자 전원 차단 및 재부팅 검증 NOT RUN.
 4. 인터넷 VM 일괄 ③: D2의 남은 항목
 5. 수동 점검 E4
 6. 판정: SECURITY_STATUS 갱신, 이 표의 모든 필수 항목 PASS 확인, `1.0.0-alpha.1` 패키지 생성과 서명, 테스터 안내문(데이터 범위와 알려진 위험) 배포
