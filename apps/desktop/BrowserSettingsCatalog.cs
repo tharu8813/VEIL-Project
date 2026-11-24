@@ -1,7 +1,7 @@
 namespace Veil.Desktop;
 
 internal enum SettingsSection { General, Privacy, Network, Accounts, Downloads, Advanced }
-internal enum SettingsDestination { Security, SitePermissions, History, Bookmarks, Network, Passwords, Downloads, Vault }
+internal enum SettingsDestination { Security, SitePermissions, History, Bookmarks, Network, Passwords, Downloads, Vault, Search }
 
 internal sealed record SettingsItem(SettingsSection Section, string Title, string Description, string Keywords,
     string? State = null, SettingsDestination? Destination = null)
@@ -54,8 +54,10 @@ internal static class BrowserSettingsCatalog
             passwords.Exists ? "저장소 있음 · 열람 시 인증" : "미설정";
         return
         [
-            new(SettingsSection.General, "검색 및 주소창", "주소창에서 웹 주소 또는 검색어를 입력할 수 있습니다.",
-                "search address 검색 엔진 duckduckgo", "기본 검색: DuckDuckGo"),
+            new(SettingsSection.General, "검색 및 주소창", "기본 검색 엔진과 로컬 방문 기록·북마크 추천을 설정합니다.",
+                "search address 검색 엔진 duckduckgo google bing naver 네이버 구글 자동완성",
+                "기본 검색: " + SearchPolicy.Name(session.Data.SearchEngine) + " · 로컬 추천 " +
+                    (session.Data.LocalAddressSuggestions != false ? "사용" : "사용 안 함"), SettingsDestination.Search),
             new(SettingsSection.General, "시작 및 세션", "이전 탭과 창, 사이트 데이터를 유지하는 현재 동작입니다.",
                 "startup session 탭 복원 시작 페이지", "이전 세션 복원"),
             new(SettingsSection.General, "북마크", "저장된 페이지를 검색하거나 수정·삭제합니다.",

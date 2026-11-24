@@ -26,6 +26,23 @@ public partial class BrowserWindow
                 await WaitFor(() => !restoring, "desktop initialization");
                 Check(ResolveAddress("example.test")?.AbsoluteUri == "https://example.test/", "HTTPS address default");
                 Check(ResolveAddress("한글 브라우저")?.Host == "duckduckgo.com", "search encoding");
+                Check(ResolveAddress("한글 & 검색", "google")?.Host == "www.google.com" &&
+                    ResolveAddress("한글 & 검색", "google")?.Query.Contains("%26") == true &&
+                    ResolveAddress("한글 검색", "bing")?.Host == "www.bing.com" &&
+                    ResolveAddress("한글 검색", "naver")?.Host == "search.naver.com" &&
+                    ResolveAddress("한글 검색", "invalid")?.Host == "duckduckgo.com",
+                    "fixed HTTPS search providers and fallback");
+                var localData = new BrowserData();
+                localData.Bookmarks.Add(new PageEntry("Synthetic", "https://example.test/", DateTimeOffset.Now));
+                localData.History.Add(new PageEntry("Synthetic duplicate", "https://example.test/", DateTimeOffset.Now));
+                localData.History.Add(new PageEntry("Synthetic token", "https://example.test/?token=synthetic", DateTimeOffset.Now));
+                localData.History.Add(new PageEntry("Synthetic fragment", "https://example.test/#secret", DateTimeOffset.Now));
+                localData.History.Add(new PageEntry("Synthetic invalid", "file:///C:/synthetic", DateTimeOffset.Now));
+                Check(SearchPolicy.Suggest(localData, "synthetic").Count == 1 &&
+                    SearchPolicy.Suggest(localData, "synthetic")[0].Url == "https://example.test/",
+                    "local suggestions deduplicate and exclude sensitive URL forms");
+                localData.LocalAddressSuggestions = false;
+                Check(SearchPolicy.Suggest(localData, "synthetic").Count == 0, "local suggestions disabled");
                 Check(ResolveAddress("127.0.0.1:8765")?.AbsoluteUri == "http://127.0.0.1:8765/", "fixture address");
                 Check(ResolveAddress("file:///C:/secret") is null &&
                     ResolveAddress("https://username@example.test") is null, "address scheme and credentials rejected");

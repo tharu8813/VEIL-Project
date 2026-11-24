@@ -94,8 +94,26 @@
                     <Grid x:Name="AddressHost" Grid.Column="1" Margin="10,0" MaxWidth="860"
                           RenderTransformOrigin="0.5,0.5">
                         <TextBox x:Name="Address" Style="{StaticResource PillTextBox}" Height="34" Tag="&#xE721;"
-                                 ToolTip="주소 또는 DuckDuckGo 검색 (Ctrl+L)" AutomationProperties.Name="주소 또는 검색어"
+                                 ToolTip="주소 또는 검색 (Ctrl+L)" AutomationProperties.Name="주소 또는 검색어"
                                  KeyDown="AddressKeyDown" GotKeyboardFocus="AddressGotFocus" />
+                        <Popup x:Name="AddressSuggestionsPopup" PlacementTarget="{Binding ElementName=Address}"
+                               Placement="Bottom" AllowsTransparency="True" StaysOpen="True" Focusable="False">
+                            <Border Width="{Binding ActualWidth, ElementName=Address}" Background="{StaticResource SurfaceBrush}"
+                                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="10" Padding="5">
+                                <ListBox x:Name="AddressSuggestionsList" Style="{StaticResource VeilList}" MaxHeight="350"
+                                         Focusable="False" AutomationProperties.Name="로컬 주소 추천"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />
+                                                <TextBlock Text="{Binding Url}" TextTrimming="CharacterEllipsis" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Border>
+                        </Popup>
                     </Grid>
                     <StackPanel x:Name="ActionGroup" Grid.Column="2" Orientation="Horizontal">
                         <Button x:Name="BookmarkButton" Style="{StaticResource IconButton}" ToolTip="북마크 추가 (Ctrl+D)"

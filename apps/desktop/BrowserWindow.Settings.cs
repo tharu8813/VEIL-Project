@@ -33,6 +33,7 @@ public partial class BrowserWindow
             var click = new RoutedEventArgs();
             switch (destination)
             {
+                case SettingsDestination.Search: SearchSettingsClick(this, click); break;
                 case SettingsDestination.Security: SecurityClick(this, click); break;
                 case SettingsDestination.SitePermissions: SitePermissionsClick(this, click); break;
                 case SettingsDestination.History: HistoryClick(this, click); break;

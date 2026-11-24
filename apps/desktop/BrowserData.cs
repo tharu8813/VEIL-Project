@@ -25,6 +25,8 @@ internal sealed class BrowserData
     public SecuritySettings? Security { get; set; }
 
     public List<SitePermissionRule>? SitePermissions { get; set; }
+    public string? SearchEngine { get; set; }
+    public bool? LocalAddressSuggestions { get; set; }
 
     internal static BrowserData Load(string path)
     {
@@ -48,6 +50,7 @@ internal sealed class BrowserData
         // Missing policy means deny. Corrupted rules must never grant a permission.
         if (!SitePermissionPolicy.ValidRules(data.SitePermissions))
             data.SitePermissions = null;
+        if (!SearchPolicy.IsKnown(data.SearchEngine)) data.SearchEngine = null;
         return data;
     }
 

@@ -66,6 +66,7 @@ public partial class BrowserWindow : Window
         RefreshDownloadProgress();
         InitializeMotion(playIntro: adopt is null);
         InitializeWindowFeatures();
+        InitializeAddressSuggestions();
         Loaded += Start;
         Closing += OnClosing;
         PreviewKeyDown += BrowserKeyDown;
@@ -79,6 +80,7 @@ public partial class BrowserWindow : Window
         if (last || session.IsEnding)
             foreach (var download in session.ActiveDownloads.ToArray()) download.Cancel();
         closing = true;
+        CloseAddressSuggestions();
         session.Windows.Remove(this);
         if (!last && !session.IsEnding)
         {
@@ -581,6 +583,8 @@ public partial class BrowserWindow : Window
     private void TabChanged(object sender, SelectionChangedEventArgs args)
     {
         if (!IsLoaded || args.OriginalSource != Tabs || closing) return;
+        CloseAddressSuggestions();
+        SetAddressText(Active?.Url is null or "about:blank" ? "" : Active.Url);
         foreach (TabItem item in Tabs.Items)
             ((BrowserTab)item.Tag).View.Visibility = item == Tabs.SelectedItem ? Visibility.Visible : Visibility.Hidden;
         if (fullScreen && fullScreenFromPage && Active?.View.CoreWebView2?.ContainsFullScreenElement != true) SetFullScreen(false);
@@ -594,7 +598,7 @@ public partial class BrowserWindow : Window
         UpdateHttpsBar();
         UpdateThreatBar();
         if (!Address.IsKeyboardFocusWithin)
-            Address.Text = Active?.Url is null or "about:blank" ? "" : Active.Url;
+            SetAddressText(Active?.Url is null or "about:blank" ? "" : Active.Url);
         Home.Visibility = Active?.Url is null or "about:blank" ? Visibility.Visible : Visibility.Collapsed;
         if (Active is not null)
             Active.View.Visibility = Home.Visibility == Visibility.Visible ? Visibility.Hidden : Visibility.Visible;
@@ -642,7 +646,7 @@ public partial class BrowserWindow : Window
         _ => "새 탭",
     };
 
-    internal static Uri? ResolveAddress(string input)
+    internal static Uri? ResolveAddress(string input, string? searchEngine = null)
     {
         input = input.Trim();
         if (input.Length == 0) return null;
@@ -658,7 +662,7 @@ public partial class BrowserWindow : Window
                 return candidate.IsLoopback ? new UriBuilder(candidate) { Scheme = "http", Port = candidate.IsDefaultPort ? -1 : candidate.Port }.Uri : candidate;
             if (input.Contains(':')) return null;
         }
-        return new Uri("https://duckduckgo.com/?q=" + Uri.EscapeDataString(input));
+        return SearchPolicy.Search(searchEngine, input);
     }
 
     private string BuildInternalPage(string? url)
@@ -741,7 +745,8 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void FocusAddress()
     {
-        Address.Text = Active?.Url is null or "about:blank" ? "" : Active.Url;
+        CloseAddressSuggestions();
+        SetAddressText(Active?.Url is null or "about:blank" ? "" : Active.Url);
         Address.Focus();
         Address.SelectAll();
     }
@@ -749,9 +754,28 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private void AddressKeyDown(object sender, KeyEventArgs args)
     {
         Key key = args.Key == Key.System ? args.SystemKey : args.Key;
-        if (key == Key.Escape) { FocusAddress(); return; }
+        if (key == Key.Escape)
+        {
+            args.Handled = true;
+            if (AddressSuggestionsPopup.IsOpen) CloseAddressSuggestions();
+            else FocusAddress();
+            return;
+        }
+        if (key is Key.Down or Key.Up && AddressSuggestionsPopup.IsOpen && Keyboard.Modifiers == ModifierKeys.None)
+        {
+            args.Handled = true;
+            MoveAddressSuggestion(key == Key.Down ? 1 : -1);
+            return;
+        }
         if (key != Key.Enter) return;
         args.Handled = true;
+        if (AddressSuggestionsPopup.IsOpen && AddressSuggestionsList.SelectedItem is AddressSuggestion selected &&
+            !Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            OpenAddressSuggestion(selected, Keyboard.Modifiers.HasFlag(ModifierKeys.Alt));
+            return;
+        }
+        CloseAddressSuggestions();
         string text = Address.Text.Trim();
         // Ctrl+Enter completes a bare name to www.<name>.com, as in Chrome and Edge.
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && text.Length > 0 && !text.Contains('.') &&
@@ -760,7 +784,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
         {
             // Alt+Enter opens the address in a new tab next to the current one.
-            if (ResolveAddress(text) is { } url && Active is { } current)
+            if (ResolveAddress(text, data.SearchEngine) is { } url && Active is { } current)
                 _ = OpenTab(url.AbsoluteUri, index: Tabs.Items.IndexOf(current.Item) + 1);
             return;
         }
@@ -769,14 +793,15 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void NavigateAddress(string input)
     {
-        var url = ResolveAddress(input);
+        CloseAddressSuggestions();
+        var url = ResolveAddress(input, data.SearchEngine);
         if (url is null)
         {
             Status.Text = "웹 주소 또는 검색어를 입력하세요.";
             return;
         }
         if (Active is not { } tab) return;
-        Address.Text = url.AbsoluteUri;
+        SetAddressText(url.AbsoluteUri);
         if (IsInternalUrl(url.AbsoluteUri))
         {
             tab.Url = url.AbsoluteUri;
