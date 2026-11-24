@@ -253,6 +253,7 @@ internal sealed class DownloadVault : IDisposable
 
     internal void NoteRequest(string method, string uri)
     {
+        if (!BrowserWindow.IsWebUrl(uri)) return;
         lock (methods)
         {
             if (methods.Count > 256) methods.Clear();
@@ -263,10 +264,12 @@ internal sealed class DownloadVault : IDisposable
     internal string? Unsupported(Uri uri)
     {
         if (!Available) return "금고 사용 불가";
-        if (uri.Scheme is not ("http" or "https")) return $"미지원 방식({uri.Scheme})";
+        if (uri.Scheme == "blob") return "Blob 다운로드는 아직 안전하게 가져올 수 없습니다.";
+        if (uri.Scheme == "data") return "Data 다운로드는 개발 검증 중입니다.";
+        if (uri.Scheme is not ("http" or "https")) return "지원하지 않는 다운로드 방식";
         lock (methods)
             if (methods.TryGetValue(uri.AbsoluteUri, out var method) && !string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
-                return $"미지원 방식({method})";
+                return "GET 이외 요청은 재전송하지 않습니다.";
         return null;
     }
 
@@ -276,7 +279,28 @@ internal sealed class DownloadVault : IDisposable
         CancellationToken cancel = download.Token;
         if (!Unlocked) throw new InvalidOperationException("The vault is locked.");
         using var response = await GetFollowingRedirectsAsync(uri, web, cancel, retry);
-        long? declared = response.Content.Headers.ContentLength;
+        using var body = await response.Content.ReadAsStreamAsync(cancel);
+        return await SealCaptureAsync(body, response.Content.Headers.ContentLength, uri.Host, download);
+    }
+
+    internal async Task<VaultEntry> CaptureInlineAsync(string raw, Uri source, BrowserDownload download)
+    {
+        if (!InlineDownloadPolicy.Enabled || !InlineDownloadPolicy.SourceAllowed(source) || !Unlocked)
+            throw new InvalidOperationException("Inline download unavailable.");
+        download.Token.ThrowIfCancellationRequested();
+        await RejectThreatAsync(threats?.CheckAsync(source, TimeSpan.FromSeconds(2), download.Token));
+        byte[] bytes = InlineDownloadPolicy.Decode(raw);
+        try
+        {
+            using var body = new MemoryStream(bytes, writable: false);
+            return await SealCaptureAsync(body, bytes.Length, source.Host, download);
+        }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
+
+    private async Task<VaultEntry> SealCaptureAsync(Stream body, long? declared, string host, BrowserDownload download)
+    {
+        CancellationToken cancel = download.Token;
         string id = Guid.NewGuid().ToString("N");
         long total = 0;
         await gate.WaitAsync(cancel);
@@ -292,7 +316,6 @@ internal sealed class DownloadVault : IDisposable
                 await WriteLineAsync($"seal\t{Path.Combine(Objects, id + ".veil")}");
                 canAbort = true;
                 download.Report(0, declared);
-                var body = await response.Content.ReadAsStreamAsync(cancel);
                 for (int read; (read = await body.ReadAsync(buffer, cancel)) > 0;)
                 {
                     cancel.ThrowIfCancellationRequested();
@@ -311,6 +334,7 @@ internal sealed class DownloadVault : IDisposable
                 // ADR-0008: a listed file is aborted before the commit frame, so it is never published.
                 string sha256 = Convert.ToHexString(fileHash.GetHashAndReset()).ToLowerInvariant();
                 await RejectThreatAsync(threats?.CheckFileAsync(sha256, TimeSpan.FromSeconds(2), cancel));
+                cancel.ThrowIfCancellationRequested();
                 download.Finish();
                 canAbort = false;
                 await input!.WriteAsync(BitConverter.GetBytes(0));
@@ -335,7 +359,7 @@ internal sealed class DownloadVault : IDisposable
             finally { CryptographicOperations.ZeroMemory(buffer); }
             string reply = await ReadLineAsync();
             if (reply != $"ok\t{total}") throw new IOException("The vault did not accept the download.");
-            var entry = new VaultEntry(id, download.Name, total, DateTimeOffset.Now, uri.Host);
+            var entry = new VaultEntry(id, download.Name, total, DateTimeOffset.Now, host);
             await SealBytesLockedAsync(Path.Combine(Meta, id + ".veil"), JsonSerializer.SerializeToUtf8Bytes(entry, Json));
             Entries = [entry, .. Entries];
             await SaveIndexLockedAsync();
