@@ -60,7 +60,7 @@
 | 3. 실행 | 게스트 일반 사용자 셸 | 2단계가 출력한 `phase34-vm.mjs --run ... --cert-dir C:\VEIL-Batch\testcert` 명령. |
 | 4. 마무리 | 게스트 관리자 셸 | `C:\VEIL-Batch\BATCH.PS1 -Stage Finish`. 추적 종료·분석 → `RESULTS.ZIP`과 결과표 출력. 모두 PASS면 시험 볼륨을 잠그고 분리한 뒤 삭제한다. FAIL이 하나라도 있으면 볼륨과 증거를 그대로 둔다. |
 | 5. 패키지 | 게스트 관리자 셸 | 추적이 끝난 뒤 `C:\VEIL-Batch\src`에서 `tests\vm\guest-package.ps1 -Stage Sign` → `Install`(운영자 단계) → 운영자 점검 3개를 `-Stage Record`로 기록 → `Update` → `Remove`. 결과는 `C:\VEIL-Batch\PACKAGE-RESULTS.ZIP`. 아래 [패키지 시험](#패키지-시험-adr-0010-e1e2b3) 참고. |
-| 6. 전원 차단 | 게스트 일반 사용자 셸 + 호스트 | 별도 프로필로 `node tests\phase3\power-loss.mjs --arm ...` → 호스트에서 `VBoxManage controlvm <vm> poweroff` → 재부팅·잠금 해제 후 `--check`. |
+| 6. 전원 차단 | 게스트 일반 사용자 셸 + 호스트 | 일괄 시험과 별도의 폐기용 보호 볼륨에서 아래 arm/check 절차 실행. 운영자 승인 후에만 호스트에서 전원 차단. |
 
 자동 실행 항목(3단계):
 
@@ -164,3 +164,19 @@ ADR-0004 정책 4에 따라 인터넷에 연결된 **별도의 격리 시험 VM*
 ```
 
 실패와 미실행을 통과로 둔갑시키지 않는다.
+
+### 프로필 전원 차단 증거 연결 (B2)
+
+일괄 시험 완료 시 시험 볼륨이 제거될 수 있으므로 별도 폐기용 BitLocker VHDX와 새 preflight를 준비한다. 예를 들어 등록한 ProfileParent가 `V:\lab`이면 일반 사용자 게스트 셸에서 다음과 같이 실행한다. 기존 폴더를 재사용하지 않는다.
+
+```powershell
+node tests/phase3/power-loss.mjs --arm --isolated-vm --preflight C:\lab\preflight-before.json --evidence V:\lab\power-loss-1 --profile V:\lab\power-loss-1\profile
+```
+
+ARMED 출력과 `armed.json`을 확인한 운영자만 지정된 폐기용 VM의 호스트에서 전원 차단을 수행한다. 일반 재시작으로 대체하지 않는다. 재부팅 후 동일 VHDX를 연결·잠금 해제하고 관리자 셸에서 현재 부팅의 새로운 preflight를 만든 뒤 일반 사용자 셸에서 실행한다.
+
+```powershell
+node tests/phase3/power-loss.mjs --check --isolated-vm --confirm-power-cut --preflight C:\lab\preflight-after.json --evidence V:\lab\power-loss-1 --profile V:\lab\power-loss-1\profile
+```
+
+동일 VM UUID·다른 부팅·동일 VHDX 및 볼륨 GUID·프로필 경로·바이너리 해시·fixture 출처를 확인한다. 100개 이상 완료 트랜잭션을 관찰하지 못하면 arm하지 않고, 확인된 레코드 수보다 복구 결과가 적거나 프로세스가 실패하면 PASS를 기록하지 않는다. 실제 호스트 전원 차단은 운영자의 확인이며 다른 부팅 증거만으로 물리 차단을 증명하지 않는다. 호스트 기록은 별도로 보존한다. 실패 후에는 원본 증거를 보존하고 새로운 시험 디렉터리에서 다시 시작한다. 실제 VM 실행 **NOT RUN**, B2/C2 미통과. 이 러너는 금고 전원 차단 시험을 대신하지 않는다.
