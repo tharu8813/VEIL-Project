@@ -794,10 +794,7 @@ public partial class BrowserWindow : Window
         bool vaultVisible = session.VaultOpenGate.CurrentCount > 0 && session.Vault.Unlocked;
         var rows = url switch
         {
-            "veil://bookmarks" => data.Bookmarks.Select(entry =>
-                $@"<a class=""row"" href=""{EscapeHtml(entry.Url)}""><strong>{EscapeHtml(entry.Title)}</strong><span>{EscapeHtml(entry.Url)}</span></a>"),
-            "veil://history" => data.History.Select(entry =>
-                $@"<a class=""row"" href=""{EscapeHtml(entry.Url)}""><strong>{EscapeHtml(entry.Title)}</strong><span>{EscapeHtml(entry.Url)}</span></a>"),
+            // Bookmarks and history are native management surfaces, never HTML pages.
             // Vault items appear only while the vault is open; names come from the encrypted index.
             "veil://downloads" => (vaultVisible ? session.Vault.Entries : []).Select(entry =>
                     $@"<div class=""row""><strong>{EscapeHtml(entry.Name)}</strong><span>금고 보관 · {entry.Bytes / 1024d / 1024d:0.00} MB · {entry.SavedAt.LocalDateTime:yyyy-MM-dd HH:mm} · 내보내기는 메뉴의 다운로드 금고(Ctrl+Shift+J)</span></div>")
@@ -808,8 +805,6 @@ public partial class BrowserWindow : Window
         string title = InternalTitle(url);
         string empty = url switch
         {
-            "veil://bookmarks" => "저장한 북마크가 없습니다.",
-            "veil://history" => "방문 기록이 없습니다.",
             "veil://downloads" => vaultVisible ? "금고에 보관한 다운로드가 없습니다." : "금고가 잠겨 있습니다. 메뉴의 다운로드 금고에서 열 수 있습니다.",
             _ => "",
         };
