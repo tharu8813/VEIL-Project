@@ -18,6 +18,11 @@ const common = resolve('scripts/package-common.ps1');
 
 const script = (root) => `
 $ErrorActionPreference = 'Stop'
+# A Windows PowerShell 5.1 child launched from pwsh may inherit a module search path
+# that does not expose the inbox Utility module (Get-FileHash is a module function).
+# Load the native module explicitly; do not replace or mock package hashing.
+Import-Module (Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+$null = Get-Command Get-FileHash -ErrorAction Stop
 # Loaded with one line changed: the manifest signature is verified without chain trust (no host trust
 # store change). The unmodified chain check runs in tests/vm/guest-package.ps1.
 $source = [IO.File]::ReadAllText('${common.replace(/'/g, "''")}')
@@ -53,7 +58,7 @@ $cases = [ordered]@{
     'wrong-signer'    = @{ change = {}; thumbprint = $other.Thumbprint; expect = 'signer mismatch' }
     'other-signature' = @{ change = { param($r) Remove-Item (Join-Path $r 'manifest.p7s'), (Join-Path $r 'manifest.json'); Write-VeilPackageManifest $r '1.0.0-alpha.1' $commit $other }; expect = 'signer mismatch' }
     'bad-version'     = @{ change = { param($r) Remove-Item (Join-Path $r 'manifest.p7s'), (Join-Path $r 'manifest.json'); Write-VeilPackageManifest $r '1.0.0' $commit $cert }; expect = 'Stable releases' }
-    'bad-path'        = @{ change = { param($r) [IO.File]::WriteAllText((Join-Path $r 'Desktop/CON.txt'), 'x') }; expect = 'Unsafe package path|Unexpected' }
+    'bad-path'        = @{ change = { param($r) Assert-VeilRelativeFile 'Desktop/CON.txt' }; expect = 'Unsafe package path' }
 }
 $results = [ordered]@{}
 foreach ($name in $cases.Keys) {
