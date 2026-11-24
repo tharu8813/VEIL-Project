@@ -21,6 +21,9 @@ internal sealed class DownloadOverview : Border
     private bool? lastVisible;
     private int lastCount = -1, lastPage = -1;
     private DownloadOverviewRow[] lastRows = [];
+    private List<VaultEntry>? indexedEntries;
+    private DownloadIssue[] indexedIssues = [];
+    private IReadOnlyList<DownloadOverviewRow>? matchedRows;
 
     internal DownloadOverview(Window owner, BrowserSession session, Func<bool> ready, Action clearIssues)
     {
@@ -84,12 +87,15 @@ internal sealed class DownloadOverview : Border
         timer.Tick += (_, _) => Refresh();
     }
 
-    private void Reset() { page = 0; Refresh(); }
+    private void Reset() { page = 0; matchedRows = null; Refresh(); }
 
     private void ClearRows()
     {
         list.Items.Clear();
         lastRows = [];
+        indexedEntries = null;
+        indexedIssues = [];
+        matchedRows = null;
         lastCount = lastPage = -1;
         lastVisible = null;
         summary.Text = "";
@@ -104,9 +110,18 @@ internal sealed class DownloadOverview : Border
             return;
         }
         bool visible = session.VaultOpenGate.CurrentCount > 0 && session.Vault.Unlocked;
-        var rows = DownloadOverviewPolicy.Filter(visible ? session.Vault.Entries : [],
-            session.RecentDownloadIssues, search.Text, (DownloadFilter)Math.Max(0, filter.SelectedIndex),
-            (VaultSort)Math.Max(0, sort.SelectedIndex));
+        // Vault entry lists are replaced on load/capture/delete/lock, not mutated in place.
+        // Avoid repeatedly sorting the complete index during the visibility guard tick.
+        var entries = visible ? session.Vault.Entries : null;
+        if (matchedRows is null || !ReferenceEquals(indexedEntries, entries) ||
+            !indexedIssues.SequenceEqual(session.RecentDownloadIssues))
+        {
+            indexedEntries = entries;
+            indexedIssues = session.RecentDownloadIssues.ToArray();
+            matchedRows = DownloadOverviewPolicy.Filter(entries ?? [], indexedIssues, search.Text,
+                (DownloadFilter)Math.Max(0, filter.SelectedIndex), (VaultSort)Math.Max(0, sort.SelectedIndex));
+        }
+        var rows = matchedRows;
         page = Math.Clamp(page, 0, Math.Max(0, (rows.Count - 1) / PageSize));
         var shown = rows.Skip(page * PageSize).Take(PageSize).ToArray();
         clear.IsEnabled = session.RecentDownloadIssues.Count > 0;
