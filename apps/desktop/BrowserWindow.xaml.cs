@@ -483,10 +483,40 @@ public partial class BrowserWindow : Window
 
     private async void VaultClick(object sender, RoutedEventArgs args)
     {
-        if (await EnsureVaultOpenAsync()) new VaultWindow(this, session.Vault).ShowDialog();
-        else if (session.Vault.UsesProfilePassword)
-            MessageBox.Show(this, "다운로드 금고가 잠겨 있습니다. VEIL을 다시 시작하고 보호 프로필 잠금 해제 단계에서 금고를 여세요.",
-                "다운로드 금고", MessageBoxButton.OK, MessageBoxImage.Information);
+        if (!SettingsReady() || session.VaultUiOpen || session.SettingsUiOpen ||
+            session.PermissionUiOpen || session.PasswordUiOpen) return;
+        session.VaultUiOpen = true;
+        session.PermissionUiOpen = true;
+        try
+        {
+            if (await EnsureVaultOpenAsync())
+            {
+                if (SettingsReady())
+                    new VaultWindow(this, session.Vault, SettingsReady).ShowDialog();
+            }
+            else if (SettingsReady() && session.Vault.UsesProfilePassword)
+                MessageBox.Show(this, "다운로드 금고가 잠겨 있습니다. VEIL을 다시 시작하고 보호 프로필 잠금 해제 단계에서 금고를 여세요.",
+                    "다운로드 금고", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException
+            or System.ComponentModel.Win32Exception or System.Text.Json.JsonException)
+        {
+            if (SettingsReady()) Status.Text = "다운로드 금고를 열지 못했습니다.";
+        }
+        finally
+        {
+            session.VaultUiOpen = false;
+            session.PermissionUiOpen = false;
+            if (SettingsReady())
+                foreach (var window in session.Windows.ToArray())
+                {
+                    if (window.closing) continue;
+                    foreach (var tab in window.Tabs.Items.OfType<TabItem>().Select(item => item.Tag).OfType<BrowserTab>())
+                        if (tab.Url == "veil://downloads" && tab.View.CoreWebView2 is { } web)
+                            try { web.NavigateToString(window.BuildInternalPage("veil://downloads")); }
+                            catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
+                }
+        }
     }
 
     /// <summary>Drops the engine's HTTP disk cache after a cancelled download (twice: the engine can still
@@ -627,8 +657,9 @@ public partial class BrowserWindow : Window
     {
         bool hasDownloads = session.ActiveDownloads.Count > 0;
         if (hasDownloads) DownloadButton.Visibility = Visibility.Visible;
-        DownloadProgressPanel.Visibility = hasDownloads && Active?.Url == "veil://downloads"
+        DownloadProgressPanel.Visibility = Active?.Url == "veil://downloads"
             ? Visibility.Visible : Visibility.Collapsed;
+        ActiveDownloadsList.Visibility = hasDownloads ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void CancelDownloadClick(object sender, RoutedEventArgs args)

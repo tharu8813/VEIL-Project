@@ -43,6 +43,15 @@ public partial class BrowserWindow
                     "local suggestions deduplicate and exclude sensitive URL forms");
                 localData.LocalAddressSuggestions = false;
                 Check(SearchPolicy.Suggest(localData, "synthetic").Count == 0, "local suggestions disabled");
+                var previewEntry = new VaultEntry(Guid.NewGuid().ToString("N"), "synthetic.txt", 12, DateTimeOffset.Now, "example.test");
+                Check(VaultPresentation.CanPreview(previewEntry) &&
+                    !VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.html" }) &&
+                    !VaultPresentation.CanPreview(previewEntry with { Bytes = VaultPresentation.PreviewLimit + 1 }) &&
+                    !VaultPresentation.CanPreview(previewEntry with { Recovered = true }), "text preview allowlist");
+                Check(VaultPresentation.DecodeText("synthetic"u8.ToArray()) == "synthetic" &&
+                    VaultPresentation.ExportName(previewEntry with { Name = "CON.txt" }) == "VEIL-download.bin" &&
+                    VaultPresentation.Filter([previewEntry], "example", VaultSort.Recent, false).Count == 1,
+                    "vault presentation and filename policy");
                 var sites = SiteDataPolicy.Origins(["https://example.test/path?secret=test", "https://example.test:443/",
                     "https://example.test:8443/", "http://example.test/", "file:///C:/test", "https://user@example.test/"]);
                 Check(sites.Count == 3 && sites.Contains("https://example.test") &&

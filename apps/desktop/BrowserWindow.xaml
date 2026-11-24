@@ -243,7 +243,13 @@
             <Border x:Name="DownloadProgressPanel" Grid.Row="4" Visibility="Collapsed"
                     Background="{StaticResource ChromeBrush}" BorderBrush="{StaticResource LineBrush}"
                     BorderThickness="0,0,0,1">
-                <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="18,8">
+                        <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Content="다운로드 금고 열기"
+                                Click="VaultClick" AutomationProperties.Name="다운로드 금고 열기" />
+                        <TextBlock Text="다운로드 관리" VerticalAlignment="Center" Foreground="{StaticResource TextBrush}" />
+                    </DockPanel>
+                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
                     <ItemsControl x:Name="ActiveDownloadsList" MaxWidth="920" Margin="18,8"
                                   AutomationProperties.Name="진행 중인 다운로드">
                         <ItemsControl.ItemTemplate>
@@ -268,7 +274,8 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                </ScrollViewer>
+                    </ScrollViewer>
+                </DockPanel>
             </Border>
 
             <Grid x:Name="Pages" Grid.Row="5" Background="{StaticResource InkBrush}" ClipToBounds="True">

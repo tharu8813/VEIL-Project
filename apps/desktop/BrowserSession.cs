@@ -33,6 +33,7 @@ internal sealed class BrowserSession
     internal bool PermissionUiOpen { get; set; }
     internal bool PasswordUiOpen { get; set; }
     internal bool SettingsUiOpen { get; set; }
+    internal bool VaultUiOpen { get; set; }
 
     /// <summary>Network mode applied to this run's engine (changes take effect after a restart).</summary>
     internal NetworkSettings Network { get; }

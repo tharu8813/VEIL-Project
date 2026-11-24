@@ -366,12 +366,34 @@ internal sealed class DownloadVault : IDisposable
         return reply.StartsWith("ok\t") ? long.Parse(reply[3..]) : throw new IOException("The item failed authentication.");
     }
 
+    /// <summary>Authenticates a bounded text object before returning bytes to native UI. No plaintext file.</summary>
+    internal async Task<byte[]> ReadPreviewAsync(VaultEntry entry)
+    {
+        await gate.WaitAsync();
+        try
+        {
+            if (!Unlocked || !Guid.TryParseExact(entry.Id, "N", out _) ||
+                !Entries.Contains(entry) || !VaultPresentation.CanPreview(entry))
+                throw new IOException("Preview unavailable.");
+            var bytes = await ReadSmallLockedAsync(ObjectPath(entry));
+            if (bytes is null) throw new IOException("Preview authentication failed.");
+            if (bytes.Length != entry.Bytes || bytes.Length > VaultPresentation.PreviewLimit)
+            {
+                CryptographicOperations.ZeroMemory(bytes);
+                throw new IOException("Preview size mismatch.");
+            }
+            return bytes;
+        }
+        finally { gate.Release(); }
+    }
+
     internal async Task DeleteAsync(VaultEntry entry)
     {
         await gate.WaitAsync();
         try
         {
-            if (!Unlocked) throw new IOException("The vault is locked.");
+            if (!Unlocked || !Guid.TryParseExact(entry.Id, "N", out _) || !Entries.Contains(entry))
+                throw new IOException("The vault item is unavailable.");
             File.Delete(ObjectPath(entry));
             File.Delete(Path.Combine(Meta, entry.Id + ".veil"));
             Entries = Entries.Where(e => e.Id != entry.Id).ToList();
@@ -473,7 +495,9 @@ internal sealed class DownloadVault : IDisposable
         await gate.WaitAsync();
         try
         {
-            if (!Unlocked) return "err\tlocked";
+            if (!Unlocked || !Guid.TryParseExact(entry.Id, "N", out _) || !Entries.Contains(entry))
+                return "err\tunavailable";
+            if (destination is not null && destination.Any(char.IsControl)) return "err\tinvalid destination";
             string line = $"{command}\t{ObjectPath(entry)}";
             if (destination is not null) line += "\t" + destination;
             return await CommandLockedAsync(line);
@@ -507,9 +531,23 @@ internal sealed class DownloadVault : IDisposable
         if (!File.Exists(path)) return null;
         string reply = await CommandLockedAsync($"read\t{path}");
         if (!reply.StartsWith("ok\t")) return null;
-        var bytes = new byte[int.Parse(reply[3..])];
-        await output!.ReadExactlyAsync(bytes);
-        return bytes;
+        if (!int.TryParse(reply.AsSpan(3), out int length) || length < 0 || length > 1024 * 1024)
+        {
+            CloseBrokenPipe();
+            throw new IOException("Invalid vault response size.");
+        }
+        var bytes = new byte[length];
+        try
+        {
+            await output!.ReadExactlyAsync(bytes);
+            return bytes;
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+            CloseBrokenPipe();
+            throw;
+        }
     }
 
     /// <summary>Command lines and frames must use the same (async) write path: mixing a buffered sync
