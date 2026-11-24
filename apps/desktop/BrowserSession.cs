@@ -23,6 +23,9 @@ internal sealed class BrowserSession
         Vault.ConfigureNetwork(Network);
         // ADR-0007: one security policy for every view of this profile's engine (shared user data folder).
         Security = new SecurityManager(Data.Security, () => Windows.SelectMany(window => window.CoreViews()));
+        // ADR-0008: signed local threat list on the profile volume; the vault uses the same engines.
+        Security.LoadThreatList(Path.Combine(root, "security"));
+        Vault.ConfigureThreats(Security.Threats);
     }
 
     internal SecurityManager Security { get; }
@@ -33,6 +36,8 @@ internal sealed class BrowserSession
     internal bool? ProxyReachable { get; set; }
     /// <summary>Hosts the user explicitly allowed over plain HTTP in this run (HTTPS-first exceptions).</summary>
     internal HashSet<string> HttpAllowed { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Hosts the user explicitly chose to open despite a VEIL threat warning, for this run only.</summary>
+    internal HashSet<string> ThreatAllowed { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Encrypted download vault shared by all windows of this profile.</summary>
     internal DownloadVault Vault { get; }

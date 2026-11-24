@@ -82,6 +82,21 @@ internal sealed class SecurityManager
     /// <summary>Exception type of the last apply failure, for diagnostics (never contains page data).</summary>
     internal string? LastFailure { get; private set; }
     internal ThreatProtection Threats { get; } = new();
+    /// <summary>Signed local threat list state (ADR-0008).</summary>
+    internal ThreatListStatus ThreatList { get; private set; } = ThreatListStatus.None;
+
+    /// <summary>Loads <c>&lt;folder&gt;/threat-list.json</c> and registers the local engine when a list exists
+    /// (a damaged list is registered too, so every check reports Error instead of silently passing).</summary>
+    internal void LoadThreatList(string folder)
+    {
+        var (engine, status) = LocalThreatList.Load(folder, LocalThreatList.TrustedKeys(), DateTimeOffset.UtcNow);
+        ThreatList = status;
+        if (engine is not null && !Threats.Register(engine))
+            ThreatList = status with { Valid = false, Detail = "이 빌드에서 사용할 수 없음" };
+    }
+
+    /// <summary>Status suffix for the VEIL list; empty when there is no list or it is in use.</summary>
+    internal string ThreatListSuffix() => ThreatList is { Present: true, Valid: false } ? $" · 위협 목록 오류({ThreatList.Detail})" : "";
 
     /// <summary>
     /// Applies the saved policy to a new view. Must run before its first navigation: a view that never
@@ -169,6 +184,9 @@ internal interface IThreatEngine
     /// <summary>True only for engines intended for production; test engines return false.</summary>
     bool ProductionReady { get; }
     ValueTask<ThreatResult> CheckAsync(Uri address, CancellationToken cancel);
+    /// <summary>Checks a downloaded file by SHA-256 (lowercase hex). Engines without file data answer Unknown.</summary>
+    ValueTask<ThreatResult> CheckFileAsync(string sha256, CancellationToken cancel) =>
+        new(new ThreatResult(ThreatVerdict.Unknown, Name, "no file check"));
 }
 
 /// <summary>
@@ -179,8 +197,8 @@ internal sealed class ThreatProtection
 {
     private readonly List<IThreatEngine> engines = [];
 
-    /// <summary>Production builds accept no engine until one is implemented and reviewed (1.1).</summary>
-    internal static bool ProductionEnginesEnabled => false;
+    /// <summary>1.1: production builds accept production-ready engines (the signed local list, ADR-0008).</summary>
+    internal static bool ProductionEnginesEnabled => true;
 
     internal IReadOnlyList<IThreatEngine> Engines => engines;
 
@@ -202,7 +220,14 @@ internal sealed class ThreatProtection
     /// Combined verdict: Malicious if any engine says so; otherwise Error if any engine failed;
     /// otherwise NotDetected if an engine positively checked it; otherwise Unknown (no engines included).
     /// </summary>
-    internal async Task<ThreatResult> CheckAsync(Uri address, TimeSpan timeout, CancellationToken cancel = default)
+    internal Task<ThreatResult> CheckAsync(Uri address, TimeSpan timeout, CancellationToken cancel = default) =>
+        CombineAsync((engine, token) => engine.CheckAsync(address, token), timeout, cancel);
+
+    /// <summary>Same combination rule for a downloaded file's SHA-256.</summary>
+    internal Task<ThreatResult> CheckFileAsync(string sha256, TimeSpan timeout, CancellationToken cancel = default) =>
+        CombineAsync((engine, token) => engine.CheckFileAsync(sha256, token), timeout, cancel);
+
+    private async Task<ThreatResult> CombineAsync(Func<IThreatEngine, CancellationToken, ValueTask<ThreatResult>> check, TimeSpan timeout, CancellationToken cancel)
     {
         if (engines.Count == 0) return new ThreatResult(ThreatVerdict.Unknown, "none", "no VEIL engine enabled");
         var results = new List<ThreatResult>();
@@ -210,7 +235,12 @@ internal sealed class ThreatProtection
         {
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
             limit.CancelAfter(timeout);
-            try { results.Add(await engine.CheckAsync(address, limit.Token).AsTask().WaitAsync(limit.Token)); }
+            try
+            {
+                var pending = check(engine, limit.Token);
+                // Synchronous engines (the local list) complete without a thread switch, so navigation can decide inline.
+                results.Add(pending.IsCompletedSuccessfully ? pending.Result : await pending.AsTask().WaitAsync(limit.Token));
+            }
             catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
             {
                 results.Add(new ThreatResult(ThreatVerdict.Error, engine.Name, "timeout"));

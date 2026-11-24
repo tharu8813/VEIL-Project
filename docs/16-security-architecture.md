@@ -59,13 +59,15 @@ interface IThreatEngine
     string Name { get; }
     bool ProductionReady { get; }            // 시험용 엔진은 false
     ValueTask<ThreatResult> CheckAsync(Uri address, CancellationToken cancel);
+    ValueTask<ThreatResult> CheckFileAsync(string sha256, CancellationToken cancel);  // 1.1, 기본 구현은 Unknown
 }
 
 class ThreatProtection
 {
-    static bool ProductionEnginesEnabled => false;  // 1.0: 프로덕션 엔진 없음
-    bool Register(IThreatEngine engine);            // Release: 위 값이 false이면 항상 거부
+    static bool ProductionEnginesEnabled => true;   // 1.1: 서명된 로컬 목록 엔진(ADR-0008)
+    bool Register(IThreatEngine engine);            // Release: ProductionReady 엔진만
     Task<ThreatResult> CheckAsync(Uri address, TimeSpan timeout, CancellationToken cancel = default);
+    Task<ThreatResult> CheckFileAsync(string sha256, TimeSpan timeout, CancellationToken cancel = default);
 }
 ```
 
@@ -93,13 +95,23 @@ class ThreatProtection
 - Windows Defender나 OS 전체 SmartScreen 변경(하지 않음).
 - WebView2 엔진의 다른 Microsoft 연결 차단. 예를 들어 `config.edge.skype.com`은 SmartScreen을 꺼도 남을 수 있다.
 
-## 7. 1.1 계획
+## 7. 1.1 구현 (2026-11-24, [ADR-0008](decisions/ADR-0008-local-threat-list.md))
 
-- 로컬 엔진 1차: 탐색 시작 시 호출하고, Malicious면 경고 페이지와 사용자 선택을 보여 준다. Unknown과 Error는 통과시키고 표시만 한다(정책 결정 필요).
-- 서명된 로컬 차단 목록과 갱신(갱신 채널의 개인정보 설계 포함, 주소 원문 전송 금지).
-- 다운로드 금고 단계에 파일 검사 연결(봉인 전 해시 기반).
-- Windows SmartScreen 정책 상태 감지(가능한 공식 경로가 있을 때만).
-- 엔진별 시간 제한, 병렬 실행, 성능 예산.
+- **구현:**
+  - 서명된 로컬 위협 목록 엔진 `LocalThreatList`: 호스트와 하위 도메인, 주소 해시, 파일 해시를 검사한다. ECDSA P-256 서명을 쓰고, 만료일과 발급일을 확인한다.
+  - 탐색: Malicious면 경고 페이지와 네이티브 "위험을 이해하고 계속" 막대를 보여 준다.
+  - 다운로드: 모든 리다이렉트 단계의 주소와 파일 해시를 검사하고, 목록에 있으면 발행 전에 중단한다.
+  - 상태 표시: 목록 오류를 상태 표시줄과 보안 화면에 보여 준다.
+  - 서명 도구 `scripts/threat-list.mjs`.
+- **정책:**
+  - Unknown과 Error는 막지 않는다(fail-open, 사용자 결정).
+  - Release는 내장 공개 키로 서명된 목록만 받는다. 키 목록이 비어 있으므로 출시 키를 만들 때까지 목록을 쓰지 않는다.
+- **남은 계획:**
+  - 공개 피드 선정과 개인정보를 지키는 갱신 채널.
+  - 출시 서명 키를 만들고 보관하는 절차.
+  - 하위 프레임과 리소스 검사.
+  - Windows SmartScreen 정책 상태 감지(공식 경로가 있을 때만).
+  - 엔진별 성능 예산.
 
 ## 8. 시험 결과와 미검증 항목
 

@@ -192,6 +192,17 @@
                                TextWrapping="Wrap" Text="이 사이트는 안전한 연결(HTTPS)을 사용할 수 없습니다." />
                 </DockPanel>
             </Border>
+            <!-- ADR-0008: continuing past a VEIL threat warning is a native control only. -->
+            <Border x:Name="ThreatBar" Visibility="Collapsed" Background="#1FE5484D" BorderBrush="#55E5484D"
+                    BorderThickness="0,0,0,1" Padding="14,6">
+                <DockPanel>
+                    <Button x:Name="ProceedThreatButton" DockPanel.Dock="Right" Style="{StaticResource GhostButton}"
+                            Content="위험을 이해하고 계속" Click="ProceedThreatClick"
+                            AutomationProperties.Name="위협 경고를 무시하고 이 사이트 열기" />
+                    <TextBlock x:Name="ThreatBarText" Foreground="#F3B3B5" FontSize="12" VerticalAlignment="Center"
+                               TextWrapping="Wrap" Text="이 사이트는 VEIL 위협 목록에 있습니다." />
+                </DockPanel>
+            </Border>
             </StackPanel>
 
             <Border x:Name="FindBar" Grid.Row="3" Background="{StaticResource InkBrush}" Height="0"
