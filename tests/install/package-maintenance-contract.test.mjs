@@ -38,3 +38,12 @@ test('browser candidate is explicitly registered from verified installed package
     assert.doesNotMatch(maintenance,/UserChoice|SetUserFTA|SetDefaultBrowser/);
     assert.match(maintenance,/Remove-VeilBrowserRegistration\s+Remove-RestrictedTree \$bin/);
 });
+
+test('fresh install refuses existing registration before staging; invalid versions clean owned staging',()=>{
+    const staging=maintenance.indexOf('$manifest=Copy-StagedPackage');
+    const preflight=maintenance.indexOf("throw 'Existing installation/registration requires administrator recovery, not a fresh install.'");
+    assert.ok(preflight>=0 && preflight<staging);
+    assert.match(maintenance.slice(maintenance.lastIndexOf('if ($Install)',preflight),preflight),/Get-CimInstance Win32_Service/);
+    assert.match(maintenance,/try\s*\{\s*\$manifest=Copy-StagedPackage\s*\[void\]\(Assert-VeilInternalVersion \$manifest.version\)\s*\}\s*catch\s*\{\s*if \(Test-Path -LiteralPath \$stage\) \{ Remove-RestrictedTree \$stage \}\s*throw/);
+    assert.ok(maintenance.indexOf("throw 'Unresolved maintenance state.")<preflight);
+});

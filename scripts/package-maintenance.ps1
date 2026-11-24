@@ -231,15 +231,24 @@ try {
         Write-Host 'Binaries removed; encrypted VHDX and registration retained. Re-registration requires administrator recovery.'
         return
     }
-    try { $manifest=Copy-StagedPackage }
+    # Refuse an existing registration before touching staging. A rejected fresh install
+    # must not leave a staging tree that blocks subsequent legitimate maintenance.
+    if ($Install) {
+        if ((Test-Path -LiteralPath $bin) -or (Test-Path -LiteralPath $data) -or
+            (Get-CimInstance Win32_Service -Filter "Name='$service'")) {
+            throw 'Existing installation/registration requires administrator recovery, not a fresh install.'
+        }
+    }
+    try {
+        $manifest=Copy-StagedPackage
+        [void](Assert-VeilInternalVersion $manifest.version)
+    }
     catch {
         if (Test-Path -LiteralPath $stage) { Remove-RestrictedTree $stage }
         throw
     }
-    [void](Assert-VeilInternalVersion $manifest.version)
     if ($Install) {
         # The existing installer owns BitLocker recovery registration and service creation.
-        if ((Test-Path -LiteralPath $bin) -or (Test-Path -LiteralPath $data)) { throw 'Existing installation/registration requires administrator recovery, not a fresh install.' }
         & (Join-Path $PSScriptRoot 'broker-service.ps1') -BrokerSource (Join-Path $stage 'Broker') -DesktopSource (Join-Path $stage 'Desktop') -ImagePath $ImagePath -ProfilePath $ProfilePath -VolumeGuid $VolumeGuid -ProtectorId $ProtectorId -RecoveryProtectorId $RecoveryProtectorId -UserSid $UserSid -SignerThumbprint $SignerThumbprint
         foreach ($name in @('manifest.json','manifest.p7s')) { [IO.File]::Copy((Join-Path $stage $name),(Join-Path $bin $name),$false) }
         [void](Read-VeilPackage $bin $SignerThumbprint)
