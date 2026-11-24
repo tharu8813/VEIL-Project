@@ -155,8 +155,9 @@ public partial class BrowserWindow
                 {
                     Check(Tabs.Items.Count == 3 && Tabs.SelectedIndex == 1, "tabs and selection restored");
                     Check(PinnedTabCount == 1, "pinned tab restored");
-                    // Restore the original test layout before existing cross-window reorder checks.
-                    SetTabPinned((TabItem)Tabs.Items[0], false);
+                    // Only the normal read stage needs unpinned tabs for its existing reorder checks.
+                    // The interrupted-write stage must preserve the pin for the next read process.
+                    if (stage == "read") SetTabPinned((TabItem)Tabs.Items[0], false);
                     await ReadyAt("/");
                     Check(data.Bookmarks.Count == 1 && data.Bookmarks[0].Url == origin + "/", "bookmark restored");
                     Check(data.History.Any(entry => entry.Url.EndsWith("/second")), "history restored");
