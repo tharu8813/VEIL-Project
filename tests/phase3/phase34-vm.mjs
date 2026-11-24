@@ -32,6 +32,7 @@ const manual = [
     ['recovery-backup', 'Recovery password drill inside guest-package.ps1 -Stage Install (operator step).'],
     ['physical-writes', 'Procmon capture and analysis from the elevated guest shell.'],
     ['power-loss', 'Arm the dedicated test, cut VM power explicitly, then check after reboot.'],
+    ['rotation-power-loss', 'Operator-only Rust test executable: rotation-power-loss.mjs before-marker and after-marker, separate fresh profiles.'],
 ];
 // Need an internet-connected isolated VM (ADR-0004 policy 4), never the offline lab VM.
 const internet = [
