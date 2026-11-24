@@ -36,13 +36,13 @@ internal sealed class SearchSettingsDialog : VeilDialog
             },
         };
         SetBody(panel);
-        AddFooterButton("취소", () => DialogResult = false);
+        AddFooterButton("취소", () => Complete(false));
         AddFooterButton("저장", () =>
         {
             if (providers.SelectedIndex < 0) return;
             Engine = SearchPolicy.Providers[providers.SelectedIndex].Id;
             LocalSuggestions = local.IsChecked == true;
-            DialogResult = true;
+            Complete(true);
         }, primary: true);
     }
 }

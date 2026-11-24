@@ -54,11 +54,11 @@ internal sealed class SecuritySettingsDialog : VeilDialog
         toggle.Unchecked += (_, _) => Sync();
         Sync();
         SetBody(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = new StackPanel { Children = { toggle, about, limits, risk, state, veil } } });
-        AddFooterButton("취소", () => DialogResult = false);
+        AddFooterButton("취소", () => Complete(false));
         AddFooterButton("저장", () =>
         {
             Result = new SecuritySettings(SmartScreen: toggle.IsChecked == true);
-            DialogResult = true;
+            Complete(true);
         }, primary: true);
     }
 }

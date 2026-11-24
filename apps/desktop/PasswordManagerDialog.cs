@@ -41,7 +41,7 @@ internal sealed class PasswordManagerDialog : VeilDialog
             if (origin is null || string.IsNullOrWhiteSpace(user.Text) || entered.Length == 0) return;
             Selected = new SavedLogin(origin, user.Text, password.Password);
             Action = PasswordAction.Save;
-            DialogResult = true;
+            Complete(true);
         };
         panel.Children.Add(save);
         panel.Children.Add(Text("자동완성은 현재 사이트와 출처가 일치하는 단일 로그인 폼만 지원합니다. 비밀번호를 자동 제출하거나 다른 사이트로 보내지 않습니다."));
@@ -50,11 +50,11 @@ internal sealed class PasswordManagerDialog : VeilDialog
         {
             if ((list.SelectedItem as ListBoxItem)?.Tag is not SavedLogin entry) return;
             if (action == PasswordAction.Fill && entry.Origin != origin) return;
-            if (action == PasswordAction.Remove && MessageBox.Show(this, "선택한 계정을 삭제할까요?",
+            if (action == PasswordAction.Remove && MessageBox.Show(PromptOwner, "선택한 계정을 삭제할까요?",
                     "비밀번호 삭제", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
             Selected = entry;
             Action = action;
-            DialogResult = true;
+            Complete(true);
         }
         AddFooterButton("삭제", () => Choose(PasswordAction.Remove));
         AddFooterButton("비밀번호 보기", () => Choose(PasswordAction.Reveal));
@@ -64,7 +64,7 @@ internal sealed class PasswordManagerDialog : VeilDialog
         {
             fill.IsEnabled = (list.SelectedItem as ListBoxItem)?.Tag is SavedLogin entry && entry.Origin == origin;
         };
-        AddFooterButton("닫기", Close);
+        AddFooterButton("닫기", Dismiss);
         Closed += (_, _) => password.Clear();
     }
 }
@@ -80,7 +80,7 @@ internal sealed class PasswordRevealDialog : VeilDialog
         SetBody(new StackPanel { Children = {
             new TextBlock { Text = login.UserName, Margin = new Thickness(0, 0, 0, 12) }, secret
         } });
-        AddFooterButton("닫기", Close, primary: true);
+        AddFooterButton("닫기", Dismiss, primary: true);
         Closed += (_, _) => secret.Text = "";
     }
 }

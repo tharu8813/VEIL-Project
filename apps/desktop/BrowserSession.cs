@@ -53,6 +53,7 @@ internal sealed class BrowserSession
     internal BrowserData Data { get; }
     internal Stack<ClosedTab> ClosedTabs { get; } = new();
     internal List<string> Downloads { get; } = [];
+    internal List<(DateTimeOffset At, string Text)> RecentDownloadIssues { get; } = [];
     internal ObservableCollection<BrowserDownload> ActiveDownloads { get; } = [];
     internal List<BrowserWindow> Windows { get; } = [];
     // The first release has exactly one production backend. No fallback or runtime switching.

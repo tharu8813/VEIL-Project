@@ -41,8 +41,9 @@ public partial class BrowserWindow
         SaveTabs();
     }
 
-    private void TabSearchClick(object sender, RoutedEventArgs args)
+    private async void TabSearchClick(object sender, RoutedEventArgs args)
     {
+        if (FocusManagementPage("veil://tabs")) return;
         if (!SettingsReady() || session.SettingsUiOpen || session.PermissionUiOpen || session.PasswordUiOpen) return;
         CloseAddressSuggestions();
         var live = session.Windows.Where(window => !window.closing && !window.restoring)
@@ -57,7 +58,7 @@ public partial class BrowserWindow
         try
         {
             var dialog = new TabSearchDialog(this, rows);
-            if (dialog.ShowDialog() == true) selected = dialog.SelectedId;
+            if (await ShowManagementPageAsync("veil://tabs", dialog) == true) selected = dialog.SelectedId;
         }
         finally
         {

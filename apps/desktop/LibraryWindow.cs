@@ -94,7 +94,7 @@ internal sealed class LibraryWindow : VeilDialog
         {
             if (Selected() is not { } entry) return;
             SelectedUrl = entry.Url;
-            DialogResult = true;
+            Complete(true);
         }
 
         void Commit(Action change)
@@ -108,7 +108,7 @@ internal sealed class LibraryWindow : VeilDialog
                 entries.Clear();
                 entries.AddRange(previous);
                 Refresh();
-                MessageBox.Show(this, "변경사항을 저장하지 못했습니다. 기존 목록을 유지합니다.",
+                MessageBox.Show(PromptOwner, "변경사항을 저장하지 못했습니다. 기존 목록을 유지합니다.",
                     title, MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
@@ -128,7 +128,7 @@ internal sealed class LibraryWindow : VeilDialog
             var targets = entries.Where(entry => InRange(entry, cutoff)).ToArray();
             if (targets.Length == 0) return;
             string scope = range.SelectedItem as string ?? "전체 기간";
-            if (MessageBox.Show(this,
+            if (MessageBox.Show(PromptOwner,
                 $"{scope}의 VEIL 방문 기록 {targets.Length}개를 삭제할까요?\n검색어와 관계없이 이 기간의 항목을 삭제합니다. 쿠키, 사이트 데이터 및 엔진 기록은 지우지 않습니다.",
                 "방문 기록 삭제", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
                 return;
@@ -161,7 +161,7 @@ internal sealed class LibraryWindow : VeilDialog
                 Commit(() => entries[index] = entry with { Title = newTitle });
             });
         }
-        AddFooterButton("닫기", Close);
+        AddFooterButton("닫기", Dismiss);
         AddFooterButton("열기", Open, primary: true);
 
         search.TextChanged += (_, _) => Refresh();
@@ -172,7 +172,8 @@ internal sealed class LibraryWindow : VeilDialog
                 ItemsControl.ContainerFromElement(list, element) is ListBoxItem) Open();
         };
         list.KeyDown += (_, args) => { if (args.Key == Key.Enter) Open(); };
-        Loaded += (_, _) => search.Focus();
+        OnContentLoaded(() => { Refresh(); search.Focus(); });
+        OnContentVisible(Refresh);
         Refresh();
     }
 
@@ -223,7 +224,7 @@ internal sealed class DownloadsWindow : VeilDialog
         if (downloads.Count == 0) area.Children.Add(EmptyState("", "취소한 다운로드가 없습니다."));
         panel.Children.Add(area);
         SetBody(panel);
-        AddFooterButton("닫기", Close, primary: true);
+        AddFooterButton("닫기", Dismiss, primary: true);
         Loaded += (_, _) =>
         {
             Motion.Wipe(notice, 220, 700);

@@ -11,6 +11,7 @@ public partial class BrowserWindow
 
     private async void PasswordsClick(object sender, RoutedEventArgs args)
     {
+        if (FocusManagementPage("veil://passwords")) return;
         if (!PasswordWindowReady() || session.PasswordUiOpen || session.PermissionUiOpen) return;
         session.PasswordUiOpen = true;
         session.PermissionUiOpen = true; // no concurrent site permission prompts while entering credentials
@@ -60,7 +61,7 @@ public partial class BrowserWindow
             if (tab is null || origin is null || !PermissionContextMatches(tab, origin, epoch))
                 origin = null;
             var dialog = new PasswordManagerDialog(this, origin, entries);
-            if (dialog.ShowDialog() != true || !PasswordWindowReady() || dialog.Selected is not { } selected) return;
+            if (await ShowManagementPageAsync("veil://passwords", dialog) != true || !PasswordWindowReady() || dialog.Selected is not { } selected) return;
 
             switch (dialog.Action)
             {

@@ -7,14 +7,15 @@ namespace Veil.Desktop;
 
 public partial class BrowserWindow
 {
-    private void SitePermissionsClick(object sender, RoutedEventArgs args)
+    private async void SitePermissionsClick(object sender, RoutedEventArgs args)
     {
+        if (FocusManagementPage("veil://settings/permissions")) return;
         if (closing || restoring || session.IsEnding || session.EngineLost || session.PermissionUiOpen) return;
         session.PermissionUiOpen = true;
         try
         {
             var dialog = new SitePermissionsDialog(this, SitePermissionPolicy.Origin(Active?.Url), data.SitePermissions);
-            if (dialog.ShowDialog() != true || closing || session.IsEnding || session.EngineLost) return;
+            if (await ShowManagementPageAsync("veil://settings/permissions", dialog) != true || closing || session.IsEnding || session.EngineLost) return;
             var previous = data.SitePermissions;
             data.SitePermissions = dialog.Result.Count == 0 ? null : dialog.Result.ToList();
             try { data.Save(statePath); }

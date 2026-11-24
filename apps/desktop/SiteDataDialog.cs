@@ -29,10 +29,10 @@ internal sealed class SiteDataDialog : VeilDialog
         }
         void Choose(SiteDataSelection value, string message)
         {
-            if (!value.InspectUsage && MessageBox.Show(this, message, "사이트 데이터 삭제",
+            if (!value.InspectUsage && MessageBox.Show(PromptOwner, message, "사이트 데이터 삭제",
                 MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
             Result = value;
-            DialogResult = true;
+            Complete(true);
         }
         var search = new TextBox { Style = (Style)FindResource("PillTextBox"), Tag = "", Height = 34,
             ToolTip = "도메인 또는 출처 검색" };
@@ -103,7 +103,7 @@ internal sealed class SiteDataDialog : VeilDialog
         body.Children.Add(cache);
         body.Children.Add(Note("삭제하기 전에 관련 사이트의 탭을 닫는 것을 권장합니다. 삭제는 디스크 복구 흔적의 완전 제거를 보장하지 않습니다."));
         SetBody(new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
-        AddFooterButton("닫기", Close);
+        AddFooterButton("닫기", Dismiss);
         var clearAll = AddFooterButton("선택 유형 전체 삭제", () =>
         {
             var value = new SiteDataSelection(null, null, allCookies.IsChecked == true, allStorage.IsChecked == true, cache.IsChecked == true);
@@ -122,6 +122,6 @@ internal sealed class SiteDataDialog : VeilDialog
             check.Checked += (_, _) => Sync();
             check.Unchecked += (_, _) => Sync();
         }
-        Loaded += (_, _) => search.Focus();
+        OnContentLoaded(() => search.Focus());
     }
 }

@@ -6,8 +6,9 @@ public partial class BrowserWindow
 {
     private bool SettingsReady() => !closing && !restoring && !session.IsEnding && !session.EngineLost;
 
-    private void SettingsClick(object sender, RoutedEventArgs args)
+    private async void SettingsClick(object sender, RoutedEventArgs args)
     {
+        if (FocusManagementPage("veil://settings")) return;
         if (!SettingsReady() || session.SettingsUiOpen || session.PasswordUiOpen || session.PermissionUiOpen)
             return;
         session.SettingsUiOpen = true;
@@ -16,7 +17,7 @@ public partial class BrowserWindow
         try
         {
             var settings = new BrowserSettingsDialog(this, BrowserSettingsCatalog.Build(session));
-            if (settings.ShowDialog() == true)
+            if (await ShowManagementPageAsync("veil://settings", settings))
                 destination = settings.Destination;
         }
         finally
@@ -25,7 +26,7 @@ public partial class BrowserWindow
             session.PermissionUiOpen = false;
         }
         if (!SettingsReady() || destination is null) return;
-        // Close the hub before opening an existing manager. The original browser tab stays active,
+        // Close the hub tab before opening an existing manager. The original browser tab is reselected,
         // so site-scoped actions still use the original HTTPS context. No web message or URI can invoke this.
         Dispatcher.BeginInvoke(new Action(() =>
         {

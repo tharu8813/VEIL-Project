@@ -115,7 +115,8 @@ public partial class BrowserWindow
             (Ctrl, Key.D0 or Key.NumPad0) => () => Zoom(null),
             // Library
             (Ctrl, Key.D) => () => BookmarkClick(this, args),
-            (Ctrl, Key.B) or (Ctrl | Shift, Key.B) or (Ctrl | Shift, Key.O) => () => BookmarksClick(this, args),
+            (Ctrl, Key.B) or (Ctrl | Shift, Key.O) => () => BookmarksClick(this, args),
+            (Ctrl | Shift, Key.B) => () => ToggleBookmarkBarClick(this, args),
             (Ctrl, Key.H) => () => HistoryClick(this, args),
             (Ctrl, Key.J) => () => DownloadsClick(this, args),
             (Ctrl | Shift, Key.J) => () => VaultClick(this, args),
@@ -328,6 +329,7 @@ public partial class BrowserWindow
         move.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
         move.X = 0;
         Panel.SetZIndex(item, 0);
+        ClearManagement(tab);
         Tabs.Items.Remove(item);
         Pages.Children.Remove(tab.View);
         if (Tabs.Items.Count == 0) Close();
@@ -395,6 +397,8 @@ public partial class BrowserWindow
         var chrome = on ? Visibility.Collapsed : Visibility.Visible;
         TitleBar.Visibility = chrome;
         Toolbar.Visibility = chrome;
+        DownloadPopup.IsOpen = false;
+        RefreshBookmarkBar();
         StatusBar.Visibility = chrome;
         if (on)
         {

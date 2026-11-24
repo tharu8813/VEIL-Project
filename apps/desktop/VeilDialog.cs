@@ -18,6 +18,32 @@ internal class VeilDialog : Window
     private readonly Border shell;
     private readonly Border badge;
     protected readonly TextBlock Subtitle;
+    private Action<bool>? pageCompletion;
+    protected Window PromptOwner => pageCompletion is null ? this : Owner ?? this;
+
+    // Native controls are reparented into the browser, never exposed to WebView script.
+    internal FrameworkElement TakePage(Action<bool> complete)
+    {
+        if (pageCompletion is not null || IsVisible) throw new InvalidOperationException("Dialog already hosted.");
+        pageCompletion = complete;
+        Content = null;
+        return shell;
+    }
+
+    protected void Complete(bool accepted)
+    {
+        if (pageCompletion is { } finish) finish(accepted);
+        else DialogResult = accepted;
+    }
+
+    protected void Dismiss()
+    {
+        if (pageCompletion is { } finish) finish(false);
+        else Close();
+    }
+
+    protected void OnContentLoaded(Action action) => shell.Loaded += (_, _) => action();
+    protected void OnContentVisible(Action action) => shell.IsVisibleChanged += (_, _) => { if (shell.IsVisible) action(); };
 
     protected VeilDialog(Window? owner, string title, string glyph, double width, double height)
     {
@@ -73,7 +99,7 @@ internal class VeilDialog : Window
         };
         System.Windows.Automation.AutomationProperties.SetName(close, "닫기");
         WindowChrome.SetIsHitTestVisibleInChrome(close, true);
-        close.Click += (_, _) => Close();
+        close.Click += (_, _) => Dismiss();
 
         var header = new DockPanel { Height = 56, Margin = new Thickness(20, 0, 0, 0) };
         DockPanel.SetDock(close, Dock.Right);

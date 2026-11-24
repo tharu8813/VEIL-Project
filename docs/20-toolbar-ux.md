@@ -1,0 +1,6 @@
+# Toolbar UX: download progress and bookmarks
+
+- The download toolbar button remains visible and toggles a native recent-download popup without changing tabs. The native list shows active transfers/cancel, recent authenticated vault entries (only while unlocked), and recent non-stored outcomes from this session. No file is opened or exported from the popup; existing vault and full download controls are retained.
+- The ring shows byte-weighted aggregate progress for known lengths; queued/unknown-length and final authentication are indeterminate. A short UI timer runs only while transfers are active or the popup is open. No network or storage path is changed.
+- Bookmark bar under the address toolbar is visible by default, can be toggled using Ctrl+Shift+B or the menu, and is saved in the existing protected browser state. Existing bookmarks are local only; no favicon lookups. Clicking navigates through existing address handling; Ctrl+click opens a new tab. Changes and visibility sync across profile windows. Full screen hides the bar.
+- Added smoke assertions for progress aggregation, unknown sizes, popup opening without navigation, full download page, bookmark bar creation/toggle/persistence. Interactive Windows/VM tests and visual/DPI checks remain required. No security release gate is changed.

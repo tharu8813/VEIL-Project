@@ -86,15 +86,16 @@ public partial class BrowserWindow
         else NavigateAddress(selected.Url);
     }
 
-    private void SearchSettingsClick(object sender, RoutedEventArgs args)
+    private async void SearchSettingsClick(object sender, RoutedEventArgs args)
     {
+        if (FocusManagementPage("veil://settings/search")) return;
         if (!SettingsReady() || session.SettingsUiOpen || session.PasswordUiOpen || session.PermissionUiOpen) return;
         session.SettingsUiOpen = true;
         session.PermissionUiOpen = true;
         try
         {
             var dialog = new SearchSettingsDialog(this, data.SearchEngine, data.LocalAddressSuggestions != false);
-            if (dialog.ShowDialog() != true || !SettingsReady() || !SearchPolicy.IsKnown(dialog.Engine)) return;
+            if (await ShowManagementPageAsync("veil://settings/search", dialog) != true || !SettingsReady() || !SearchPolicy.IsKnown(dialog.Engine)) return;
             var previous = data.SearchEngine;
             var previousLocal = data.LocalAddressSuggestions;
             data.SearchEngine = dialog.Engine == SearchPolicy.Default ? null : dialog.Engine;

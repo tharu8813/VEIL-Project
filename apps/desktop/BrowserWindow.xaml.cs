@@ -25,6 +25,8 @@ public partial class BrowserWindow : Window
         internal TabHeader Header { get; set; } = null!;
         internal bool Loading { get; set; }
         internal bool Pinned { get; set; }
+        internal FrameworkElement? ManagementSurface { get; set; }
+        internal Action? CancelManagement { get; set; }
         internal long NavigationEpoch { get; set; }
         /// <summary>HTTPS-first: the plain-HTTP address this tab is currently trying as HTTPS.</summary>
         internal Uri? UpgradedFrom { get; set; }
@@ -44,7 +46,6 @@ public partial class BrowserWindow : Window
     private bool closing;
     private bool restoring = true;
     private bool smokeRun;
-    private DispatcherTimer? downloadPopupTimer;
 
     private BrowserData data => session.Data;
     private Stack<ClosedTab> closedTabs => session.ClosedTabs;
@@ -68,6 +69,9 @@ public partial class BrowserWindow : Window
         session.Windows.Add(this);
         InitializeComponent();
         ActiveDownloadsList.ItemsSource = session.ActiveDownloads;
+        PopupActiveDownloads.ItemsSource = session.ActiveDownloads;
+        InitializeDownloadToolbar();
+        RefreshBookmarkBar();
         RefreshDownloadProgress();
         InitializeMotion(playIntro: adopt is null);
         InitializeWindowFeatures();
@@ -85,6 +89,9 @@ public partial class BrowserWindow : Window
         if (last || session.IsEnding)
             foreach (var download in session.ActiveDownloads.ToArray()) download.Cancel();
         closing = true;
+        DownloadPopup.IsOpen = false;
+        downloadRingTimer.Stop();
+        RecentDownloadsList.ItemsSource = null;
         CloseAddressSuggestions();
         session.Windows.Remove(this);
         if (!last && !session.IsEnding)
@@ -94,6 +101,8 @@ public partial class BrowserWindow : Window
                 if (item.Tag is BrowserTab tab && IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
             SaveSession();
         }
+        foreach (var tab in Tabs.Items.OfType<TabItem>().Select(item => (BrowserTab)item.Tag).ToArray())
+            ClearManagement(tab);
         foreach (var view in Pages.Children.OfType<WebView2>())
             view.Dispose();
     }
@@ -244,7 +253,7 @@ public partial class BrowserWindow : Window
                 tab.Title = InternalTitle(tab.Url);
                 UpdateTabToolTip(tab);
                 tab.Header.Label.Text = tab.Title;
-                engineView.ShowInternalHtml(BuildInternalPage(url));
+                if (!IsManagementUrl(url)) engineView.ShowInternalHtml(BuildInternalPage(url));
             }
             else if (url is not null && url != "about:blank")
             {
@@ -270,6 +279,12 @@ public partial class BrowserWindow : Window
     private void OnNavigationStarting(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
     {
         tab.NavigationEpoch++;
+        // Internal management routes are browser-chrome commands, never web navigation.
+        if (args.Uri.StartsWith("veil:", StringComparison.OrdinalIgnoreCase) || IsManagementUrl(tab.Url))
+        {
+            args.Cancel = true;
+            return;
+        }
         if (HandleHttpsFirst(tab, args)) return;
         if (HandleThreat(tab, args)) return;
         args.Cancel = args.Uri != "about:blank" &&
@@ -491,6 +506,7 @@ public partial class BrowserWindow : Window
 
     private async void VaultClick(object sender, RoutedEventArgs args)
     {
+        if (FocusManagementPage("veil://vault")) return;
         if (!SettingsReady() || session.VaultUiOpen || session.SettingsUiOpen ||
             session.PermissionUiOpen || session.PasswordUiOpen) return;
         session.VaultUiOpen = true;
@@ -500,7 +516,8 @@ public partial class BrowserWindow : Window
             if (await EnsureVaultOpenAsync())
             {
                 if (SettingsReady())
-                    new VaultWindow(this, session.Vault, SettingsReady).ShowDialog();
+                    await ShowManagementPageAsync("veil://vault", new VaultWindow(this, session.Vault,
+                        () => SettingsReady() && Active?.Url == "veil://vault"));
             }
             else if (SettingsReady() && session.Vault.UsesProfilePassword)
                 MessageBox.Show(this, "다운로드 금고가 잠겨 있습니다. VEIL을 다시 시작하고 보호 프로필 잠금 해제 단계에서 금고를 여세요.",
@@ -554,24 +571,21 @@ public partial class BrowserWindow : Window
     private void ShowDownloadOutcome(string fileName, string label, string message)
     {
         downloads.Insert(0, $"{fileName} · {label}");
+        if (label != DownloadVault.Stored)
+        {
+            session.RecentDownloadIssues.Insert(0, (DateTimeOffset.Now, $"{fileName} · {label}"));
+            if (session.RecentDownloadIssues.Count > 20) session.RecentDownloadIssues.RemoveAt(20);
+        }
         Status.Text = message + " Ctrl+J에서 확인할 수 있습니다.";
         Dispatcher.BeginInvoke(() =>
         {
             if (closing) return;
             DownloadButton.Visibility = Visibility.Visible;
-            DownloadPopupText.Text = message;
-            DownloadPopup.IsOpen = true;
+            foreach (var window in session.Windows.ToArray())
+                if (!window.closing) window.RefreshDownloadProgress();
             if (Active?.Url == "veil://downloads")
                 Active.View.CoreWebView2.NavigateToString(BuildInternalPage("veil://downloads"));
             Motion.Pop(Motion.Transforms(DownloadButton).Scale, 1.35);
-            downloadPopupTimer?.Stop();
-            downloadPopupTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-            downloadPopupTimer.Tick += (_, _) =>
-            {
-                downloadPopupTimer.Stop();
-                DownloadPopup.IsOpen = false;
-            };
-            downloadPopupTimer.Start();
         }, System.Windows.Threading.DispatcherPriority.Input);
     }
 
@@ -621,6 +635,7 @@ public partial class BrowserWindow : Window
         if (protectPinned && tab.Pinned) return;
         if (!await AnimateTabClose(item) || closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
         if (IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
+        ClearManagement(tab);
         Tabs.Items.Remove(item);
         Pages.Children.Remove(tab.View);
         tab.EngineView.Dispose();
@@ -638,9 +653,10 @@ public partial class BrowserWindow : Window
     {
         if (!IsLoaded || args.OriginalSource != Tabs || closing) return;
         CloseAddressSuggestions();
+        foreach (var tab in Tabs.Items.OfType<TabItem>().Select(item => (BrowserTab)item.Tag).ToArray())
+            if (tab != Active && tab.Url == "veil://passwords" && tab.CancelManagement is not null) ClearManagement(tab);
         SetAddressText(Active?.Url is null or "about:blank" ? "" : Active.Url);
-        foreach (TabItem item in Tabs.Items)
-            ((BrowserTab)item.Tag).View.Visibility = item == Tabs.SelectedItem ? Visibility.Visible : Visibility.Hidden;
+        UpdateManagementVisibility();
         if (fullScreen && fullScreenFromPage && Active?.View.CoreWebView2?.ContainsFullScreenElement != true) SetFullScreen(false);
         RefreshChrome();
         SyncProgress();
@@ -654,8 +670,7 @@ public partial class BrowserWindow : Window
         if (!Address.IsKeyboardFocusWithin)
             SetAddressText(Active?.Url is null or "about:blank" ? "" : Active.Url);
         Home.Visibility = Active?.Url is null or "about:blank" ? Visibility.Visible : Visibility.Collapsed;
-        if (Active is not null)
-            Active.View.Visibility = Home.Visibility == Visibility.Visible ? Visibility.Hidden : Visibility.Visible;
+        UpdateManagementVisibility();
         UpdateNavigationButtons();
         UpdateBookmarkGlyph();
         RefreshDownloadProgress();
@@ -664,7 +679,8 @@ public partial class BrowserWindow : Window
     private void RefreshDownloadProgress()
     {
         bool hasDownloads = session.ActiveDownloads.Count > 0;
-        if (hasDownloads) DownloadButton.Visibility = Visibility.Visible;
+        DownloadButton.Visibility = Visibility.Visible;
+        UpdateDownloadToolbar();
         DownloadProgressPanel.Visibility = Active?.Url == "veil://downloads"
             ? Visibility.Visible : Visibility.Collapsed;
         ActiveDownloadsList.Visibility = hasDownloads ? Visibility.Visible : Visibility.Collapsed;
@@ -677,8 +693,8 @@ public partial class BrowserWindow : Window
 
     private void UpdateNavigationButtons()
     {
-        Back.IsEnabled = Active?.EngineView.CanGoBack == true;
-        Forward.IsEnabled = Active?.EngineView.CanGoForward == true;
+        Back.IsEnabled = !IsManagementUrl(Active?.Url) && Active?.EngineView.CanGoBack == true;
+        Forward.IsEnabled = !IsManagementUrl(Active?.Url) && Active?.EngineView.CanGoForward == true;
         Reload.IsEnabled = IsWebUrl(Active?.Url);
     }
 
@@ -689,13 +705,22 @@ public partial class BrowserWindow : Window
         (url.Scheme is "http" or "https") && !string.IsNullOrEmpty(url.Host) && url.UserInfo.Length == 0;
 
     internal static bool IsInternalUrl(string? value) =>
-        value is "veil://bookmarks" or "veil://history" or "veil://downloads" or HttpsWarningUrl or ThreatWarningUrl;
+        IsManagementUrl(value) || value is "veil://downloads" or HttpsWarningUrl or ThreatWarningUrl;
 
     private static string InternalTitle(string? value) => value switch
     {
         "veil://bookmarks" => "북마크",
         "veil://history" => "방문 기록",
         "veil://downloads" => "다운로드",
+        "veil://settings" => "설정",
+        "veil://passwords" => "비밀번호 관리자",
+        "veil://vault" => "다운로드 금고",
+        "veil://settings/network" => "네트워크",
+        "veil://settings/security" => "보안",
+        "veil://settings/search" => "검색 및 주소창",
+        "veil://settings/site-data" => "쿠키 및 사이트 데이터",
+        "veil://settings/permissions" => "사이트 권한",
+        "veil://tabs" => "탭 검색",
         HttpsWarningUrl => "안전하지 않은 연결",
         ThreatWarningUrl => "위험한 사이트",
         _ => "새 탭",
@@ -836,11 +861,12 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && text.Length > 0 && !text.Contains('.') &&
             !text.Contains(':') && !text.Contains('/') && !text.Any(char.IsWhiteSpace))
             text = $"www.{text}.com";
+        if (IsManagementUrl(text)) { OpenManagementRoute(text); return; }
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
         {
             // Alt+Enter opens the address in a new tab next to the current one.
             if (ResolveAddress(text, data.SearchEngine) is { } url && Active is { } current)
-                _ = OpenTab(url.AbsoluteUri, index: Tabs.Items.IndexOf(current.Item) + 1);
+                _ = OpenTab(IsInternalUrl(url.OriginalString) ? url.OriginalString : url.AbsoluteUri, index: Tabs.Items.IndexOf(current.Item) + 1);
             return;
         }
         NavigateAddress(text);
@@ -849,6 +875,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private void NavigateAddress(string input)
     {
         CloseAddressSuggestions();
+        if (IsManagementUrl(input.Trim())) { OpenManagementRoute(input.Trim()); return; }
         var url = ResolveAddress(input, data.SearchEngine);
         if (url is null)
         {
@@ -856,10 +883,14 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             return;
         }
         if (Active is not { } tab) return;
+        ClearManagement(tab);
+        tab.PendingHttp = null;
+        tab.PendingThreat = null;
+        tab.UpgradedFrom = null;
         SetAddressText(url.AbsoluteUri);
-        if (IsInternalUrl(url.AbsoluteUri))
+        if (IsInternalUrl(url.OriginalString))
         {
-            tab.Url = url.AbsoluteUri;
+            tab.Url = url.OriginalString;
             tab.Title = InternalTitle(tab.Url);
             tab.Header.Label.Text = tab.Title;
             tab.View.Visibility = Visibility.Visible;
@@ -941,6 +972,10 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private void GoHome()
     {
         if (Active is not { } tab) return;
+        ClearManagement(tab);
+        tab.PendingHttp = null;
+        tab.PendingThreat = null;
+        tab.UpgradedFrom = null;
         tab.Url = "about:blank";
         tab.EngineView.Navigate("about:blank");
         RefreshChrome();
@@ -961,8 +996,14 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         {
             data.Bookmarks.Add(new PageEntry(tab.Title, tab.Url, DateTimeOffset.Now));
             Status.Text = "북마크에 추가했습니다.";
-            SaveData();
-            UpdateBookmarkGlyph();
+            try { data.Save(statePath); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                data.Bookmarks.RemoveAt(data.Bookmarks.Count - 1);
+                Status.Text = "북마크를 저장하지 못했습니다.";
+                return;
+            }
+            RefreshBookmarkBars();
             Motion.Pop((System.Windows.Media.ScaleTransform)BookmarkGlyph.RenderTransform, 1.6);
         }
         else Status.Text = "이미 북마크에 있습니다.";
@@ -976,14 +1017,16 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private async Task ShowLibraryAsync(bool editable)
     {
         if (closing || restoring || session.IsEnding || session.EngineLost) return;
+        string internalUrl = editable ? "veil://bookmarks" : "veil://history";
+        if (FocusManagementPage(internalUrl)) return;
         var entries = editable ? data.Bookmarks : data.History;
-        bool changed = false;
         bool SaveLibrary()
         {
             try
             {
                 data.Save(statePath);
-                changed = true;
+                if (editable)
+                    RefreshBookmarkBars();
                 return true;
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -993,33 +1036,16 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         }
 
         var dialog = new LibraryWindow(this, editable ? "북마크 관리" : "방문 기록", entries, editable, SaveLibrary);
-        bool open = dialog.ShowDialog() == true;
-        if (closing || session.IsEnding || session.EngineLost) return;
-        if (changed)
-        {
-            string internalUrl = editable ? "veil://bookmarks" : "veil://history";
-            foreach (var window in session.Windows.ToArray())
-            {
-                if (window.closing) continue;
-                if (editable) window.UpdateBookmarkGlyph();
-                // Keep already-open legacy read-only library tabs in sync.
-                foreach (var tab in window.Tabs.Items.OfType<TabItem>().Select(item => item.Tag).OfType<BrowserTab>())
-                {
-                    if (tab.Url != internalUrl || tab.View.CoreWebView2 is not { } web) continue;
-                    try { web.NavigateToString(window.BuildInternalPage(internalUrl)); }
-                    catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException)
-                    {
-                        window.Status.Text = "목록 탭을 새로고침하지 못했습니다.";
-                    }
-                }
-            }
-        }
+        bool open = await ShowManagementPageAsync(internalUrl, dialog);
+        if (!SettingsReady()) return;
         if (open && dialog.SelectedUrl is { } url && IsWebUrl(url))
             _ = await OpenTab(url);
     }
     private async void DownloadsClick(object sender, RoutedEventArgs args)
     {
         DownloadPopup.IsOpen = false;
+        var existing = Tabs.Items.OfType<TabItem>().FirstOrDefault(item => item.Tag is BrowserTab { Url: "veil://downloads" } && !closingTabs.Contains(item));
+        if (existing is not null) { Tabs.SelectedItem = existing; return; }
         _ = await OpenTab("veil://downloads");
     }
 
