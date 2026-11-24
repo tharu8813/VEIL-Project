@@ -136,10 +136,14 @@ pub fn rotate(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| invalid("Invalid vault generation name"))?;
+    #[cfg(test)]
+    tests::interruption_checkpoint(root, "before-marker");
     publish_replace(&root.join(MARKER), |file| {
         file.write_all(generation.as_bytes())
     })?;
     let active = staging.keep();
+    #[cfg(test)]
+    tests::interruption_checkpoint(root, "after-marker");
     let retired = retire(root, current, &migrated);
     Ok((active, next, retired))
 }
@@ -191,5 +195,156 @@ fn remove(path: &Path, directory: bool) -> bool {
             }
         }
         Ok(_) => false,
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    const ROOT_ENV: &str = "VEIL_UNIT_ROTATION_ROOT";
+    const PHASE_ENV: &str = "VEIL_UNIT_ROTATION_PHASE";
+    const READY: &str = ".rotation-unit-ready";
+    const PASSWORD: &str = "synthetic-interruption-password";
+    const OLD_CODE: &str = "synthetic-interruption-old-code";
+    const NEW_CODE: &str = "synthetic-interruption-new-code";
+    const FILES: [(&str, &[u8]); 3] = [
+        ("objects/1234567890abcdef1234567890abcdef.veil", b"synthetic object body"),
+        ("meta/1234567890abcdef1234567890abcdef.veil", b"synthetic metadata"),
+        ("index/202611250102030123456.veil", b"synthetic index"),
+    ];
+
+    // This checkpoint is present only in the unit-test executable, not in Debug or Release
+    // product binaries. The child is killed by the parent while waiting here.
+    pub(super) fn interruption_checkpoint(root: &Path, phase: &str) {
+        if std::env::var_os(ROOT_ENV).as_deref() != Some(root.as_os_str())
+            || std::env::var(PHASE_ENV).as_deref() != Ok(phase)
+        {
+            return;
+        }
+        let mut signal = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(root.join(READY))
+            .unwrap();
+        signal.write_all(phase.as_bytes()).unwrap();
+        signal.sync_all().unwrap();
+        thread::sleep(Duration::from_secs(90));
+        panic!("rotation interruption parent did not terminate the child");
+    }
+
+    #[test]
+    fn rotation_interruption_child() {
+        let Some(root) = std::env::var_os(ROOT_ENV).map(PathBuf::from) else {
+            return; // The ordinary test enumeration does not supply a child fixture.
+        };
+        assert!(matches!(
+            std::env::var(PHASE_ENV).as_deref(),
+            Ok("before-marker" | "after-marker")
+        ));
+        let _lock = lock_session(&root).unwrap();
+        let current = active(&root).unwrap();
+        let keys = vault_credentials::unlock(&current, SecretString::from(PASSWORD), false).unwrap();
+        rotate(
+            &root,
+            &current,
+            &keys,
+            SecretString::from(PASSWORD),
+            SecretString::from(NEW_CODE),
+        )
+        .unwrap();
+        panic!("rotation completed without reaching the requested checkpoint");
+    }
+
+    fn interrupt_at(root: &Path, phase: &str) {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "vault_generation::tests::rotation_interruption_child"])
+            .env(ROOT_ENV, root)
+            .env(PHASE_ENV, phase)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        let ready = loop {
+            if fs::read_to_string(root.join(READY)).is_ok_and(|value| value == phase) {
+                break true;
+            }
+            if child.try_wait().unwrap().is_some() || start.elapsed() >= Duration::from_secs(60) {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(25));
+        };
+        // Always reap the child, even if the checkpoint was never reached.
+        let killed = child.kill();
+        let status = child.wait().unwrap();
+        assert!(ready, "child never reached {phase}");
+        killed.unwrap();
+        assert!(!status.success());
+    }
+
+    #[test]
+    fn interrupted_rotation_preserves_authoritative_generation_at_both_boundaries() {
+        for phase in ["before-marker", "after-marker"] {
+            let lab = tempfile::tempdir().unwrap();
+            let root = lab.path();
+            for folder in ["objects", "meta", "index"] {
+                fs::create_dir(root.join(folder)).unwrap();
+            }
+            let original = vault_credentials::create(
+                root,
+                SecretString::from(PASSWORD),
+                SecretString::from(OLD_CODE),
+            )
+            .unwrap();
+            let mut ciphertexts = Vec::new();
+            for (file, bytes) in FILES {
+                let path = root.join(file);
+                original.seal_new(Purpose::Download, &path, bytes).unwrap();
+                ciphertexts.push(fs::read(path).unwrap());
+            }
+
+            interrupt_at(root, phase);
+            let _lock = lock_session(root).expect("interrupted process released the session lock");
+            let chosen = active(root).unwrap();
+            let switched = phase == "after-marker";
+            assert_eq!(chosen != root, switched);
+            let accepted = if switched { NEW_CODE } else { OLD_CODE };
+            let rejected = if switched { OLD_CODE } else { NEW_CODE };
+            let reopened = vault_credentials::unlock(
+                &chosen, SecretString::from(accepted), true,
+            ).unwrap();
+            assert!(vault_credentials::unlock(
+                &chosen, SecretString::from(rejected), true,
+            ).is_err());
+            assert!(vault_credentials::unlock(
+                &chosen, SecretString::from(PASSWORD), false,
+            ).is_ok());
+
+            for ((file, bytes), old_ciphertext) in FILES.into_iter().zip(ciphertexts) {
+                let path = chosen.join(file);
+                assert_eq!(&*reopened.read_small(Purpose::Download, &path).unwrap(), bytes);
+                // The previous generation must not have been retired before the switch;
+                // after switching but before retirement it is intentionally still present.
+                assert_eq!(fs::read(root.join(file)).unwrap(), old_ciphertext);
+                if switched {
+                    assert!(original.verify(Purpose::Download, &path).is_err());
+                } else {
+                    assert_eq!(fs::read(path).unwrap(), old_ciphertext);
+                }
+            }
+            // There is exactly one new sibling; an interrupted rotation must not silently
+            // delete retained encrypted generations or choose them merely because they exist.
+            assert_eq!(fs::read_dir(root).unwrap().filter(|entry| {
+                entry.as_ref().is_ok_and(|entry| {
+                    entry.file_name().to_str().is_some_and(is_generation_name)
+                })
+            }).count(), 1);
+        }
     }
 }
