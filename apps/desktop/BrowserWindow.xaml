@@ -188,6 +188,8 @@
                                         <TextBlock Text="최근 다운로드" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" />
                                     </DockPanel>
                                     <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+                                        <Button x:Name="RetryDownloadButton" Style="{StaticResource GhostButton}" Content="실패한 다운로드 다시 시도"
+                                                Visibility="Collapsed" Click="RetryDownloadClick" Margin="0,0,0,6" />
                                         <Button Style="{StaticResource GhostButton}" Content="다운로드 금고 열기"
                                                 Click="PopupVaultClick" Margin="0,0,0,6" />
                                         <Button Style="{StaticResource PrimaryButton}" Content="모든 다운로드 보기" Click="DownloadsClick" />

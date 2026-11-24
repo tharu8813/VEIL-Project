@@ -28,6 +28,7 @@ public partial class BrowserWindow : Window
         internal FrameworkElement? ManagementSurface { get; set; }
         internal Action? CancelManagement { get; set; }
         internal long NavigationEpoch { get; set; }
+        internal (string Method, string Uri, long Epoch)? LastDownloadRequest { get; set; }
         internal bool LoginFormDetected { get; set; }
         /// <summary>HTTPS-first: the plain-HTTP address this tab is currently trying as HTTPS.</summary>
         internal Uri? UpgradedFrom { get; set; }
@@ -101,6 +102,7 @@ public partial class BrowserWindow : Window
         closing = true;
         DownloadPopup.IsOpen = false;
         downloadRingTimer.Stop();
+        retryDownload = null;
         RecentDownloadsList.ItemsSource = null;
         ActiveDownloadsList.ItemsSource = null;
         PopupActiveDownloads.ItemsSource = null;
@@ -315,7 +317,11 @@ public partial class BrowserWindow : Window
             if (!session.IsPrivate)
             {
                 web.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Document);
-                web.WebResourceRequested += (_, args) => session.Vault.NoteRequest(args.Request.Method, args.Request.Uri);
+                web.WebResourceRequested += (_, args) =>
+                {
+                    session.Vault.NoteRequest(args.Request.Method, args.Request.Uri);
+                    tab.LastDownloadRequest = (args.Request.Method, args.Request.Uri, tab.NavigationEpoch);
+                };
             }
             web.NewWindowRequested += (_, args) => tab.Owner.OnNewWindowRequested(tab, args);
             web.WindowCloseRequested += (_, _) => tab.Owner.Dispatcher.BeginInvoke(() => tab.Owner.CloseTab(tab.Item));
@@ -371,6 +377,8 @@ public partial class BrowserWindow : Window
     private void OnNavigationStarting(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
     {
         tab.NavigationEpoch++;
+        tab.LastDownloadRequest = null;
+        if (retryDownload?.Tab == tab) retryDownload = null;
         tab.LoginFormDetected = false;
         if (Active == tab) UpdateLoginAction();
         // Internal management routes are browser-chrome commands, never web navigation.
@@ -500,14 +508,23 @@ public partial class BrowserWindow : Window
         // WebView2 callbacks cannot safely run a nested modal message loop. Schedule capture
         // after DownloadStarting returns, keeping the original request cancelled and protected.
         var web = tab.View.CoreWebView2;
+        RetryDownload? retry = null;
+        if (uri is not null && tab.LastDownloadRequest is { } request && request.Epoch == tab.NavigationEpoch &&
+            string.Equals(request.Method, "GET", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(request.Uri, uri.AbsoluteUri, StringComparison.Ordinal) &&
+            DownloadFailurePolicy.SafeRetryAddress(uri) && Uri.TryCreate(web.Source, UriKind.Absolute, out var source) &&
+            source.Scheme == "https" && source.GetLeftPart(UriPartial.Authority) == uri.GetLeftPart(UriPartial.Authority))
+            retry = new RetryDownload(tab, uri, fileName, tab.NavigationEpoch, web.Source, DateTimeOffset.UtcNow.AddMinutes(5));
+        tab.LastDownloadRequest = null;
         Dispatcher.BeginInvoke(new Action(() =>
         {
             if (!closing && !session.IsEnding && !session.EngineLost)
-                _ = CaptureAsync(web, uri!, fileName, engineReceived, engineOnDisk);
+                _ = CaptureAsync(web, uri!, fileName, engineReceived, engineOnDisk, retry);
         }), DispatcherPriority.Normal);
     }
 
-    private async Task CaptureAsync(CoreWebView2 web, Uri uri, string fileName, long engineReceived, long engineOnDisk)
+    private async Task CaptureAsync(CoreWebView2 web, Uri uri, string fileName, long engineReceived, long engineOnDisk,
+        RetryDownload? candidate = null, bool retry = false)
     {
         var vault = session.Vault;
         using var download = new BrowserDownload(fileName);
@@ -535,7 +552,12 @@ public partial class BrowserWindow : Window
                 return;
             }
             download.WaitForTransfer();
-            var entry = await vault.CaptureAsync(uri, download, web);
+            if (retry && (candidate is null || !CanRetry(candidate)))
+            {
+                Report(DownloadVault.Blocked, "원래 다운로드 페이지 변경", "원래 페이지에서 다시 다운로드하세요.");
+                return;
+            }
+            var entry = await vault.CaptureAsync(uri, download, web, retry);
             Report(DownloadVault.Stored, null, $"{fileName}을(를) 암호화 금고에 보관했습니다.", entry);
         }
         catch (OperationCanceledException) when (download.Token.IsCancellationRequested)
@@ -550,8 +572,11 @@ public partial class BrowserWindow : Window
             or OperationCanceledException or UnauthorizedAccessException or System.ComponentModel.Win32Exception
             or System.Runtime.InteropServices.COMException)
         {
-            string reason = !open ? "금고 열기 실패" : error is System.Net.Http.HttpRequestException http ? http.Message : "보관 실패";
-            Report(DownloadVault.Failed, reason, $"{fileName}을(를) 보관하지 못했습니다.");
+            string reason = DownloadFailurePolicy.Describe(error, download.Phase, open);
+            if (!retry && open && download.Phase == DownloadPhase.Request &&
+                error is DownloadRequestFailure { Retryable: true } && candidate is not null && CanRetry(candidate))
+                retryDownload = candidate;
+            Report(DownloadVault.Failed, reason, $"{fileName}을(를) 보관하지 못했습니다. {reason}");
         }
         finally
         {
@@ -770,6 +795,7 @@ public partial class BrowserWindow : Window
         // Cancel pending native actions before yielding to the close animation.
         ClearManagement(tab);
         if (!await AnimateTabClose(item) || closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
+        if (retryDownload?.Tab == tab) retryDownload = null;
         session.RememberClosedTab(new ClosedTab(tab.Url, tab.Pinned));
         ClearManagement(tab);
         Tabs.Items.Remove(item);
