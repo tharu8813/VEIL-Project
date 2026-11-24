@@ -48,6 +48,7 @@ public partial class BrowserWindow : Window
     private bool restoring = true;
     private bool smokeRun;
     private bool openingDownloads;
+    private string? startupAddress;
     private LibraryWindow? bookmarkLibrary;
 
     private BrowserData data => session.Data;
@@ -162,12 +163,42 @@ public partial class BrowserWindow : Window
             }
             restoring = false;
             Status.Text = "준비";
+            if (startupAddress is { } external)
+            {
+                startupAddress = null;
+                if (await OpenTab(external) is null && !closing) Status.Text = "외부 링크를 열지 못했습니다.";
+            }
             if (Active?.Url == "about:blank") FocusAddress();
         }
         catch (Exception)
         {
             if (!closing) Status.Text = "테스트 엔진을 시작하지 못했습니다. WebView2 런타임과 프로필 위치를 확인하세요.";
         }
+    }
+
+    internal void SetStartupAddress(string? address) => startupAddress = ExternalAddress.Parse(address);
+
+    internal async Task<bool> OpenExternalAddressAsync(string? address)
+    {
+        var main = session.MainSession;
+        if (main.IsEnding || main.EngineLost || !main.EngineHost.IsReady ||
+            main.PasswordUiOpen || main.PermissionUiOpen || main.SettingsUiOpen || main.VaultUiOpen) return false;
+        string? url = ExternalAddress.Parse(address);
+        if (address is not null && url is null) return false;
+        var target = main.Windows.FirstOrDefault(w => !w.closing && !w.restoring && w.IsActive) ??
+            main.Windows.FirstOrDefault(w => !w.closing && !w.restoring);
+        if (target is null)
+        {
+            if (main.Windows.Any(w => !w.closing)) return false;
+            // Only private windows remain; do not route the external address into them.
+            target = new BrowserWindow(main, ["about:blank"], 0, null);
+            target.SetStartupAddress(url);
+            target.Show();
+            return true; // accepted for startup, not a claim of successful navigation
+        }
+        if (target.WindowState == WindowState.Minimized) target.WindowState = WindowState.Normal;
+        target.Activate();
+        return url is null || await target.OpenTab(url) is not null;
     }
 
     /// <summary>Opens another window sharing this profile's engine and data.</summary>

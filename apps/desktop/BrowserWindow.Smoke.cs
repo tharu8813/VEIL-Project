@@ -24,6 +24,12 @@ public partial class BrowserWindow
                 Check(string.Equals(Path.TrimEndingDirectorySeparator(Path.GetTempPath()),
                     Path.Combine(session.Root, ProfileScratch.FolderName), StringComparison.OrdinalIgnoreCase), "temp path inside profile");
                 await WaitFor(() => !restoring, "desktop initialization");
+                Check(ExternalAddress.Parse("https://example.test/a?b=1") == "https://example.test/a?b=1" &&
+                    ExternalAddress.Parse("veil://passwords") is null &&
+                    ExternalAddress.Parse("file:///C:/secret") is null &&
+                    ExternalAddress.Parse("https://user@example.test") is null &&
+                    ExternalAddress.Parse("https://example.test/\" --smoke") is null &&
+                    ExternalAddress.Parse("example.test") is null, "external activation accepts only well-formed web URLs");
                 Check(ResolveAddress("example.test")?.AbsoluteUri == "https://example.test/", "HTTPS address default");
                 Check(ResolveAddress("한글 브라우저")?.Host == "duckduckgo.com", "search encoding");
                 Check(ResolveAddress("한글 & 검색", "google")?.Host == "www.google.com" &&
