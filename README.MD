@@ -2,7 +2,7 @@
   <img src="docs/assets/veil-logo.svg" alt="VEIL 로고" width="112" height="112">
 </p>
 <h1 align="center">VEIL</h1>
-<p align="center"><strong>익숙한 웹 브라우징, 더 신중한 개인정보 보호.</strong></p>
+<p align="center"><strong>Browse freely. Stay private.</strong></p>
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MPL%202.0-blue.svg" alt="License: MPL 2.0"></a>
   <img src="https://img.shields.io/badge/Platform-Windows%2011-0078D4.svg" alt="Platform: Windows 11">
