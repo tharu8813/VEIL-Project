@@ -1,0 +1,23 @@
+# Version updates only; review every PR and preserve locked dependency checks.
+version: 2
+updates:
+  - package-ecosystem: "nuget"
+    directories:
+      - "/apps/desktop"
+      - "/apps/broker/Veil.VolumeBroker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+  - package-ecosystem: "cargo"
+    directory: "/crates/veil-security"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 1

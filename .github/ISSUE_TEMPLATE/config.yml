@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "보안 취약점 신고"
+    url: "https://github.com/tharu8813/VEIL-Project/blob/main/SECURITY.md"
+    about: "일반 이슈 대신 보안 정책에 따라 비공개로 신고하세요."
