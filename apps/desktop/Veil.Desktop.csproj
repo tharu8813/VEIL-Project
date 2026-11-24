@@ -16,7 +16,7 @@
     <None Include="../../crates/veil-security/target/release/veil-vault.exe" Link="veil-vault.exe" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup Condition="'$(VeilWebView2Sdk)' == ''">
-    <PackageReference Include="Microsoft.Web.WebView2" Version="[1.0.2903.40]" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="[1.0.4370.26]" />
   </ItemGroup>
   <ItemGroup Condition="'$(VeilWebView2Sdk)' != ''">
     <Reference Include="Microsoft.Web.WebView2.Core" HintPath="$(VeilWebView2Sdk)/Microsoft.Web.WebView2.Core.dll" />
