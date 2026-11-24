@@ -46,6 +46,7 @@ public partial class BrowserWindow : Window
     private bool closing;
     private bool restoring = true;
     private bool smokeRun;
+    private bool openingDownloads;
 
     private BrowserData data => session.Data;
     private Stack<ClosedTab> closedTabs => session.ClosedTabs;
@@ -92,6 +93,8 @@ public partial class BrowserWindow : Window
         DownloadPopup.IsOpen = false;
         downloadRingTimer.Stop();
         RecentDownloadsList.ItemsSource = null;
+        ActiveDownloadsList.ItemsSource = null;
+        PopupActiveDownloads.ItemsSource = null;
         CloseAddressSuggestions();
         session.Windows.Remove(this);
         if (!last && !session.IsEnding)
@@ -658,9 +661,11 @@ public partial class BrowserWindow : Window
 
     private async Task CloseTabAsync(TabItem item, bool protectPinned = false)
     {
-        if (closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
+        if (closing || session.IsEnding || closingTabs.Contains(item) || !Tabs.Items.Contains(item)) return;
         var tab = (BrowserTab)item.Tag;
         if (protectPinned && tab.Pinned) return;
+        // Cancel pending native actions before yielding to the close animation.
+        ClearManagement(tab);
         if (!await AnimateTabClose(item) || closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
         if (IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
         ClearManagement(tab);
@@ -910,7 +915,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             Status.Text = "웹 주소 또는 검색어를 입력하세요.";
             return;
         }
-        if (Active is not { } tab) return;
+        if (Active is not { } tab || closingTabs.Contains(tab.Item)) return;
         ClearManagement(tab);
         tab.PendingHttp = null;
         tab.PendingThreat = null;
@@ -999,7 +1004,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void GoHome()
     {
-        if (Active is not { } tab) return;
+        if (Active is not { } tab || closingTabs.Contains(tab.Item)) return;
         ClearManagement(tab);
         tab.PendingHttp = null;
         tab.PendingThreat = null;
@@ -1072,9 +1077,12 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private async void DownloadsClick(object sender, RoutedEventArgs args)
     {
         DownloadPopup.IsOpen = false;
+        if (!SettingsReady() || openingDownloads) return;
         var existing = Tabs.Items.OfType<TabItem>().FirstOrDefault(item => item.Tag is BrowserTab { Url: "veil://downloads" } && !closingTabs.Contains(item));
         if (existing is not null) { Tabs.SelectedItem = existing; return; }
-        _ = await OpenTab("veil://downloads");
+        openingDownloads = true;
+        try { _ = await OpenTab("veil://downloads"); }
+        finally { openingDownloads = false; }
     }
 
     // ── Find in page ─────────────────────────────────────────────────────────

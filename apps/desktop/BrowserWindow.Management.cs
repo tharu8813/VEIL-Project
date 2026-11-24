@@ -52,7 +52,11 @@ public partial class BrowserWindow
             Content = InternalTitle(tab.Url) + " 열기", Style = (Style)FindResource("PrimaryButton"),
             Height = 36, HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(18, 0, 18, 0),
         };
-        open.Click += (_, _) => { if (Active == tab && tab.Owner == this) OpenManagementRoute(tab.Url); };
+        open.Click += (_, _) =>
+        {
+            if (Active == tab && tab.Owner == this && !closingTabs.Contains(tab.Item))
+                OpenManagementRoute(tab.Url);
+        };
         var panel = new StackPanel { Margin = new Thickness(32), MaxWidth = 900 };
         panel.Children.Add(new TextBlock
         {
@@ -80,7 +84,7 @@ public partial class BrowserWindow
             var tab = (BrowserTab)item.Tag;
             bool selected = item == Tabs.SelectedItem;
             bool management = IsManagementUrl(tab.Url);
-            if (management && tab.ManagementSurface is null)
+            if (management && tab.ManagementSurface is null && !closingTabs.Contains(item))
             {
                 tab.ManagementSurface = ManagementLanding(tab);
                 Pages.Children.Add(tab.ManagementSurface);
@@ -104,13 +108,15 @@ public partial class BrowserWindow
             reserved = openingManagement.Add(route);
             if (!reserved) return false;
             tab = FindManagementTab(route) ?? await OpenTab(route);
-            if (tab is null || !SettingsReady() || tab.Owner != this || !Tabs.Items.Contains(tab.Item) ||
-                closingTabs.Contains(tab.Item)) return false;
+            if (tab is null || !SettingsReady() || tab.Owner != this || tab.Url != route ||
+                !Tabs.Items.Contains(tab.Item) || closingTabs.Contains(tab.Item)) return false;
             ClearManagement(tab);
             var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             page = dialog.TakePage(accepted =>
             {
-                if (Active == tab && SettingsReady() && IsActive) completion.TrySetResult(accepted);
+                if (Active == tab && tab.Owner == this && tab.Url == route &&
+                    !closingTabs.Contains(tab.Item) && SettingsReady() && IsActive)
+                    completion.TrySetResult(accepted);
             });
             tab.ManagementSurface = page;
             tab.CancelManagement = () => completion.TrySetResult(false);
@@ -119,7 +125,8 @@ public partial class BrowserWindow
             RefreshChrome();
             bool accepted = await completion.Task;
             // Cancel if the page was detached or left between the native click and its continuation.
-            accepted = accepted && tab.ManagementSurface == page && Active == tab && IsActive && SettingsReady();
+            accepted = accepted && tab.ManagementSurface == page && Active == tab &&
+                tab.Owner == this && tab.Url == route && !closingTabs.Contains(tab.Item) && IsActive && SettingsReady();
             if (tab.ManagementSurface == page)
             {
                 ClearManagement(tab);
