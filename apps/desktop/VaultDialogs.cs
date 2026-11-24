@@ -17,6 +17,11 @@ internal sealed class VaultSetupDialog : VeilDialog
     internal string? RecoveryCode { get; private set; }
     internal VaultBackupSource? Backup { get; private set; }
     private readonly Action exerciseWizard;
+#if DEBUG
+    internal static Func<string, (bool Accept, string? Passphrase)>? SmokeMaintenanceInput;
+    internal static Action<string>? SmokeMaintenanceCode;
+    private readonly Action<bool, string?> exerciseMaintenance;
+#endif
 
     internal VaultSetupDialog(Window? owner, string title, bool askPassphrase, bool issueCode,
         bool allowRestore = false, string? passwordPrompt = null)
@@ -98,6 +103,31 @@ internal sealed class VaultSetupDialog : VeilDialog
         Show();
         Closed += (_, _) => { first.Clear(); second.Clear(); confirm.Clear(); };
 
+#if DEBUG
+        exerciseMaintenance = (accept, passphrase) =>
+        {
+            if (!accept) { DialogResult = false; return; }
+            if (index != 0 || allowRestore) throw new InvalidOperationException("Unexpected maintenance wizard state.");
+            void Press() => next!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            if (askPassphrase)
+            {
+                first.Password = passphrase ?? "";
+                second.Password = first.Password;
+                Press();
+                if (error.Text.Length != 0) throw new InvalidOperationException("Synthetic maintenance passphrase rejected.");
+            }
+            if (issueCode)
+            {
+                Press();
+                confirm.Text = "INVALID";
+                Press();
+                if (error.Text.Length == 0) throw new InvalidOperationException("Incorrect recovery code accepted.");
+                confirm.Text = code;
+                Press();
+            }
+        };
+#endif
+
         // Invoked only by the explicit developer smoke harness, with synthetic credentials.
         // Exercise the real button handlers, including failed validation and the 2 -> 3 transition.
         exerciseWizard = () =>
@@ -128,6 +158,35 @@ internal sealed class VaultSetupDialog : VeilDialog
             Press();
             Require(Passphrase == "synthetic-test-only" && RecoveryCode == code, "confirmed credentials accepted");
         };
+    }
+
+    // The maintenance wizard still runs its real modal controls. Release has no scripted input.
+    internal bool ShowMaintenanceDialog()
+    {
+#if DEBUG
+        Exception? failure = null;
+        if (SmokeMaintenanceInput is { } answer)
+            Loaded += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    var input = answer(Title);
+                    exerciseMaintenance(input.Accept, input.Passphrase);
+                    if (IsVisible) throw new InvalidOperationException("Maintenance wizard did not close.");
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                    if (IsVisible) Close();
+                }
+            }), DispatcherPriority.Background);
+        bool accepted = ShowDialog() == true;
+        if (failure is not null) throw new InvalidOperationException("Maintenance wizard smoke failed.", failure);
+        if (accepted && RecoveryCode is { } code) SmokeMaintenanceCode?.Invoke(code);
+        return accepted;
+#else
+        return ShowDialog() == true;
+#endif
     }
 
     internal static void VerifySetupWizard(Window owner)

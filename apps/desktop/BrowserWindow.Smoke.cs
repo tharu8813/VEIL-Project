@@ -609,6 +609,16 @@ public partial class BrowserWindow
                         Directory.CreateDirectory(destination);
                         string file = Path.Combine(destination, "large.bin");
                         Check(await restored.ExportAsync(sample, file) == sample.Bytes, "rotated large file authenticates");
+#if DEBUG
+                        string uiCode = await VaultWindow.VerifyMaintenanceUiAsync(this, restored, target,
+                            "synthetic-restored-profile-password", Check);
+                        restored.Lock();
+                        Check(await restored.RecoverAsync(rotationCode) is not null, "previous recovery code rejected after UI rotation");
+                        Check(await restored.RecoverAsync(uiCode) is null &&
+                            restored.Entries.OrderBy(entry => entry.Id).SequenceEqual(vault.Entries.OrderBy(entry => entry.Id)),
+                            "UI rotation recovery and metadata verified");
+                        Check(await restored.VerifyAsync(sample) == sample.Bytes, "UI-rotated large file authenticates");
+#endif
                         File.WriteAllText(Path.ChangeExtension(report, ".vault.json"),
                             JsonSerializer.Serialize(new { destination = file, sample.Bytes }));
                     }
