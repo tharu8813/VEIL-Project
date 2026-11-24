@@ -89,32 +89,40 @@ function Restore-PreActivation {
     Assert-Tree $journal
     Disable-Broker
     Assert-ClosedAndDetached
-    if (Test-Path -LiteralPath $previous) {
-        Assert-Tree $previous
-        $old=Read-VeilPackage $previous $SignerThumbprint
-        if (-not (Test-Path -LiteralPath $backup)) { throw 'Recovery metadata missing.' }
+    if (Test-Path -LiteralPath $backup) {
         Assert-VeilAdminPath $backup
         $registered=Get-Content -LiteralPath $backup -Raw | ConvertFrom-Json
-        $oldHash=(Get-FileHash -LiteralPath (Join-Path $previous 'Desktop\Veil.Desktop.exe') -Algorithm SHA256).Hash
-        if ($registered.clientSha256 -ne $oldHash) { throw 'Rollback binary and registration do not match.' }
-        if (Test-Path -LiteralPath $bin) {
-            Assert-Tree $bin
-            if (Test-Path -LiteralPath $failed) { throw 'Recovery collision; administrator review required.' }
-            [IO.Directory]::Move($bin,$failed)
+        if (Test-Path -LiteralPath $previous) {
+            Assert-Tree $previous
+            [void](Read-VeilPackage $previous $SignerThumbprint)
+            $oldHash=(Get-FileHash -LiteralPath (Join-Path $previous 'Desktop\Veil.Desktop.exe') -Algorithm SHA256).Hash
+            if ($registered.clientSha256 -ne $oldHash) { throw 'Rollback binary and registration do not match.' }
+            if (Test-Path -LiteralPath $bin) {
+                Assert-Tree $bin
+                if (Test-Path -LiteralPath $failed) { throw 'Recovery collision; administrator review required.' }
+                [IO.Directory]::Move($bin,$failed)
+            }
+            [IO.Directory]::Move($previous,$bin)
         }
-        [IO.Directory]::Move($previous,$bin)
+        # A second interruption may leave the old tree already restored but the new pin still present.
+        # Authenticate the actual old tree against the durable registration backup before restoring it.
+        [void](Read-VeilPackage $bin $SignerThumbprint)
+        if ($registered.clientSha256 -ne (Get-FileHash -LiteralPath $client -Algorithm SHA256).Hash) { throw 'Rollback binary and registration do not match.' }
         $restore=Join-Path $journal 'broker.restore.json'
+        if (Test-Path -LiteralPath $restore) { Assert-VeilAdminPath $restore; Remove-Item -LiteralPath $restore -Force }
         Write-Durable $restore ([IO.File]::ReadAllBytes($backup))
         [IO.File]::Replace($restore,$config,$null)
+    } elseif ((Test-Path -LiteralPath $previous) -or (Test-Path -LiteralPath $failed)) {
+        throw 'Recovery metadata missing.'
     }
-    # If interrupted before either rename, the old tree must still match its pinned client hash.
+    # If interrupted before creating the backup, the original package and pin must still match.
     [void](Read-VeilPackage $bin $SignerThumbprint)
     $current=Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
     if ($current.clientSha256 -ne (Get-FileHash -LiteralPath $client -Algorithm SHA256).Hash) { throw 'Recovery hash mismatch.' }
     Remove-RestrictedTree $failed
     Remove-RestrictedTree $stage
-    Remove-RestrictedTree $journal
     Start-Broker
+    Remove-RestrictedTree $journal
 }
 function Copy-StagedPackage {
     # Copy only bytes into a restricted staging directory. Re-validate the complete signed inventory
@@ -175,7 +183,11 @@ try {
         Write-Host 'Binaries removed; encrypted VHDX and registration retained. Re-registration requires administrator recovery.'
         return
     }
-    $manifest=Copy-StagedPackage
+    try { $manifest=Copy-StagedPackage }
+    catch {
+        if (Test-Path -LiteralPath $stage) { Remove-RestrictedTree $stage }
+        throw
+    }
     if ((Get-VeilVersion $manifest.version).Major -ne 0) { throw 'Only internal packages are enabled.' }
     if ($Install) {
         # The existing installer owns BitLocker recovery registration and service creation.
@@ -213,6 +225,14 @@ try {
     Remove-RestrictedTree $journal
     Write-Host 'Internal update installed. Browser/VM regression validation is still required.'
 } finally {
-    if ($held) { $mutex.ReleaseMutex() }
+    try {
+        # Version/registration rejection before a transaction leaves no maintenance artifacts.
+        # A partial initial installation is preserved for explicit administrator review.
+        if ($held -and $Update -and -not (Test-Path -LiteralPath $journal) -and
+            -not (Test-Path -LiteralPath $previous) -and -not (Test-Path -LiteralPath $failed) -and
+            (Test-Path -LiteralPath $stage)) { Remove-RestrictedTree $stage }
+    } finally {
+        if ($held) { $mutex.ReleaseMutex() }
+    }
     $mutex.Dispose()
 }
