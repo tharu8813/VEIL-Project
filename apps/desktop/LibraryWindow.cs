@@ -227,7 +227,7 @@ internal sealed class LibraryWindow : VeilDialog
                 if (Commit(() => { folders.AddRange(imported.Folders); entries.AddRange(imported.Entries); }))
                     MessageBox.Show(PromptOwner, $"북마크 {imported.Entries.Count}개, 폴더 {imported.Folders.Count}개 가져옴. 건너뜀 {imported.Skipped}개.", title);
             }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or DecoderFallbackException or RegexMatchTimeoutException)
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or DecoderFallbackException or RegexMatchTimeoutException)
             {
                 MessageBox.Show(PromptOwner, "북마크 HTML을 읽지 못했습니다. UTF-8 북마크 파일과 크기를 확인하세요.", title,
                     MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -248,7 +248,7 @@ internal sealed class LibraryWindow : VeilDialog
                 BookmarkHtml.WriteNew(picker.FileName, BookmarkHtml.Export(folders, entries));
                 MessageBox.Show(PromptOwner, "북마크를 내보냈습니다.", title);
             }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
             {
                 MessageBox.Show(PromptOwner, "내보내지 못했습니다. 기존 파일을 덮어쓰지 않습니다. 다른 이름과 저장 위치를 확인하세요.",
                     title, MessageBoxButton.OK, MessageBoxImage.Warning);
