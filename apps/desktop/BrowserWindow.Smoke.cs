@@ -426,7 +426,7 @@ public partial class BrowserWindow
                     Check(!NetworkPolicy.BrowserArguments(NetworkSettings.Standard).Any(), "standard mode adds no engine switches");
                     var proxyArgs = NetworkPolicy.BrowserArguments(new NetworkSettings(NetworkMode.Proxy, "socks5", "127.0.0.1", 9050)).ToList();
                     Check(proxyArgs.SequenceEqual(new[] { "--proxy-server=socks5://127.0.0.1:9050", "--proxy-bypass-list=<-loopback>",
-                        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--disable-quic" }), "proxy mode engine switches");
+                        "--webrtc-ip-handling-policy=disable_non_proxied_udp", "--disable-quic" }), "proxy mode engine switches");
                     Check(Active!.View.CoreWebView2.Profile.PreferredTrackingPreventionLevel == Microsoft.Web.WebView2.Core.CoreWebView2TrackingPreventionLevel.Strict, "tracking prevention strict");
 
                     // Live: a public http address is tried as https; the failure shows the warning page.
@@ -479,6 +479,31 @@ public partial class BrowserWindow
                 else if (stage == "security")
                 {
                     await SecurityStage();
+                }
+                else if (stage == "visit")
+                {
+                    // Gate D internet-VM checks: open VEIL_TEST_URL as typed (HTTPS-first applies) and report the
+                    // outcome; optionally wait for VEIL_TEST_EVAL to return a non-null value.
+                    string target = Environment.GetEnvironmentVariable("VEIL_TEST_URL") ?? throw new ArgumentException("VEIL_TEST_URL");
+                    Active!.LastNavigationError = null;
+                    NavigateAddress(target);
+                    await Task.Delay(800);
+                    for (int i = 0; i < 400 && Active.Loading; i++) await Task.Delay(75);
+                    string evaluated = "null";
+                    if (Environment.GetEnvironmentVariable("VEIL_TEST_EVAL") is { Length: > 0 } expression)
+                    {
+                        for (int i = 0; i < 200 && evaluated == "null"; i++)
+                        {
+                            evaluated = await Active.View.ExecuteScriptAsync($"(() => {{ const v = ({expression}); return v === undefined ? null : v; }})()");
+                            if (evaluated == "null") await Task.Delay(100);
+                        }
+                    }
+                    string title = await Active.View.ExecuteScriptAsync("document.title");
+                    checks.Add($"visit: url={Active.Url}");
+                    checks.Add($"visit: error={Active.LastNavigationError?.ToString() ?? "none"}");
+                    checks.Add($"visit: title={title}");
+                    checks.Add($"visit: eval={evaluated}");
+                    checks.Add($"visit: smartscreen={SecurityManager.Read(Active.View.CoreWebView2)}");
                 }
                 else if (stage == "dns-probe")
                 {

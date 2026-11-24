@@ -20,6 +20,7 @@ const mainRunners = [
 // working directory: their engine profiles stay on the protected volume and the write trace covers them.
 const localRunners = [
     ['network-guard', 'tests/phase5/network-guard.mjs', [], []],
+    ['webrtc-guard', 'tests/phase5/webrtc-guard.mjs', [], []],
     ['dns-protection', 'tests/phase5/dns-protection.mjs', [], ['openssl']],
     ['smartscreen', 'tests/security/smartscreen.mjs', [], ['openssl']],
 ];

@@ -23,7 +23,7 @@ Phase 0에서 WebView2에 고정 프록시(`--proxy-server`, 폴백 없음)를 �
 
 ### 프록시 보호 (실패 시 차단)
 
-- 엔진 인수: `--proxy-server=<scheme>://<host>:<port>`, `--proxy-bypass-list=<-loopback>`(루프백도 프록시로), `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`(WebRTC가 프록시를 거치지 않는 UDP를 쓰지 않음), `--disable-quic`. PAC·자동 감지·`DIRECT` 폴백은 쓰지 않는다.
+- 엔진 인수: `--proxy-server=<scheme>://<host>:<port>`, `--proxy-bypass-list=<-loopback>`(루프백도 프록시로), `--webrtc-ip-handling-policy=disable_non_proxied_udp`(WebRTC가 프록시를 거치지 않는 UDP를 쓰지 않음), `--disable-quic`. PAC·자동 감지·`DIRECT` 폴백은 쓰지 않는다.
 - **VEIL 자체 요청**(금고 재요청)은 같은 프록시만 사용한다. 프록시 설정이 없거나 연결되지 않으면 요청하지 않는다.
 - 시작할 때 프록시 주소로 TCP 연결을 시험해 `경로 검증됨` 또는 `차단됨`을 표시한다. 연결 시험은 경로 표시용이며, 차단 자체는 엔진 인수(폴백 없음)에 의존한다.
 
@@ -35,6 +35,14 @@ Phase 0에서 WebView2에 고정 프록시(`--proxy-server`, 폴백 없음)를 �
 - 프록시 보호 모드에서는 이름 해석을 프록시가 맡는다. 보안 DNS 설정은 그대로 두되 효과는 VM에서 확인한다.
 - 시험용으로만 Debug 빌드에 `VEIL_TEST_TRUSTED_SPKI` 훅을 둔다. 지정한 시험 인증서 키 하나를 신뢰하게 하는 엔진 인수이며 Release 바이너리에는 포함되지 않음을 확인했다.
 - 실측(호스트): 로컬 DoH 응답기로 합성 이름이 해석되어 페이지가 열렸고, 응답기를 멈추면 해석이 실패했다(시스템 DNS 폴백 없음). 엔진은 배경에서 `config.edge.skype.com`(Edge 원격 구성)과 `nav-edge.smartscreen.microsoft.com`(SmartScreen 평판 검사)도 DoH로 조회했다. SmartScreen은 방문 주소를 Microsoft에 보내므로 끌지 여부는 보안·개인정보 절충으로 별도 결정한다.
+
+### WebRTC 스위치 수정 (2026-11-24)
+
+- 결함: 1단계에서 넣은 `--force-webrtc-ip-handling-policy`는 Chrome 전용 스위치다. WebView2 런타임(157.0.4341.60) `msedge.dll`에는 이 문자열이 없어 **무시됐다**. 프록시 보호 모드에서도 WebRTC가 UDP host 후보(mDNS로 가린 `.local` 주소)를 수집했고, STUN 서버가 있으면 실제 IP가 드러날 수 있는 상태였다.
+- 1단계 시험은 엔진 명령줄에 인수가 있는지만 확인했고, 효과는 확인하지 않았다.
+- 수정: 런타임이 지원하는 `--webrtc-ip-handling-policy`로 바꿨다. 같은 조건에서 표준 모드는 UDP 후보 1개, 프록시 모드는 후보 0개로 확인했다.
+- 회귀 시험 `tests/phase5/webrtc-guard.mjs`를 추가했다. 루프백 전용이며 STUN이나 외부 연결을 쓰지 않는다.
+- 나머지 엔진 스위치(`--proxy-server`, `--proxy-bypass-list`, `--disable-quic`, 시험용 SPKI)는 런타임 문자열에 있음을 확인했다. `--disable-quic`의 실제 효과는 인터넷 VM에서 확인한다.
 
 ## 검증
 
