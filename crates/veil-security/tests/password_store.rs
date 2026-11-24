@@ -38,3 +38,50 @@ fn oversized_or_empty_payload_never_publishes() {
     assert!(password_store::write(&path, secret(), too_large.as_slice(), false).is_err());
     assert!(!path.exists());
 }
+
+
+#[test]
+fn rotate_authenticates_old_and_preserves_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("passwords.age");
+    let payload = br#"[{"synthetic":"rotation-test"}]"#;
+    let new = || SecretString::from("synthetic replacement passphrase".to_owned());
+    password_store::write(&path, secret(), payload.as_slice(), false).unwrap();
+    let before = fs::read(&path).unwrap();
+    assert!(password_store::rotate(&path, SecretString::from("wrong".to_owned()), new()).is_err());
+    assert_eq!(fs::read(&path).unwrap(), before);
+    password_store::rotate(&path, secret(), new()).unwrap();
+    assert!(password_store::read(&path, secret()).is_err());
+    assert_eq!(password_store::read(&path, new()).unwrap().as_slice(), payload);
+    let mut corrupt = fs::read(&path).unwrap();
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    fs::write(&path, &corrupt).unwrap();
+    assert!(password_store::rotate(&path, new(), secret()).is_err());
+    assert_eq!(fs::read(&path).unwrap(), corrupt);
+}
+
+#[test]
+fn rotation_cli_requires_two_complete_secret_lines() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("passwords.age");
+    password_store::write(&path, secret(), b"[]".as_slice(), false).unwrap();
+    let hex = |s: &str| s.as_bytes().iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join("");
+    let old = hex("synthetic-only long passphrase");
+    let new = hex("synthetic cli replacement passphrase");
+    let run = |input: String| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_veil-vault"))
+            .arg("passwords-rotate").arg(&path)
+            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
+            .spawn().unwrap();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        child.wait().unwrap().success()
+    };
+    let before = fs::read(&path).unwrap();
+    assert!(!run(format!("{old}\n{new}")));
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert!(run(format!("{old}\n{new}\n")));
+    assert_eq!(password_store::read(&path, SecretString::from("synthetic cli replacement passphrase".to_owned())).unwrap().as_slice(), b"[]");
+}

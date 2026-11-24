@@ -2,6 +2,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
+using Microsoft.Win32;
 
 namespace Veil.Desktop;
 
@@ -61,7 +62,13 @@ public partial class BrowserWindow
             if (tab is null || origin is null || !PermissionContextMatches(tab, origin, epoch))
                 origin = null;
             var dialog = new PasswordManagerDialog(this, origin, entries);
-            if (await ShowManagementPageAsync("veil://passwords", dialog) != true || !PasswordWindowReady() || dialog.Selected is not { } selected) return;
+            if (await ShowManagementPageAsync("veil://passwords", dialog) != true || !PasswordWindowReady()) return;
+            if (dialog.Action is PasswordAction.Rotate or PasswordAction.Backup or PasswordAction.Restore)
+            {
+                await MaintainPasswordsAsync(store, password, entries, dialog.Action);
+                return;
+            }
+            if (dialog.Selected is not { } selected) return;
 
             switch (dialog.Action)
             {
@@ -97,7 +104,7 @@ public partial class BrowserWindow
                     break;
             }
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException
             or COMException or JsonException or OperationCanceledException or System.ComponentModel.Win32Exception)
         {
             if (PasswordWindowReady())
@@ -111,6 +118,64 @@ public partial class BrowserWindow
             entries?.Clear();
             session.PasswordUiOpen = false;
             session.PermissionUiOpen = false;
+        }
+    }
+
+    private async Task MaintainPasswordsAsync(PasswordStore store, char[] current, List<SavedLogin> entries, PasswordAction action)
+    {
+        bool Ready() => PasswordWindowReady() && IsActive;
+        if (!Ready()) return;
+        char[]? secret = null, confirmation = null;
+        List<SavedLogin>? imported = null, merged = null;
+        try
+        {
+            if (action == PasswordAction.Rotate)
+            {
+                secret = ProfileUnlockDialog.Prompt("새 관리자 암호", "새 암호를 12자 이상으로 설정하세요. 이전 백업의 암호는 변경되지 않습니다.", this);
+                if (secret is null || !Ready()) return;
+                if (secret.Length < 12 || current.AsSpan().SequenceEqual(secret))
+                { Status.Text = "기존과 다른 12자 이상의 암호를 입력하세요."; return; }
+                confirmation = ProfileUnlockDialog.Prompt("새 관리자 암호 확인", "새 암호를 다시 입력하세요.", this);
+                if (confirmation is null || !secret.AsSpan().SequenceEqual(confirmation) || !Ready()) return;
+                await store.RotateAsync(current, secret);
+                if (Ready()) Status.Text = "관리자 암호를 변경했습니다. 기존 백업은 이전 백업 암호로 여세요.";
+            }
+            else if (action == PasswordAction.Backup)
+            {
+                secret = ProfileUnlockDialog.Prompt("백업 전용 암호", "백업을 열 때 필요한 별도의 12자 이상 암호를 설정하세요. 잊으면 백업을 복원할 수 없습니다.", this);
+                if (secret is null || !Ready()) return;
+                if (secret.Length < 12) { Status.Text = "백업 암호는 12자 이상이어야 합니다."; return; }
+                confirmation = ProfileUnlockDialog.Prompt("백업 암호 확인", "백업 암호를 다시 입력하세요.", this);
+                if (confirmation is null || !secret.AsSpan().SequenceEqual(confirmation) || !Ready()) return;
+                var picker = new SaveFileDialog { Filter = "VEIL 암호화 계정 백업 (*.age)|*.age", DefaultExt = ".age",
+                    AddExtension = true, FileName = "veil-passwords-backup.age", OverwritePrompt = false };
+                if (picker.ShowDialog(this) != true || !Ready()) return;
+                await store.BackupAsync(picker.FileName, secret, entries);
+                if (Ready()) Status.Text = "암호화 백업을 생성했습니다. 백업 암호를 안전하게 보관하세요.";
+            }
+            else if (action == PasswordAction.Restore)
+            {
+                var picker = new OpenFileDialog { Filter = "VEIL 암호화 계정 백업 (*.age)|*.age", CheckFileExists = true };
+                if (picker.ShowDialog(this) != true || !Ready()) return;
+                secret = ProfileUnlockDialog.Prompt("백업 암호", "선택한 백업을 만들 때 사용한 암호를 입력하세요.", this);
+                if (secret is null || !Ready()) return;
+                imported = await store.ReadBackupAsync(picker.FileName, secret);
+                if (!Ready()) return;
+                merged = PasswordStore.MergeBackup(entries, imported);
+                int added = merged.Count - entries.Count;
+                if (added == 0) { Status.Text = "추가할 계정이 없습니다. 기존 계정은 유지했습니다."; return; }
+                if (MessageBox.Show(this, $"새 계정 {added}개를 추가합니다. 중복 {imported.Count - added}개는 기존 계정을 유지합니다. 복원할까요?",
+                    "암호화 백업 복원", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes || !Ready()) return;
+                await store.WriteAsync(current, merged, replace: true);
+                if (Ready()) Status.Text = $"계정 {added}개를 복원했습니다. 기존 계정은 유지했습니다.";
+            }
+        }
+        finally
+        {
+            ProtectedProfileSession.ClearPassword(secret);
+            ProtectedProfileSession.ClearPassword(confirmation);
+            imported?.Clear();
+            merged?.Clear();
         }
     }
 
