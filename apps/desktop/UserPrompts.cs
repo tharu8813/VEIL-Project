@@ -1,4 +1,5 @@
 using System.Windows;
+using Microsoft.Win32;
 
 namespace Veil.Desktop;
 
@@ -17,6 +18,8 @@ internal static class UserPrompts
     internal static Func<string, char[]?>? SmokeSecret;
     /// <summary>Debug smoke only: records a modal dialog by title instead of showing it.</summary>
     internal static Action<string>? SmokeModal;
+    // Debug only: substitute a synthetic path or cancellation for the native file picker.
+    internal static Func<bool, string?>? SmokeFilePicker;
 #endif
 
     internal static bool Confirm(Window owner, string message, string caption, MessageBoxImage icon = MessageBoxImage.Warning)
@@ -41,6 +44,14 @@ internal static class UserPrompts
         if (SmokeSecret is { } answer) return answer(title);
 #endif
         return ProfileUnlockDialog.Prompt(title, prompt, owner);
+    }
+
+    internal static string? PickFile(Window owner, FileDialog picker)
+    {
+#if DEBUG
+        if (SmokeFilePicker is { } answer) return answer(picker is SaveFileDialog);
+#endif
+        return picker.ShowDialog(owner) == true ? picker.FileName : null;
     }
 
     internal static void ShowModal(VeilDialog dialog, string title)

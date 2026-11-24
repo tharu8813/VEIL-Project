@@ -214,43 +214,43 @@ internal sealed class LibraryWindow : VeilDialog
         {
             if (folders is null || canEdit?.Invoke() != true) return;
             var picker = new OpenFileDialog { Filter = "북마크 HTML (*.html;*.htm)|*.html;*.htm", CheckFileExists = true };
-            if (picker.ShowDialog(PromptOwner) != true || canEdit?.Invoke() != true) return;
+            string? path = UserPrompts.PickFile(PromptOwner, picker);
+            if (path is null || canEdit?.Invoke() != true) return;
             try
             {
-                var imported = BookmarkHtml.Read(picker.FileName, entries);
+                var imported = BookmarkHtml.Read(path, entries);
                 if (imported.Entries.Count == 0 && imported.Folders.Count == 0)
                 {
-                    MessageBox.Show(PromptOwner, "가져올 새 북마크가 없습니다.", title);
+                    UserPrompts.Notice(PromptOwner, "가져올 새 북마크가 없습니다.", title, MessageBoxImage.None);
                     return;
                 }
                 if (Commit(() => { folders.AddRange(imported.Folders); entries.AddRange(imported.Entries); }))
-                    MessageBox.Show(PromptOwner, $"북마크 {imported.Entries.Count}개, 폴더 {imported.Folders.Count}개 가져옴. 건너뜀 {imported.Skipped}개.", title);
+                    UserPrompts.Notice(PromptOwner, $"북마크 {imported.Entries.Count}개, 폴더 {imported.Folders.Count}개 가져옴. 건너뜀 {imported.Skipped}개.", title, MessageBoxImage.None);
             }
             catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or DecoderFallbackException or RegexMatchTimeoutException)
             {
-                MessageBox.Show(PromptOwner, "북마크 HTML을 읽지 못했습니다. UTF-8 북마크 파일과 크기를 확인하세요.", title,
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                UserPrompts.Notice(PromptOwner, "북마크 HTML을 읽지 못했습니다. UTF-8 북마크 파일과 크기를 확인하세요.", title);
             }
         }
 
         void ExportBookmarks()
         {
             if (folders is null || canEdit?.Invoke() != true) return;
-            if (MessageBox.Show(PromptOwner, "내보낸 HTML에는 북마크 주소와 이름이 평문으로 저장됩니다. 계속할까요?",
-                "북마크 내보내기", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes ||
+            if (!UserPrompts.Confirm(PromptOwner, "내보낸 HTML에는 북마크 주소와 이름이 평문으로 저장됩니다. 계속할까요?",
+                "북마크 내보내기") ||
                 canEdit?.Invoke() != true) return;
             var picker = new SaveFileDialog { Filter = "북마크 HTML (*.html)|*.html", DefaultExt = ".html",
                 FileName = "veil-bookmarks.html", AddExtension = true, OverwritePrompt = false };
-            if (picker.ShowDialog(PromptOwner) != true || canEdit?.Invoke() != true) return;
+            string? path = UserPrompts.PickFile(PromptOwner, picker);
+            if (path is null || canEdit?.Invoke() != true) return;
             try
             {
-                BookmarkHtml.WriteNew(picker.FileName, BookmarkHtml.Export(folders, entries));
-                MessageBox.Show(PromptOwner, "북마크를 내보냈습니다.", title);
+                BookmarkHtml.WriteNew(path, BookmarkHtml.Export(folders, entries));
+                UserPrompts.Notice(PromptOwner, "북마크를 내보냈습니다.", title, MessageBoxImage.None);
             }
             catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
             {
-                MessageBox.Show(PromptOwner, "내보내지 못했습니다. 기존 파일을 덮어쓰지 않습니다. 다른 이름과 저장 위치를 확인하세요.",
-                    title, MessageBoxButton.OK, MessageBoxImage.Warning);
+                UserPrompts.Notice(PromptOwner, "내보내지 못했습니다. 기존 파일을 덮어쓰지 않습니다. 다른 이름과 저장 위치를 확인하세요.", title);
             }
         }
 
@@ -274,8 +274,8 @@ internal sealed class LibraryWindow : VeilDialog
         void DeleteFolder()
         {
             if (folders is null || Current() is not { } folder) return;
-            if (MessageBox.Show(PromptOwner, $"'{folder.Name}' 폴더를 삭제할까요? 북마크와 하위 폴더는 상위 폴더로 이동합니다.",
-                "폴더 삭제", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            if (!UserPrompts.Confirm(PromptOwner, $"'{folder.Name}' 폴더를 삭제할까요? 북마크와 하위 폴더는 상위 폴더로 이동합니다.",
+                "폴더 삭제", MessageBoxImage.Question)) return;
             if (!folders.Contains(folder)) return;
             Commit(() => BookmarkPolicy.RemoveFolder(folders, entries, folder.Id));
             if (!folders.Contains(folder)) { currentFolder = folder.ParentId; Refresh(); }
@@ -294,7 +294,7 @@ internal sealed class LibraryWindow : VeilDialog
                 folder.ParentId == target.Id) return;
             bool moved = false;
             Commit(() => moved = BookmarkPolicy.MoveFolder(folders, entries, folder.Id, target.Id));
-            if (!moved) MessageBox.Show(PromptOwner, "자기 자신 또는 하위 폴더로 이동할 수 없으며 최대 깊이는 16단계입니다.", title);
+            if (!moved) UserPrompts.Notice(PromptOwner, "자기 자신 또는 하위 폴더로 이동할 수 없으며 최대 깊이는 16단계입니다.", title, MessageBoxImage.None);
         }
 
         void ShiftBookmark(int direction)

@@ -285,6 +285,139 @@ public partial class BrowserWindow
                     !data.History.Any(e => e.Title is "p6-h-30m" or "p6-h-3d"), "history deletions restored after restart");
                 break;
             }
+            case "p6-bookmark-folders":
+            {
+                var page = await OpenPage(() => BookmarksClick(this, new RoutedEventArgs()), "veil://bookmarks");
+                var folderView = Named<ComboBox>(page, "현재 폴더");
+                var destination = Named<ComboBox>(page, "이동할 폴더");
+                var folderName = Named<TextBox>(page, "폴더 이름");
+                var search = Named<TextBox>(page, "북마크 관리 검색");
+                var list = Named<ListBox>(page, "북마크 관리");
+                void Select(ComboBox box, string label) => box.SelectedItem =
+                    box.Items.Cast<object>().Single(item => item.ToString() == label);
+                void Press(string label) => Click(ButtonText(page, label), label);
+                string Snapshot(BrowserData value) => JsonSerializer.Serialize(new { value.Bookmarks, value.BookmarkFolders });
+                string before = Snapshot(data);
+                string temp = Path.Combine(session.Root, "p6-bookmark-fixtures-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(temp);
+                var picks = new Queue<(bool Save, string? Path)>();
+                UserPrompts.SmokeFilePicker = save =>
+                {
+                    Check(picks.Count > 0, "expected file picker request");
+                    var pick = picks.Dequeue();
+                    Check(pick.Save == save, "correct picker kind");
+                    return pick.Path;
+                };
+                try
+                {
+                    string input = Path.Combine(temp, "import.html");
+                    string invalid = Path.Combine(temp, "invalid.html");
+                    string output = Path.Combine(temp, "export.html");
+                    File.WriteAllText(input, "<!DOCTYPE NETSCAPE-Bookmark-file-1><DL><p>" +
+                        "<DT><H3>P6 Parent</H3><DL><p><DT><H3>P6 Child</H3><DL><p>" +
+                        "<DT><A HREF=\"https://bookmark-fixture.test/a?x=1&amp;y=2\">P6 &amp; A</A>" +
+                        "<DT><A HREF=\"https://bookmark-fixture.test/b\">P6 B</A>" +
+                        "<DT><A HREF=\"https://bookmark-fixture.test/b\">Duplicate</A>" +
+                        "<DT><A HREF=\"javascript:alert(1)\">Unsafe</A></DL><p></DL><p></DL><p>");
+                    File.WriteAllText(invalid, "<!DOCTYPE NETSCAPE-Bookmark-file-1><DL><script>bad</script></DL>");
+                    picks.Enqueue((false, null));
+                    Press("HTML 가져오기");
+                    Check(Snapshot(data) == before, "cancelled import preserves state");
+                    picks.Enqueue((false, invalid));
+                    Press("HTML 가져오기");
+                    Check(Snapshot(data) == before && harness.Notices[^1].Message.Contains("읽지 못했습니다"), "active markup rejected");
+                    BlockSave();
+                    try
+                    {
+                        picks.Enqueue((false, input));
+                        Press("HTML 가져오기");
+                        Check(Snapshot(data) == before && harness.Notices[^1].Message.Contains("저장하지 못했습니다"), "import save failure rolls back both lists");
+                    }
+                    finally { UnblockSave(); }
+                    Check(Snapshot(BrowserData.Load(statePath)) == before, "import rollback preserves persisted state");
+                    picks.Enqueue((false, input));
+                    Press("HTML 가져오기");
+                    var parent = data.BookmarkFolders.Single(f => f.Name == "P6 Parent");
+                    var child = data.BookmarkFolders.Single(f => f.Name == "P6 Child");
+                    Check(child.ParentId == parent.Id && data.Bookmarks.Count(e => e.FolderId == child.Id) == 2,
+                        "HTML imports nested folders and skips unsafe and duplicate URLs");
+                    Check(harness.Notices[^1].Message.Contains("건너뜀 2개"), "import reports skipped items");
+                    Select(folderView, "최상위 / P6 Parent / P6 Child");
+                    Check(list.Items.Count == 2, "folder filters bookmark rows");
+                    list.SelectedIndex = 1;
+                    Press("북마크 ↑");
+                    Check(data.Bookmarks.First(e => e.FolderId == child.Id).Title == "P6 B", "bookmark reordered");
+                    list.SelectedIndex = 0;
+                    Select(destination, "최상위 / P6 Parent");
+                    Press("북마크 이동");
+                    Check(data.Bookmarks.Single(e => e.Title == "P6 B").FolderId == parent.Id, "bookmark moved");
+                    Select(folderView, "최상위 / P6 Parent");
+                    Select(destination, "최상위 / P6 Parent / P6 Child");
+                    Press("폴더 이동");
+                    Check(data.BookmarkFolders.Single(f => f.Id == parent.Id).ParentId is null &&
+                        harness.Notices[^1].Message.Contains("하위 폴더"), "folder cycle rejected");
+                    folderName.Text = "P6 New";
+                    Press("폴더 추가");
+                    var added = data.BookmarkFolders.Single(f => f.Name == "P6 New");
+                    Check(added.ParentId == parent.Id, "folder created under current folder");
+                    folderName.Text = "P6 Renamed";
+                    Press("이름 변경");
+                    Check(data.BookmarkFolders.Single(f => f.Id == added.Id).Name == "P6 Renamed", "folder renamed");
+                    Select(destination, "최상위");
+                    Press("폴더 이동");
+                    Check(data.BookmarkFolders.Single(f => f.Id == added.Id).ParentId is null, "folder moved to root");
+                    Select(folderView, "최상위 / P6 Parent");
+                    harness.Answers.Enqueue(false);
+                    Press("폴더 삭제");
+                    Check(data.BookmarkFolders.Any(f => f.Id == parent.Id), "cancelled folder delete");
+                    harness.Answers.Enqueue(true);
+                    Press("폴더 삭제");
+                    Check(!data.BookmarkFolders.Any(f => f.Id == parent.Id) &&
+                        data.BookmarkFolders.Single(f => f.Id == child.Id).ParentId is null &&
+                        data.Bookmarks.Single(e => e.Title == "P6 B").FolderId is null, "folder removal promotes children without losing bookmarks");
+                    search.Text = "P6 & A";
+                    Check(list.Items.Count == 1, "search spans folders");
+                    search.Text = "";
+                    string saved = Snapshot(data);
+                    harness.Answers.Enqueue(false);
+                    Press("HTML 내보내기");
+                    Check(!File.Exists(output), "plaintext export declined");
+                    harness.Answers.Enqueue(true);
+                    picks.Enqueue((true, null));
+                    Press("HTML 내보내기");
+                    Check(!File.Exists(output), "export picker cancelled");
+                    harness.Answers.Enqueue(true);
+                    picks.Enqueue((true, output));
+                    Press("HTML 내보내기");
+                    byte[] exported = File.ReadAllBytes(output);
+                    var roundTrip = BookmarkHtml.Read(output, []);
+                    var entry = roundTrip.Entries.Single(e => e.Title == "P6 & A");
+                    Check(entry.Url == "https://bookmark-fixture.test/a?x=1&y=2" &&
+                        roundTrip.Folders.Single(f => f.Id == entry.FolderId).Name == "P6 Child", "export round trip preserves escaped title, URL and folder");
+                    harness.Answers.Enqueue(true);
+                    picks.Enqueue((true, output));
+                    Press("HTML 내보내기");
+                    Check(File.ReadAllBytes(output).SequenceEqual(exported) && harness.Notices[^1].Message.Contains("덮어쓰지"), "export collision preserves existing file");
+                    Check(Snapshot(data) == saved && Snapshot(BrowserData.Load(statePath)) == saved, "export leaves protected state unchanged");
+                    Check(picks.Count == 0 && harness.Answers.Count == 0, "all scripted prompts consumed");
+                }
+                finally
+                {
+                    UserPrompts.SmokeFilePicker = null;
+                    Directory.Delete(temp, recursive: true);
+                }
+                await ClosePage(page, "veil://bookmarks");
+                break;
+            }
+            case "p6-bookmark-folders-read":
+            {
+                var child = data.BookmarkFolders.Single(f => f.Name == "P6 Child");
+                Check(child.ParentId is null && data.BookmarkFolders.Any(f => f.Name == "P6 Renamed" && f.ParentId is null) &&
+                    !data.BookmarkFolders.Any(f => f.Name == "P6 Parent"), "folder changes restored after restart");
+                Check(data.Bookmarks.Single(e => e.Title == "P6 & A").FolderId == child.Id &&
+                    data.Bookmarks.Single(e => e.Title == "P6 B").FolderId is null, "bookmark moves restored after restart");
+                break;
+            }
             case "p6-tabs":
             {
                 while (Tabs.Items.Count > 1) await CloseTabAsync((TabItem)Tabs.Items[^1]);

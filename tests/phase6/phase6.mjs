@@ -17,7 +17,7 @@ import { startFixture } from '../integration/fixture.mjs';
 import { startHttpsFixtures } from './https-fixture.mjs';
 
 const run = promisify(execFile);
-const all = ['p6-library', 'p6-library-read', 'p6-tabs', 'p6-search', 'p6-search-read', 'p6-permissions',
+const all = ['p6-library', 'p6-library-read', 'p6-bookmark-folders', 'p6-bookmark-folders-read', 'p6-tabs', 'p6-search', 'p6-search-read', 'p6-permissions',
     'p6-permissions-read', 'p6-sitedata', 'p6-passwords', 'p6-settings'];
 const selected = process.argv.slice(2);
 const stages = selected.length ? all.filter(stage => selected.includes(stage)) : all;
