@@ -43,6 +43,13 @@ public partial class BrowserWindow
                     "local suggestions deduplicate and exclude sensitive URL forms");
                 localData.LocalAddressSuggestions = false;
                 Check(SearchPolicy.Suggest(localData, "synthetic").Count == 0, "local suggestions disabled");
+                var rule = new SitePermissionRule("https://example.test", "camera", SitePermissionPolicy.Ask);
+                Check(SitePermissionPolicy.ValidRules([rule]) &&
+                    !SitePermissionPolicy.ValidRules([rule, rule]) &&
+                    !SitePermissionPolicy.ValidRules([rule with { Mode = "unknown" }]) &&
+                    SitePermissionPolicy.ModeFor([rule], "https://example.test:8443", "camera") == SitePermissionPolicy.Block &&
+                    SitePermissionPolicy.ModeFor([rule], "https://example.test", "microphone") == SitePermissionPolicy.Block &&
+                    SitePermissionPolicy.Origin("http://example.test") is null, "permission policy defaults and exact scope");
                 var unusedEngine = new WebView2BrowserEngine();
                 Check(!unusedEngine.IsReady && unusedEngine.RuntimeVersion is null, "uninitialized engine state");
                 bool refusedView = false;
@@ -137,7 +144,7 @@ public partial class BrowserWindow
                     await ReadyAt("/second");
                     Check(Tabs.Items.Count == 3, "closed tab restored");
                     SetTabPinned((TabItem)Tabs.Items[0], true);
-                    Check(PinnedTabCount == 1 && ((BrowserTab)Tabs.Items[0].Tag).Pinned, "tab pinned");
+                    Check(PinnedTabCount == 1 && ((BrowserTab)((TabItem)Tabs.Items[0]).Tag).Pinned, "tab pinned");
                     Tabs.SelectedIndex = 1;
                     MoveSelectedTab(-1);
                     Check(Tabs.SelectedIndex == 1, "normal tab cannot cross pinned boundary");

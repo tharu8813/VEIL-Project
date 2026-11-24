@@ -286,7 +286,7 @@ public partial class BrowserWindow : Window
 
     private void OnSourceChanged(BrowserTab tab)
     {
-    if (IsInternalUrl(tab.Url)) return;
+        if (IsInternalUrl(tab.Url)) return;
         tab.Url = tab.View.CoreWebView2.Source;
         UpdateTabToolTip(tab);
         if (Active == tab) RefreshChrome();
