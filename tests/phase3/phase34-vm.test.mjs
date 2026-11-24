@@ -92,3 +92,9 @@ test('disk-full probe uses bounded vault frames and a byte-count commit', () => 
     assert.equal(bytes.readUInt32LE(bytes.length - 12), 0);
     assert.equal(bytes.readBigUInt64LE(bytes.length - 8), BigInt(payload.length));
 });
+
+test('publication recovery runs on the verified primary volume', () => {
+    const item = makePlan(main.parent).find(item => item.id === 'vault-publication');
+    assert.deepEqual(item.args, ['tests/phase4/vault-publication.mjs', '--profile-parent', main.parent]);
+    assert.equal(item.lab, main.parent);
+});

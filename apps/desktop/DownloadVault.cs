@@ -413,7 +413,7 @@ internal sealed class DownloadVault : IDisposable
             string reply;
             try { reply = await CapturePipeAsync(ReadLineAsync, CommitTimeoutSeconds); }
             catch { CloseBrokenPipe(); throw; }
-            if (reply != $"ok\t{total}") throw new IOException("The vault did not accept the download.");
+            if (reply != $"ok\t{total}") throw SealFailure(reply);
             var entry = new VaultEntry(id, download.Name, total, DateTimeOffset.Now, host);
             await SealBytesLockedAsync(Path.Combine(Meta, id + ".veil"), JsonSerializer.SerializeToUtf8Bytes(entry, Json));
             Entries = [entry, .. Entries];
@@ -638,11 +638,16 @@ internal sealed class DownloadVault : IDisposable
                 await input.FlushAsync(token);
                 return await ReadLineAsync(token);
             }, CommitTimeoutSeconds);
-            if (reply != $"ok\t{data.Length}") throw new IOException("The vault did not store metadata.");
+            if (reply != $"ok\t{data.Length}") throw SealFailure(reply);
         }
         catch { CloseBrokenPipe(); throw; }
         finally { CryptographicOperations.ZeroMemory(data); }
     }
+
+    // Recognize only the fixed error-kind prefix, not paths or arbitrary helper diagnostics.
+    internal static IOException SealFailure(string reply) =>
+        reply.StartsWith("err\tStorageFull:", StringComparison.Ordinal)
+            ? new VaultStorageFullException() : new IOException("The vault did not accept the encrypted write.");
 
     private Task<byte[]?> ReadSmallLockedAsync(string path) => ReadBoundedLockedAsync(path, "read", 1024 * 1024);
 

@@ -13,6 +13,7 @@ const mainRunners = [
     ['engine-kill', 'tests/phase3/engine-kill.mjs', []],
     ['vault-capture', 'tests/phase4/vault-capture.mjs', []],
     ['vault-persistence', 'tests/phase4/vault-persist.mjs', []],
+    ['vault-publication', 'tests/phase4/vault-publication.mjs', []],
     ['jump-list', 'tests/security/browse-session.mjs', ['--runs', '1', '--assert-clean']],
     ['desktop-crash-cycle', 'tests/integration/desktop.mjs', ['--crash-cycle']],
 ];
