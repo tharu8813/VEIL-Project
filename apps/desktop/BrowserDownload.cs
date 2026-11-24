@@ -15,6 +15,7 @@ internal sealed class BrowserDownload(string name) : INotifyPropertyChanged, IDi
     public bool CanCancel { get; private set; } = true;
     public bool IsIndeterminate => totalBytes is not > 0;
     public double Percent => totalBytes is > 0 ? Math.Clamp(100d * Bytes / totalBytes.Value, 0, 100) : 0;
+    internal DownloadPhase Phase { get; private set; } = DownloadPhase.Waiting;
     internal long Bytes { get; private set; }
     internal long? TotalBytes => totalBytes;
     internal CancellationToken Token => cancellation.Token;
@@ -24,6 +25,8 @@ internal sealed class BrowserDownload(string name) : INotifyPropertyChanged, IDi
     {
         Bytes = bytes;
         totalBytes = total;
+        if (!CanCancel) return;
+        Phase = DownloadPhase.Streaming;
         if (lastUpdate != 0 && Stopwatch.GetElapsedTime(lastUpdate) < TimeSpan.FromMilliseconds(100)) return;
         lastUpdate = Stopwatch.GetTimestamp();
         StatusText = total is > 0
@@ -41,6 +44,7 @@ internal sealed class BrowserDownload(string name) : INotifyPropertyChanged, IDi
     internal void WaitForTransfer()
     {
         if (!CanCancel) return;
+        Phase = DownloadPhase.Request;
         StatusText = "보호 다운로드 준비 중";
         Refresh();
     }
@@ -48,6 +52,7 @@ internal sealed class BrowserDownload(string name) : INotifyPropertyChanged, IDi
     internal void Finish()
     {
         CanCancel = false;
+        Phase = DownloadPhase.Publishing;
         StatusText = "금고 저장 마무리 중";
         Refresh();
     }

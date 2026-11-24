@@ -138,6 +138,15 @@ public partial class BrowserWindow
                 Check(VaultPdfPreview.RenderSize(612, 792) is (1391, 1800) &&
                     VaultPdfPreview.RenderSize(double.NaN, 100) is null &&
                     VaultPdfPreview.RenderSize(100000, 1) is null, "PDF render dimension limits");
+                Check(DownloadFailurePolicy.HttpStatus(System.Net.HttpStatusCode.ServiceUnavailable, true).Retryable &&
+                    !DownloadFailurePolicy.HttpStatus(System.Net.HttpStatusCode.Forbidden, true).Retryable &&
+                    !DownloadFailurePolicy.HttpStatus(System.Net.HttpStatusCode.ServiceUnavailable, false).Retryable &&
+                    DownloadFailurePolicy.SafeRetryAddress(new Uri("https://example.test/file.bin")) &&
+                    !DownloadFailurePolicy.SafeRetryAddress(new Uri("https://example.test/file.bin?token=synthetic")) &&
+                    !DownloadFailurePolicy.SafeRetryAddress(new Uri("http://example.test/file.bin")),
+                    "download retry only permits initial transient failures and restricted HTTPS addresses");
+                Check(!DownloadFailurePolicy.Describe(new IOException("synthetic-secret"), DownloadPhase.Streaming, true)
+                    .Contains("synthetic-secret"), "download failure detail does not expose raw exceptions");
                 Check(VaultPresentation.DecodeText("synthetic"u8.ToArray()) == "synthetic" &&
                     VaultPresentation.ExportName(previewEntry with { Name = "CON.txt" }) == "VEIL-download.bin" &&
                     VaultPresentation.Filter([previewEntry], "example", VaultSort.Recent, false).Count == 1,

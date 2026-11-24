@@ -271,12 +271,11 @@ internal sealed class DownloadVault : IDisposable
     }
 
     /// <summary>Fetches the URL with the page's cookies and seals the body as a new vault item.</summary>
-    internal async Task<VaultEntry> CaptureAsync(Uri uri, BrowserDownload download, CoreWebView2 web)
+    internal async Task<VaultEntry> CaptureAsync(Uri uri, BrowserDownload download, CoreWebView2 web, bool retry = false)
     {
         CancellationToken cancel = download.Token;
         if (!Unlocked) throw new InvalidOperationException("The vault is locked.");
-        using var response = await GetFollowingRedirectsAsync(uri, web, cancel);
-        if (!response.IsSuccessStatusCode) throw new HttpRequestException($"HTTP {(int)response.StatusCode}");
+        using var response = await GetFollowingRedirectsAsync(uri, web, cancel, retry);
         long? declared = response.Content.Headers.ContentLength;
         string id = Guid.NewGuid().ToString("N");
         long total = 0;
@@ -621,29 +620,38 @@ internal sealed class DownloadVault : IDisposable
         if (result.Verdict == ThreatVerdict.Malicious) throw new ThreatBlockedException(result.Reason);
     }
 
-    private async Task<HttpResponseMessage> GetFollowingRedirectsAsync(Uri uri, CoreWebView2 web, CancellationToken cancel)
+    private async Task<HttpResponseMessage> GetFollowingRedirectsAsync(Uri uri, CoreWebView2 web, CancellationToken cancel, bool retry)
     {
         for (int hop = 0; hop <= MaxRedirects; hop++)
         {
             if (uri.Scheme is not ("http" or "https")) throw new HttpRequestException("Redirect left HTTP(S).");
             // Every hop is checked before VEIL requests it, so a redirect cannot route around the list.
             await RejectThreatAsync(threats?.CheckAsync(uri, TimeSpan.FromSeconds(2), cancel));
-            var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.TryAddWithoutValidation("User-Agent", web.Settings.UserAgent);
             // Cookies are looked up per hop so each origin only receives its own cookies.
             var cookies = await web.CookieManager.GetCookiesAsync(uri.AbsoluteUri);
             if (cookies.Count > 0)
                 request.Headers.TryAddWithoutValidation("Cookie", string.Join("; ", cookies.Select(c => $"{c.Name}={c.Value}")));
-            var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel);
+            HttpResponseMessage response;
+            try { response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel); }
+            catch (HttpRequestException error) { throw DownloadFailurePolicy.Connection(error, hop == 0 && !retry); }
             if ((int)response.StatusCode is >= 300 and < 400 && response.Headers.Location is { } location)
             {
-                uri = location.IsAbsoluteUri ? location : new Uri(uri, location);
                 response.Dispose();
+                if (retry) throw new DownloadRequestFailure("재시도 중 리디렉션 발생 · 원래 페이지에서 다시 다운로드하세요.", false);
+                uri = location.IsAbsoluteUri ? location : new Uri(uri, location);
                 continue;
+            }
+            if (!response.IsSuccessStatusCode)
+            {
+                var failure = DownloadFailurePolicy.HttpStatus(response.StatusCode, hop == 0 && !retry);
+                response.Dispose();
+                throw failure;
             }
             return response;
         }
-        throw new HttpRequestException("Too many redirects.");
+        throw new DownloadRequestFailure("리디렉션 횟수 초과", false);
     }
 
     public void Dispose()

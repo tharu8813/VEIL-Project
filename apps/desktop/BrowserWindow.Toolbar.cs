@@ -12,6 +12,33 @@ public partial class BrowserWindow
     private readonly DispatcherTimer downloadRingTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
     private double ringAngle;
     private string[] popupRows = [];
+    private sealed record RetryDownload(BrowserTab Tab, Uri Address, string Name, long Epoch, string Source, DateTimeOffset Expires);
+    private RetryDownload? retryDownload;
+
+    private bool CanRetry(RetryDownload item)
+    {
+        if (!SettingsReady() || !CanUseTab(item.Tab.Item) || item.Expires <= DateTimeOffset.UtcNow ||
+            item.Tab.NavigationEpoch != item.Epoch || !DownloadFailurePolicy.SafeRetryAddress(item.Address)) return false;
+        try
+        {
+            return item.Tab.View.CoreWebView2 is { } web && web.Source == item.Source &&
+                session.Vault.Unlocked && session.Vault.Unsupported(item.Address) is null;
+        }
+        catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException)
+        { return false; }
+    }
+
+    private void RetryDownloadClick(object sender, RoutedEventArgs args)
+    {
+        if (retryDownload is not { } item || !CanRetry(item)) return;
+        retryDownload = null; // single explicit retry; no duplicate clicks or repeated retry chains
+        RetryDownloadButton.Visibility = Visibility.Collapsed;
+        DownloadPopup.IsOpen = false;
+        if (MessageBox.Show(this, $"{item.Name}을(를) 원래 서버에 다시 요청합니다. 이전 전송을 이어받지 않습니다. 계속할까요?",
+            "다운로드 다시 시도", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes ||
+            !CanRetry(item)) return;
+        _ = CaptureAsync(item.Tab.View.CoreWebView2, item.Address, item.Name, 0, 0, item, retry: true);
+    }
 
     // Weight known transfers by bytes, not by the number of files. An unknown or queued size
     // cannot be represented by an honest percentage. A full body is not yet an authenticated file.
@@ -37,6 +64,9 @@ public partial class BrowserWindow
             downloadRingTimer.Stop();
             return;
         }
+        if (retryDownload is { } retry && !CanRetry(retry)) retryDownload = null;
+        RetryDownloadButton.Visibility = retryDownload is null ? Visibility.Collapsed : Visibility.Visible;
+        RetryDownloadButton.ToolTip = retryDownload?.Name;
         bool active = session.ActiveDownloads.Count != 0;
         DownloadRingTrack.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
         DownloadRingArc.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
@@ -59,7 +89,7 @@ public partial class BrowserWindow
             System.Windows.Automation.AutomationProperties.SetName(DownloadButton, "최근 다운로드");
         }
         if (DownloadPopup.IsOpen) RefreshRecentDownloads();
-        if (active || DownloadPopup.IsOpen)
+        if (active || DownloadPopup.IsOpen || retryDownload is not null)
         {
             if (!downloadRingTimer.IsEnabled) downloadRingTimer.Start();
         }
