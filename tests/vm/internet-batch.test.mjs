@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { candidate, judgeCapture, judgeProxyCandidates, judgeWebRtc, judgeQuic, plan } from './internet-batch.mjs';
+import { candidate, judgeCapture, judgeProxyCandidates, judgeWebRtc, judgeQuic, judgeProxyDohRoute, judgeProxyDohCapture, plan } from './internet-batch.mjs';
 
 test('plan lists every Gate D item as NOT RUN and rejects unknown IDs', () => {
     const items = plan();
@@ -23,15 +23,37 @@ test('ICE candidates are parsed and any UDP candidate fails proxy mode', () => {
     assert.equal(judgeProxyCandidates(null).status, 'FAIL');
 });
 
-test('dns-path needs the control name in the capture and fails when the secure-DNS name leaks', () => {
+const wire = name => Buffer.concat([...name.split('.').map(label => Buffer.concat([
+    Buffer.from([label.length]), Buffer.from(label, 'ascii'),
+])), Buffer.from([0])]);
+
+test('dns-path needs a full control name and rejects a case-insensitive protected name leak', () => {
     const names = { systemName: 'veil-aaaa.example.com', dohName: 'veil-bbbb.example.com' };
-    const packet = (...labels) => Buffer.concat(labels.map(label => Buffer.concat([Buffer.from([label.length]), Buffer.from(label)])));
-    assert.equal(judgeCapture(packet('veil-aaaa', 'example', 'com'), names).status, 'PASS');
-    assert.equal(judgeCapture(packet('veil-aaaa', 'example', 'com', 'veil-bbbb'), names).status, 'FAIL');
-    assert.match(judgeCapture(Buffer.alloc(10), names).detail, /not trustworthy/);
-    assert.deepEqual(judgeCapture(packet('veil-aaaa', 'cloudflare-dns', 'com'), names).bootstrap, ['cloudflare-dns']);
+    const control = wire(names.systemName);
+    assert.equal(judgeCapture(control, names).status, 'PASS');
+    assert.equal(judgeCapture(Buffer.concat([control, wire('VEIL-BBBB.Example.COM')]), names).status, 'FAIL');
+    assert.equal(judgeCapture(wire(names.dohName), names).status, 'FAIL');
+    assert.match(judgeCapture(Buffer.from('veil-aaaa'), names).detail, /not trustworthy/);
+    assert.match(judgeCapture(wire('veil-aaaa.other.com'), names).detail, /not trustworthy/);
+    assert.deepEqual(judgeCapture(Buffer.concat([control, wire('cloudflare-dns.com'), wire('dns.quad9.net')]), names).bootstrap,
+        ['cloudflare-dns.com', 'dns.quad9.net']);
+    assert.throws(() => judgeCapture(control, { ...names, dohName: names.systemName }));
 });
 
+test('proxy DoH requires successful site and tunnel, and distinguishes missing provider evidence', () => {
+    const target = 'https://www.wikipedia.org/', dohName = 'veil-bbbb.example.com', systemName = 'veil-aaaa.example.com';
+    const site = { error: null, navError: 'none', url: target, eval: '"h2"' };
+    const tunnels = ['CONNECT www.wikipedia.org:443'], seen = ['CONNECT ' + dohName + ':443', ...tunnels];
+    assert.equal(judgeProxyDohRoute(site, target, [], seen, dohName).status, 'FAIL');
+    assert.equal(judgeProxyDohRoute({ ...site, navError: 'Timeout' }, target, tunnels, seen, dohName).status, 'FAIL');
+    assert.equal(judgeProxyDohRoute(site, target, tunnels, [], dohName).status, 'FAIL');
+    const missing = { ...judgeProxyDohRoute(site, target, tunnels, seen, dohName), names: { dohName } };
+    assert.equal(judgeProxyDohCapture(wire(systemName), systemName, missing).status, 'OBSERVED');
+    const established = { ...judgeProxyDohRoute(site, target, [...tunnels, 'CONNECT cloudflare-dns.com:443'], seen, dohName), names: { dohName } };
+    assert.equal(judgeProxyDohCapture(wire(systemName), systemName, established).status, 'PASS');
+    assert.equal(judgeProxyDohCapture(Buffer.concat([wire(systemName), wire(dohName)]), systemName, established).status, 'FAIL');
+    assert.equal(judgeProxyDohCapture(wire(dohName), systemName, missing).status, 'FAIL');
+});
 
 test('ICE errors, malformed candidates, missing control and direct requests cannot pass', () => {
     const udp = 'candidate:1 1 udp 2122260223 192.168.1.5 54321 typ host';

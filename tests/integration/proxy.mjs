@@ -3,8 +3,9 @@
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 
-export function startProxy() {
-    const seen = [];
+export function startProxy({ rejectConnectHosts = [] } = {}) {
+    const seen = [], connected = [];
+    const rejected = new Set(rejectConnectHosts.map(host => host.toLowerCase()));
     const proxy = createServer((request, response) => {
         const target = new URL(request.url);
         seen.push(target.pathname);
@@ -18,9 +19,19 @@ export function startProxy() {
     proxy.on('connect', (request, socket) => {
         seen.push(`CONNECT ${request.url}`);
         const [host, port] = request.url.split(':');
-        const tunnel = connect(Number(port), host, () => { socket.write('HTTP/1.1 200 OK\r\n\r\n'); tunnel.pipe(socket); socket.pipe(tunnel); });
+        // Synthetic negative DNS controls must never be resolved by this test proxy itself.
+        if (rejected.has(host.toLowerCase())) {
+            socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+            return;
+        }
+        const tunnel = connect(Number(port), host, () => {
+            connected.push('CONNECT ' + request.url);
+            socket.write('HTTP/1.1 200 OK\r\n\r\n');
+            tunnel.pipe(socket);
+            socket.pipe(tunnel);
+        });
         tunnel.on('error', () => socket.destroy());
         socket.on('error', () => tunnel.destroy());
     });
-    return new Promise(resolveProxy => proxy.listen(0, '127.0.0.1', () => resolveProxy({ proxy, seen, port: proxy.address().port })));
+    return new Promise(resolveProxy => proxy.listen(0, '127.0.0.1', () => resolveProxy({ proxy, seen, connected, port: proxy.address().port })));
 }
