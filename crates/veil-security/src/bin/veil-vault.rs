@@ -310,9 +310,9 @@ impl<'a, R: Read> Frames<'a, R> {
 
     /// Discards the rest of the current object stream up to its terminator or abort frame.
     fn drain(&mut self) -> io::Result<()> {
-        let mut sink = vec![0u8; 64 * 1024];
+        let mut sink = Zeroizing::new(vec![0u8; 64 * 1024]);
         loop {
-            match self.read(&mut sink) {
+            match self.read(&mut sink[..]) {
                 Ok(0) => return Ok(()),
                 Ok(_) => {}
                 Err(_) if self.ended => return Ok(()),

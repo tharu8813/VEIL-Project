@@ -159,6 +159,16 @@ public partial class BrowserWindow
                     catch (InvalidDataException) { refusedData = true; }
                     Check(refusedData, "invalid inline data rejected");
                 }
+                using (var queued = new BrowserDownload("synthetic-queued.bin"))
+                {
+                    queued.WaitForSlot();
+                    Check(queued.Phase == DownloadPhase.Waiting && queued.Bytes == 0 && queued.CanCancel,
+                        "queued transfer waits before opening body");
+                    queued.Cancel();
+                    queued.WaitForTransfer();
+                    Check(queued.Token.IsCancellationRequested && queued.Phase == DownloadPhase.Waiting,
+                        "cancelled queue cannot advance");
+                }
                 var overviewIssue = new DownloadIssue(Guid.NewGuid(), "synthetic-failed.bin", DownloadVault.Failed, "DNS", DateTimeOffset.Now);
                 Check(DownloadOverviewPolicy.Filter([previewEntry], [overviewIssue], "dns", DownloadFilter.Failed, VaultSort.Recent).Single().Outcome == DownloadVault.Failed &&
                     DownloadOverviewPolicy.Filter([], [overviewIssue], "", DownloadFilter.Stored, VaultSort.Recent).Count == 0 &&

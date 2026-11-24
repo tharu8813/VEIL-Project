@@ -41,6 +41,14 @@ internal sealed class BrowserDownload(string name) : INotifyPropertyChanged, IDi
         Refresh();
     }
 
+    internal void WaitForSlot()
+    {
+        if (!CanCancel) return;
+        Phase = DownloadPhase.Waiting;
+        StatusText = "다른 다운로드 완료 대기 중";
+        Refresh();
+    }
+
     internal void WaitForTransfer()
     {
         if (!CanCancel) return;
