@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { executePlan, makePlan, validatePreflight } from './phase34-vm.mjs';
+import { assertLabChild, frames } from '../phase4/vault-disk-full.mjs';
 
 const guest = {
     virtualBox: true, noDefaultRoute: true, elevated: false, uuid: 'lab-guest', boot: 'lab-boot', systemDrive: 'C:',
@@ -70,4 +71,24 @@ test('internet-VM items are listed and never executed by the offline batch', asy
     const online = results.filter(item => item.id.startsWith('internet-'));
     assert.ok(online.length >= 4);
     assert.ok(online.every(item => item.status === 'NOT RUN' && item.reason && !item.args));
+});
+
+test('vault disk-full only runs against the verified small volume', () => {
+    assert.equal(makePlan(main.parent).find(item => item.id === 'vault-disk-full').args, undefined);
+    const item = makePlan(main.parent, small.parent).find(item => item.id === 'vault-disk-full');
+    assert.deepEqual(item.args, ['tests/phase4/vault-disk-full.mjs', '--profile-parent', small.parent]);
+    assert.equal(item.lab, small.parent);
+    assertLabChild('W:\\small\\veil-phase34-Ab12cD', small.parent);
+    for (const path of ['C:\\small\\veil-phase34-Ab12cD', 'W:\\small', 'W:\\small\\nested\\veil-phase34-Ab12cD',
+        'W:\\small\\unrelated']) assert.throws(() => assertLabChild(path, small.parent));
+});
+
+test('disk-full probe uses bounded vault frames and a byte-count commit', () => {
+    const payload = Buffer.alloc(64 * 1024 + 3, 0x5a);
+    const bytes = frames(payload);
+    assert.equal(bytes.readUInt32LE(0), 64 * 1024);
+    assert.deepEqual(bytes.subarray(4, 4 + 64 * 1024), payload.subarray(0, 64 * 1024));
+    assert.equal(bytes.readUInt32LE(4 + 64 * 1024), 3);
+    assert.equal(bytes.readUInt32LE(bytes.length - 12), 0);
+    assert.equal(bytes.readBigUInt64LE(bytes.length - 8), BigInt(payload.length));
 });

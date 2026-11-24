@@ -31,7 +31,6 @@ const manual = [
     ['recovery-backup', 'Recovery password drill inside guest-package.ps1 -Stage Install (operator step).'],
     ['physical-writes', 'Procmon capture and analysis from the elevated guest shell.'],
     ['power-loss', 'Arm the dedicated test, cut VM power explicitly, then check after reboot.'],
-    ['vault-disk-full', 'Vault operations while the disk is full. The existing disk-full runner covers profile recovery.'],
 ];
 // Need an internet-connected isolated VM (ADR-0004 policy 4), never the offline lab VM.
 const internet = [
@@ -58,6 +57,9 @@ export function makePlan(primaryParent, diskFullParent, missingTools = []) {
         diskFullParent
             ? { id: 'profile-disk-full', args: ['tests/phase3/disk-full.mjs', '--profile-parent', diskFullParent] }
             : { id: 'profile-disk-full', reason: 'No separately verified small BitLocker volume.' },
+        diskFullParent
+            ? { id: 'vault-disk-full', lab: diskFullParent, args: ['tests/phase4/vault-disk-full.mjs', '--profile-parent', diskFullParent] }
+            : { id: 'vault-disk-full', reason: 'No separately verified small BitLocker volume.' },
         ...manual.map(([id, reason]) => ({ id, reason })),
         ...internet.map(([id, reason]) => ({ id, reason })),
     ];
@@ -173,6 +175,7 @@ async function main() {
         const log = `${test.id}.log`;
         const before = test.lab ? new Set(await readdir(test.lab)) : null;
         const args = test.cwd ? [join(repo, test.args[0]), ...test.args.slice(1)] : test.args;
+        if (test.id === 'vault-disk-full') args.push('--preflight', resolve(values.preflight));
         const result = await run(process.execPath, args, {
             cwd: test.cwd ?? repo, env, windowsHide: true, maxBuffer: 4 * 1024 ** 2, timeout: 20 * 60_000,
         })
