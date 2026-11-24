@@ -44,7 +44,7 @@ fn main() -> ExitCode {
     let mut input = BufReader::new(stdin.lock());
     let result = match args.as_slice() {
         [command, dir] if command == "serve" => serve(Path::new(dir), &mut input).map(|()| String::new()),
-        [command, path] if matches!(command.as_str(), "passwords-read" | "passwords-create" | "passwords-replace") =>
+        [command, path] if matches!(command.as_str(), "passwords-read" | "passwords-create" | "passwords-replace" | "passwords-rotate") =>
             password_command(command, Path::new(path), &mut input).map(|()| String::new()),
         _ => one_shot(&args, &mut input),
     };
@@ -64,13 +64,7 @@ fn main() -> ExitCode {
 
 fn password_command(command: &str, path: &Path, input: &mut impl BufRead) -> io::Result<()> {
     use veil_security::password_store;
-    let mut encoded = Zeroizing::new(String::new());
-    // Bounded hex UTF-8 passphrase line; the following bytes are the JSON payload for writes.
-    if (&mut *input).take(2050).read_line(&mut encoded)? == 0 || !encoded.ends_with('\n') {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid password store request"));
-    }
-    let passphrase = profile_secret(encoded.trim_end_matches(['\r', '\n']))?;
-    drop(encoded);
+    let passphrase = password_line(input)?;
     match command {
         "passwords-read" => {
             let plain = password_store::read(path, passphrase)?;
@@ -80,8 +74,24 @@ fn password_command(command: &str, path: &Path, input: &mut impl BufRead) -> io:
         }
         "passwords-create" | "passwords-replace" =>
             password_store::write(path, passphrase, input, command == "passwords-replace"),
+        "passwords-rotate" => {
+            let new = password_line(input)?;
+            if !input.fill_buf()?.is_empty() {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "Unexpected password rotation payload"));
+            }
+            password_store::rotate(path, passphrase, new)
+        },
         _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid password store command")),
     }
+}
+
+// Bounded hex UTF-8 line. Rotation takes two lines, never command-line secrets.
+fn password_line(input: &mut impl BufRead) -> io::Result<SecretString> {
+    let mut encoded = Zeroizing::new(String::new());
+    if (&mut *input).take(2050).read_line(&mut encoded)? == 0 || !encoded.ends_with('\n') {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid password store request"));
+    }
+    profile_secret(encoded.trim_end_matches(['\r', '\n']))
 }
 
 fn one_shot(args: &[String], input: &mut impl BufRead) -> io::Result<String> {
@@ -148,7 +158,11 @@ fn serve(dir: &Path, input: &mut impl BufRead) -> io::Result<()> {
             ["backup", dest, password] => secret_str(password)
                 .and_then(|secret| vault_backup::export(&keys, &active, Path::new(dest), secret))
                 .map(|count| format!("ok\t{count}")),
-            ["read", path] => match keys.read_small(Purpose::Download, Path::new(path)) {
+            [command @ ("read" | "read-preview"), path] => match if *command == "read" {
+                keys.read_small(Purpose::Download, Path::new(path))
+            } else {
+                keys.read_preview(Path::new(path))
+            } {
                 Ok(bytes) => {
                     writeln!(out, "ok\t{}", bytes.len())?;
                     out.write_all(&bytes)?;

@@ -24,6 +24,12 @@ public partial class BrowserWindow
                 Check(string.Equals(Path.TrimEndingDirectorySeparator(Path.GetTempPath()),
                     Path.Combine(session.Root, ProfileScratch.FolderName), StringComparison.OrdinalIgnoreCase), "temp path inside profile");
                 await WaitFor(() => !restoring, "desktop initialization");
+                Check(ExternalAddress.Parse("https://example.test/a?b=1") == "https://example.test/a?b=1" &&
+                    ExternalAddress.Parse("veil://passwords") is null &&
+                    ExternalAddress.Parse("file:///C:/secret") is null &&
+                    ExternalAddress.Parse("https://user@example.test") is null &&
+                    ExternalAddress.Parse("https://example.test/\" --smoke") is null &&
+                    ExternalAddress.Parse("example.test") is null, "external activation accepts only well-formed web URLs");
                 Check(ResolveAddress("example.test")?.AbsoluteUri == "https://example.test/", "HTTPS address default");
                 Check(ResolveAddress("한글 브라우저")?.Host == "duckduckgo.com", "search encoding");
                 Check(ResolveAddress("한글 & 검색", "google")?.Host == "www.google.com" &&
@@ -41,8 +47,59 @@ public partial class BrowserWindow
                 Check(SearchPolicy.Suggest(localData, "synthetic").Count == 1 &&
                     SearchPolicy.Suggest(localData, "synthetic")[0].Url == "https://example.test/",
                     "local suggestions deduplicate and exclude sensitive URL forms");
+                localData.Bookmarks.Add(new PageEntry("CSharp Reference", "https://www.docs.example.test/guide", DateTimeOffset.Now));
+                Check(SearchPolicy.Suggest(localData, "docs.example.test").FirstOrDefault()?.SourceLabel == "북마크" &&
+                    SearchPolicy.Suggest(localData, "reference guide").Any(item => item.Url.EndsWith("/guide")),
+                    "local suggestions support www-free host and multiple terms");
+                Check(SearchPolicy.Suggest(localData, "? synthetic").Count == 0 &&
+                    SearchPolicy.Suggest(localData, "@google synthetic").Count == 0 &&
+                    ResolveAddress("? example.test", "bing")?.Host == "www.bing.com" &&
+                    ResolveAddress("@naver 한글 검색", "google")?.Host == "search.naver.com" &&
+                    ResolveAddress("@google") is null, "explicit search selects provider only at submission");
+                localData.Bookmarks.RemoveAt(1);
                 localData.LocalAddressSuggestions = false;
                 Check(SearchPolicy.Suggest(localData, "synthetic").Count == 0, "local suggestions disabled");
+                var parentFolder = new BookmarkFolder(Guid.NewGuid(), "Parent");
+                var childFolder = new BookmarkFolder(Guid.NewGuid(), "Child", parentFolder.Id);
+                localData.BookmarkFolders.AddRange([parentFolder, childFolder]);
+                localData.Bookmarks[0] = localData.Bookmarks[0] with { FolderId = childFolder.Id };
+                Check(BookmarkPolicy.Valid(localData.BookmarkFolders, localData.Bookmarks), "nested bookmark hierarchy valid");
+                Check(!BookmarkPolicy.MoveFolder(localData.BookmarkFolders, localData.Bookmarks, parentFolder.Id, childFolder.Id),
+                    "bookmark folder cycle rejected");
+                Check(BookmarkPolicy.RemoveFolder(localData.BookmarkFolders, localData.Bookmarks, childFolder.Id) &&
+                    localData.Bookmarks[0].FolderId == parentFolder.Id, "deleting folder preserves bookmarks");
+                Check(BookmarkPolicy.RemoveFolder(localData.BookmarkFolders, localData.Bookmarks, parentFolder.Id) &&
+                    localData.Bookmarks[0].FolderId is null && localData.Bookmarks.Count == 1,
+                    "deleting last folder promotes bookmarks to root");
+                const string bookmarksHtml = """
+                    <!DOCTYPE NETSCAPE-Bookmark-file-1>
+                    <DL><p><DT><H3>Study &amp; Code</H3><DL><p>
+                    <DT><A HREF="https://example.test/docs?a=1&amp;b=2">Docs &lt;3</A>
+                    <DT><A HREF="javascript:alert(1)">Unsafe</A>
+                    <DT><A HREF="https://example.test/docs?a=1&amp;b=2">Duplicate</A>
+                    </DL><p></DL><p>
+                    """;
+                var importedBookmarks = BookmarkHtml.Parse(bookmarksHtml, []);
+                Check(importedBookmarks is { Skipped: 2, Folders.Count: 1, Entries.Count: 1 } &&
+                    importedBookmarks.Entries[0].FolderId == importedBookmarks.Folders[0].Id &&
+                    importedBookmarks.Entries[0].Title == "Docs <3", "bookmark HTML imports folders, entities and skips unsafe or duplicate URLs");
+                var roundTrip = BookmarkHtml.Parse(System.Text.Encoding.UTF8.GetString(
+                    BookmarkHtml.Export(importedBookmarks.Folders, importedBookmarks.Entries)), []);
+                Check(roundTrip.Folders[0].Name == "Study & Code" && roundTrip.Entries[0].Url == importedBookmarks.Entries[0].Url &&
+                    roundTrip.Entries[0].FolderId == roundTrip.Folders[0].Id, "bookmark HTML round trip preserves hierarchy and URL");
+                Check(LoginFormPolicy.Decode("https://example.test", """{"UserName":"synthetic","Password":"synthetic-pass"}""")?.Origin == "https://example.test" &&
+                    LoginFormPolicy.Decode("http://example.test", """{"UserName":"synthetic","Password":"synthetic-pass"}""") is null &&
+                    LoginFormPolicy.Decode("https://example.test", """{"UserName":"","Password":"synthetic-pass"}""") is null,
+                    "login capture rejects invalid origin and empty username");
+                Check(LoginFormPolicy.Probe("https://example.test").Contains("return true;") &&
+                    !LoginFormPolicy.Probe("https://example.test").Contains("pass.value") &&
+                    !LoginFormPolicy.Fill(new SavedLogin("https://example.test", "synthetic", "synthetic-pass")).Contains(".submit("),
+                    "login probe reads no password and fill does not submit");
+                var savedAccount = new SavedLogin("https://example.test", "synthetic", "original");
+                var mergedAccounts = PasswordStore.MergeBackup([savedAccount],
+                    [savedAccount with { Password = "different" }, new SavedLogin("https://example.test", "second", "synthetic")]);
+                Check(mergedAccounts.Count == 2 && mergedAccounts[0] == savedAccount && mergedAccounts[1].UserName == "second",
+                    "credential backup merge preserves existing account on conflict");
                 var rule = new SitePermissionRule("https://example.test", "camera", SitePermissionPolicy.Ask);
                 Check(SitePermissionPolicy.ValidRules([rule]) &&
                     !SitePermissionPolicy.ValidRules([rule, rule]) &&
@@ -61,6 +118,52 @@ public partial class BrowserWindow
                     !VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.html" }) &&
                     !VaultPresentation.CanPreview(previewEntry with { Bytes = VaultPresentation.PreviewLimit + 1 }) &&
                     !VaultPresentation.CanPreview(previewEntry with { Recovered = true }), "text preview allowlist");
+                Check(VaultPresentation.PreviewKind(previewEntry with { Name = "synthetic.PNG" }) == VaultPreviewKind.Png &&
+                    VaultPresentation.PreviewKind(previewEntry with { Name = "synthetic.jpg" }) == VaultPreviewKind.Jpeg &&
+                    !VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.svg" }) &&
+                    !VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.png", Bytes = VaultPresentation.ImagePreviewLimit + 1 }),
+                    "image preview format and byte limits");
+                byte[] tinyPng = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR1sAAAAASUVORK5CYII=");
+                Check(VaultImagePreview.Dimensions(tinyPng, VaultPreviewKind.Png) == (1, 1), "PNG header size");
+                var oversizedPng = tinyPng.ToArray();
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(oversizedPng.AsSpan(16), 100000);
+                bool rejectedImage = false;
+                try { VaultImagePreview.Dimensions(oversizedPng, VaultPreviewKind.Png); }
+                catch (InvalidDataException) { rejectedImage = true; }
+                Check(rejectedImage, "oversized PNG rejected before decoder");
+                Check(VaultPdfPreview.ValidHeader("%PDF-1.7\nsynthetic"u8) &&
+                    !VaultPdfPreview.ValidHeader("<html>synthetic</html>"u8) &&
+                    VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.pdf" }) == VaultPdfPreview.Enabled,
+                    "PDF preview header and development gate");
+                Check(VaultPdfPreview.RenderSize(612, 792) is (1391, 1800) &&
+                    VaultPdfPreview.RenderSize(double.NaN, 100) is null &&
+                    VaultPdfPreview.RenderSize(100000, 1) is null, "PDF render dimension limits");
+                Check(DownloadFailurePolicy.HttpStatus(System.Net.HttpStatusCode.ServiceUnavailable, true).Retryable &&
+                    !DownloadFailurePolicy.HttpStatus(System.Net.HttpStatusCode.Forbidden, true).Retryable &&
+                    !DownloadFailurePolicy.HttpStatus(System.Net.HttpStatusCode.ServiceUnavailable, false).Retryable &&
+                    DownloadFailurePolicy.SafeRetryAddress(new Uri("https://example.test/file.bin")) &&
+                    !DownloadFailurePolicy.SafeRetryAddress(new Uri("https://example.test/file.bin?token=synthetic")) &&
+                    !DownloadFailurePolicy.SafeRetryAddress(new Uri("http://example.test/file.bin")),
+                    "download retry only permits initial transient failures and restricted HTTPS addresses");
+                Check(!DownloadFailurePolicy.Describe(new IOException("synthetic-secret"), DownloadPhase.Streaming, true)
+                    .Contains("synthetic-secret"), "download failure detail does not expose raw exceptions");
+                Check(InlineDownloadPolicy.Decode("data:application/octet-stream;base64,c3ludGhldGlj").SequenceEqual("synthetic"u8.ToArray()) &&
+                    InlineDownloadPolicy.Decode("data:text/plain;charset=utf-8,a%20b+%00").SequenceEqual(new byte[] { 97, 32, 98, 43, 0 }) &&
+                    InlineDownloadPolicy.SourceAllowed(new Uri("https://example.test/")) &&
+                    !InlineDownloadPolicy.SourceAllowed(new Uri("http://example.test/")), "bounded inline data decode and source policy");
+                foreach (string invalidData in new[] { "data:text/plain,%GG", "data:;base64,YQ==#fragment",
+                    "data:;base64, YQ=", "data:;unknown=1,x", "data:," + new string('a', InlineDownloadPolicy.MaxBytes + 1) })
+                {
+                    bool refusedData = false;
+                    try { InlineDownloadPolicy.Decode(invalidData); }
+                    catch (InvalidDataException) { refusedData = true; }
+                    Check(refusedData, "invalid inline data rejected");
+                }
+                var overviewIssue = new DownloadIssue(Guid.NewGuid(), "synthetic-failed.bin", DownloadVault.Failed, "DNS", DateTimeOffset.Now);
+                Check(DownloadOverviewPolicy.Filter([previewEntry], [overviewIssue], "dns", DownloadFilter.Failed, VaultSort.Recent).Single().Outcome == DownloadVault.Failed &&
+                    DownloadOverviewPolicy.Filter([], [overviewIssue], "", DownloadFilter.Stored, VaultSort.Recent).Count == 0 &&
+                    DownloadOverviewPolicy.Filter([previewEntry], [overviewIssue], "", DownloadFilter.All, VaultSort.Smallest)[0].Bytes == previewEntry.Bytes,
+                    "download overview search, locked storage omission and known-size sort");
                 Check(VaultPresentation.DecodeText("synthetic"u8.ToArray()) == "synthetic" &&
                     VaultPresentation.ExportName(previewEntry with { Name = "CON.txt" }) == "VEIL-download.bin" &&
                     VaultPresentation.Filter([previewEntry], "example", VaultSort.Recent, false).Count == 1,
@@ -135,9 +238,26 @@ public partial class BrowserWindow
                     await ReadyAt("/");
                     SettingsClick(this, new RoutedEventArgs());
                     await WaitFor(() => Active?.Url == "veil://settings" && Active.CancelManagement is not null, "settings opened in native tab");
-                    CloseTab((TabItem)Tabs.SelectedItem);
+                    Check(BrowserData.Load(statePath).Tabs.Contains("veil://settings"),
+                        "selected native route persisted without WebView navigation");
+                    var closingSettings = Active!;
+                    var settingsClose = CloseTabAsync(closingSettings.Item);
+                    Check(closingSettings.CancelManagement is null && closingSettings.ManagementSurface is null,
+                        "closing native manager cancels its action before animation completes");
+                    await settingsClose;
                     await ReadyAt("/");
                     await WaitFor(() => !session.SettingsUiOpen && !session.PermissionUiOpen, "closing settings releases manager guards");
+                    var selectedBeforeBackground = Active;
+                    var backgroundSettings = await OpenTab("veil://settings", select: false)
+                        ?? throw new InvalidOperationException("background settings tab did not open");
+                    Check(Active == selectedBeforeBackground && backgroundSettings.ManagementSurface is not null &&
+                        backgroundSettings.CancelManagement is null &&
+                        backgroundSettings.ManagementSurface.Visibility == Visibility.Collapsed &&
+                        backgroundSettings.View.Visibility == Visibility.Hidden &&
+                        BrowserData.Load(statePath).Tabs.Contains("veil://settings"),
+                        "background native tab persisted without selecting or opening privileged controls");
+                    await CloseTabAsync(backgroundSettings.Item);
+                    Check(!BrowserData.Load(statePath).Tabs.Contains("veil://settings"), "closed background native route removed from state");
                     NavigateAddress(origin + "/second");
                     await ReadyAt("/second");
                     await WaitFor(() => Back.IsEnabled, "back button");
@@ -196,6 +316,36 @@ public partial class BrowserWindow
                     await WaitForScript("window.smoke === true", "five site storage types restored");
                     if (stage == "read")
                     {
+                        // Private windows are separate from the persisted regular session.
+                        var regularState = File.ReadAllBytes(statePath);
+                        int regularHistory = data.History.Count;
+                        var privateWindow = OpenPrivateWindow();
+                        try
+                        {
+                            await WaitFor(() => !privateWindow.IsRestoring && privateWindow.Active is not null, "private window initialized");
+                            var privateTab = privateWindow.Active!;
+                            var profile = privateTab.View.CoreWebView2.Profile;
+                            Check(profile.IsInPrivateModeEnabled && profile.ProfileName == privateWindow.session.PrivateProfileName &&
+                                !Active!.View.CoreWebView2.Profile.IsInPrivateModeEnabled, "private engine profile verified");
+                            Check(privateWindow.data.Bookmarks.Count == 0 && !privateWindow.SettingsReady() &&
+                                !privateWindow.PasswordWindowReady() && privateWindow.data.LocalAddressSuggestions == false,
+                                "private persistent managers unavailable");
+                            privateWindow.NavigateAddress(origin + "/second");
+                            await WaitFor(() => privateTab.Url == origin + "/second" && !privateTab.Loading &&
+                                privateTab.LastNavigationError is null, "private navigation");
+                            Check((await privateTab.View.CoreWebView2.CookieManager.GetCookiesAsync(origin)).Count == 0,
+                                "regular fixture cookies not visible in private profile");
+                            await privateTab.View.ExecuteScriptAsync("localStorage.setItem('veil-private-marker','synthetic'); null;");
+                            Check(await Active!.View.ExecuteScriptAsync("localStorage.getItem('veil-private-marker')") == "null",
+                                "private local storage isolated");
+                            Check(!privateWindow.CanMoveTo(privateTab.Item, this) &&
+                                !CanMoveTo(Active!.Item, privateWindow), "cross-session tab transfer refused");
+                            Check(data.History.Count == regularHistory && privateWindow.data.History.Count == 0 &&
+                                File.ReadAllBytes(statePath).SequenceEqual(regularState), "private navigation not persisted");
+                            Check(await privateWindow.OpenTab("veil://downloads") is null, "private vault route rejected");
+                        }
+                        finally { privateWindow.Close(); }
+                        Check(!session.AllWindows.Contains(privateWindow), "private window released");
                         // Tabs move between windows without reloading; the second window is persisted.
                         var moving = Active!;
                         await moving.View.ExecuteScriptAsync("window.veilMarker = 42; null");
@@ -204,16 +354,30 @@ public partial class BrowserWindow
                         await WaitFor(() => moving.Owner == other && !other.IsRestoring &&
                             other.Tabs.Items.Contains(moving.Item) && Tabs.Items.Count == count - 1, "tab moved to a new window");
                         Check(await moving.View.ExecuteScriptAsync("window.veilMarker") == "42", "moved tab kept its live page");
+                        other.ToggleBookmarkBarClick(this, new RoutedEventArgs());
+                        Check(!data.ShowBookmarksBar && BookmarkBar.Visibility == Visibility.Collapsed &&
+                            other.BookmarkBar.Visibility == Visibility.Collapsed && !BrowserData.Load(statePath).ShowBookmarksBar,
+                            "bookmark bar hidden across windows and persisted");
+                        ToggleBookmarkBarClick(this, new RoutedEventArgs());
+                        Check(data.ShowBookmarksBar && BookmarkBar.Visibility == Visibility.Visible &&
+                            other.BookmarkBar.Visibility == Visibility.Visible && BrowserData.Load(statePath).ShowBookmarksBar,
+                            "bookmark bar restored across windows");
                         SaveSession();
                         Check(BrowserData.Load(statePath).Windows is [{ Tabs.Count: 1 }], "second window persisted");
-                        other.DetachTab(moving.Item);
-                        AttachTab(moving.Item, 0);
+                        Check(other.CanMoveTo(moving.Item, this) && other.MoveToExistingWindow(moving.Item, this, 0),
+                            "move existing tab to another regular window");
                         await WaitFor(() => !session.Windows.Contains(other) && Tabs.Items.IndexOf(moving.Item) == 0 &&
                             Active == moving && Tabs.Items.Count == count, "tab merged back at the front");
                         Check(await moving.View.ExecuteScriptAsync("window.veilMarker") == "42", "merged tab kept its live page");
                         MoveSelectedTab(1);
                         Check(Tabs.Items.IndexOf(moving.Item) == 1 && Active == moving, "keyboard tab reorder");
                         Check(BrowserData.Load(statePath).Windows is null, "merged window removed from state");
+                        var selectedBefore = Tabs.SelectedItem;
+                        SelectTab(Tabs.Items.Count + 3);
+                        Check(Tabs.SelectedItem == selectedBefore, "out of range numbered shortcut leaves selection unchanged");
+                        CycleTab(1);
+                        CycleTab(-1);
+                        Check(Tabs.SelectedItem == selectedBefore, "tab cycling wraps and preserves order");
                         // Tear-off path used by dragging a tab out of the strip (without real mouse input).
                         var torn = (TabItem)Tabs.Items[^1];
                         int windowCount = session.Windows.Count;
@@ -335,10 +499,10 @@ public partial class BrowserWindow
                             var cancelButton = FindProgressElement<Button>(ActiveDownloadsList)!;
                             Check(cancelButton.IsEnabled, $"download cancel enabled ({kind})");
                             cancelButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                            // Ctrl+J is a native veil://downloads tab, so the panel stays while that tab is open;
-                            // the cancelled transfer must leave the active list.
-                            await WaitFor(() => session.Vault.Results.Count == count + 1 && session.ActiveDownloads.Count == 0 &&
-                                !ActiveDownloadsList.IsVisible, $"cancelled transfer leaves active downloads ({kind})");
+                            await WaitFor(() => session.Vault.Results.Count == count + 1 &&
+                                session.ActiveDownloads.Count == 0 && ActiveDownloadsList.Visibility == Visibility.Collapsed &&
+                                DownloadProgressPanel.IsVisible,
+                                $"cancelled transfer clears active list but keeps download manager visible ({kind})");
                             CloseTab((TabItem)Tabs.SelectedItem);
                         }
                         for (int i = 0; i < 1600 && session.Vault.Results.Count == count; i++) await Task.Delay(75);
@@ -860,10 +1024,16 @@ public partial class BrowserWindow
                     string expected = type switch
                     {
                         "get" or "auth" or "redirect" or "large" => DownloadVault.Stored,
+                        "data" when InlineDownloadPolicy.Enabled => DownloadVault.Stored,
                         "sw" => DownloadVault.Failed, // VEIL refetches from the network, where /sw-file does not exist
                         _ => DownloadVault.Blocked,
                     };
                     Check(downloads[0].StartsWith($"veil-phase0-{type}.bin · {expected}"), $"download {expected} ({type}): {downloads[0]}");
+                    if (type == "data" && InlineDownloadPolicy.Enabled)
+                    {
+                        var entry = session.Vault.Entries.First(e => e.Name == "veil-phase0-data.bin");
+                        Check(await session.Vault.VerifyAsync(entry) == 9, "inline data authenticated size");
+                    }
                     Check(Active!.View.CoreWebView2.Profile.DefaultDownloadFolderPath.StartsWith(
                         Path.Combine(session.Root, ProfileScratch.FolderName), StringComparison.OrdinalIgnoreCase),
                         $"download scratch inside profile ({type})");
@@ -876,8 +1046,13 @@ public partial class BrowserWindow
                         Check(DownloadPopup.IsOpen && Active == before && Tabs.Items.Count == tabCount,
                             "toolbar download click opens recent popup without navigating");
                         DownloadsClick(this, new RoutedEventArgs());
-                        await WaitFor(() => Active?.Url == "veil://downloads" && !DownloadPopup.IsOpen, "all downloads opened in tab");
-                        Check(Active?.Title == "다운로드", "downloads tab title");
+                        DownloadsClick(this, new RoutedEventArgs());
+                        await WaitFor(() => Active?.Url == "veil://downloads" && !DownloadPopup.IsOpen && !openingDownloads,
+                            "all downloads opened in tab");
+                        Check(Active?.Title == "다운로드" && Active.ManagementSurface is DownloadOverview,
+                            "downloads tab uses native overview");
+                        Check(Tabs.Items.OfType<TabItem>().Count(item => item.Tag is BrowserTab { Url: "veil://downloads" }) == 1,
+                            "repeated download manager invocation opens only one tab");
                         CloseTab((TabItem)Tabs.SelectedItem);
                         CloseTab(downloadTab);
                         Tabs.SelectedItem = original;

@@ -8,7 +8,7 @@ public partial class BrowserWindow
     private async void SecurityClick(object sender, RoutedEventArgs args)
     {
         if (FocusManagementPage("veil://settings/security")) return;
-        if (closing || restoring || session.IsEnding || session.EngineLost) return;
+        if (!SettingsReady()) return;
         if (session.SettingsUiOpen || session.PasswordUiOpen || session.PermissionUiOpen) return;
         session.SettingsUiOpen = true;
         session.PermissionUiOpen = true;
@@ -58,7 +58,7 @@ public partial class BrowserWindow
 
     private void UpdateSecurityIndicators()
     {
-        foreach (var window in session.Windows) window.UpdateNetworkIndicator();
+        foreach (var window in session.AllWindows) window.UpdateNetworkIndicator();
     }
 
     /// <summary>Status-bar suffix: shown only when SmartScreen is off or could not be applied.</summary>

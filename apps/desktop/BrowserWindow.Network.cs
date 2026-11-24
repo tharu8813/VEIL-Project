@@ -93,7 +93,7 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
     private async void NetworkClick(object sender, RoutedEventArgs args)
     {
         if (FocusManagementPage("veil://settings/network")) return;
-        if (closing || restoring || session.IsEnding || session.EngineLost) return;
+        if (!SettingsReady()) return;
         if (session.SettingsUiOpen || session.PasswordUiOpen || session.PermissionUiOpen) return;
         session.SettingsUiOpen = true;
         session.PermissionUiOpen = true;

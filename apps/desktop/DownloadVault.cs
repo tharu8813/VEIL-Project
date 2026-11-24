@@ -253,6 +253,7 @@ internal sealed class DownloadVault : IDisposable
 
     internal void NoteRequest(string method, string uri)
     {
+        if (!BrowserWindow.IsWebUrl(uri)) return;
         lock (methods)
         {
             if (methods.Count > 256) methods.Clear();
@@ -263,21 +264,43 @@ internal sealed class DownloadVault : IDisposable
     internal string? Unsupported(Uri uri)
     {
         if (!Available) return "금고 사용 불가";
-        if (uri.Scheme is not ("http" or "https")) return $"미지원 방식({uri.Scheme})";
+        if (uri.Scheme == "blob") return "Blob 다운로드는 아직 안전하게 가져올 수 없습니다.";
+        if (uri.Scheme == "data") return "Data 다운로드는 개발 검증 중입니다.";
+        if (uri.Scheme is not ("http" or "https")) return "지원하지 않는 다운로드 방식";
         lock (methods)
             if (methods.TryGetValue(uri.AbsoluteUri, out var method) && !string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
-                return $"미지원 방식({method})";
+                return "GET 이외 요청은 재전송하지 않습니다.";
         return null;
     }
 
     /// <summary>Fetches the URL with the page's cookies and seals the body as a new vault item.</summary>
-    internal async Task<VaultEntry> CaptureAsync(Uri uri, BrowserDownload download, CoreWebView2 web)
+    internal async Task<VaultEntry> CaptureAsync(Uri uri, BrowserDownload download, CoreWebView2 web, bool retry = false)
     {
         CancellationToken cancel = download.Token;
         if (!Unlocked) throw new InvalidOperationException("The vault is locked.");
-        using var response = await GetFollowingRedirectsAsync(uri, web, cancel);
-        if (!response.IsSuccessStatusCode) throw new HttpRequestException($"HTTP {(int)response.StatusCode}");
-        long? declared = response.Content.Headers.ContentLength;
+        using var response = await GetFollowingRedirectsAsync(uri, web, cancel, retry);
+        using var body = await response.Content.ReadAsStreamAsync(cancel);
+        return await SealCaptureAsync(body, response.Content.Headers.ContentLength, uri.Host, download);
+    }
+
+    internal async Task<VaultEntry> CaptureInlineAsync(string raw, Uri source, BrowserDownload download)
+    {
+        if (!InlineDownloadPolicy.Enabled || !InlineDownloadPolicy.SourceAllowed(source) || !Unlocked)
+            throw new InvalidOperationException("Inline download unavailable.");
+        download.Token.ThrowIfCancellationRequested();
+        await RejectThreatAsync(threats?.CheckAsync(source, TimeSpan.FromSeconds(2), download.Token));
+        byte[] bytes = InlineDownloadPolicy.Decode(raw);
+        try
+        {
+            using var body = new MemoryStream(bytes, writable: false);
+            return await SealCaptureAsync(body, bytes.Length, source.Host, download);
+        }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
+
+    private async Task<VaultEntry> SealCaptureAsync(Stream body, long? declared, string host, BrowserDownload download)
+    {
+        CancellationToken cancel = download.Token;
         string id = Guid.NewGuid().ToString("N");
         long total = 0;
         await gate.WaitAsync(cancel);
@@ -293,7 +316,6 @@ internal sealed class DownloadVault : IDisposable
                 await WriteLineAsync($"seal\t{Path.Combine(Objects, id + ".veil")}");
                 canAbort = true;
                 download.Report(0, declared);
-                var body = await response.Content.ReadAsStreamAsync(cancel);
                 for (int read; (read = await body.ReadAsync(buffer, cancel)) > 0;)
                 {
                     cancel.ThrowIfCancellationRequested();
@@ -312,6 +334,7 @@ internal sealed class DownloadVault : IDisposable
                 // ADR-0008: a listed file is aborted before the commit frame, so it is never published.
                 string sha256 = Convert.ToHexString(fileHash.GetHashAndReset()).ToLowerInvariant();
                 await RejectThreatAsync(threats?.CheckFileAsync(sha256, TimeSpan.FromSeconds(2), cancel));
+                cancel.ThrowIfCancellationRequested();
                 download.Finish();
                 canAbort = false;
                 await input!.WriteAsync(BitConverter.GetBytes(0));
@@ -336,7 +359,7 @@ internal sealed class DownloadVault : IDisposable
             finally { CryptographicOperations.ZeroMemory(buffer); }
             string reply = await ReadLineAsync();
             if (reply != $"ok\t{total}") throw new IOException("The vault did not accept the download.");
-            var entry = new VaultEntry(id, download.Name, total, DateTimeOffset.Now, uri.Host);
+            var entry = new VaultEntry(id, download.Name, total, DateTimeOffset.Now, host);
             await SealBytesLockedAsync(Path.Combine(Meta, id + ".veil"), JsonSerializer.SerializeToUtf8Bytes(entry, Json));
             Entries = [entry, .. Entries];
             await SaveIndexLockedAsync();
@@ -366,7 +389,7 @@ internal sealed class DownloadVault : IDisposable
         return reply.StartsWith("ok\t") ? long.Parse(reply[3..]) : throw new IOException("The item failed authentication.");
     }
 
-    /// <summary>Authenticates a bounded text object before returning bytes to native UI. No plaintext file.</summary>
+    /// <summary>Authenticates a bounded preview object before returning bytes to native UI. No plaintext file.</summary>
     internal async Task<byte[]> ReadPreviewAsync(VaultEntry entry)
     {
         await gate.WaitAsync();
@@ -375,9 +398,12 @@ internal sealed class DownloadVault : IDisposable
             if (!Unlocked || !Guid.TryParseExact(entry.Id, "N", out _) ||
                 !Entries.Contains(entry) || !VaultPresentation.CanPreview(entry))
                 throw new IOException("Preview unavailable.");
-            var bytes = await ReadSmallLockedAsync(ObjectPath(entry));
+            bool text = VaultPresentation.PreviewKind(entry) == VaultPreviewKind.Text;
+            int limit = text ? VaultPresentation.PreviewLimit : VaultPresentation.ImagePreviewLimit;
+            var bytes = await ReadBoundedLockedAsync(ObjectPath(entry), text ? "read" : "read-preview",
+                text ? 1024 * 1024 : limit);
             if (bytes is null) throw new IOException("Preview authentication failed.");
-            if (bytes.Length != entry.Bytes || bytes.Length > VaultPresentation.PreviewLimit)
+            if (bytes.Length != entry.Bytes || bytes.Length > limit)
             {
                 CryptographicOperations.ZeroMemory(bytes);
                 throw new IOException("Preview size mismatch.");
@@ -526,12 +552,14 @@ internal sealed class DownloadVault : IDisposable
         if (reply != $"ok\t{data.Length}") throw new IOException($"The vault did not store metadata ({reply}).");
     }
 
-    private async Task<byte[]?> ReadSmallLockedAsync(string path)
+    private Task<byte[]?> ReadSmallLockedAsync(string path) => ReadBoundedLockedAsync(path, "read", 1024 * 1024);
+
+    private async Task<byte[]?> ReadBoundedLockedAsync(string path, string command, int limit)
     {
         if (!File.Exists(path)) return null;
-        string reply = await CommandLockedAsync($"read\t{path}");
+        string reply = await CommandLockedAsync($"{command}\t{path}");
         if (!reply.StartsWith("ok\t")) return null;
-        if (!int.TryParse(reply.AsSpan(3), out int length) || length < 0 || length > 1024 * 1024)
+        if (!int.TryParse(reply.AsSpan(3), out int length) || length < 0 || length > limit)
         {
             CloseBrokenPipe();
             throw new IOException("Invalid vault response size.");
@@ -616,29 +644,38 @@ internal sealed class DownloadVault : IDisposable
         if (result.Verdict == ThreatVerdict.Malicious) throw new ThreatBlockedException(result.Reason);
     }
 
-    private async Task<HttpResponseMessage> GetFollowingRedirectsAsync(Uri uri, CoreWebView2 web, CancellationToken cancel)
+    private async Task<HttpResponseMessage> GetFollowingRedirectsAsync(Uri uri, CoreWebView2 web, CancellationToken cancel, bool retry)
     {
         for (int hop = 0; hop <= MaxRedirects; hop++)
         {
             if (uri.Scheme is not ("http" or "https")) throw new HttpRequestException("Redirect left HTTP(S).");
             // Every hop is checked before VEIL requests it, so a redirect cannot route around the list.
             await RejectThreatAsync(threats?.CheckAsync(uri, TimeSpan.FromSeconds(2), cancel));
-            var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.TryAddWithoutValidation("User-Agent", web.Settings.UserAgent);
             // Cookies are looked up per hop so each origin only receives its own cookies.
             var cookies = await web.CookieManager.GetCookiesAsync(uri.AbsoluteUri);
             if (cookies.Count > 0)
                 request.Headers.TryAddWithoutValidation("Cookie", string.Join("; ", cookies.Select(c => $"{c.Name}={c.Value}")));
-            var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel);
+            HttpResponseMessage response;
+            try { response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel); }
+            catch (HttpRequestException error) { throw DownloadFailurePolicy.Connection(error, hop == 0 && !retry); }
             if ((int)response.StatusCode is >= 300 and < 400 && response.Headers.Location is { } location)
             {
-                uri = location.IsAbsoluteUri ? location : new Uri(uri, location);
                 response.Dispose();
+                if (retry) throw new DownloadRequestFailure("재시도 중 리디렉션 발생 · 원래 페이지에서 다시 다운로드하세요.", false);
+                uri = location.IsAbsoluteUri ? location : new Uri(uri, location);
                 continue;
+            }
+            if (!response.IsSuccessStatusCode)
+            {
+                var failure = DownloadFailurePolicy.HttpStatus(response.StatusCode, hop == 0 && !retry);
+                response.Dispose();
+                throw failure;
             }
             return response;
         }
-        throw new HttpRequestException("Too many redirects.");
+        throw new DownloadRequestFailure("리디렉션 횟수 초과", false);
     }
 
     public void Dispose()

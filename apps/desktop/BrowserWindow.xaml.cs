@@ -28,6 +28,8 @@ public partial class BrowserWindow : Window
         internal FrameworkElement? ManagementSurface { get; set; }
         internal Action? CancelManagement { get; set; }
         internal long NavigationEpoch { get; set; }
+        internal (string Method, string Uri, long Epoch)? LastDownloadRequest { get; set; }
+        internal bool LoginFormDetected { get; set; }
         /// <summary>HTTPS-first: the plain-HTTP address this tab is currently trying as HTTPS.</summary>
         internal Uri? UpgradedFrom { get; set; }
         /// <summary>The plain-HTTP address the HTTPS warning page offers to open.</summary>
@@ -46,6 +48,9 @@ public partial class BrowserWindow : Window
     private bool closing;
     private bool restoring = true;
     private bool smokeRun;
+    private bool openingDownloads;
+    private string? startupAddress;
+    private LibraryWindow? bookmarkLibrary;
 
     private BrowserData data => session.Data;
     private Stack<ClosedTab> closedTabs => session.ClosedTabs;
@@ -68,6 +73,12 @@ public partial class BrowserWindow : Window
         adopted = adopt;
         session.Windows.Add(this);
         InitializeComponent();
+        if (session.IsPrivate)
+        {
+            Title = "VEIL · 일회용 탐색";
+            PrivateIndicator.Visibility = Visibility.Visible;
+            BookmarkButton.Visibility = Visibility.Collapsed;
+        }
         ActiveDownloadsList.ItemsSource = session.ActiveDownloads;
         PopupActiveDownloads.ItemsSource = session.ActiveDownloads;
         InitializeDownloadToolbar();
@@ -91,20 +102,25 @@ public partial class BrowserWindow : Window
         closing = true;
         DownloadPopup.IsOpen = false;
         downloadRingTimer.Stop();
+        retryDownload = null;
         RecentDownloadsList.ItemsSource = null;
+        ActiveDownloadsList.ItemsSource = null;
+        PopupActiveDownloads.ItemsSource = null;
         CloseAddressSuggestions();
         session.Windows.Remove(this);
         if (!last && !session.IsEnding)
         {
             // Closing one of several windows closes its tabs; they stay reopenable.
             foreach (TabItem item in Tabs.Items)
-                if (item.Tag is BrowserTab tab && IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
+                if (item.Tag is BrowserTab tab) session.RememberClosedTab(new ClosedTab(tab.Url, tab.Pinned));
             SaveSession();
         }
         foreach (var tab in Tabs.Items.OfType<TabItem>().Select(item => (BrowserTab)item.Tag).ToArray())
             ClearManagement(tab);
+        if (session.IsPrivate) DeletePrivateProfile();
         foreach (var view in Pages.Children.OfType<WebView2>())
             view.Dispose();
+        session.ReleasePrivate();
     }
 
     internal void PrepareForProtectedShutdown()
@@ -149,12 +165,42 @@ public partial class BrowserWindow : Window
             }
             restoring = false;
             Status.Text = "준비";
+            if (startupAddress is { } external)
+            {
+                startupAddress = null;
+                if (await OpenTab(external) is null && !closing) Status.Text = "외부 링크를 열지 못했습니다.";
+            }
             if (Active?.Url == "about:blank") FocusAddress();
         }
         catch (Exception)
         {
             if (!closing) Status.Text = "테스트 엔진을 시작하지 못했습니다. WebView2 런타임과 프로필 위치를 확인하세요.";
         }
+    }
+
+    internal void SetStartupAddress(string? address) => startupAddress = ExternalAddress.Parse(address);
+
+    internal async Task<bool> OpenExternalAddressAsync(string? address)
+    {
+        var main = session.MainSession;
+        if (main.IsEnding || main.EngineLost || !main.EngineHost.IsReady ||
+            main.PasswordUiOpen || main.PermissionUiOpen || main.SettingsUiOpen || main.VaultUiOpen) return false;
+        string? url = ExternalAddress.Parse(address);
+        if (address is not null && url is null) return false;
+        var target = main.Windows.FirstOrDefault(w => !w.closing && !w.restoring && w.IsActive) ??
+            main.Windows.FirstOrDefault(w => !w.closing && !w.restoring);
+        if (target is null)
+        {
+            if (main.Windows.Any(w => !w.closing)) return false;
+            // Only private windows remain; do not route the external address into them.
+            target = new BrowserWindow(main, ["about:blank"], 0, null);
+            target.SetStartupAddress(url);
+            target.Show();
+            return true; // accepted for startup, not a claim of successful navigation
+        }
+        if (target.WindowState == WindowState.Minimized) target.WindowState = WindowState.Normal;
+        target.Activate();
+        return url is null || await target.OpenTab(url) is not null;
     }
 
     /// <summary>Opens another window sharing this profile's engine and data.</summary>
@@ -175,17 +221,51 @@ public partial class BrowserWindow : Window
         return window;
     }
 
+    private void PrivateWindowClick(object sender, RoutedEventArgs args)
+    {
+        if (closing || restoring || session.IsEnding || session.EngineLost || !session.EngineHost.IsReady) return;
+        OpenPrivateWindow();
+    }
+
+    private BrowserWindow OpenPrivateWindow()
+    {
+        var window = new BrowserWindow(session.CreatePrivate(), ["about:blank"], 0, null)
+        {
+            Width = Width, Height = Height, ShowActivated = ShowActivated, ShowInTaskbar = ShowInTaskbar,
+        };
+        window.Show();
+        return window;
+    }
+
+    private void DeletePrivateProfile()
+    {
+        // Only a verified, randomly named private profile is ever eligible for deletion.
+        foreach (var view in Pages.Children.OfType<WebView2>())
+        {
+            try
+            {
+                var profile = view.CoreWebView2?.Profile;
+                if (profile is null || !profile.IsInPrivateModeEnabled ||
+                    !string.Equals(profile.ProfileName, session.PrivateProfileName, StringComparison.OrdinalIgnoreCase)) continue;
+                profile.Delete(); // engine schedules deletion; physical erasure is not guaranteed
+                break;
+            }
+            catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException or NotSupportedException) { }
+        }
+    }
+
     /// <summary>Initialized engine views of this window's tabs (Security Manager).</summary>
     internal IEnumerable<CoreWebView2> CoreViews() => Tabs.Items.OfType<TabItem>()
         .Select(item => (item.Tag as BrowserTab)?.View.CoreWebView2).OfType<CoreWebView2>();
 
     private async Task<BrowserTab?> OpenTab(string? url, bool select = true, int? index = null, bool pinned = false)
     {
-        if (!session.EngineHost.IsReady || closing || session.IsEnding || session.EngineLost) return null;
+        if (!session.EngineHost.IsReady || closing || session.IsEnding || session.EngineLost ||
+            (session.IsPrivate && IsInternalUrl(url))) return null;
         // Reject an unsupported backend before creating or attaching any content.
         if (session.EngineHost is not WebView2BrowserEngine)
             throw new InvalidOperationException("The selected engine has no approved security integration.");
-        var engineView = session.EngineHost.CreateView();
+        var engineView = session.EngineHost.CreateView(session.PrivateProfileName);
         var tab = new BrowserTab(engineView, this) { Pinned = pinned };
         var view = tab.View;
         var item = new TabItem { Tag = tab };
@@ -218,7 +298,8 @@ public partial class BrowserWindow : Window
             }
             // SEC-004/007: the engine writes download bytes (GUID.tmp) before DownloadStarting can cancel
             // them. Keep that partial data on the profile volume instead of the user's Downloads folder.
-            string downloadScratch = Path.Combine(session.Root, ProfileScratch.FolderName, "downloads");
+            string downloadScratch = Path.Combine(session.Root, ProfileScratch.FolderName,
+                session.IsPrivate ? session.PrivateProfileName! : "downloads");
             Directory.CreateDirectory(downloadScratch);
             web.Profile.DefaultDownloadFolderPath = downloadScratch;
             // ADR-0006 standard protection: strict tracking prevention for every profile.
@@ -233,8 +314,16 @@ public partial class BrowserWindow : Window
             web.NavigationCompleted += (_, args) => tab.Owner.OnNavigationCompleted(tab, args);
             web.DownloadStarting += (_, args) => tab.Owner.OnDownloadStarting(tab, args);
             // Record navigation methods so the vault never replays a POST download as GET.
-            web.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Document);
-            web.WebResourceRequested += (_, args) => session.Vault.NoteRequest(args.Request.Method, args.Request.Uri);
+            if (!session.IsPrivate)
+            {
+                web.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Document);
+                web.WebResourceRequested += (_, args) =>
+                {
+                    if (!IsWebUrl(args.Request.Uri)) return;
+                    session.Vault.NoteRequest(args.Request.Method, args.Request.Uri);
+                    tab.LastDownloadRequest = (args.Request.Method, args.Request.Uri, tab.NavigationEpoch);
+                };
+            }
             web.NewWindowRequested += (_, args) => tab.Owner.OnNewWindowRequested(tab, args);
             web.WindowCloseRequested += (_, _) => tab.Owner.Dispatcher.BeginInvoke(() => tab.Owner.CloseTab(tab.Item));
             web.IsDocumentPlayingAudioChanged += (_, _) => tab.Owner.UpdateAudio(tab);
@@ -244,15 +333,19 @@ public partial class BrowserWindow : Window
             {
                 if (tab.Owner.Active == tab) tab.Owner.SetFullScreen(web.ContainsFullScreenElement, page: true);
             };
+            // SelectionChanged can synchronously save the session. Publish an internal route
+            // before inserting the item, since native pages may never navigate the WebView.
+            if (IsInternalUrl(url))
+            {
+                tab.Url = url!;
+                tab.Title = InternalTitle(tab.Url);
+                tab.Header.Label.Text = tab.Title;
+            }
             Tabs.Items.Insert(TabInsertionIndex(tab.Pinned, index ?? Tabs.Items.Count), item);
             LayoutTabs(item);
             if (select || Tabs.SelectedItem is null) Tabs.SelectedItem = item;
             if (IsInternalUrl(url))
             {
-                tab.Url = url!;
-                tab.Title = InternalTitle(tab.Url);
-                UpdateTabToolTip(tab);
-                tab.Header.Label.Text = tab.Title;
                 if (!IsManagementUrl(url)) engineView.ShowInternalHtml(BuildInternalPage(url));
             }
             else if (url is not null && url != "about:blank")
@@ -262,6 +355,12 @@ public partial class BrowserWindow : Window
             }
             UpdateTabToolTip(tab);
             if (Active == tab) RefreshChrome();
+            else if (IsInternalUrl(url))
+            {
+                // Background internal tabs have no selection event to persist them.
+                UpdateManagementVisibility();
+                SaveTabs();
+            }
             return tab;
         }
         catch (Exception)
@@ -279,6 +378,10 @@ public partial class BrowserWindow : Window
     private void OnNavigationStarting(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
     {
         tab.NavigationEpoch++;
+        tab.LastDownloadRequest = null;
+        if (retryDownload?.Tab == tab) retryDownload = null;
+        tab.LoginFormDetected = false;
+        if (Active == tab) UpdateLoginAction();
         // Internal management routes are browser-chrome commands, never web navigation.
         if (args.Uri.StartsWith("veil:", StringComparison.OrdinalIgnoreCase) || IsManagementUrl(tab.Url))
         {
@@ -339,7 +442,7 @@ public partial class BrowserWindow : Window
                 return;
             }
         }
-        if (args.IsSuccess && IsWebUrl(tab.Url))
+        if (!session.IsPrivate && args.IsSuccess && IsWebUrl(tab.Url))
             data.History.Insert(0, new PageEntry(tab.Title, tab.Url, DateTimeOffset.Now));
         if (Active == tab)
         {
@@ -347,7 +450,11 @@ public partial class BrowserWindow : Window
                 Status.Text = args.IsSuccess ? "준비" : $"페이지를 불러오지 못했습니다 ({args.WebErrorStatus}).";
             UpdateNavigationButtons();
         }
-        if (args.IsSuccess) SaveTabs();
+        if (args.IsSuccess)
+        {
+            SaveTabs();
+            if (Active == tab) _ = ProbeLoginFormAsync(tab);
+        }
     }
 
     /// <summary>Engine browser exit ends the session cleanly (app state saved once, every window closed so the
@@ -359,23 +466,30 @@ public partial class BrowserWindow : Window
             if (Active == tab) Status.Text = "페이지 프로세스가 중단되었습니다. 새로고침(F5)하세요.";
             return;
         }
-        if (session.EngineLost) return;
+        if (closing || session.EngineLost) return;
         session.EngineLost = true;
-        try { session.Save(); }
+        try { session.MainSession.Save(); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         session.IsEnding = true;
-        foreach (var window in session.Windows.ToList())
+        foreach (var window in session.AllWindows.ToList())
             window.Status.Text = "브라우저 엔진이 종료되었습니다. VEIL을 다시 시작하세요.";
         if (smokeRun) return; // the smoke harness observes and closes on its own
         MessageBox.Show(this, "브라우저 엔진이 예기치 않게 종료되었습니다. 열린 탭은 저장되었습니다. VEIL을 다시 시작하세요.",
             "VEIL", MessageBoxButton.OK, MessageBoxImage.Warning);
-        foreach (var window in session.Windows.ToList()) window.Close();
+        foreach (var window in session.AllWindows.ToList()) window.Close();
     }
 
     /// <summary>Phase 4-0: the engine's download is always cancelled. Supported requests are fetched again
     /// by VEIL straight into the encrypted vault; everything else is blocked (no plaintext fallback).</summary>
     private void OnDownloadStarting(BrowserTab tab, CoreWebView2DownloadStartingEventArgs args)
     {
+        if (session.IsPrivate)
+        {
+            args.Cancel = true;
+            args.Handled = true;
+            Status.Text = "일회용 탐색에서는 다운로드를 지원하지 않습니다.";
+            return;
+        }
         var operation = args.DownloadOperation;
         long engineReceived = operation.BytesReceived;
         long engineOnDisk = ScratchBytes();
@@ -385,24 +499,75 @@ public partial class BrowserWindow : Window
         // The engine has already received (and HTTP-cached) the start of the body before this event.
         _ = PurgeEngineCacheAsync(tab.View.CoreWebView2);
         var vault = session.Vault;
-        string? unsupported = Uri.TryCreate(operation.Uri, UriKind.Absolute, out var uri) ? vault.Unsupported(uri) : "미지원 방식";
+        string raw = operation.Uri;
+        if (raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            string webSource = tab.View.CoreWebView2.Source;
+            long epoch = tab.NavigationEpoch;
+            bool sourceReady = Uri.TryCreate(webSource, UriKind.Absolute, out var origin) && InlineDownloadPolicy.SourceAllowed(origin);
+            bool allowed = InlineDownloadPolicy.Enabled && vault.Available && !session.InlineCapturePending &&
+                sourceReady && raw.Length <= InlineDownloadPolicy.MaxUriChars && CanUseTab(tab.Item) && Active == tab &&
+                !IsInternalUrl(tab.Url);
+            if (!allowed)
+            {
+                const string detail = "Data 다운로드 미지원 또는 제한 초과";
+                vault.Results.Add(new VaultResult(fileName, DownloadVault.Blocked, 0, detail, null, engineReceived, engineOnDisk));
+                ShowDownloadOutcome(fileName, DownloadVault.Blocked, detail, "Data 다운로드를 안전하게 처리할 수 없어 차단했습니다.");
+                return;
+            }
+            session.InlineCapturePending = true;
+            bool ContextReady() => CanUseTab(tab.Item) && tab.NavigationEpoch == epoch &&
+                tab.View.CoreWebView2?.Source == webSource && !IsInternalUrl(tab.Url);
+            Dispatcher.BeginInvoke(new Action(async () =>
+            {
+                try
+                {
+                    if (ContextReady())
+                        await CaptureAsync(tab.View.CoreWebView2, origin!, fileName, engineReceived, engineOnDisk,
+                            inlinePayload: raw, inlineReady: ContextReady);
+                    else
+                    {
+                        const string detail = "원래 다운로드 페이지 변경";
+                        vault.Results.Add(new VaultResult(fileName, DownloadVault.Blocked, 0, detail, null, engineReceived, engineOnDisk));
+                        if (!closing) ShowDownloadOutcome(fileName, DownloadVault.Blocked, detail, "원래 페이지에서 다시 다운로드하세요.");
+                    }
+                }
+                catch (Exception error) when (RecoverableFailure.Is(error))
+                {
+                    // An exception escaping this async dispatcher callback would terminate the browser.
+                    if (!closing) ShowDownloadOutcome(fileName, DownloadVault.Failed, error.GetType().Name, "다운로드를 저장하지 못했습니다.");
+                }
+                finally { session.InlineCapturePending = false; }
+            }), DispatcherPriority.Normal);
+            return;
+        }
+        string? unsupported = Uri.TryCreate(raw, UriKind.Absolute, out var uri) ? vault.Unsupported(uri) : "미지원 방식";
         if (unsupported is not null)
         {
             vault.Results.Add(new VaultResult(fileName, DownloadVault.Blocked, 0, unsupported, null, engineReceived, engineOnDisk));
-            ShowDownloadOutcome(fileName, $"{DownloadVault.Blocked}: {unsupported}", $"{fileName}: 보호 저장을 지원하지 않는 다운로드라 차단했습니다.");
+            ShowDownloadOutcome(fileName, DownloadVault.Blocked, unsupported, $"{fileName}: 보호 저장을 지원하지 않는 다운로드라 차단했습니다.");
             return;
         }
         // WebView2 callbacks cannot safely run a nested modal message loop. Schedule capture
         // after DownloadStarting returns, keeping the original request cancelled and protected.
         var web = tab.View.CoreWebView2;
+        RetryDownload? retry = null;
+        if (uri is not null && tab.LastDownloadRequest is { } request && request.Epoch == tab.NavigationEpoch &&
+            string.Equals(request.Method, "GET", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(request.Uri, uri.AbsoluteUri, StringComparison.Ordinal) &&
+            DownloadFailurePolicy.SafeRetryAddress(uri) && Uri.TryCreate(web.Source, UriKind.Absolute, out var source) &&
+            source.Scheme == "https" && source.GetLeftPart(UriPartial.Authority) == uri.GetLeftPart(UriPartial.Authority))
+            retry = new RetryDownload(tab, uri, fileName, tab.NavigationEpoch, web.Source, DateTimeOffset.UtcNow.AddMinutes(5));
+        tab.LastDownloadRequest = null;
         Dispatcher.BeginInvoke(new Action(() =>
         {
             if (!closing && !session.IsEnding && !session.EngineLost)
-                _ = CaptureAsync(web, uri!, fileName, engineReceived, engineOnDisk);
+                _ = CaptureAsync(web, uri!, fileName, engineReceived, engineOnDisk, retry);
         }), DispatcherPriority.Normal);
     }
 
-    private async Task CaptureAsync(CoreWebView2 web, Uri uri, string fileName, long engineReceived, long engineOnDisk)
+    private async Task CaptureAsync(CoreWebView2 web, Uri uri, string fileName, long engineReceived, long engineOnDisk,
+        RetryDownload? candidate = null, bool retry = false, string? inlinePayload = null, Func<bool>? inlineReady = null)
     {
         var vault = session.Vault;
         using var download = new BrowserDownload(fileName);
@@ -415,7 +580,7 @@ public partial class BrowserWindow : Window
             vault.Results.Add(new VaultResult(fileName, outcome, entry?.Bytes ?? download.Bytes, detail,
                 entry is null ? null : vault.ObjectPath(entry), engineReceived, engineOnDisk));
             var window = closing ? session.Windows.FirstOrDefault() : this;
-            window?.ShowDownloadOutcome(fileName, detail is null ? outcome : $"{outcome}: {detail}", message);
+            window?.ShowDownloadOutcome(fileName, outcome, detail, message);
         }
 
         bool open = false;
@@ -430,7 +595,18 @@ public partial class BrowserWindow : Window
                 return;
             }
             download.WaitForTransfer();
-            var entry = await vault.CaptureAsync(uri, download, web);
+            if (retry && (candidate is null || !CanRetry(candidate)))
+            {
+                Report(DownloadVault.Blocked, "원래 다운로드 페이지 변경", "원래 페이지에서 다시 다운로드하세요.");
+                return;
+            }
+            if (inlinePayload is not null && inlineReady?.Invoke() != true)
+            {
+                Report(DownloadVault.Blocked, "원래 다운로드 페이지 변경", "원래 페이지에서 다시 다운로드하세요.");
+                return;
+            }
+            var entry = inlinePayload is null ? await vault.CaptureAsync(uri, download, web, retry) :
+                await vault.CaptureInlineAsync(inlinePayload, uri, download);
             Report(DownloadVault.Stored, null, $"{fileName}을(를) 암호화 금고에 보관했습니다.", entry);
         }
         catch (OperationCanceledException) when (download.Token.IsCancellationRequested)
@@ -441,12 +617,19 @@ public partial class BrowserWindow : Window
         {
             Report(DownloadVault.Blocked, "VEIL 위협 목록", $"{fileName}: {threat.Message}. 저장하지 않았습니다.");
         }
+        catch (InvalidDataException) when (inlinePayload is not null)
+        {
+            Report(DownloadVault.Blocked, "Data 형식 또는 크기 제한", "지원하지 않는 Data 다운로드를 차단했습니다.");
+        }
         catch (Exception error) when (error is IOException or System.Net.Http.HttpRequestException or InvalidOperationException
             or OperationCanceledException or UnauthorizedAccessException or System.ComponentModel.Win32Exception
             or System.Runtime.InteropServices.COMException)
         {
-            string reason = !open ? "금고 열기 실패" : error is System.Net.Http.HttpRequestException http ? http.Message : "보관 실패";
-            Report(DownloadVault.Failed, reason, $"{fileName}을(를) 보관하지 못했습니다.");
+            string reason = DownloadFailurePolicy.Describe(error, download.Phase, open);
+            if (!retry && open && download.Phase == DownloadPhase.Request &&
+                error is DownloadRequestFailure { Retryable: true } && candidate is not null && CanRetry(candidate))
+                retryDownload = candidate;
+            Report(DownloadVault.Failed, reason, $"{fileName}을(를) 보관하지 못했습니다. {reason}");
         }
         finally
         {
@@ -464,38 +647,40 @@ public partial class BrowserWindow : Window
         {
             cancellation.ThrowIfCancellationRequested();
             if (closing || session.IsEnding || session.EngineLost) return false;
-            return await OpenVaultAsync();
+            return await OpenVaultAsync(cancellation);
         }
         finally { session.VaultOpenGate.Release(); }
     }
 
-    private async Task<bool> OpenVaultAsync()
+    private async Task<bool> OpenVaultAsync(CancellationToken cancellation)
     {
+        bool CanContinue() => !closing && !session.IsEnding && !session.EngineLost && !cancellation.IsCancellationRequested;
+        if (!CanContinue()) return false;
         var vault = session.Vault;
         if (vault.Unlocked) return true;
         if (vault.UsesProfilePassword) return false;
         if (!vault.Available) return false;
-        if (await vault.TryOpenFromDevelopmentEnvironmentAsync()) return true;
-        if (smokeRun) return false;
+        if (await vault.TryOpenFromDevelopmentEnvironmentAsync()) return CanContinue();
+        if (smokeRun || !CanContinue()) return false;
         if (!vault.Exists)
         {
             var setup = new VaultSetupDialog(this, "다운로드 금고 만들기", askPassphrase: true, issueCode: true, allowRestore: true);
-            if (setup.ShowDialog() != true) return false;
+            if (setup.ShowDialog() != true || !CanContinue()) return false;
             bool restoringBackup = setup.Backup is not null;
             Status.Text = restoringBackup ? "암호화 금고를 복원하는 중입니다." : "암호화 금고를 만드는 중입니다.";
             string? failure = setup.Backup is { } backup
                 ? await vault.RestoreAsync(backup)
                 : await vault.CreateAsync(setup.Passphrase!, setup.RecoveryCode!);
-            if (failure is not null && !closing && !session.IsEnding)
+            if (failure is not null && CanContinue())
                 MessageBox.Show(this, failure, restoringBackup ? "금고 백업 복원" : "다운로드 금고 만들기",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
-            return failure is null;
+            return failure is null && CanContinue();
         }
         string? error = null;
-        for (int attempt = 0; attempt < 5; attempt++)
+        for (int attempt = 0; attempt < 5 && CanContinue(); attempt++)
         {
             var unlock = new VaultUnlockDialog(this, error);
-            if (unlock.ShowDialog() != true) return false;
+            if (unlock.ShowDialog() != true || !CanContinue()) return false;
             if (unlock.RecoveryCode is { } code)
             {
                 error = await vault.RecoverAsync(code);
@@ -503,10 +688,12 @@ public partial class BrowserWindow : Window
                 bool resetSaved = false;
                 try
                 {
+                    // A recovered vault must be relocked if shutdown/cancellation wins before credential reset.
+                    if (!CanContinue()) return false;
                     var reset = new VaultSetupDialog(this, "복구 후 새 암호와 복구 코드", askPassphrase: true, issueCode: true);
-                    if (reset.ShowDialog() != true) return false;
+                    if (reset.ShowDialog() != true || !CanContinue()) return false;
                     resetSaved = await vault.CompleteRecoveryAsync(reset.Passphrase!, reset.RecoveryCode!);
-                    if (resetSaved) return true;
+                    if (resetSaved) return CanContinue();
                     error = "새 인증 정보를 모두 저장하지 못했습니다. 다시 잠금을 해제하세요.";
                 }
                 finally
@@ -516,8 +703,9 @@ public partial class BrowserWindow : Window
                 continue;
             }
             error = await vault.UnlockAsync(unlock.Passphrase!);
-            if (error is null) return true;
-            await Task.Delay(500 * (attempt + 1)); // slow down repeated guesses
+            if (error is null) return CanContinue();
+            if (!CanContinue()) return false;
+            await Task.Delay(500 * (attempt + 1), cancellation); // slow down repeated guesses
         }
         return false;
     }
@@ -549,15 +737,7 @@ public partial class BrowserWindow : Window
         {
             session.VaultUiOpen = false;
             session.PermissionUiOpen = false;
-            if (SettingsReady())
-                foreach (var window in session.Windows.ToArray())
-                {
-                    if (window.closing) continue;
-                    foreach (var tab in window.Tabs.Items.OfType<TabItem>().Select(item => item.Tag).OfType<BrowserTab>())
-                        if (tab.Url == "veil://downloads" && tab.View.CoreWebView2 is { } web)
-                            try { web.NavigateToString(window.BuildInternalPage("veil://downloads")); }
-                            catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
-                }
+            RefreshSharedDownloadPages();
         }
     }
 
@@ -585,32 +765,46 @@ public partial class BrowserWindow : Window
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return -1; }
     }
 
-    private void ShowDownloadOutcome(string fileName, string label, string message)
+    private void ShowDownloadOutcome(string fileName, string outcome, string? detail, string message)
     {
+        string label = detail is null ? outcome : $"{outcome}: {detail}";
         downloads.Insert(0, $"{fileName} · {label}");
-        if (label != DownloadVault.Stored)
+        if (downloads.Count > 200) downloads.RemoveAt(200);
+        if (outcome != DownloadVault.Stored)
         {
-            session.RecentDownloadIssues.Insert(0, (DateTimeOffset.Now, $"{fileName} · {label}"));
-            if (session.RecentDownloadIssues.Count > 20) session.RecentDownloadIssues.RemoveAt(20);
+            session.RecentDownloadIssues.Insert(0, new DownloadIssue(Guid.NewGuid(), fileName, outcome, detail, DateTimeOffset.Now));
+            if (session.RecentDownloadIssues.Count > 100) session.RecentDownloadIssues.RemoveAt(100);
         }
         Status.Text = message + " Ctrl+J에서 확인할 수 있습니다.";
         Dispatcher.BeginInvoke(() =>
         {
-            if (closing) return;
-            DownloadButton.Visibility = Visibility.Visible;
-            foreach (var window in session.Windows.ToArray())
-                if (!window.closing) window.RefreshDownloadProgress();
-            if (Active?.Url == "veil://downloads")
-                Active.View.CoreWebView2.NavigateToString(BuildInternalPage("veil://downloads"));
-            Motion.Pop(Motion.Transforms(DownloadButton).Scale, 1.35);
+            RefreshSharedDownloadPages();
+            if (!closing && !session.IsEnding && !session.EngineLost)
+                Motion.Pop(Motion.Transforms(DownloadButton).Scale, 1.35);
         }, System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    // Results and vault visibility belong to the profile, not the originating window.
+    private void RefreshSharedDownloadPages()
+    {
+        if (session.IsEnding || session.EngineLost) return;
+        foreach (var window in session.Windows.ToArray())
+        {
+            if (window.closing) continue;
+            window.RefreshDownloadProgress();
+            foreach (var tab in window.Tabs.Items.OfType<TabItem>().Select(item => item.Tag).OfType<BrowserTab>().ToArray())
+            {
+                if (tab.Url == "veil://downloads" && !window.closingTabs.Contains(tab.Item) &&
+                    tab.ManagementSurface is DownloadOverview overview) overview.Refresh();
+            }
+        }
     }
 
     private async void OnNewWindowRequested(BrowserTab opener, CoreWebView2NewWindowRequestedEventArgs args)
     {
         using var deferral = args.GetDeferral();
         args.Handled = true;
-        if (args.Uri != "about:blank" && !IsWebUrl(args.Uri)) return;
+        if (!CanUseTab(opener.Item) || (args.Uri != "about:blank" && !IsWebUrl(args.Uri))) return;
         try
         {
             // Like other browsers, tabs opened from a page appear right after their opener.
@@ -655,11 +849,15 @@ public partial class BrowserWindow : Window
 
     private async Task CloseTabAsync(TabItem item, bool protectPinned = false)
     {
-        if (closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
+        if (closing || session.IsEnding || closingTabs.Contains(item) || !Tabs.Items.Contains(item)) return;
         var tab = (BrowserTab)item.Tag;
         if (protectPinned && tab.Pinned) return;
+        if (session.IsPrivate && Tabs.Items.Count == 1) { Close(); return; }
+        // Cancel pending native actions before yielding to the close animation.
+        ClearManagement(tab);
         if (!await AnimateTabClose(item) || closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
-        if (IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
+        if (retryDownload?.Tab == tab) retryDownload = null;
+        session.RememberClosedTab(new ClosedTab(tab.Url, tab.Pinned));
         ClearManagement(tab);
         Tabs.Items.Remove(item);
         Pages.Children.Remove(tab.View);
@@ -684,6 +882,7 @@ public partial class BrowserWindow : Window
         UpdateManagementVisibility();
         if (fullScreen && fullScreenFromPage && Active?.View.CoreWebView2?.ContainsFullScreenElement != true) SetFullScreen(false);
         RefreshChrome();
+        if (Active is { } selected) _ = ProbeLoginFormAsync(selected);
         SyncProgress();
         SaveTabs();
     }
@@ -698,13 +897,14 @@ public partial class BrowserWindow : Window
         UpdateManagementVisibility();
         UpdateNavigationButtons();
         UpdateBookmarkGlyph();
+        UpdateLoginAction();
         RefreshDownloadProgress();
     }
 
     private void RefreshDownloadProgress()
     {
         bool hasDownloads = session.ActiveDownloads.Count > 0;
-        DownloadButton.Visibility = Visibility.Visible;
+        DownloadButton.Visibility = session.IsPrivate ? Visibility.Collapsed : Visibility.Visible;
         UpdateDownloadToolbar();
         DownloadProgressPanel.Visibility = Active?.Url == "veil://downloads"
             ? Visibility.Visible : Visibility.Collapsed;
@@ -730,7 +930,7 @@ public partial class BrowserWindow : Window
         (url.Scheme is "http" or "https") && !string.IsNullOrEmpty(url.Host) && url.UserInfo.Length == 0;
 
     internal static bool IsInternalUrl(string? value) =>
-        IsManagementUrl(value) || value is "veil://downloads" or HttpsWarningUrl or ThreatWarningUrl;
+        IsManagementUrl(value) || value is HttpsWarningUrl or ThreatWarningUrl;
 
     private static string InternalTitle(string? value) => value switch
     {
@@ -755,6 +955,7 @@ public partial class BrowserWindow : Window
     {
         input = input.Trim();
         if (input.Length == 0) return null;
+        if (SearchPolicy.TryExplicitSearch(input, searchEngine, out var search)) return search;
         if (IsInternalUrl(input)) return new Uri(input);
         if (Uri.TryCreate(input, UriKind.Absolute, out var absolute) && IsWebUrl(absolute)) return absolute;
         if (input.Contains("://") || input.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) return null;
@@ -772,29 +973,9 @@ public partial class BrowserWindow : Window
 
     private string BuildInternalPage(string? url)
     {
-        bool vaultVisible = session.VaultOpenGate.CurrentCount > 0 && session.Vault.Unlocked;
-        var rows = url switch
-        {
-            "veil://bookmarks" => data.Bookmarks.Select(entry =>
-                $@"<a class=""row"" href=""{EscapeHtml(entry.Url)}""><strong>{EscapeHtml(entry.Title)}</strong><span>{EscapeHtml(entry.Url)}</span></a>"),
-            "veil://history" => data.History.Select(entry =>
-                $@"<a class=""row"" href=""{EscapeHtml(entry.Url)}""><strong>{EscapeHtml(entry.Title)}</strong><span>{EscapeHtml(entry.Url)}</span></a>"),
-            // Vault items appear only while the vault is open; names come from the encrypted index.
-            "veil://downloads" => (vaultVisible ? session.Vault.Entries : []).Select(entry =>
-                    $@"<div class=""row""><strong>{EscapeHtml(entry.Name)}</strong><span>금고 보관 · {entry.Bytes / 1024d / 1024d:0.00} MB · {entry.SavedAt.LocalDateTime:yyyy-MM-dd HH:mm} · 내보내기는 메뉴의 다운로드 금고(Ctrl+Shift+J)</span></div>")
-                .Concat(downloads.Where(entry => !entry.EndsWith(DownloadVault.Stored)).Select(entry =>
-                    $@"<div class=""row""><strong>{EscapeHtml(entry)}</strong><span>보관하지 않음 · 일반 디스크에도 저장하지 않음</span></div>")),
-            _ => [],
-        };
+        // Sensitive download metadata is now rendered only by native chrome.
         string title = InternalTitle(url);
-        string empty = url switch
-        {
-            "veil://bookmarks" => "저장한 북마크가 없습니다.",
-            "veil://history" => "방문 기록이 없습니다.",
-            "veil://downloads" => vaultVisible ? "금고에 보관한 다운로드가 없습니다." : "금고가 잠겨 있습니다. 메뉴의 다운로드 금고에서 열 수 있습니다.",
-            _ => "",
-        };
-        string body = rows.Any() ? string.Concat(rows) : $"<div class=\"empty\">{EscapeHtml(empty)}</div>";
+        const string body = "";
         return $$"""
 <!doctype html>
 <html><head><meta charset="utf-8"><style>
@@ -839,6 +1020,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void SaveData()
     {
+        if (session.IsPrivate) return;
         try { data.Save(statePath); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -889,6 +1071,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         string text = Address.Text.Trim();
         // Ctrl+Enter completes a bare name to www.<name>.com, as in Chrome and Edge.
         if (modifiers.HasFlag(ModifierKeys.Control) && text.Length > 0 && !text.Contains('.') &&
+            !text.StartsWith('?') && !text.StartsWith('@') &&
             !text.Contains(':') && !text.Contains('/') && !text.Any(char.IsWhiteSpace))
             text = $"www.{text}.com";
         if (IsManagementUrl(text)) { OpenManagementRoute(text); return; }
@@ -905,6 +1088,11 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private void NavigateAddress(string input)
     {
         CloseAddressSuggestions();
+        if (session.IsPrivate && IsInternalUrl(input.Trim()))
+        {
+            Status.Text = "일회용 탐색에서는 일반 프로필 관리 페이지를 열 수 없습니다.";
+            return;
+        }
         if (IsManagementUrl(input.Trim())) { OpenManagementRoute(input.Trim()); return; }
         var url = ResolveAddress(input, data.SearchEngine);
         if (url is null)
@@ -912,7 +1100,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             Status.Text = "웹 주소 또는 검색어를 입력하세요.";
             return;
         }
-        if (Active is not { } tab) return;
+        if (Active is not { } tab || closingTabs.Contains(tab.Item)) return;
         ClearManagement(tab);
         tab.PendingHttp = null;
         tab.PendingThreat = null;
@@ -939,13 +1127,18 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void CycleTab(int direction)
     {
-        int count = Tabs.Items.Count;
-        if (count > 0) Tabs.SelectedIndex = (Tabs.SelectedIndex + direction + count) % count;
+        var live = Tabs.Items.OfType<TabItem>().Where(CanUseTab).ToArray();
+        if (live.Length == 0) return;
+        int current = Array.IndexOf(live, Tabs.SelectedItem as TabItem);
+        int next = current < 0 ? (direction > 0 ? 0 : live.Length - 1) :
+            (current + direction + live.Length) % live.Length;
+        Tabs.SelectedItem = live[next];
     }
 
     private void SelectTab(int index)
     {
-        if (Tabs.Items.Count > 0) Tabs.SelectedIndex = Math.Clamp(index, 0, Tabs.Items.Count - 1);
+        if (index >= 0 && index < Tabs.Items.Count && Tabs.Items[index] is TabItem item && CanUseTab(item))
+            Tabs.SelectedItem = item;
     }
 
     private void Zoom(double? change)
@@ -963,18 +1156,26 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void NewWindowClick(object sender, RoutedEventArgs args)
     {
+        if (session.IsPrivate) { PrivateWindowClick(sender, args); return; }
         if (session.EngineHost.IsReady && !session.IsEnding && !session.EngineLost) OpenWindow(["about:blank"], 0, cascade: true);
     }
 
     private async void RestoreClick(object sender, RoutedEventArgs args)
     {
-        if (!closedTabs.TryPop(out var closed)) return;
-        try { if (await OpenTab(closed.Url, pinned: closed.Pinned) is null) closedTabs.Push(closed); }
+        if (session.IsPrivate || closing || restoring || session.IsEnding || session.EngineLost ||
+            session.RestoringClosedTab || !closedTabs.TryPop(out var closed)) return;
+        session.RestoringClosedTab = true;
+        try
+        {
+            if (await OpenTab(closed.Url, pinned: closed.Pinned) is null)
+                session.RememberClosedTab(closed);
+        }
         catch (Exception error) when (RecoverableFailure.Is(error))
         {
-            closedTabs.Push(closed);
+            session.RememberClosedTab(closed);
             if (!closing) Status.Text = "닫은 탭을 다시 열지 못했습니다.";
         }
+        finally { session.RestoringClosedTab = false; }
     }
 
     private void BackClick(object sender, RoutedEventArgs args) { if (Back.IsEnabled) Active?.EngineView.GoBack(); }
@@ -1009,7 +1210,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void GoHome()
     {
-        if (Active is not { } tab) return;
+        if (Active is not { } tab || closingTabs.Contains(tab.Item)) return;
         ClearManagement(tab);
         tab.PendingHttp = null;
         tab.PendingThreat = null;
@@ -1023,13 +1224,16 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private void MenuClick(object sender, RoutedEventArgs args)
     {
         var menu = MenuButton.ContextMenu;
+        if (session.IsPrivate)
+            foreach (var item in menu.Items.OfType<MenuItem>())
+                item.Visibility = Equals(item.Tag, "private-ok") ? Visibility.Visible : Visibility.Collapsed;
         menu.PlacementTarget = MenuButton;
         menu.IsOpen = true;
     }
 
     private void BookmarkClick(object sender, RoutedEventArgs args)
     {
-        if (Active is not { } tab || !IsWebUrl(tab.Url)) return;
+        if (!SettingsReady() || Active is not { } tab || closingTabs.Contains(tab.Item) || !IsWebUrl(tab.Url)) return;
         if (data.Bookmarks.All(entry => entry.Url != tab.Url))
         {
             data.Bookmarks.Add(new PageEntry(tab.Title, tab.Url, DateTimeOffset.Now));
@@ -1061,17 +1265,18 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private async Task ShowLibraryAsync(bool editable)
     {
-        if (closing || restoring || session.IsEnding || session.EngineLost) return;
+        if (!SettingsReady()) return;
         string internalUrl = editable ? "veil://bookmarks" : "veil://history";
         if (FocusManagementPage(internalUrl)) return;
         var entries = editable ? data.Bookmarks : data.History;
+        LibraryWindow? dialog = null;
         bool SaveLibrary()
         {
             try
             {
                 data.Save(statePath);
                 if (editable)
-                    RefreshBookmarkBars();
+                    RefreshBookmarkBars(dialog);
                 return true;
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -1080,19 +1285,42 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             }
         }
 
-        var dialog = new LibraryWindow(this, editable ? "북마크 관리" : "방문 기록", entries, editable, SaveLibrary);
-        bool open = await ShowManagementPageAsync(internalUrl, dialog);
-        if (!SettingsReady()) return;
-        if (open && dialog.SelectedUrl is { } url && IsWebUrl(url))
-            _ = await OpenTab(url);
+        dialog = new LibraryWindow(this, editable ? "북마크 관리" : "방문 기록", entries, editable, SaveLibrary,
+            editable ? data.BookmarkFolders : null, editable ? () =>
+                SettingsReady() && Active is { Url: "veil://bookmarks", CancelManagement: not null } active &&
+                !closingTabs.Contains(active.Item) && ReferenceEquals(bookmarkLibrary, dialog) : null);
+        if (editable) bookmarkLibrary = dialog;
+        try
+        {
+            bool open = await ShowManagementPageAsync(internalUrl, dialog);
+            if (!SettingsReady()) return;
+            if (open && dialog.SelectedUrl is { } url && IsWebUrl(url))
+                _ = await OpenTab(url);
+        }
+        finally
+        {
+            if (ReferenceEquals(bookmarkLibrary, dialog)) bookmarkLibrary = null;
+        }
     }
+    private void ClearDownloadIssues()
+    {
+        if (!SettingsReady() || Active?.Url != "veil://downloads") return;
+        session.RecentDownloadIssues.Clear();
+        foreach (var window in session.Windows.ToArray())
+            window.retryDownload = null;
+        RefreshSharedDownloadPages();
+    }
+
     private async void DownloadsClick(object sender, RoutedEventArgs args)
     {
         DownloadPopup.IsOpen = false;
+        if (!SettingsReady() || openingDownloads) return;
         var existing = Tabs.Items.OfType<TabItem>().FirstOrDefault(item => item.Tag is BrowserTab { Url: "veil://downloads" } && !closingTabs.Contains(item));
-        if (existing is not null) { Tabs.SelectedItem = existing; return; }
+        if (existing is not null) { Tabs.SelectedItem = existing; RefreshChrome(); return; }
+        openingDownloads = true;
         try { _ = await OpenTab("veil://downloads"); }
         catch (Exception error) when (RecoverableFailure.Is(error)) { if (!closing) Status.Text = "다운로드 목록을 열지 못했습니다."; }
+        finally { openingDownloads = false; }
     }
 
     // ── Find in page ─────────────────────────────────────────────────────────

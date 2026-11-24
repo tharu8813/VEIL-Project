@@ -2,12 +2,13 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
+using Microsoft.Win32;
 
 namespace Veil.Desktop;
 
 public partial class BrowserWindow
 {
-    private bool PasswordWindowReady() => !closing && !restoring && !session.IsEnding && !session.EngineLost;
+    private bool PasswordWindowReady() => !session.IsPrivate && !closing && !restoring && !session.IsEnding && !session.EngineLost;
 
     private async void PasswordsClick(object sender, RoutedEventArgs args)
     {
@@ -61,7 +62,13 @@ public partial class BrowserWindow
             if (tab is null || origin is null || !PermissionContextMatches(tab, origin, epoch))
                 origin = null;
             var dialog = new PasswordManagerDialog(this, origin, entries);
-            if (await ShowManagementPageAsync("veil://passwords", dialog) != true || !PasswordWindowReady() || dialog.Selected is not { } selected) return;
+            if (await ShowManagementPageAsync("veil://passwords", dialog) != true || !PasswordWindowReady()) return;
+            if (dialog.Action is PasswordAction.Rotate or PasswordAction.Backup or PasswordAction.Restore)
+            {
+                await MaintainPasswordsAsync(store, password, entries, dialog.Action);
+                return;
+            }
+            if (dialog.Selected is not { } selected) return;
 
             switch (dialog.Action)
             {
@@ -115,43 +122,174 @@ public partial class BrowserWindow
         }
     }
 
+    private async Task MaintainPasswordsAsync(PasswordStore store, char[] current, List<SavedLogin> entries, PasswordAction action)
+    {
+        bool Ready() => PasswordWindowReady() && IsActive;
+        if (!Ready()) return;
+        char[]? secret = null, confirmation = null;
+        List<SavedLogin>? imported = null, merged = null;
+        try
+        {
+            if (action == PasswordAction.Rotate)
+            {
+                secret = ProfileUnlockDialog.Prompt("새 관리자 암호", "새 암호를 12자 이상으로 설정하세요. 이전 백업의 암호는 변경되지 않습니다.", this);
+                if (secret is null || !Ready()) return;
+                if (secret.Length < 12 || current.AsSpan().SequenceEqual(secret))
+                { Status.Text = "기존과 다른 12자 이상의 암호를 입력하세요."; return; }
+                confirmation = ProfileUnlockDialog.Prompt("새 관리자 암호 확인", "새 암호를 다시 입력하세요.", this);
+                if (confirmation is null || !secret.AsSpan().SequenceEqual(confirmation) || !Ready()) return;
+                await store.RotateAsync(current, secret);
+                if (Ready()) Status.Text = "관리자 암호를 변경했습니다. 기존 백업은 이전 백업 암호로 여세요.";
+            }
+            else if (action == PasswordAction.Backup)
+            {
+                secret = ProfileUnlockDialog.Prompt("백업 전용 암호", "백업을 열 때 필요한 별도의 12자 이상 암호를 설정하세요. 잊으면 백업을 복원할 수 없습니다.", this);
+                if (secret is null || !Ready()) return;
+                if (secret.Length < 12) { Status.Text = "백업 암호는 12자 이상이어야 합니다."; return; }
+                confirmation = ProfileUnlockDialog.Prompt("백업 암호 확인", "백업 암호를 다시 입력하세요.", this);
+                if (confirmation is null || !secret.AsSpan().SequenceEqual(confirmation) || !Ready()) return;
+                var picker = new SaveFileDialog { Filter = "VEIL 암호화 계정 백업 (*.age)|*.age", DefaultExt = ".age",
+                    AddExtension = true, FileName = "veil-passwords-backup.age", OverwritePrompt = false };
+                if (picker.ShowDialog(this) != true || !Ready()) return;
+                await store.BackupAsync(picker.FileName, secret, entries);
+                if (Ready()) Status.Text = "암호화 백업을 생성했습니다. 백업 암호를 안전하게 보관하세요.";
+            }
+            else if (action == PasswordAction.Restore)
+            {
+                var picker = new OpenFileDialog { Filter = "VEIL 암호화 계정 백업 (*.age)|*.age", CheckFileExists = true };
+                if (picker.ShowDialog(this) != true || !Ready()) return;
+                secret = ProfileUnlockDialog.Prompt("백업 암호", "선택한 백업을 만들 때 사용한 암호를 입력하세요.", this);
+                if (secret is null || !Ready()) return;
+                imported = await store.ReadBackupAsync(picker.FileName, secret);
+                if (!Ready()) return;
+                merged = PasswordStore.MergeBackup(entries, imported);
+                int added = merged.Count - entries.Count;
+                if (added == 0) { Status.Text = "추가할 계정이 없습니다. 기존 계정은 유지했습니다."; return; }
+                if (MessageBox.Show(this, $"새 계정 {added}개를 추가합니다. 중복 {imported.Count - added}개는 기존 계정을 유지합니다. 복원할까요?",
+                    "암호화 백업 복원", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes || !Ready()) return;
+                await store.WriteAsync(current, merged, replace: true);
+                if (Ready()) Status.Text = $"계정 {added}개를 복원했습니다. 기존 계정은 유지했습니다.";
+            }
+        }
+        finally
+        {
+            ProtectedProfileSession.ClearPassword(secret);
+            ProtectedProfileSession.ClearPassword(confirmation);
+            imported?.Clear();
+            merged?.Clear();
+        }
+    }
+
+    private void UpdateLoginAction() =>
+        LoginActionButton.Visibility = !session.IsPrivate && Active is { LoginFormDetected: true } tab && !closingTabs.Contains(tab.Item) &&
+            SitePermissionPolicy.Origin(tab.Url) is not null ? Visibility.Visible : Visibility.Collapsed;
+
+    // Automatic detection returns only a boolean. Values are read only after an explicit native command.
+    private async Task ProbeLoginFormAsync(BrowserTab tab)
+    {
+        if (session.IsPrivate) return;
+        string? origin = SitePermissionPolicy.Origin(tab.Url);
+        long epoch = tab.NavigationEpoch;
+        if (origin is null || !PermissionContextMatches(tab, origin, epoch)) return;
+        try
+        {
+            string result = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Probe(origin));
+            if (!PermissionContextMatches(tab, origin, epoch)) return;
+            tab.LoginFormDetected = result == "true";
+            UpdateLoginAction();
+        }
+        catch (Exception error) when (error is InvalidOperationException or COMException) { }
+    }
+
+    private void LoginActionClick(object sender, RoutedEventArgs args)
+    {
+        if (!PasswordWindowReady() || sender is not System.Windows.Controls.Button button || button.ContextMenu is not { } menu) return;
+        menu.PlacementTarget = button;
+        menu.IsOpen = true;
+    }
+
+    private async void SavePageLoginClick(object sender, RoutedEventArgs args) => await PageLoginAsync(save: true);
+    private async void FillPageLoginClick(object sender, RoutedEventArgs args) => await PageLoginAsync(save: false);
+
+    private async Task PageLoginAsync(bool save)
+    {
+        if (!PasswordWindowReady() || session.PasswordUiOpen || session.PermissionUiOpen || session.SettingsUiOpen ||
+            Active is not { } tab || SitePermissionPolicy.Origin(tab.Url) is not { } origin) return;
+        long epoch = tab.NavigationEpoch;
+        string page = tab.Url;
+        bool Current() => tab.Url == page && PermissionContextMatches(tab, origin, epoch);
+        if (!Current()) return;
+        session.PasswordUiOpen = true;
+        session.PermissionUiOpen = true;
+        char[]? password = null, confirmation = null;
+        List<SavedLogin>? entries = null;
+        try
+        {
+            var store = new PasswordStore(session.Root);
+            if (!store.Available || (!save && !store.Exists))
+            {
+                Status.Text = "저장된 계정 또는 암호화 코어가 없습니다.";
+                return;
+            }
+            bool exists = store.Exists;
+            password = ProfileUnlockDialog.Prompt("비밀번호 관리자",
+                exists ? "관리자 전용 암호를 입력하세요." : "별도의 긴 암호(12자 이상)를 설정하세요. 잊으면 복구할 수 없습니다.", this);
+            if (password is null || !Current()) return;
+            if (!exists)
+            {
+                if (password.Length < 12) { Status.Text = "관리자 암호는 12자 이상이어야 합니다."; return; }
+                confirmation = ProfileUnlockDialog.Prompt("비밀번호 관리자 암호 확인", "동일한 암호를 다시 입력하세요.", this);
+                if (confirmation is null || !password.AsSpan().SequenceEqual(confirmation) || !Current()) return;
+                ProtectedProfileSession.ClearPassword(confirmation);
+                confirmation = null;
+            }
+            entries = exists ? await store.ReadAsync(password) : [];
+            if (!Current()) return;
+            if (save)
+            {
+                string json = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Read(origin));
+                if (!Current()) return;
+                var login = LoginFormPolicy.Decode(origin, json);
+                if (login is null)
+                {
+                    Status.Text = "지원되는 로그인 폼에 계정과 비밀번호를 먼저 입력하세요.";
+                    return;
+                }
+                bool replace = entries.Any(e => e.Origin == origin && e.UserName == login.UserName);
+                if (MessageBox.Show(this, origin + "\n" + (replace ? "이 계정의 비밀번호를 갱신할까요?" : "현재 폼의 계정과 비밀번호를 암호화해 저장할까요?"),
+                    "비밀번호 저장", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes || !Current()) return;
+                entries.RemoveAll(e => e.Origin == origin && e.UserName == login.UserName);
+                entries.Add(login);
+                await store.WriteAsync(password, entries, replace: exists);
+                if (PasswordWindowReady()) Status.Text = "계정을 암호화해 저장했습니다.";
+            }
+            else
+            {
+                var matches = entries.Where(e => e.Origin == origin).ToList();
+                if (matches.Count == 0) { Status.Text = "현재 사이트에 저장된 계정이 없습니다."; return; }
+                var picker = new LoginPickerDialog(this, origin, matches);
+                if (picker.ShowDialog() != true || !Current() || picker.Selected is not { } selected) return;
+                await FillLoginAsync(tab, selected, epoch);
+            }
+        }
+        catch (Exception error) when (RecoverableFailure.Is(error))
+        {
+            if (PasswordWindowReady()) Status.Text = "비밀번호 작업을 완료하지 못했습니다. 현재 페이지와 저장소를 확인하세요.";
+        }
+        finally
+        {
+            ProtectedProfileSession.ClearPassword(password);
+            ProtectedProfileSession.ClearPassword(confirmation);
+            entries?.Clear();
+            session.PasswordUiOpen = false;
+            session.PermissionUiOpen = false;
+        }
+    }
+
     private async Task FillLoginAsync(BrowserTab tab, SavedLogin login, long epoch)
     {
         if (!PermissionContextMatches(tab, login.Origin, epoch)) return;
-        // Serialize as JSON, not JavaScript interpolation of raw values. The JS checks the origin
-        // again at execution time and never submits a form or traverses frames.
-        string origin = JsonSerializer.Serialize(login.Origin);
-        string username = JsonSerializer.Serialize(login.UserName);
-        string secret = JsonSerializer.Serialize(login.Password);
-        string script = $$"""
-            (() => {
-                if (window !== window.top || location.origin !== {{origin}} || document.visibilityState !== 'visible') return false;
-                const visible = el => !el.disabled && !el.readOnly && el.getClientRects().length > 0 &&
-                    getComputedStyle(el).visibility === 'visible';
-                const passwords = [...document.querySelectorAll('input[type="password"]')].filter(visible);
-                if (passwords.length !== 1) return false;
-                const pass = passwords[0], form = pass.form;
-                if (!form || pass.value || pass.autocomplete === 'new-password' ||
-                    new URL(form.action, location.href).origin !== location.origin ||
-                    [...form.querySelectorAll('[formaction]')].some(el =>
-                        new URL(el.getAttribute('formaction'), location.href).origin !== location.origin)) return false;
-                const users = [...form.elements].filter(el => el instanceof HTMLInputElement && visible(el) &&
-                    ['text', 'email', 'tel'].includes(el.type) && el.autocomplete !== 'one-time-code');
-                const explicit = users.filter(el => el.autocomplete.split(/\s+/).includes('username'));
-                const user = explicit.length === 1 ? explicit[0] : explicit.length === 0 && users.length === 1 ? users[0] : null;
-                if (!user || (user.value && user.value !== {{username}})) return false;
-                const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-                if (location.origin !== {{origin}}) return false;
-                set.call(user, {{username}});
-                set.call(pass, {{secret}});
-                for (const el of [user, pass]) {
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-                return true;
-            })()
-            """;
-        string result = await tab.View.CoreWebView2.ExecuteScriptAsync(script);
+        string result = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Fill(login));
         if (PasswordWindowReady())
             Status.Text = result == "true" ? "로그인 정보를 채웠습니다. 제출은 직접 진행하세요." :
                 "지원되는 로그인 폼을 찾지 못했습니다. 직접 입력하세요.";

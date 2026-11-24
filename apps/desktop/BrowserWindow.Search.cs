@@ -22,7 +22,7 @@ public partial class BrowserWindow
                 ItemsControl.ContainerFromElement(AddressSuggestionsList, element) is not ListBoxItem row ||
                 row.Content is not AddressSuggestion selected) return;
             args.Handled = true;
-            OpenAddressSuggestion(selected, false);
+            OpenAddressSuggestion(selected, Keyboard.Modifiers.HasFlag(ModifierKeys.Control));
         };
     }
 
@@ -40,7 +40,7 @@ public partial class BrowserWindow
     {
         if (suppressAddressSuggestions) return;
         if (closing || restoring || session.IsEnding || session.EngineLost || !IsActive ||
-            !Address.IsKeyboardFocusWithin || Active is not { } tab)
+            !Address.IsKeyboardFocusWithin || Active is not { } tab || closingTabs.Contains(tab.Item))
         {
             CloseAddressSuggestions();
             return;
@@ -69,16 +69,18 @@ public partial class BrowserWindow
         int count = AddressSuggestionsList.Items.Count;
         if (count == 0) return;
         int selected = AddressSuggestionsList.SelectedIndex;
-        int index = selected < 0 ? (direction > 0 ? 0 : count - 1) : Math.Clamp(selected + direction, 0, count - 1);
-        AddressSuggestionsList.SelectedIndex = index;
-        AddressSuggestionsList.ScrollIntoView(AddressSuggestionsList.Items[index]);
+        int index = selected < 0 ? (direction > 0 ? 0 : count - 1) : selected + direction;
+        // Moving past either end returns to the original typed input (no auto-selection).
+        AddressSuggestionsList.SelectedIndex = index < 0 || index >= count ? -1 : index;
+        if (AddressSuggestionsList.SelectedIndex >= 0)
+            AddressSuggestionsList.ScrollIntoView(AddressSuggestionsList.Items[index]);
     }
 
     private void OpenAddressSuggestion(AddressSuggestion selected, bool newTab)
     {
         var tab = suggestionTab;
-        bool valid = !closing && !restoring && !session.IsEnding && !session.EngineLost &&
-            tab is not null && tab == Active && data.LocalAddressSuggestions != false &&
+        bool valid = !closing && !restoring && !session.IsEnding && !session.EngineLost && IsActive &&
+            tab is not null && tab == Active && tab.Owner == this && !closingTabs.Contains(tab.Item) && data.LocalAddressSuggestions != false &&
             SearchPolicy.Suggest(data, Address.Text).Any(item => item.Url == selected.Url);
         CloseAddressSuggestions();
         if (!valid || tab is null || !IsWebUrl(selected.Url)) return;

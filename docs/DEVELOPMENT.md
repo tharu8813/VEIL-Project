@@ -2,7 +2,7 @@
 
 > 기존 프로젝트 README의 개발자용 내용을 옮긴 문서입니다. 일부 설명은 초기 프로토타입을 기준으로 하므로 최신 구현·보안 검증 상태는 [SECURITY_STATUS.md](SECURITY_STATUS.md)를 우선 참고하세요. 아래 명령은 별도 지시가 없으면 저장소 루트에서 실행합니다.
 
-Windows용 개발자 브라우저 프로토타입입니다. 테스트용 북마크, 방문 기록, 탭과 사이트 데이터가 재실행 후 유지됩니다. 현재 프로필은 일반 디스크에 기록되므로 실제 계정이나 민감한 자료는 사용하지 마세요. 파일 다운로드 요청은 취소되며 Ctrl+J에서 확인할 수 있습니다.
+Windows용 개발자 브라우저 프로토타입입니다. 테스트용 북마크, 방문 기록, 탭과 사이트 데이터가 재실행 후 유지됩니다. 현재 프로필은 일반 디스크에 기록되므로 실제 계정이나 민감한 자료는 사용하지 마세요. 지원되는 GET 다운로드는 Rust 암호화 금고로 재요청하여 보관하고, 지원되지 않는 요청은 차단합니다. Ctrl+J에서 결과를 확인할 수 있습니다.
 
 ## 라이선스
 
@@ -17,7 +17,7 @@ dotnet build apps/desktop
 dotnet .\apps\desktop\bin\Debug\net10.0-windows\Veil.Desktop.dll
 ```
 
-SDK는 `Microsoft.Web.WebView2` 1.0.2903.40으로 고정했습니다. NuGet을 사용할 수 없는 이 개발 환경에서는 이미 설치된 Visual Studio의 동일 버전 SDK로 빌드했습니다. 해당 파일이 설치되어 있을 때 다음 명령을 사용할 수 있습니다.
+SDK는 `Microsoft.Web.WebView2` 1.0.4370.26으로 고정합니다(실제 기준은 `apps/desktop/Veil.Desktop.csproj`와 잠금 파일). 일반적으로 NuGet의 잠긴 의존성을 사용하세요. 오프라인 환경에서 동일 버전의 SDK를 별도로 준비했다면 다음 명령으로 지정할 수 있습니다.
 
 ```powershell
 $veilSdk = 'C:/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/ModelBuilder'
@@ -65,7 +65,7 @@ node tests/integration/fixture.mjs 8765
 
 페이지의 **사이트 데이터 저장**으로 합성 로그인 및 사이트 저장소를 생성합니다. Ctrl+D로 북마크를 추가한 뒤 앱을 닫았다 다시 열어 Ctrl+B와 Ctrl+H에서 확인할 수 있습니다. 쿠키는 로그인 fixture에서 만료가 명시된 영구 쿠키를 검증했습니다. 세션 쿠키와 충돌 복구는 별도 검증 대상입니다.
 
-웹 주소를 직접 입력하거나 주소창에서 DuckDuckGo로 검색할 수 있습니다. 일반 주소는 HTTPS로 시작하고 로컬 fixture 주소는 HTTP를 사용합니다. 사이트 팝업은 탭으로 열립니다. 프로토타입에서 카메라·마이크 등 사이트 권한 요청은 거부합니다.
+웹 주소를 직접 입력하거나 주소창에서 DuckDuckGo로 검색할 수 있습니다. 일반 주소는 HTTPS로 시작하고 로컬 fixture 주소는 HTTP를 사용합니다. 사이트 팝업은 탭으로 열립니다. 카메라·마이크 등 지원 권한은 기본 거부하며, 사이트별 명시적인 정책과 요청 컨텍스트 확인을 적용합니다. 실제 장치 검증은 별도입니다.
 
 ## 자동 시험
 
@@ -106,6 +106,21 @@ node tests/phase0/run.mjs
 
 각 실행은 `.veil-dev/` 아래에 새 합성 프로필을 만들고 증거 파일 위치를 출력합니다. 범위와 결과는 [Phase 0 증거](phase0-evidence.md)와 [보안 상태](SECURITY_STATUS.md)를 참고하세요.
 
+## 1단계 일괄 회귀 검증
+
+Windows 11의 일반 사용자 대화형 세션에서 저장소 루트 기준으로 실행합니다. Node 22+, .NET 10 SDK, Rust MSVC 및 WebView2 Runtime이 필요합니다. 실제 계정이나 제품 프로필을 사용하지 않습니다.
+
+```powershell
+node tests/integration/stage1-batch.mjs --plan
+node tests/integration/stage1-batch.mjs --run
+# 중복 실행을 피하기 위해 추가 금고 지속성 시험은 필요할 때만:
+node tests/integration/stage1-batch.mjs --run --include-vault-persistence
+```
+
+기본 실행은 Rust 금고 바이너리와 Debug 앱을 각각 한 번 빌드한 후 기존 desktop 통합 시험과 vault-capture 시험을 순차 실행합니다. 결과는 새 `.veil-dev/stage1-batch-*` 폴더의 `summary.json`과 단계별 로그로 남습니다. 빌드 실패 뒤의 시험은 NOT RUN으로 기록하며, 실패한 시험 이후의 독립 시험은 계속합니다. 스크립트가 관리자 권한을 요청하거나 VM, 제품 프로필, OS 정책을 변경하지는 않습니다. 빌드나 실제 실행을 하지 않는 `--plan`은 모든 시험을 NOT RUN으로 표시합니다.
+
+세부 수용 기준은 [1단계 검증 체크리스트](22-stage1-validation.md)를 참고하세요. 이 개발자용 시험은 보호 볼륨/설치형 Release 보안 게이트를 대체하지 않습니다.
+
 ## 독립 암호화 코어
 
 Rust 1.99.1 MSVC에서 브라우저와 분리된 age 스트리밍, 암호문 변조 감지, 중단 후 파일 발행을 시험합니다. 테스트는 합성 데이터만 사용합니다. [Phase 2 증거](phase2-evidence.md)
@@ -135,7 +150,7 @@ bash scripts/rust-timed-tests.sh
 
 **아직 완성된 보안 기능이 아닙니다.** 실제 BitLocker 백엔드가 포함된 격리 VM에서 시작·종료,
 중단·열린 핸들, 자동 잠금, 로그·메모리, 설치/업데이트를 검증해야 합니다. 브로커는 현재
-Windows 서비스 설치까지 통합되지 않았습니다. 비밀번호는 전송 버퍼에서 지우지만 OS/프로세스
+Windows 서비스 설치 스크립트와 내부 배포 패키지 기반이 있으나 설치형 Release의 실제 검증은 남아 있습니다. 비밀번호는 전송 버퍼에서 지우지만 OS/프로세스
 메모리의 모든 복제본 제거를 보장하지 않습니다.
 
 Release 빌드는 제품용 보호 설정이 없으면 시작하지 않으며, Debug 빌드만 이전의 비보호

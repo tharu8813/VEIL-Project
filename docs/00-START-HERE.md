@@ -38,6 +38,7 @@
 | `12-development-roadmap.md` | 단계별 작업·의존성·완료 기준 | 일정·우선순위 지정 시 |
 | `13-agent-execution.md` | 코딩 에이전트의 작업 지침 | 새 세션 시작 시 |
 | `14-tooling-and-updates.md` | 빌드, 의존성, CI, 공급망, 업데이트 | 프로젝트 초기화 시 |
+| `22-stage1-validation.md` | 1단계 안정화 및 일괄 회귀 검증 수용 기준 | 기능 안정화 시 |
 | `SECURITY_STATUS.md` | 실제 구현/검증 상태 및 미해결 위험 | 모든 작업 후 갱신 |
 
 ## 문서 간 충돌 시 우선순위

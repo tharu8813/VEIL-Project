@@ -3,7 +3,7 @@ using System.Windows.Controls;
 
 namespace Veil.Desktop;
 
-internal enum PasswordAction { None, Save, Remove, Reveal, Fill }
+internal enum PasswordAction { None, Save, Remove, Reveal, Fill, Rotate, Backup, Restore }
 
 /// <summary>Native manager; passwords are never included in list rows, search, or tooltips.</summary>
 internal sealed class PasswordManagerDialog : VeilDialog
@@ -45,6 +45,18 @@ internal sealed class PasswordManagerDialog : VeilDialog
         };
         panel.Children.Add(save);
         panel.Children.Add(Text("자동완성은 현재 사이트와 출처가 일치하는 단일 로그인 폼만 지원합니다. 비밀번호를 자동 제출하거나 다른 사이트로 보내지 않습니다."));
+        var maintenance = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+        void Maintenance(string label, PasswordAction action)
+        {
+            var button = new Button { Content = label, Height = 32, Padding = new Thickness(10, 0, 10, 0),
+                Margin = new Thickness(0, 0, 6, 6), Style = (Style)FindResource("GhostButton") };
+            button.Click += (_, _) => { Action = action; Complete(true); };
+            maintenance.Children.Add(button);
+        }
+        Maintenance("관리자 암호 변경", PasswordAction.Rotate);
+        Maintenance("암호화 백업", PasswordAction.Backup);
+        Maintenance("백업 복원", PasswordAction.Restore);
+        panel.Children.Add(maintenance);
         SetBody(new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
         void Choose(PasswordAction action)
         {
@@ -81,5 +93,34 @@ internal sealed class PasswordRevealDialog : VeilDialog
         } });
         AddFooterButton("닫기", Dismiss, primary: true);
         Closed += (_, _) => secret.Text = "";
+    }
+}
+
+
+/// <summary>Native selection, current origin only. Never displays password values.</summary>
+internal sealed class LoginPickerDialog : VeilDialog
+{
+    internal SavedLogin? Selected { get; private set; }
+
+    internal LoginPickerDialog(Window owner, string origin, List<SavedLogin> entries)
+        : base(owner, "로그인 정보 채우기", "", 500, 360)
+    {
+        Subtitle.Text = origin;
+        var list = new ListBox { Style = (Style)FindResource("VeilList") };
+        foreach (var entry in entries.Where(e => e.Origin == origin).OrderBy(e => e.UserName))
+            list.Items.Add(new ListBoxItem { Tag = entry, Content = Row("", entry.UserName, origin) });
+        System.Windows.Automation.AutomationProperties.SetName(list, "현재 사이트 계정");
+        SetBody(list);
+        AddFooterButton("취소", Dismiss);
+        var fill = AddFooterButton("채우기", () =>
+        {
+            if ((list.SelectedItem as ListBoxItem)?.Tag is SavedLogin login && login.Origin == origin)
+            {
+                Selected = login;
+                Complete(true);
+            }
+        }, primary: true);
+        fill.IsEnabled = false;
+        list.SelectionChanged += (_, _) => fill.IsEnabled = list.SelectedItem is not null;
     }
 }

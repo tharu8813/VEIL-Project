@@ -80,6 +80,8 @@
                 </Grid>
                 <StackPanel x:Name="Caption" Grid.Column="2" Orientation="Horizontal"
                             WindowChrome.IsHitTestVisibleInChrome="True">
+                    <TextBlock x:Name="PrivateIndicator" Text="일회용 탐색 · 개발 중" Visibility="Collapsed"
+                               Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" Margin="8,0,12,0"/>
                     <Button Style="{StaticResource CaptionButton}" Content="&#xE921;" Click="MinimizeClick"
                             AutomationProperties.Name="최소화" />
                     <Button x:Name="MaximizeButton" Style="{StaticResource CaptionButton}" Content="&#xE922;"
@@ -126,7 +128,11 @@
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
                                             <StackPanel>
-                                                <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />
+                                                <DockPanel>
+                                                    <TextBlock DockPanel.Dock="Right" Text="{Binding SourceLabel}" Margin="8,0,0,0"
+                                                               Foreground="{StaticResource MutedBrush}" FontSize="11"/>
+                                                    <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />
+                                                </DockPanel>
                                                 <TextBlock Text="{Binding Url}" TextTrimming="CharacterEllipsis" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
                                             </StackPanel>
                                         </DataTemplate>
@@ -143,6 +149,18 @@
                                     <ScaleTransform />
                                 </TextBlock.RenderTransform>
                             </TextBlock>
+                        </Button>
+                        <Button x:Name="LoginActionButton" Style="{StaticResource IconButton}" Content="&#xE72E;"
+                                Visibility="Collapsed" ToolTip="로그인 정보 저장 또는 채우기" AutomationProperties.Name="로그인 정보"
+                                Click="LoginActionClick" WindowChrome.IsHitTestVisibleInChrome="True">
+                            <Button.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="입력한 로그인 정보 저장" Click="SavePageLoginClick"/>
+                                    <MenuItem Header="저장된 로그인 정보 채우기" Click="FillPageLoginClick"/>
+                                    <Separator/>
+                                    <MenuItem Header="비밀번호 관리자" Click="PasswordsClick"/>
+                                </ContextMenu>
+                            </Button.ContextMenu>
                         </Button>
                         <Button x:Name="DownloadButton" Style="{StaticResource IconButton}"
                                 ToolTip="최근 다운로드" AutomationProperties.Name="최근 다운로드"
@@ -170,6 +188,8 @@
                                         <TextBlock Text="최근 다운로드" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" />
                                     </DockPanel>
                                     <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+                                        <Button x:Name="RetryDownloadButton" Style="{StaticResource GhostButton}" Content="실패한 다운로드 다시 시도"
+                                                Visibility="Collapsed" Click="RetryDownloadClick" Margin="0,0,0,6" />
                                         <Button Style="{StaticResource GhostButton}" Content="다운로드 금고 열기"
                                                 Click="PopupVaultClick" Margin="0,0,0,6" />
                                         <Button Style="{StaticResource PrimaryButton}" Content="모든 다운로드 보기" Click="DownloadsClick" />
@@ -219,8 +239,9 @@
                                 AutomationProperties.Name="브라우저 메뉴" Click="MenuClick">
                             <Button.ContextMenu>
                                 <ContextMenu Opened="MenuOpened">
-                                    <MenuItem Header="새 탭" InputGestureText="Ctrl+T" Click="NewTabClick" />
-                                    <MenuItem Header="새 창" InputGestureText="Ctrl+N" Click="NewWindowClick" />
+                                    <MenuItem Header="새 탭" Tag="private-ok" InputGestureText="Ctrl+T" Click="NewTabClick" />
+                                    <MenuItem Header="새 창" Tag="private-ok" InputGestureText="Ctrl+N" Click="NewWindowClick" />
+                                    <MenuItem Header="새 일회용 탐색 창" Tag="private-ok" InputGestureText="Ctrl+Shift+N" Click="PrivateWindowClick" />
                                     <MenuItem Header="닫은 탭 복원" InputGestureText="Ctrl+Shift+T" Click="RestoreClick" />
                                     <MenuItem Header="탭 검색" InputGestureText="Ctrl+Shift+A" Click="TabSearchClick" />
                                     <Separator />
@@ -232,11 +253,13 @@
                                     <MenuItem Header="다운로드" InputGestureText="Ctrl+J" Click="DownloadsClick" />
                                     <MenuItem Header="다운로드 금고" InputGestureText="Ctrl+Shift+J" Click="VaultClick" />
                                     <MenuItem Header="비밀번호 관리자" Click="PasswordsClick" />
-                                    <MenuItem Header="페이지 내 검색" InputGestureText="Ctrl+F" Click="FindClick" />
+                                    <MenuItem Header="입력한 로그인 정보 저장" Click="SavePageLoginClick"/>
+                                    <MenuItem Header="저장된 로그인 정보 채우기" Click="FillPageLoginClick"/>
+                                    <MenuItem Header="페이지 내 검색" Tag="private-ok" InputGestureText="Ctrl+F" Click="FindClick" />
                                     <Separator />
                                     <MenuItem Header="설정" InputGestureText="Ctrl+," Click="SettingsClick" />
                                     <Separator />
-                                    <MenuItem Header="전체 화면" InputGestureText="F11" Click="FullScreenClick" />
+                                    <MenuItem Header="전체 화면" Tag="private-ok" InputGestureText="F11" Click="FullScreenClick" />
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>

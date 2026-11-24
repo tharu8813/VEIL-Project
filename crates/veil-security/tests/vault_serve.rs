@@ -257,3 +257,31 @@ fn content_rotation_rejects_corruption_and_rekeys_downloads_and_backups() {
     assert!(vault_credentials::unlock(&next, password(), false).is_ok());
     assert!(vault_generation::require_no_generations(base).is_err());
 }
+
+
+#[test]
+fn preview_pipe_authenticates_and_has_independent_size_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, reply) = Session::start(dir.path(), "create\tfirst-pass\tRECOV-ERYCO-DE111");
+    assert_eq!(reply, "ok");
+    let path = dir.path().join("preview.veil");
+    let data = vec![0x42u8; 2 * 1024 * 1024];
+    assert_eq!(s.seal(&path, &data, None), format!("ok\t{}", data.len()));
+    assert!(s.command(&format!("read\t{}", path.display())).starts_with("err\t"));
+    let header = s.command(&format!("read-preview\t{}", path.display()));
+    assert_eq!(header, format!("ok\t{}", data.len()));
+    let mut bytes = vec![0; data.len()];
+    s.stdout.read_exact(&mut bytes).unwrap();
+    assert_eq!(bytes, data);
+    let mut corrupt = fs::read(&path).unwrap();
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    fs::write(&path, corrupt).unwrap();
+    assert!(s.command(&format!("read-preview\t{}", path.display())).starts_with("err\t"));
+    let oversized = dir.path().join("oversized.veil");
+    let too_big = vec![0u8; 8 * 1024 * 1024 + 1];
+    assert_eq!(s.seal(&oversized, &too_big, None), format!("ok\t{}", too_big.len()));
+    assert!(s.command(&format!("read-preview\t{}", oversized.display())).starts_with("err\t"));
+    assert!(s.command("location").starts_with("ok\t"));
+    s.quit();
+}

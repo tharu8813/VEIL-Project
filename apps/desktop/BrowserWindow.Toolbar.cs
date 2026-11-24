@@ -12,6 +12,33 @@ public partial class BrowserWindow
     private readonly DispatcherTimer downloadRingTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
     private double ringAngle;
     private string[] popupRows = [];
+    private sealed record RetryDownload(BrowserTab Tab, Uri Address, string Name, long Epoch, string Source, DateTimeOffset Expires);
+    private RetryDownload? retryDownload;
+
+    private bool CanRetry(RetryDownload item)
+    {
+        if (!SettingsReady() || !CanUseTab(item.Tab.Item) || item.Expires <= DateTimeOffset.UtcNow ||
+            item.Tab.NavigationEpoch != item.Epoch || !DownloadFailurePolicy.SafeRetryAddress(item.Address)) return false;
+        try
+        {
+            return item.Tab.View.CoreWebView2 is { } web && web.Source == item.Source &&
+                session.Vault.Unlocked && session.Vault.Unsupported(item.Address) is null;
+        }
+        catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException)
+        { return false; }
+    }
+
+    private void RetryDownloadClick(object sender, RoutedEventArgs args)
+    {
+        if (retryDownload is not { } item || !CanRetry(item)) return;
+        retryDownload = null; // single explicit retry; no duplicate clicks or repeated retry chains
+        RetryDownloadButton.Visibility = Visibility.Collapsed;
+        DownloadPopup.IsOpen = false;
+        if (MessageBox.Show(this, $"{item.Name}을(를) 원래 서버에 다시 요청합니다. 이전 전송을 이어받지 않습니다. 계속할까요?",
+            "다운로드 다시 시도", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes ||
+            !CanRetry(item)) return;
+        _ = CaptureAsync(item.Tab.View.CoreWebView2, item.Address, item.Name, 0, 0, item, retry: true);
+    }
 
     // Weight known transfers by bytes, not by the number of files. An unknown or queued size
     // cannot be represented by an honest percentage. A full body is not yet an authenticated file.
@@ -37,6 +64,9 @@ public partial class BrowserWindow
             downloadRingTimer.Stop();
             return;
         }
+        if (retryDownload is { } retry && !CanRetry(retry)) retryDownload = null;
+        RetryDownloadButton.Visibility = retryDownload is null ? Visibility.Collapsed : Visibility.Visible;
+        RetryDownloadButton.ToolTip = retryDownload?.Name;
         bool active = session.ActiveDownloads.Count != 0;
         DownloadRingTrack.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
         DownloadRingArc.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
@@ -59,7 +89,7 @@ public partial class BrowserWindow
             System.Windows.Automation.AutomationProperties.SetName(DownloadButton, "최근 다운로드");
         }
         if (DownloadPopup.IsOpen) RefreshRecentDownloads();
-        if (active || DownloadPopup.IsOpen)
+        if (active || DownloadPopup.IsOpen || retryDownload is not null)
         {
             if (!downloadRingTimer.IsEnabled) downloadRingTimer.Start();
         }
@@ -119,7 +149,9 @@ public partial class BrowserWindow
         var stored = visible ? session.Vault.Entries.Select(entry =>
             (At: entry.SavedAt, Text: $"{entry.Name} · 금고 보관 · {VaultPresentation.Size(entry.Bytes)}"))
             : Enumerable.Empty<(DateTimeOffset At, string Text)>();
-        var rows = stored.Concat(session.RecentDownloadIssues).OrderByDescending(item => item.At)
+        var rows = stored.Concat(session.RecentDownloadIssues.Select(issue =>
+            (At: issue.At, Text: $"{issue.Name} · {issue.Outcome}" + (issue.Detail is null ? "" : $": {issue.Detail}"))))
+            .OrderByDescending(item => item.At)
             .Take(8).Select(item => item.Text).ToArray();
         if (!popupRows.SequenceEqual(rows))
         {
@@ -131,14 +163,21 @@ public partial class BrowserWindow
         DownloadPopupLocked.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    private void RefreshBookmarkBars()
+    private void RefreshBookmarkBars(LibraryWindow? source = null, bool refreshLibraries = true)
     {
         foreach (var window in session.Windows.ToArray())
         {
             if (window.closing) continue;
             window.UpdateBookmarkGlyph();
             window.RefreshBookmarkBar();
+            if (refreshLibraries && window.bookmarkLibrary is { } library && !ReferenceEquals(library, source))
+                library.RefreshEntries();
         }
+    }
+
+    private sealed record BookmarkBarFolder(Guid Id, string Title)
+    {
+        public string Url => "북마크 폴더";
     }
 
     private void RefreshBookmarkBar()
@@ -146,7 +185,9 @@ public partial class BrowserWindow
         BookmarkBarMenuItem.IsChecked = data.ShowBookmarksBar;
         BookmarkBar.Visibility = data.ShowBookmarksBar && !fullScreen ? Visibility.Visible : Visibility.Collapsed;
         // Local metadata only: no remote favicon or speculative requests.
-        var items = data.Bookmarks.Where(entry => IsWebUrl(entry.Url)).ToArray();
+        var items = data.BookmarkFolders.Where(folder => folder.ParentId is null)
+            .Select(folder => (object)new BookmarkBarFolder(folder.Id, folder.Name))
+            .Concat(data.Bookmarks.Where(entry => entry.FolderId is null && IsWebUrl(entry.Url))).ToArray();
         BookmarkBarItems.ItemsSource = items;
         BookmarkBarEmpty.Visibility = items.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -162,14 +203,43 @@ public partial class BrowserWindow
             data.ShowBookmarksBar = previous;
             Status.Text = "북마크 바 설정을 저장하지 못했습니다.";
         }
-        RefreshBookmarkBars();
+        RefreshBookmarkBars(refreshLibraries: false);
     }
 
     private void BookmarkBarItemClick(object sender, RoutedEventArgs args)
     {
-        if (!SettingsReady() || sender is not Button { DataContext: PageEntry entry } ||
-            !data.Bookmarks.Contains(entry) || !IsWebUrl(entry.Url)) return;
+        if (!SettingsReady() || sender is not Button button) return;
+        if (button.DataContext is BookmarkBarFolder folder && data.BookmarkFolders.Any(f => f.Id == folder.Id))
+        {
+            var menu = new ContextMenu { PlacementTarget = button, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
+            FillFolderMenu(menu.Items, folder.Id);
+            menu.IsOpen = true;
+            return;
+        }
+        if (button.DataContext is PageEntry entry) OpenBookmark(entry);
+    }
+
+    private void OpenBookmark(PageEntry entry)
+    {
+        if (!SettingsReady() || !data.Bookmarks.Contains(entry) || !IsWebUrl(entry.Url)) return;
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) _ = OpenTab(entry.Url);
         else NavigateAddress(entry.Url);
+    }
+
+    private void FillFolderMenu(ItemCollection items, Guid folderId)
+    {
+        foreach (var folder in data.BookmarkFolders.Where(f => f.ParentId == folderId))
+        {
+            var item = new MenuItem { Header = folder.Name };
+            FillFolderMenu(item.Items, folder.Id);
+            items.Add(item);
+        }
+        foreach (var entry in data.Bookmarks.Where(e => e.FolderId == folderId && IsWebUrl(e.Url)))
+        {
+            var item = new MenuItem { Header = entry.Title, ToolTip = entry.Url };
+            item.Click += (_, _) => OpenBookmark(entry);
+            items.Add(item);
+        }
+        if (items.Count == 0) items.Add(new MenuItem { Header = "빈 폴더", IsEnabled = false });
     }
 }

@@ -30,3 +30,11 @@ test('packages carry ADR-0010 versions, notices and SBOM',async()=>{
     assert.match(maintenance,/Assert-VeilInternalVersion \$manifest\.version/);
     assert.doesNotMatch(build + maintenance,/Major -ne 0/);
 });
+
+test('browser candidate is explicitly registered from verified installed package, not forced default',()=>{
+    assert.match(maintenance,/if \(\$RegisterBrowser\)[\s\S]*?Read-VeilPackage \$bin \$SignerThumbprint[\s\S]*?Installed client pin mismatch[\s\S]*?Register-VeilBrowser/);
+    assert.match(maintenance,/--open-url "%1"/);
+    assert.match(maintenance,/URLAssociations/);
+    assert.doesNotMatch(maintenance,/UserChoice|SetUserFTA|SetDefaultBrowser/);
+    assert.match(maintenance,/Remove-VeilBrowserRegistration\s+Remove-RestrictedTree \$bin/);
+});

@@ -14,9 +14,15 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+#if DEBUG
+        // Dedicated raster worker: no Application, profile unlock, network engine or file arguments.
+        if (args is ["--pdf-preview-worker"]) return VaultPdfPreview.RunWorker();
+#endif
+        string? external = args is ["--open-url", var address] ? ExternalAddress.Parse(address) : null;
+        if (args is ["--open-url", _] && (external is null || !ExternalAddress.Installed)) return 2;
 #if !DEBUG
-        // Release builds must never fall back to the unencrypted developer profile or test modes.
-        if (args.Length != 0) return 2;
+        // Release accepts only no arguments or a validated installed-product web activation.
+        if (args.Length != 0 && external is null) return 2;
 #endif
         if (args is ["--broker-status", var clientConfig, var gateProfile, var gateReport])
             return BrokerStatus(clientConfig, gateProfile, gateReport);
@@ -28,7 +34,7 @@ internal static class Program
             return application.Run(new EngineProbe(proxyProfile, proxyOrigin, "proxy", proxyReport, port));
 
         bool smoke = args is ["--smoke", _, _, _, _];
-        if (!smoke && args.Length != 0) return 2;
+        if (!smoke && args.Length != 0 && external is null) return 2;
         ProtectedProfileSession? protectedSession = null;
         ProtectedSessionNotifications? notifications = null;
         BrowserWindow? window = null;
@@ -37,6 +43,14 @@ internal static class Program
         try
         {
             ProfileGate.RejectElevated();
+            using var activation = !smoke && ExternalAddress.Installed ? new BrowserActivation() : null;
+            if (activation is { Primary: false })
+            {
+                if (activation.Forward(external)) return 0;
+                MessageBox.Show("VEIL이 실행 중이거나 잠금 해제 중입니다. 준비된 일반 창에서 링크를 다시 여세요.",
+                    "VEIL", MessageBoxButton.OK, MessageBoxImage.Information);
+                return 1;
+            }
 #if !DEBUG
             if (!File.Exists(BrokerClientConfig.ProductPath))
                 throw new ProfileLocationException("Protected profile registration is missing.");
@@ -101,12 +115,14 @@ internal static class Program
             using var jumpLists = new JumpListScrubber(Path.Combine(root, "webview2"));
             jumpLists.Scrub();
             window = new BrowserWindow(root, vault);
+            window.SetStartupAddress(external);
             // SEC-004: temp files of the app and engine stay on the profile volume (after state loads,
             // so a refused profile is left exactly as found).
             scratch = ProfileScratch.Redirect(root);
             if (smoke) window.ConfigureSmoke(args[2], args[3], args[4]);
             application.MainWindow = window;
             application.ShutdownMode = ShutdownMode.OnLastWindowClose;
+            activation?.Start(application.Dispatcher, window.OpenExternalAddressAsync);
             int exitCode = application.Run(window);
             jumpLists.ScrubAfterExit();
             return exitCode;

@@ -19,6 +19,7 @@ const VERSION: &str = "VEIL-KEYRING-1";
 const SCRYPT_LOG_N: u8 = 17;
 const ENVELOPE_LIMIT: usize = 4096;
 const SMALL_OBJECT_LIMIT: usize = 1024 * 1024;
+const PREVIEW_OBJECT_LIMIT: usize = 8 * 1024 * 1024;
 const BUFFER_SIZE: usize = 64 * 1024;
 const PART_PREFIX: &str = ".veil-encrypted-";
 
@@ -170,6 +171,14 @@ impl Keyring {
     pub fn read_small(&self, purpose: Purpose, path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
         self.read_object(purpose, path, |plaintext| {
             read_bounded(plaintext, SMALL_OBJECT_LIMIT)
+        })
+    }
+
+    /// Authenticates the complete download object within a separate, fixed preview budget.
+    /// Does not expand the metadata/keyring small-object allowance.
+    pub fn read_preview(&self, path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
+        self.read_object(Purpose::Download, path, |plaintext| {
+            read_bounded(plaintext, PREVIEW_OBJECT_LIMIT)
         })
     }
 

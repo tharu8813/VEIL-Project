@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Veil.Desktop;
 
-internal sealed record PageEntry(string Title, string Url, DateTimeOffset Visited)
+internal sealed record PageEntry(string Title, string Url, DateTimeOffset Visited, Guid? FolderId = null)
 {
     public override string ToString() => $"{Title}   ·   {Url}";
 }
@@ -16,6 +16,7 @@ internal sealed class BrowserData
 {
     public List<PageEntry> Bookmarks { get; init; } = [];
     public List<PageEntry> History { get; init; } = [];
+    public List<BookmarkFolder> BookmarkFolders { get; init; } = [];
     public List<string> Tabs { get; set; } = [];
     public int Selected { get; set; }
     public int PinnedCount { get; set; }
@@ -50,6 +51,8 @@ internal sealed class BrowserData
             data.Tabs.Any(url => url is null) ||
             (data.Windows is not null && data.Windows.Any(window => window?.Tabs is null || window.Tabs.Any(url => url is null))))
             throw new JsonException("Invalid VEIL developer profile state.");
+        if (!BookmarkPolicy.Valid(data.BookmarkFolders, data.Bookmarks))
+            throw new JsonException("Invalid bookmark folder hierarchy.");
         // The prefix count is optional for older profiles. Invalid counts never pin unrelated tabs.
         if (data.PinnedCount < 0 || data.PinnedCount > data.Tabs.Count) data.PinnedCount = 0;
         if (data.Windows is { } windows)
