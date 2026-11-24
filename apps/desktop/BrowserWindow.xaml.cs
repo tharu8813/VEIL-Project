@@ -501,6 +501,7 @@ public partial class BrowserWindow : Window
 
     private async void VaultClick(object sender, RoutedEventArgs args)
     {
+        if (FocusManagementPage("veil://vault")) return;
         if (!SettingsReady() || session.VaultUiOpen || session.SettingsUiOpen ||
             session.PermissionUiOpen || session.PasswordUiOpen) return;
         session.VaultUiOpen = true;
@@ -510,7 +511,8 @@ public partial class BrowserWindow : Window
             if (await EnsureVaultOpenAsync())
             {
                 if (SettingsReady())
-                    new VaultWindow(this, session.Vault, SettingsReady).ShowDialog();
+                    await ShowManagementPageAsync("veil://vault", new VaultWindow(this, session.Vault,
+                        () => SettingsReady() && Active?.Url == "veil://vault" && IsActive));
             }
             else if (SettingsReady() && session.Vault.UsesProfilePassword)
                 MessageBox.Show(this, "다운로드 금고가 잠겨 있습니다. VEIL을 다시 시작하고 보호 프로필 잠금 해제 단계에서 금고를 여세요.",
@@ -649,6 +651,8 @@ public partial class BrowserWindow : Window
     {
         if (!IsLoaded || args.OriginalSource != Tabs || closing) return;
         CloseAddressSuggestions();
+        foreach (var tab in Tabs.Items.OfType<TabItem>().Select(item => (BrowserTab)item.Tag).ToArray())
+            if (tab != Active && tab.Url == "veil://passwords" && tab.CancelManagement is not null) ClearManagement(tab);
         SetAddressText(Active?.Url is null or "about:blank" ? "" : Active.Url);
         UpdateManagementVisibility();
         if (fullScreen && fullScreenFromPage && Active?.View.CoreWebView2?.ContainsFullScreenElement != true) SetFullScreen(false);
@@ -706,6 +710,8 @@ public partial class BrowserWindow : Window
         "veil://history" => "방문 기록",
         "veil://downloads" => "다운로드",
         "veil://settings" => "설정",
+        "veil://passwords" => "비밀번호 관리자",
+        "veil://vault" => "다운로드 금고",
         "veil://settings/network" => "네트워크",
         "veil://settings/security" => "보안",
         "veil://settings/search" => "검색 및 주소창",

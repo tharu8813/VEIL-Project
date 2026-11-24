@@ -97,7 +97,8 @@ public partial class BrowserWindow
                     BookmarkClick(this, new RoutedEventArgs());
                     Check(data.Bookmarks.Count == 1, "bookmark created");
                     // Restored management tabs have a native surface, not a privileged web page.
-                    Check(IsManagementUrl("veil://settings") && !IsManagementUrl("veil://settings/unknown"), "management route allowlist");
+                    Check(IsManagementUrl("veil://settings") && IsManagementUrl("veil://vault") && IsManagementUrl("veil://passwords") &&
+                        !IsManagementUrl("veil://settings/unknown"), "management route allowlist");
                     Check(await OpenTab("veil://bookmarks") is not null, "bookmark library tab created");
                     await WaitFor(() => Active?.Url == "veil://bookmarks", "bookmark library opened in tab");
                     Check(Active?.Title == "북마크", "bookmark library tab title");

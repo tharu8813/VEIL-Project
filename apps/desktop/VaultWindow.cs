@@ -161,7 +161,7 @@ internal sealed class VaultWindow : VeilDialog
         {
             if (!Ready) return;
             string text = VaultPresentation.DecodeText(bytes);
-            if (Ready) new VaultTextPreviewDialog(this, entry.Name, text).ShowDialog();
+            if (Ready) new VaultTextPreviewDialog(PromptOwner, entry.Name, text).ShowDialog();
             if (Ready) feedback.Text = "텍스트 미리보기를 닫았습니다.";
         }
         finally { CryptographicOperations.ZeroMemory(bytes); }
@@ -175,8 +175,8 @@ internal sealed class VaultWindow : VeilDialog
             FileName = VaultPresentation.ExportName(entry), Title = "금고에서 내보내기",
             OverwritePrompt = false, AddToRecent = false,
         };
-        if (dialog.ShowDialog(this) != true || !Ready) return;
-        if (MessageBox.Show(this, "선택한 위치에 암호화되지 않은 일반 파일을 만듭니다. 금고 밖에서는 VEIL의 보호가 적용되지 않을 수 있습니다. 계속할까요?",
+        if (dialog.ShowDialog(PromptOwner) != true || !Ready) return;
+        if (MessageBox.Show(PromptOwner, "선택한 위치에 암호화되지 않은 일반 파일을 만듭니다. 금고 밖에서는 VEIL의 보호가 적용되지 않을 수 있습니다. 계속할까요?",
             "파일 내보내기", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes || !Ready) return;
         if (File.Exists(dialog.FileName) || Directory.Exists(dialog.FileName))
         {
@@ -191,7 +191,7 @@ internal sealed class VaultWindow : VeilDialog
     private async Task DeleteAsync()
     {
         if (Selected is not { } entry) return;
-        if (MessageBox.Show(this, $"{entry.Name}을(를) 금고에서 삭제할까요? 백업이나 복구 가능한 디스크 흔적은 지우지 않습니다.",
+        if (MessageBox.Show(PromptOwner, $"{entry.Name}을(를) 금고에서 삭제할까요? 백업이나 복구 가능한 디스크 흔적은 지우지 않습니다.",
             "금고 항목 삭제", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes || !Ready) return;
         await vault.DeleteAsync(entry);
         if (!closed) feedback.Text = "선택한 항목을 금고 목록에서 삭제했습니다.";
@@ -233,8 +233,8 @@ internal sealed class VaultWindow : VeilDialog
             DefaultExt = ".veil-backup", Filter = "VEIL 금고 백업 (*.veil-backup)|*.veil-backup",
             OverwritePrompt = false, AddToRecent = false,
         };
-        if (destination.ShowDialog(this) != true || !Ready) return;
-        var setup = new VaultSetupDialog(this, "금고 백업 암호", askPassphrase: true, issueCode: false,
+        if (destination.ShowDialog(PromptOwner) != true || !Ready) return;
+        var setup = new VaultSetupDialog(PromptOwner, "금고 백업 암호", askPassphrase: true, issueCode: false,
             passwordPrompt: "백업 전용 암호를 정하세요. 복원할 때 이 암호가 필요합니다.");
         if (setup.ShowDialog() != true || !Ready) return;
         feedback.Text = "암호화 백업을 만드는 중입니다.";
@@ -262,7 +262,7 @@ internal sealed class VaultWindow : VeilDialog
 
     private async Task RotateAsync(bool askPassphrase)
     {
-        var dialog = new VaultSetupDialog(this, askPassphrase ? "금고 암호 변경" : "복구 코드 재발급", askPassphrase, issueCode: !askPassphrase);
+        var dialog = new VaultSetupDialog(PromptOwner, askPassphrase ? "금고 암호 변경" : "복구 코드 재발급", askPassphrase, issueCode: !askPassphrase);
         if (dialog.ShowDialog() != true || !Ready) return;
         bool ok = askPassphrase ? await vault.ChangePassphraseAsync(dialog.Passphrase!) : await vault.ReissueRecoveryCodeAsync(dialog.RecoveryCode!);
         if (!closed) feedback.Text = ok ? (askPassphrase ? "금고 암호를 바꿨습니다." : "새 복구 코드로 바꿨습니다. 이전 코드는 더 이상 쓸 수 없습니다.") : "변경하지 못했습니다.";
@@ -270,12 +270,12 @@ internal sealed class VaultWindow : VeilDialog
 
     private async Task RotateContentAsync()
     {
-        if (MessageBox.Show(this, "금고 파일을 새 키로 다시 암호화합니다. 금고 크기만큼의 추가 공간이 필요합니다. 계속할까요?",
+        if (MessageBox.Show(PromptOwner, "금고 파일을 새 키로 다시 암호화합니다. 금고 크기만큼의 추가 공간이 필요합니다. 계속할까요?",
             "금고 내용 키 교체", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes || !Ready) return;
-        var setup = new VaultSetupDialog(this, "새 금고 복구 코드", askPassphrase: false, issueCode: true);
+        var setup = new VaultSetupDialog(PromptOwner, "새 금고 복구 코드", askPassphrase: false, issueCode: true);
         if (setup.ShowDialog() != true || !Ready) return;
         char[]? password = ProfileUnlockDialog.Prompt("금고 내용 키 교체", vault.UsesProfilePassword
-            ? "현재 보호 프로필 암호를 입력하세요." : "현재 금고 암호를 입력하세요.", this);
+            ? "현재 보호 프로필 암호를 입력하세요." : "현재 금고 암호를 입력하세요.", PromptOwner);
         if (password is null) return;
         try
         {
@@ -306,7 +306,7 @@ internal sealed class VaultTextPreviewDialog : VeilDialog
         root.Children.Add(label);
         root.Children.Add(new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
         SetBody(root);
-        AddFooterButton("닫기", Close, primary: true);
+        AddFooterButton("닫기", Dismiss, primary: true);
         Closed += (_, _) => content.Text = "";
     }
 }
