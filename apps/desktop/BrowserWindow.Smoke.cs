@@ -43,6 +43,12 @@ public partial class BrowserWindow
                     "local suggestions deduplicate and exclude sensitive URL forms");
                 localData.LocalAddressSuggestions = false;
                 Check(SearchPolicy.Suggest(localData, "synthetic").Count == 0, "local suggestions disabled");
+                var unusedEngine = new WebView2BrowserEngine();
+                Check(!unusedEngine.IsReady && unusedEngine.RuntimeVersion is null, "uninitialized engine state");
+                bool refusedView = false;
+                try { using var premature = unusedEngine.CreateView(); }
+                catch (InvalidOperationException) { refusedView = true; }
+                Check(refusedView, "engine refuses view before verified initialization");
                 var previewEntry = new VaultEntry(Guid.NewGuid().ToString("N"), "synthetic.txt", 12, DateTimeOffset.Now, "example.test");
                 Check(VaultPresentation.CanPreview(previewEntry) &&
                     !VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.html" }) &&

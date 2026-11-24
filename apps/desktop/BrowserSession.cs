@@ -55,7 +55,9 @@ internal sealed class BrowserSession
     internal List<string> Downloads { get; } = [];
     internal ObservableCollection<BrowserDownload> ActiveDownloads { get; } = [];
     internal List<BrowserWindow> Windows { get; } = [];
-    internal CoreWebView2Environment? Engine { get; set; }
+    // The first release has exactly one production backend. No fallback or runtime switching.
+    internal IBrowserEngine EngineHost { get; } = new WebView2BrowserEngine();
+    internal CoreWebView2Environment? Engine => (EngineHost as WebView2BrowserEngine)?.Environment;
     internal bool IsEnding { get; set; }
     /// <summary>The shared engine's browser process exited; no window can use it any more.</summary>
     internal bool EngineLost { get; set; }

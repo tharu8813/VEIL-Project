@@ -153,7 +153,7 @@ public partial class BrowserWindow
 
         Add("오른쪽에 새 탭", "", () => _ = OpenTab("about:blank", index: index + 1));
         Separate();
-        Add("새로고침", "Ctrl+R", () => tab.View.Reload(), IsWebUrl(tab.Url));
+        Add("새로고침", "Ctrl+R", () => tab.EngineView.Reload(), IsWebUrl(tab.Url));
         Add("탭 복제", "", () => _ = OpenTab(tab.Url, index: index + 1), IsWebUrl(tab.Url));
         Add(tab.View.CoreWebView2?.IsMuted == true ? "사이트 음소거 해제" : "사이트 음소거", "", () => ToggleMute(tab));
         Add(tab.Pinned ? "탭 고정 해제" : "탭 고정", "", () => SetTabPinned(item, !tab.Pinned), !closingTabs.Contains(item));

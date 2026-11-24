@@ -13,9 +13,11 @@ public partial class BrowserWindow : Window
 {
     /// <summary>A tab and its engine view. <see cref="Owner"/> changes when the tab moves between windows,
     /// so every engine event is routed through it rather than captured at creation.</summary>
-    private sealed class BrowserTab(WebView2 view, BrowserWindow owner)
+    private sealed class BrowserTab(IBrowserEngineView engineView, BrowserWindow owner)
     {
-        internal WebView2 View { get; } = view;
+        internal IBrowserEngineView EngineView { get; } = engineView;
+        // Transitional native boundary: security events, cookies, downloads and CDP remain WebView2-specific.
+        internal WebView2 View => ((WebView2EngineView)EngineView).NativeView;
         internal BrowserWindow Owner { get; set; } = owner;
         internal TabItem Item { get; set; } = null!;
         internal string Title { get; set; } = "새 탭";
@@ -107,13 +109,10 @@ public partial class BrowserWindow : Window
         Loaded -= Start;
         try
         {
-            if (session.Engine is null)
-            {
-                string profile = Path.GetFullPath(Path.Combine(session.Root, "webview2"));
-                session.Engine = await Program.CreateEngine(profile, network: session.Network);
-                if (session.Network.Mode == NetworkMode.Proxy)
-                    session.ProxyReachable = await NetworkPolicy.ProxyReachableAsync(session.Network, TimeSpan.FromSeconds(3));
-            }
+            await session.EngineHost.InitializeAsync(session.Root, session.Network);
+            if (closing || session.IsEnding || session.EngineLost) return;
+            if (session.Network.Mode == NetworkMode.Proxy && session.ProxyReachable is null)
+                session.ProxyReachable = await NetworkPolicy.ProxyReachableAsync(session.Network, TimeSpan.FromSeconds(3));
             UpdateNetworkIndicator();
             if (closing) return;
             if (adopted is not null)
@@ -173,9 +172,13 @@ public partial class BrowserWindow : Window
 
     private async Task<BrowserTab?> OpenTab(string? url, bool select = true, int? index = null, bool pinned = false)
     {
-        if (engine is null || closing) return null;
-        var view = new WebView2 { Visibility = Visibility.Hidden };
-        var tab = new BrowserTab(view, this) { Pinned = pinned };
+        if (!session.EngineHost.IsReady || closing || session.IsEnding || session.EngineLost) return null;
+        // Reject an unsupported backend before creating or attaching any content.
+        if (session.EngineHost is not WebView2BrowserEngine)
+            throw new InvalidOperationException("The selected engine has no approved security integration.");
+        var engineView = session.EngineHost.CreateView();
+        var tab = new BrowserTab(engineView, this) { Pinned = pinned };
+        var view = tab.View;
         var item = new TabItem { Tag = tab };
         tab.Item = item;
         tab.Header = CreateTabHeader(item, tab);
@@ -183,8 +186,13 @@ public partial class BrowserWindow : Window
         Pages.Children.Add(view);
         try
         {
-            await view.EnsureCoreWebView2Async(engine);
-            if (closing) return null;
+            await engineView.InitializeAsync();
+            if (closing || session.IsEnding || session.EngineLost)
+            {
+                engineView.Dispose();
+                Pages.Children.Remove(view);
+                return null;
+            }
             var web = view.CoreWebView2;
             web.Settings.AreHostObjectsAllowed = false;
             web.Settings.IsWebMessageEnabled = false;
@@ -236,12 +244,12 @@ public partial class BrowserWindow : Window
                 tab.Title = InternalTitle(tab.Url);
                 UpdateTabToolTip(tab);
                 tab.Header.Label.Text = tab.Title;
-                web.NavigateToString(BuildInternalPage(url));
+                engineView.ShowInternalHtml(BuildInternalPage(url));
             }
             else if (url is not null && url != "about:blank")
             {
                 tab.Url = url;
-                web.Navigate(url);
+                engineView.Navigate(url);
             }
             UpdateTabToolTip(tab);
             if (Active == tab) RefreshChrome();
@@ -249,7 +257,7 @@ public partial class BrowserWindow : Window
         }
         catch (Exception)
         {
-            view.Dispose();
+            engineView.Dispose();
             Pages.Children.Remove(view);
             if (Tabs.Items.Contains(item)) Tabs.Items.Remove(item);
             if (!closing) Status.Text = "탭을 열 수 없습니다. WebView2 런타임과 테스트 프로필을 확인하세요.";
@@ -615,7 +623,7 @@ public partial class BrowserWindow : Window
         if (IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
         Tabs.Items.Remove(item);
         Pages.Children.Remove(tab.View);
-        tab.View.Dispose();
+        tab.EngineView.Dispose();
         LayoutTabs();
         if (Tabs.Items.Count == 0)
         {
@@ -669,8 +677,8 @@ public partial class BrowserWindow : Window
 
     private void UpdateNavigationButtons()
     {
-        Back.IsEnabled = Active?.View.CoreWebView2?.CanGoBack == true;
-        Forward.IsEnabled = Active?.View.CoreWebView2?.CanGoForward == true;
+        Back.IsEnabled = Active?.EngineView.CanGoBack == true;
+        Forward.IsEnabled = Active?.EngineView.CanGoForward == true;
         Reload.IsEnabled = IsWebUrl(Active?.Url);
     }
 
@@ -855,7 +863,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             tab.Title = InternalTitle(tab.Url);
             tab.Header.Label.Text = tab.Title;
             tab.View.Visibility = Visibility.Visible;
-            tab.View.CoreWebView2.NavigateToString(BuildInternalPage(tab.Url));
+            tab.EngineView.ShowInternalHtml(BuildInternalPage(tab.Url));
             RefreshChrome();
             UpdateTabToolTip(tab);
             return;
@@ -863,7 +871,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         tab.Url = url.AbsoluteUri;
         tab.View.Visibility = Visibility.Visible;
         tab.View.Focus();
-        tab.View.CoreWebView2.Navigate(url.AbsoluteUri);
+        tab.EngineView.Navigate(url.AbsoluteUri);
     }
 
     // ── Commands ─────────────────────────────────────────────────────────────
@@ -881,7 +889,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void Zoom(double? change)
     {
-        if (Active is { } tab) tab.View.ZoomFactor = change is null ? 1 : Math.Clamp(tab.View.ZoomFactor + change.Value, 0.25, 5);
+        if (Active is { } tab) tab.EngineView.ZoomFactor = change is null ? 1 : Math.Clamp(tab.EngineView.ZoomFactor + change.Value, 0.25, 5);
     }
 
     private async void NewTabClick(object sender, RoutedEventArgs args)
@@ -893,7 +901,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void NewWindowClick(object sender, RoutedEventArgs args)
     {
-        if (engine is not null) OpenWindow(["about:blank"], 0, cascade: true);
+        if (session.EngineHost.IsReady && !session.IsEnding && !session.EngineLost) OpenWindow(["about:blank"], 0, cascade: true);
     }
 
     private async void RestoreClick(object sender, RoutedEventArgs args)
@@ -901,13 +909,13 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         if (closedTabs.TryPop(out var closed) && await OpenTab(closed.Url, pinned: closed.Pinned) is null) closedTabs.Push(closed);
     }
 
-    private void BackClick(object sender, RoutedEventArgs args) { if (Back.IsEnabled) Active?.View.GoBack(); }
-    private void ForwardClick(object sender, RoutedEventArgs args) { if (Forward.IsEnabled) Active?.View.GoForward(); }
+    private void BackClick(object sender, RoutedEventArgs args) { if (Back.IsEnabled) Active?.EngineView.GoBack(); }
+    private void ForwardClick(object sender, RoutedEventArgs args) { if (Forward.IsEnabled) Active?.EngineView.GoForward(); }
     private void ReloadClick(object sender, RoutedEventArgs args)
     {
         if (!Reload.IsEnabled) return;
         Motion.Spin((System.Windows.Media.RotateTransform)ReloadGlyph.RenderTransform);
-        Active?.View.Reload();
+        Active?.EngineView.Reload();
     }
 
     private async void HardReload()
@@ -917,7 +925,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         try { await tab.View.CoreWebView2.CallDevToolsProtocolMethodAsync("Page.reload", "{\"ignoreCache\":true}"); }
         catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException)
         {
-            tab.View.Reload();
+            tab.EngineView.Reload();
         }
     }
 
@@ -925,7 +933,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     {
         if (Active is { Loading: true } tab)
         {
-            tab.View.CoreWebView2.Stop();
+            tab.EngineView.Stop();
             Status.Text = "페이지 로드를 중지했습니다.";
         }
     }
@@ -934,7 +942,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     {
         if (Active is not { } tab) return;
         tab.Url = "about:blank";
-        tab.View.CoreWebView2.Navigate("about:blank");
+        tab.EngineView.Navigate("about:blank");
         RefreshChrome();
         FocusAddress();
     }

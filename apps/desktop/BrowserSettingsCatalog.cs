@@ -85,7 +85,8 @@ internal static class BrowserSettingsCatalog
             new(SettingsSection.Advanced, "브라우저 정보", "VEIL · Windows 데스크톱 · MPL-2.0",
                 "about version license 버전 라이선스 정보", "개발 중 · 출시 보안 검증 미완료"),
             new(SettingsSection.Advanced, "브라우저 엔진", "Microsoft Edge WebView2 기반. 실제 설치된 런타임은 SDK 버전과 다를 수 있습니다.",
-                "engine chromium webview2 runtime 엔진 런타임", "WebView2"),
+                "engine chromium webview2 runtime 엔진 런타임", session.EngineHost.DisplayName +
+                    (session.EngineHost.RuntimeVersion is { } version ? " · " + version : " · 시작 전")),
         ];
     }
 }
