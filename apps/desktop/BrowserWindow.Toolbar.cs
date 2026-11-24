@@ -143,12 +143,19 @@ public partial class BrowserWindow
         }
     }
 
+    private sealed record BookmarkBarFolder(Guid Id, string Title)
+    {
+        public string Url => "북마크 폴더";
+    }
+
     private void RefreshBookmarkBar()
     {
         BookmarkBarMenuItem.IsChecked = data.ShowBookmarksBar;
         BookmarkBar.Visibility = data.ShowBookmarksBar && !fullScreen ? Visibility.Visible : Visibility.Collapsed;
         // Local metadata only: no remote favicon or speculative requests.
-        var items = data.Bookmarks.Where(entry => IsWebUrl(entry.Url)).ToArray();
+        var items = data.BookmarkFolders.Where(folder => folder.ParentId is null)
+            .Select(folder => (object)new BookmarkBarFolder(folder.Id, folder.Name))
+            .Concat(data.Bookmarks.Where(entry => entry.FolderId is null && IsWebUrl(entry.Url))).ToArray();
         BookmarkBarItems.ItemsSource = items;
         BookmarkBarEmpty.Visibility = items.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -169,9 +176,38 @@ public partial class BrowserWindow
 
     private void BookmarkBarItemClick(object sender, RoutedEventArgs args)
     {
-        if (!SettingsReady() || sender is not Button { DataContext: PageEntry entry } ||
-            !data.Bookmarks.Contains(entry) || !IsWebUrl(entry.Url)) return;
+        if (!SettingsReady() || sender is not Button button) return;
+        if (button.DataContext is BookmarkBarFolder folder && data.BookmarkFolders.Any(f => f.Id == folder.Id))
+        {
+            var menu = new ContextMenu { PlacementTarget = button, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
+            FillFolderMenu(menu.Items, folder.Id);
+            menu.IsOpen = true;
+            return;
+        }
+        if (button.DataContext is PageEntry entry) OpenBookmark(entry);
+    }
+
+    private void OpenBookmark(PageEntry entry)
+    {
+        if (!SettingsReady() || !data.Bookmarks.Contains(entry) || !IsWebUrl(entry.Url)) return;
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) _ = OpenTab(entry.Url);
         else NavigateAddress(entry.Url);
+    }
+
+    private void FillFolderMenu(ItemCollection items, Guid folderId)
+    {
+        foreach (var folder in data.BookmarkFolders.Where(f => f.ParentId == folderId))
+        {
+            var item = new MenuItem { Header = folder.Name };
+            FillFolderMenu(item.Items, folder.Id);
+            items.Add(item);
+        }
+        foreach (var entry in data.Bookmarks.Where(e => e.FolderId == folderId && IsWebUrl(e.Url)))
+        {
+            var item = new MenuItem { Header = entry.Title, ToolTip = entry.Url };
+            item.Click += (_, _) => OpenBookmark(entry);
+            items.Add(item);
+        }
+        if (items.Count == 0) items.Add(new MenuItem { Header = "빈 폴더", IsEnabled = false });
     }
 }

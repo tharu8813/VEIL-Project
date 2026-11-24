@@ -11,7 +11,13 @@ internal sealed class LibraryWindow : VeilDialog
     private Action? refreshEntries;
     internal void RefreshEntries() => refreshEntries?.Invoke();
 
-    internal LibraryWindow(Window owner, string title, List<PageEntry> entries, bool editable, Func<bool> save)
+    private sealed record FolderChoice(Guid? Id, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    internal LibraryWindow(Window owner, string title, List<PageEntry> entries, bool editable, Func<bool> save,
+        List<BookmarkFolder>? folders = null)
         : base(owner, title, editable ? "" : "", 760, 540)
     {
         string rowGlyph = editable ? "" : "";
@@ -30,6 +36,17 @@ internal sealed class LibraryWindow : VeilDialog
         var panel = new DockPanel();
         DockPanel.SetDock(search, Dock.Top);
         panel.Children.Add(search);
+
+        // Folder controls are only present for bookmarks, not the history library.
+        var folderView = new ComboBox { MinWidth = 170, MaxWidth = 320, Height = 32 };
+        var destination = new ComboBox { MinWidth = 170, MaxWidth = 320, Height = 32 };
+        var folderName = new TextBox { Width = 145, Height = 32, Style = (Style)FindResource("PillTextBox"),
+            ToolTip = "폴더 이름" };
+        System.Windows.Automation.AutomationProperties.SetName(folderView, "현재 폴더");
+        System.Windows.Automation.AutomationProperties.SetName(destination, "이동할 폴더");
+        System.Windows.Automation.AutomationProperties.SetName(folderName, "폴더 이름");
+        Guid? currentFolder = null;
+        bool refreshing = false;
 
         // History scope is independent of the text query: bulk deletion always names its scope.
         var range = new ComboBox { Width = 130, Height = 32, VerticalContentAlignment = VerticalAlignment.Center };
@@ -63,6 +80,46 @@ internal sealed class LibraryWindow : VeilDialog
             DockPanel.SetDock(bar, Dock.Top);
             panel.Children.Add(bar);
         }
+        if (folders is not null)
+        {
+            var controls = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
+            var first = new WrapPanel();
+            var second = new WrapPanel { Margin = new Thickness(0, 5, 0, 0) };
+            void AddControl(Panel row, FrameworkElement element)
+            {
+                element.Margin = new Thickness(0, 0, 5, 4);
+                row.Children.Add(element);
+            }
+            void ActionButton(Panel row, string text, Action action)
+            {
+                var button = new Button { Content = text, Height = 32, Padding = new Thickness(8, 0, 8, 0),
+                    Style = (Style)FindResource("GhostButton") };
+                button.Click += (_, _) => action();
+                AddControl(row, button);
+            }
+            AddControl(first, folderView);
+            AddControl(first, folderName);
+            ActionButton(first, "폴더 추가", CreateFolder);
+            ActionButton(first, "이름 변경", RenameFolder);
+            ActionButton(first, "폴더 삭제", DeleteFolder);
+            ActionButton(first, "폴더 ↑", () => ShiftFolder(-1));
+            ActionButton(first, "폴더 ↓", () => ShiftFolder(1));
+            AddControl(second, destination);
+            ActionButton(second, "북마크 이동", MoveBookmark);
+            ActionButton(second, "폴더 이동", MoveCurrentFolder);
+            ActionButton(second, "북마크 ↑", () => ShiftBookmark(-1));
+            ActionButton(second, "북마크 ↓", () => ShiftBookmark(1));
+            controls.Children.Add(first);
+            controls.Children.Add(second);
+            DockPanel.SetDock(controls, Dock.Top);
+            panel.Children.Add(controls);
+            folderView.SelectionChanged += (_, _) =>
+            {
+                if (refreshing) return;
+                currentFolder = (folderView.SelectedItem as FolderChoice)?.Id;
+                Refresh();
+            };
+        }
         var listArea = new Grid { Children = { list, empty } };
         panel.Children.Add(listArea);
         SetBody(panel);
@@ -73,14 +130,33 @@ internal sealed class LibraryWindow : VeilDialog
         {
             string filter = search.Text.Trim();
             var cutoff = editable ? null : Cutoff();
-            var matches = entries.Where(entry => InRange(entry, cutoff) &&
+            if (folders is not null)
+            {
+                if (currentFolder is Guid id && !folders.Any(f => f.Id == id)) currentFolder = null;
+                var target = (destination.SelectedItem as FolderChoice)?.Id;
+                var choices = new[] { new FolderChoice(null, "최상위") }.Concat(
+                    folders.Select(f => new FolderChoice(f.Id, BookmarkPolicy.Path(folders, f.Id)))).ToArray();
+                refreshing = true;
+                try
+                {
+                    folderView.ItemsSource = choices;
+                    folderView.SelectedItem = choices.First(c => c.Id == currentFolder);
+                    destination.ItemsSource = choices;
+                    destination.SelectedItem = choices.FirstOrDefault(c => c.Id == target) ?? choices[0];
+                }
+                finally { refreshing = false; }
+            }
+            var matches = entries.Where(entry => (folders is null || filter.Length > 0 || entry.FolderId == currentFolder) &&
+                InRange(entry, cutoff) &&
                 (entry.Title.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
                  entry.Url.Contains(filter, StringComparison.OrdinalIgnoreCase))).ToArray();
             var selected = Selected();
             list.Items.Clear();
             foreach (var entry in matches)
             {
-                var row = new ListBoxItem { Tag = entry, Content = Row(rowGlyph, entry.Title, entry.Url, When(entry.Visited)) };
+                string detail = folders is not null && filter.Length > 0
+                    ? entry.Url + " · " + BookmarkPolicy.Path(folders, entry.FolderId) : entry.Url;
+                var row = new ListBoxItem { Tag = entry, Content = Row(rowGlyph, entry.Title, detail, When(entry.Visited)) };
                 System.Windows.Automation.AutomationProperties.SetName(row, $"{entry.Title} {entry.Url}");
                 list.Items.Add(row);
                 if (selected is not null && entry == selected) list.SelectedItem = row;
@@ -106,17 +182,78 @@ internal sealed class LibraryWindow : VeilDialog
             // The list is shared by all windows. Do not report success if the protected state
             // could not be saved; restore the in-memory list before showing the error.
             var previous = entries.ToArray();
+            var previousFolders = folders?.ToArray();
             change();
-            if (!save())
+            if ((folders is not null && !BookmarkPolicy.Valid(folders, entries)) || !save())
             {
                 entries.Clear();
                 entries.AddRange(previous);
+                if (folders is not null && previousFolders is not null)
+                {
+                    folders.Clear();
+                    folders.AddRange(previousFolders);
+                }
                 Refresh();
                 MessageBox.Show(PromptOwner, "변경사항을 저장하지 못했습니다. 기존 목록을 유지합니다.",
                     title, MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
             Refresh();
+        }
+
+        BookmarkFolder? Current() => folders?.FirstOrDefault(f => f.Id == currentFolder);
+        void CreateFolder()
+        {
+            string name = folderName.Text.Trim();
+            if (folders is null || !BookmarkPolicy.ValidName(name)) return;
+            var folder = new BookmarkFolder(Guid.NewGuid(), name, currentFolder);
+            Commit(() => folders.Add(folder));
+            if (folders.Contains(folder)) { currentFolder = folder.Id; folderName.Clear(); Refresh(); }
+        }
+
+        void RenameFolder()
+        {
+            string name = folderName.Text.Trim();
+            if (folders is null || Current() is not { } folder || !BookmarkPolicy.ValidName(name)) return;
+            Commit(() => folders[folders.IndexOf(folder)] = folder with { Name = name });
+        }
+
+        void DeleteFolder()
+        {
+            if (folders is null || Current() is not { } folder) return;
+            if (MessageBox.Show(PromptOwner, $"'{folder.Name}' 폴더를 삭제할까요? 북마크와 하위 폴더는 상위 폴더로 이동합니다.",
+                "폴더 삭제", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            if (!folders.Contains(folder)) return;
+            Commit(() => BookmarkPolicy.RemoveFolder(folders, entries, folder.Id));
+            if (!folders.Contains(folder)) { currentFolder = folder.ParentId; Refresh(); }
+        }
+
+        void MoveBookmark()
+        {
+            if (folders is null || Selected() is not { } entry || !entries.Contains(entry) ||
+                destination.SelectedItem is not FolderChoice target || entry.FolderId == target.Id) return;
+            Commit(() => entries[entries.IndexOf(entry)] = entry with { FolderId = target.Id });
+        }
+
+        void MoveCurrentFolder()
+        {
+            if (folders is null || Current() is not { } folder || destination.SelectedItem is not FolderChoice target ||
+                folder.ParentId == target.Id) return;
+            bool moved = false;
+            Commit(() => moved = BookmarkPolicy.MoveFolder(folders, entries, folder.Id, target.Id));
+            if (!moved) MessageBox.Show(PromptOwner, "자기 자신 또는 하위 폴더로 이동할 수 없으며 최대 깊이는 16단계입니다.", title);
+        }
+
+        void ShiftBookmark(int direction)
+        {
+            if (Selected() is not { } entry || !entries.Contains(entry)) return;
+            Commit(() => BookmarkPolicy.Shift(entries, entry, e => e.FolderId == entry.FolderId, direction));
+        }
+
+        void ShiftFolder(int direction)
+        {
+            if (folders is null || Current() is not { } folder) return;
+            Commit(() => BookmarkPolicy.Shift(folders, folder, f => f.ParentId == folder.ParentId, direction));
         }
 
         void Remove()

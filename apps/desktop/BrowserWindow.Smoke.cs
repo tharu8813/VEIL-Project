@@ -43,6 +43,18 @@ public partial class BrowserWindow
                     "local suggestions deduplicate and exclude sensitive URL forms");
                 localData.LocalAddressSuggestions = false;
                 Check(SearchPolicy.Suggest(localData, "synthetic").Count == 0, "local suggestions disabled");
+                var parentFolder = new BookmarkFolder(Guid.NewGuid(), "Parent");
+                var childFolder = new BookmarkFolder(Guid.NewGuid(), "Child", parentFolder.Id);
+                localData.BookmarkFolders.AddRange([parentFolder, childFolder]);
+                localData.Bookmarks[0] = localData.Bookmarks[0] with { FolderId = childFolder.Id };
+                Check(BookmarkPolicy.Valid(localData.BookmarkFolders, localData.Bookmarks), "nested bookmark hierarchy valid");
+                Check(!BookmarkPolicy.MoveFolder(localData.BookmarkFolders, localData.Bookmarks, parentFolder.Id, childFolder.Id),
+                    "bookmark folder cycle rejected");
+                Check(BookmarkPolicy.RemoveFolder(localData.BookmarkFolders, localData.Bookmarks, childFolder.Id) &&
+                    localData.Bookmarks[0].FolderId == parentFolder.Id, "deleting folder preserves bookmarks");
+                Check(BookmarkPolicy.RemoveFolder(localData.BookmarkFolders, localData.Bookmarks, parentFolder.Id) &&
+                    localData.Bookmarks[0].FolderId is null && localData.Bookmarks.Count == 1,
+                    "deleting last folder promotes bookmarks to root");
                 var rule = new SitePermissionRule("https://example.test", "camera", SitePermissionPolicy.Ask);
                 Check(SitePermissionPolicy.ValidRules([rule]) &&
                     !SitePermissionPolicy.ValidRules([rule, rule]) &&
