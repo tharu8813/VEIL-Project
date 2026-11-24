@@ -131,6 +131,13 @@ public partial class BrowserWindow
                 try { VaultImagePreview.Dimensions(oversizedPng, VaultPreviewKind.Png); }
                 catch (InvalidDataException) { rejectedImage = true; }
                 Check(rejectedImage, "oversized PNG rejected before decoder");
+                Check(VaultPdfPreview.ValidHeader("%PDF-1.7\nsynthetic"u8) &&
+                    !VaultPdfPreview.ValidHeader("<html>synthetic</html>"u8) &&
+                    VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.pdf" }) == VaultPdfPreview.Enabled,
+                    "PDF preview header and development gate");
+                Check(VaultPdfPreview.RenderSize(612, 792) is (1391, 1800) &&
+                    VaultPdfPreview.RenderSize(double.NaN, 100) is null &&
+                    VaultPdfPreview.RenderSize(100000, 1) is null, "PDF render dimension limits");
                 Check(VaultPresentation.DecodeText("synthetic"u8.ToArray()) == "synthetic" &&
                     VaultPresentation.ExportName(previewEntry with { Name = "CON.txt" }) == "VEIL-download.bin" &&
                     VaultPresentation.Filter([previewEntry], "example", VaultSort.Recent, false).Count == 1,

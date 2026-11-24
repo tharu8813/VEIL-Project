@@ -4,7 +4,7 @@ using System.Text;
 namespace Veil.Desktop;
 
 internal enum VaultSort { Recent, Oldest, Name, Largest, Smallest }
-internal enum VaultPreviewKind { None, Text, Png, Jpeg }
+internal enum VaultPreviewKind { None, Text, Png, Jpeg, Pdf }
 
 internal static class VaultPresentation
 {
@@ -36,6 +36,7 @@ internal static class VaultPresentation
             ".txt" when entry.Bytes <= PreviewLimit => VaultPreviewKind.Text,
             ".png" when entry.Bytes > 0 && entry.Bytes <= ImagePreviewLimit => VaultPreviewKind.Png,
             ".jpg" or ".jpeg" when entry.Bytes > 0 && entry.Bytes <= ImagePreviewLimit => VaultPreviewKind.Jpeg,
+            ".pdf" when VaultPdfPreview.Enabled && entry.Bytes > 0 && entry.Bytes <= ImagePreviewLimit => VaultPreviewKind.Pdf,
             _ => VaultPreviewKind.None,
         };
     }

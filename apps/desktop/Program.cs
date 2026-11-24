@@ -14,6 +14,10 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+#if DEBUG
+        // Dedicated raster worker: no Application, profile unlock, network engine or file arguments.
+        if (args is ["--pdf-preview-worker"]) return VaultPdfPreview.RunWorker();
+#endif
         string? external = args is ["--open-url", var address] ? ExternalAddress.Parse(address) : null;
         if (args is ["--open-url", _] && (external is null || !ExternalAddress.Installed)) return 2;
 #if !DEBUG
