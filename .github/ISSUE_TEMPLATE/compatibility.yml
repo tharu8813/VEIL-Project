@@ -1,0 +1,49 @@
+name: "웹사이트 호환성 문제"
+description: "사이트 탐색, 렌더링, 미디어 등의 호환성 문제를 신고합니다."
+title: "[Compatibility] "
+body:
+  - type: "markdown"
+    attributes:
+      value: "보안 취약점은 이 양식으로 신고하지 마세요. [보안 정책](https://github.com/tharu8813/VEIL-Project/blob/main/SECURITY.md)을 확인하고, 쿠키·비밀번호·키·개인정보·민감한 URL이나 로그를 첨부하지 마세요."
+  - type: "input"
+    id: "version"
+    attributes:
+      label: "버전 또는 커밋"
+      description: "VEIL 버전 또는 SHA"
+    validations:
+      required: true
+  - type: "input"
+    id: "environment"
+    attributes:
+      label: "실행 환경"
+      description: "Windows / WebView2 버전"
+    validations:
+      required: true
+  - type: "input"
+    id: "site"
+    attributes:
+      label: "사이트 유형 또는 공개 도메인"
+      description: "개인 URL, 경로, 쿼리, 계정 정보는 제외"
+    validations:
+      required: true
+  - type: "textarea"
+    id: "steps"
+    attributes:
+      label: "재현 절차 및 증상"
+      description: "합성 데이터로 수행한 단계와 오류"
+    validations:
+      required: true
+  - type: "textarea"
+    id: "comparison"
+    attributes:
+      label: "비교 결과"
+      description: "다른 브라우저 및 VEIL 보호 모드에서의 결과 (미시험 시 NOT RUN)"
+    validations:
+      required: false
+  - type: "checkboxes"
+    id: "confirmation"
+    attributes:
+      label: "제출 전 확인"
+      options:
+        - label: "취약점 세부 정보와 개인정보를 포함하지 않았습니다."
+          required: true

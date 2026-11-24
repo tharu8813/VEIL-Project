@@ -48,3 +48,7 @@ VEIL은 VPN이나 익명 브라우저를 대체하지 않습니다. 웹사이트
 ## 라이선스
 
 VEIL의 자체 코드는 [Mozilla Public License 2.0 (MPL 2.0)](LICENSE)을 따릅니다. 개인 및 상업적 사용과 수정·재배포가 가능하며, MPL 적용 코드를 외부에 배포할 때는 해당 소스코드(수정 내용 포함)를 라이선스 조건에 따라 제공해야 합니다. 외부 라이브러리는 각자의 라이선스를 따릅니다. 자세한 내용은 [라이선스 안내](docs/LICENSING.md)를 참고하세요.
+
+## 프로젝트 참여
+
+[변경 기록](CHANGELOG.md) · [기능 제안 및 버그 신고](https://github.com/tharu8813/VEIL-Project/issues) · [보안 취약점 신고 정책](SECURITY.md) · [개발 참여 가이드](CONTRIBUTING.md)

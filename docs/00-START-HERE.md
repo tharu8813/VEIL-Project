@@ -17,6 +17,11 @@
 
 | 파일 | 역할 | 읽을 시점 |
 |---|---|---|
+| [../CONTRIBUTING.md](../CONTRIBUTING.md) | 기여·브랜치·검증 규칙 | 개발 시작 시 |
+| [../SECURITY.md](../SECURITY.md) | 보안 신고 정책 | 취약점 발견 시 |
+| [../CHANGELOG.md](../CHANGELOG.md) | 미출시 변경 기록 및 버전별 변경 사항 | 작업 및 배포 시 |
+| [VERSIONING.md](VERSIONING.md) | 버전·태그·릴리즈 규칙 | 버전 결정 시 |
+| [BRANDING.md](BRANDING.md) | 브랜드·로고·색상 가이드 | UI·문서 디자인 시 |
 | [LICENSING.md](LICENSING.md) | MPL 2.0 적용 범위·외부 구성 요소·배포 의무 | 개발·배포 시 |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | 빌드·실행·자동 시험 안내 (이전 README) | 개발 환경 준비 시 |
 | `01-product-requirements.md` | 사용자 목표·기능·수용 기준 | 항상 |
