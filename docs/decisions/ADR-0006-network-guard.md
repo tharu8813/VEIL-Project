@@ -47,7 +47,13 @@ Phase 0에서 WebView2에 고정 프록시(`--proxy-server`, 폴백 없음)를 �
 ## 검증
 
 - 로컬 자동 시험: HTTPS 우선 판정과 경고 페이지, 추적 방지 수준, 엔진 명령줄의 프록시·WebRTC·QUIC 인수, 프록시 경유 탐색과 금고 다운로드, 프록시 중단 후 탐색·금고 다운로드 모두 원 서버에 직접 요청 없음.
-- **NOT RUN(통합 VM)**: 실제 DNS 질의 경로, 외부 IPv6, WebRTC 실제 ICE 후보, 절전·재개 및 네트워크 전환 중 우회, 엔진 외 프로세스(업데이트·진단)의 직접 연결.
+- **인터넷 VM (2026-11-24, `Veil-VM-INTERNET`, NAT 연결 복제 VM, 런타임 157.0.4341.60)**
+  - `dns-path` PASS: pktmon 포트 53 캡처에서 시스템 DNS 대조 이름은 평문으로 보였고, Cloudflare DoH로 찾은 이름은 보이지 않았다. DoH 제공자 이름의 평문 부트스트랩 조회도 이번 캡처에는 없었다(OBSERVED).
+  - `webrtc-proxy` PASS: 실제 STUN이 있어도 프록시 보호에서 후보 0개.
+  - `webrtc-standard` OBSERVED: host(mDNS) 2개와 srflx(IPv4 공인 주소) 1개. 표준 보호는 IP를 숨기지 않는다.
+  - `site-compat` PASS: 실제 사이트 8개가 HTTPS 우선·추적 방지 엄격 상태에서 열렸고, HTTP 전용 사이트는 경고 페이지를 보였다. 첫 실행의 naver FAIL은 제목을 너무 일찍 읽은 하네스 문제였고, 수정 후 8/8.
+  - `ipv6-reachability` OBSERVED: NAT에 IPv6가 없어 도달하지 못했다(외부 IPv6 누출 여부는 미확인).
+- **NOT RUN**: 외부 IPv6 경로, 절전·재개와 네트워크 전환 중 우회, 엔진 외 프로세스(업데이트·진단)의 직접 연결, `--disable-quic`의 실제 효과, SOCKS5 원격 이름 해석.
 
 ## 결과와 열린 항목
 

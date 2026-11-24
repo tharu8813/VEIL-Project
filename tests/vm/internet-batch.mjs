@@ -164,7 +164,8 @@ async function main() {
         await guard('site-compat', async () => {
             const results = [];
             for (const site of SITES) {
-                const page = await visit(`site-${new URL(site).hostname}`, site);
+                // Some sites set the title after the load event: wait for it (up to 20 s) instead of reading once.
+                const page = await visit(`site-${new URL(site).hostname}`, site, { evalExpr: 'document.title || null' });
                 results.push({ site, ok: page.navError === 'none' && page.title !== '""', navError: page.navError });
             }
             const http = await visit('site-http-only', HTTP_ONLY);
