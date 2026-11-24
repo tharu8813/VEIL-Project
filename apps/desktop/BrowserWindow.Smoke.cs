@@ -292,6 +292,8 @@ public partial class BrowserWindow
                             await privateTab.View.ExecuteScriptAsync("localStorage.setItem('veil-private-marker','synthetic'); null;");
                             Check(await Active!.View.ExecuteScriptAsync("localStorage.getItem('veil-private-marker')") == "null",
                                 "private local storage isolated");
+                            Check(!privateWindow.CanMoveTo(privateTab.Item, this) &&
+                                !CanMoveTo(Active!.Item, privateWindow), "cross-session tab transfer refused");
                             Check(data.History.Count == regularHistory && privateWindow.data.History.Count == 0 &&
                                 File.ReadAllBytes(statePath).SequenceEqual(regularState), "private navigation not persisted");
                             Check(await privateWindow.OpenTab("veil://downloads") is null, "private vault route rejected");
@@ -316,14 +318,20 @@ public partial class BrowserWindow
                             "bookmark bar restored across windows");
                         SaveSession();
                         Check(BrowserData.Load(statePath).Windows is [{ Tabs.Count: 1 }], "second window persisted");
-                        other.DetachTab(moving.Item);
-                        AttachTab(moving.Item, 0);
+                        Check(other.CanMoveTo(moving.Item, this) && other.MoveToExistingWindow(moving.Item, this, 0),
+                            "move existing tab to another regular window");
                         await WaitFor(() => !session.Windows.Contains(other) && Tabs.Items.IndexOf(moving.Item) == 0 &&
                             Active == moving && Tabs.Items.Count == count, "tab merged back at the front");
                         Check(await moving.View.ExecuteScriptAsync("window.veilMarker") == "42", "merged tab kept its live page");
                         MoveSelectedTab(1);
                         Check(Tabs.Items.IndexOf(moving.Item) == 1 && Active == moving, "keyboard tab reorder");
                         Check(BrowserData.Load(statePath).Windows is null, "merged window removed from state");
+                        var selectedBefore = Tabs.SelectedItem;
+                        SelectTab(Tabs.Items.Count + 3);
+                        Check(Tabs.SelectedItem == selectedBefore, "out of range numbered shortcut leaves selection unchanged");
+                        CycleTab(1);
+                        CycleTab(-1);
+                        Check(Tabs.SelectedItem == selectedBefore, "tab cycling wraps and preserves order");
                         // Tear-off path used by dragging a tab out of the strip (without real mouse input).
                         var torn = (TabItem)Tabs.Items[^1];
                         int windowCount = session.Windows.Count;

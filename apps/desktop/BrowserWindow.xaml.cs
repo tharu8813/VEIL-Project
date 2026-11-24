@@ -110,7 +110,7 @@ public partial class BrowserWindow : Window
         {
             // Closing one of several windows closes its tabs; they stay reopenable.
             foreach (TabItem item in Tabs.Items)
-                if (item.Tag is BrowserTab tab && IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
+                if (item.Tag is BrowserTab tab) session.RememberClosedTab(new ClosedTab(tab.Url, tab.Pinned));
             SaveSession();
         }
         foreach (var tab in Tabs.Items.OfType<TabItem>().Select(item => (BrowserTab)item.Tag).ToArray())
@@ -726,7 +726,7 @@ public partial class BrowserWindow : Window
     {
         using var deferral = args.GetDeferral();
         args.Handled = true;
-        if (args.Uri != "about:blank" && !IsWebUrl(args.Uri)) return;
+        if (!CanUseTab(opener.Item) || (args.Uri != "about:blank" && !IsWebUrl(args.Uri))) return;
         // Like other browsers, tabs opened from a page appear right after their opener.
         var popup = await OpenTab(null, args.IsUserInitiated, Tabs.Items.IndexOf(opener.Item) + 1);
         if (popup is not null && !closing)
@@ -770,7 +770,7 @@ public partial class BrowserWindow : Window
         // Cancel pending native actions before yielding to the close animation.
         ClearManagement(tab);
         if (!await AnimateTabClose(item) || closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
-        if (!session.IsPrivate && IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
+        session.RememberClosedTab(new ClosedTab(tab.Url, tab.Pinned));
         ClearManagement(tab);
         Tabs.Items.Remove(item);
         Pages.Children.Remove(tab.View);
@@ -1050,13 +1050,18 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void CycleTab(int direction)
     {
-        int count = Tabs.Items.Count;
-        if (count > 0) Tabs.SelectedIndex = (Tabs.SelectedIndex + direction + count) % count;
+        var live = Tabs.Items.OfType<TabItem>().Where(CanUseTab).ToArray();
+        if (live.Length == 0) return;
+        int current = Array.IndexOf(live, Tabs.SelectedItem as TabItem);
+        int next = current < 0 ? (direction > 0 ? 0 : live.Length - 1) :
+            (current + direction + live.Length) % live.Length;
+        Tabs.SelectedItem = live[next];
     }
 
     private void SelectTab(int index)
     {
-        if (Tabs.Items.Count > 0) Tabs.SelectedIndex = Math.Clamp(index, 0, Tabs.Items.Count - 1);
+        if (index >= 0 && index < Tabs.Items.Count && Tabs.Items[index] is TabItem item && CanUseTab(item))
+            Tabs.SelectedItem = item;
     }
 
     private void Zoom(double? change)
@@ -1079,7 +1084,15 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private async void RestoreClick(object sender, RoutedEventArgs args)
     {
-        if (!session.IsPrivate && closedTabs.TryPop(out var closed) && await OpenTab(closed.Url, pinned: closed.Pinned) is null) closedTabs.Push(closed);
+        if (session.IsPrivate || closing || restoring || session.IsEnding || session.EngineLost ||
+            session.RestoringClosedTab || !closedTabs.TryPop(out var closed)) return;
+        session.RestoringClosedTab = true;
+        try
+        {
+            if (await OpenTab(closed.Url, pinned: closed.Pinned) is null)
+                session.RememberClosedTab(closed);
+        }
+        finally { session.RestoringClosedTab = false; }
     }
 
     private void BackClick(object sender, RoutedEventArgs args) { if (Back.IsEnabled) Active?.EngineView.GoBack(); }
