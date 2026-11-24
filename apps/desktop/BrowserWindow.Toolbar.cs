@@ -131,13 +131,15 @@ public partial class BrowserWindow
         DownloadPopupLocked.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    private void RefreshBookmarkBars()
+    private void RefreshBookmarkBars(LibraryWindow? source = null, bool refreshLibraries = true)
     {
         foreach (var window in session.Windows.ToArray())
         {
             if (window.closing) continue;
             window.UpdateBookmarkGlyph();
             window.RefreshBookmarkBar();
+            if (refreshLibraries && window.bookmarkLibrary is { } library && !ReferenceEquals(library, source))
+                library.RefreshEntries();
         }
     }
 
@@ -162,7 +164,7 @@ public partial class BrowserWindow
             data.ShowBookmarksBar = previous;
             Status.Text = "북마크 바 설정을 저장하지 못했습니다.";
         }
-        RefreshBookmarkBars();
+        RefreshBookmarkBars(refreshLibraries: false);
     }
 
     private void BookmarkBarItemClick(object sender, RoutedEventArgs args)

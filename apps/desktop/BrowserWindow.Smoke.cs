@@ -221,6 +221,14 @@ public partial class BrowserWindow
                         await WaitFor(() => moving.Owner == other && !other.IsRestoring &&
                             other.Tabs.Items.Contains(moving.Item) && Tabs.Items.Count == count - 1, "tab moved to a new window");
                         Check(await moving.View.ExecuteScriptAsync("window.veilMarker") == "42", "moved tab kept its live page");
+                        other.ToggleBookmarkBarClick(this, new RoutedEventArgs());
+                        Check(!data.ShowBookmarksBar && BookmarkBar.Visibility == Visibility.Collapsed &&
+                            other.BookmarkBar.Visibility == Visibility.Collapsed && !BrowserData.Load(statePath).ShowBookmarksBar,
+                            "bookmark bar hidden across windows and persisted");
+                        ToggleBookmarkBarClick(this, new RoutedEventArgs());
+                        Check(data.ShowBookmarksBar && BookmarkBar.Visibility == Visibility.Visible &&
+                            other.BookmarkBar.Visibility == Visibility.Visible && BrowserData.Load(statePath).ShowBookmarksBar,
+                            "bookmark bar restored across windows");
                         SaveSession();
                         Check(BrowserData.Load(statePath).Windows is [{ Tabs.Count: 1 }], "second window persisted");
                         other.DetachTab(moving.Item);
