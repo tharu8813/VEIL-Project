@@ -47,13 +47,29 @@ function safe(body) {
     return awaited.length > 0 && awaited.every(name => methods.has(name) && guarded(methods.get(name)));
 }
 
+function isAwaitedVaultTaskCallback(name, text, match) {
+    // Narrow exception: a first-argument lambda passed to the known private Task-returning
+    // vault pipe helper and immediately awaited. Its failure propagates to the caller's
+    // Task, unlike an async void event callback. Do not exempt arbitrary call arguments,
+    // non-awaited calls, event subscriptions, or other files with the same method name.
+    return name === 'DownloadVault.cs' && match[0].startsWith('(')
+        && /\bawait\s+CapturePipeAsync\s*$/.test(text.slice(0, match.index))
+        && /\bprivate\s+async\s+Task<T>\s+CapturePipeAsync<T>\s*\(\s*Func<CancellationToken,\s*Task<T>>\s+operation\s*,\s*int\s+seconds\s*\)/.test(text);
+}
+
+function lambdaMatches(text) {
+    return text.matchAll(/(?:\+=|,|\()\s*async\s*(?:\([^)]*\)|\w+)\s*=>\s*/g);
+}
+
 const handlers = [];
 for (const { name, text } of files) {
     for (const match of text.matchAll(/async\s+void\s+(\w+)\s*\([^)]*\)\s*/g))
         handlers.push({ where: `${name}: async void ${match[1]}`, body: block(text, match.index + match[0].length) });
-    for (const match of text.matchAll(/(?:\+=|,|\()\s*async\s*(?:\([^)]*\)|\w+)\s*=>\s*/g))
+    for (const match of lambdaMatches(text)) {
+        if (isAwaitedVaultTaskCallback(name, text, match)) continue;
         handlers.push({ where: `${name}: async lambda at ${text.slice(0, match.index).split('\n').length}`,
             body: block(text, text.indexOf('=>', match.index)) });
+    }
 }
 
 test('desktop async handlers were found', () => {
@@ -63,4 +79,54 @@ test('desktop async handlers were found', () => {
 test('every async void handler and async event lambda catches recoverable failures', () => {
     const unsafe = handlers.filter(handler => !safe(handler.body)).map(handler => handler.where);
     assert.deepEqual(unsafe, [], `handlers that can terminate the browser:\n${unsafe.join('\n')}`);
+});
+
+test('only directly awaited vault Task callbacks are excluded, never event handlers', () => {
+    const fixtures = [
+        [
+            "DownloadVault.cs",
+            "private async Task<T> CapturePipeAsync<T>(Func<CancellationToken, Task<T>> operation, int seconds) {}\nawait CapturePipeAsync(async token => { await WorkAsync(token); return true; }, 30);",
+            true
+        ],
+        [
+            "DownloadVault.cs",
+            "private async Task<T> CapturePipeAsync<T>(Func<CancellationToken, Task<T>> operation, int seconds) {}\nCapturePipeAsync(async token => { await WorkAsync(token); return true; }, 30);",
+            false
+        ],
+        [
+            "DownloadVault.cs",
+            "private async Task<T> CapturePipeAsync<T>(Func<CancellationToken, Task<T>> operation, int seconds) {}\nbutton.Click += async token => { await WorkAsync(token); return true; };",
+            false
+        ],
+        [
+            "DownloadVault.cs",
+            "private async Task<T> CapturePipeAsync<T>(Func<CancellationToken, Task<T>> operation, int seconds) {}\nawait OtherAsync(async token => { await WorkAsync(token); return true; });",
+            false
+        ],
+        [
+            "DownloadVault.cs",
+            "private async Task<T> CapturePipeAsync<T>(Func<CancellationToken, Task<T>> operation, int seconds) {}\nawait CapturePipeAsync(value, async token => { await WorkAsync(token); return true; });",
+            false
+        ],
+        [
+            "BrowserWindow.cs",
+            "private async Task<T> CapturePipeAsync<T>(Func<CancellationToken, Task<T>> operation, int seconds) {}\nawait CapturePipeAsync(async token => { await WorkAsync(token); return true; }, 30);",
+            false
+        ],
+        [
+            "DownloadVault.cs",
+            "await CapturePipeAsync(async token => { await WorkAsync(token); return true; }, 30);",
+            false
+        ],
+        [
+            "DownloadVault.cs",
+            "private async Task<T> CapturePipeAsync<T>(Action<CancellationToken> operation, int seconds) {}\nawait CapturePipeAsync(async token => { await WorkAsync(token); return true; }, 30);",
+            false
+        ]
+    ];
+    for (const [name, source, expected] of fixtures) {
+        const matches = [...lambdaMatches(source)];
+        assert.equal(matches.length, 1, source);
+        assert.equal(isAwaitedVaultTaskCallback(name, source, matches[0]), expected, source);
+    }
 });
