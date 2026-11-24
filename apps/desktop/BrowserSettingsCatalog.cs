@@ -1,7 +1,7 @@
 namespace Veil.Desktop;
 
 internal enum SettingsSection { General, Privacy, Network, Accounts, Downloads, Advanced }
-internal enum SettingsDestination { Security, SitePermissions, History, Bookmarks, Network, Passwords, Downloads, Vault, Search }
+internal enum SettingsDestination { Security, SitePermissions, History, Bookmarks, Network, Passwords, Downloads, Vault, Search, SiteData }
 
 internal sealed record SettingsItem(SettingsSection Section, string Title, string Description, string Keywords,
     string? State = null, SettingsDestination? Destination = null)
@@ -66,6 +66,9 @@ internal static class BrowserSettingsCatalog
                 "security smartscreen phishing 피싱 악성코드", smartScreen + "\nVEIL 위협 목록: " + threatState, SettingsDestination.Security),
             new(SettingsSection.Privacy, "사이트 권한", "카메라, 마이크, 위치, 알림을 사이트별로 관리합니다.",
                 "permissions camera microphone location notifications 권한", "미설정 권한: 차단", SettingsDestination.SitePermissions),
+            new(SettingsSection.Privacy, "쿠키 및 사이트 데이터", "쿠키 저장 도메인, 사이트 저장소 및 캐시를 관리합니다.",
+                "cookies storage localstorage indexeddb cache 로그인 유지 데이터 삭제",
+                "기본: 사이트 데이터 유지", SettingsDestination.SiteData),
             new(SettingsSection.Privacy, "방문 기록", "VEIL 방문 목록을 검색하고 선택한 항목 또는 기간을 삭제합니다.",
                 "history browsing data 기록 삭제", Destination: SettingsDestination.History),
             new(SettingsSection.Privacy, "프로필 저장소", "프로필 및 사이트 데이터의 저장 위치 정책입니다. 검증 상태는 별도 출시 기준을 따릅니다.",

@@ -178,3 +178,22 @@
 - [ ] 창 이동·분리·합치기, 구버전 프로필 및 각 창 고정 상태 재시작 복원, 비정상 고정 개수
 - [ ] 탭 검색 제목/주소·여러 창·키보드 및 닫힌 탭 선택 무효화
 - [ ] 애니메이션 도중 닫기/이동/잠금, 다수 탭/작은 화면/DPI 및 접근성
+
+## Phase 6 쿠키 및 사이트 데이터 관리 (FR-003, 구현·검증 보류)
+
+- 설정 → 개인정보 및 보안 → 쿠키 및 사이트 데이터, 또는 Ctrl+Shift+Delete로 네이티브 관리 창을 연다. 기본 로그인/쿠키/사이트 저장소 유지 정책은 변경하지 않는다.
+- WebView2 CookieManager의 전체 프로필 쿠키 조회 결과를 저장 도메인별 개수로 표시한다. 이름/값/토큰은 UI·파일·로그에 표시하거나 기록하지 않는다. 선택 삭제는 원래 저장 도메인(선행 점 포함)의 정확한 일치만 대상으로 하며 하위 도메인 일괄 삭제를 하지 않는다. 공유 도메인 쿠키의 삭제는 해당 쿠키를 사용하는 다른 사이트의 로그인에도 영향을 줄 수 있다.
+- 사이트 저장소 출처 목록은 열린 탭/북마크/VEIL 기록에서 수집한 HTTP(S) 스킴·호스트·포트 조합이다. 모든 실제 저장소의 인벤토리가 아니다. 선택 출처의 사용량은 엔진의 Storage.getUsageAndQuota 보고값으로 확인할 수 있다.
+- 출처별 삭제에는 네이티브 코드의 고정 Storage.clearDataForOrigin 호출과 명시된 storageTypes만 사용한다. LocalStorage/IndexedDB/CacheStorage/Service Worker/WebSQL/파일 시스템 대상이며 쿠키, 다른 출처, 전체 프로필 삭제로 폴백하지 않는다. 파티션 저장소·sessionStorage·디스크 캐시 및 실제 엔진 지원 범위는 별도 검증 대상이다.
+- 전체 삭제는 사용자 선택/확인에 따라 Cookies, AllDomStorage, DiskCache만 조합한다. AllProfile/Settings/비밀번호/북마크/VEIL 기록/다운로드 금고를 대상으로 하지 않는다.
+- 활성 다운로드가 있으면 시작을 보류한다. 열린 페이지/백그라운드 작업이 데이터를 다시 생성할 수 있으며, 삭제는 트랜잭션·포렌식 삭제·서버 로그아웃을 보장하지 않는다. 오류 시 부분 적용 가능성을 알리고 삭제 범위를 확대하지 않는다.
+- API 근거: https://learn.microsoft.com/dotnet/api/microsoft.web.webview2.core.corewebview2browsingdatakinds 및 https://chromedevtools.github.io/devtools-protocol/tot/Storage/
+- **NOT RUN**: 출처 정규화 및 도메인 일치 smoke를 추가했으며 빌드·실제 엔진/VM 검증은 일괄 검증으로 보류한다.
+
+### 일괄 검증 추가 항목
+
+- [ ] 합성 쿠키 도메인/공유 도메인/경로/HttpOnly/파티션, 선택 삭제 전후 및 타 도메인 보존
+- [ ] HTTP/HTTPS 및 포트 격리, 출처별 LocalStorage/IndexedDB/CacheStorage/Service Worker 삭제, 미지원 CDP 실패 시 전체 삭제 없음
+- [ ] 사용량 보고·검색·취소·전체 유형별 조합·열린 창과 페이지의 재생성·다운로드 진행 중 차단
+- [ ] 재시작 시 로그인 유지 기본값, 선택 삭제 후 재시작 및 북마크/비밀번호/권한/금고 보존
+- [ ] 잠금/강제 종료·엔진 종료·부분 삭제 오류·디스크 및 진단 로그에 민감 정보 노출 여부

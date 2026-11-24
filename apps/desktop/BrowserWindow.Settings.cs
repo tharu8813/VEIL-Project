@@ -34,6 +34,7 @@ public partial class BrowserWindow
             switch (destination)
             {
                 case SettingsDestination.Search: SearchSettingsClick(this, click); break;
+                case SettingsDestination.SiteData: SiteDataClick(this, click); break;
                 case SettingsDestination.Security: SecurityClick(this, click); break;
                 case SettingsDestination.SitePermissions: SitePermissionsClick(this, click); break;
                 case SettingsDestination.History: HistoryClick(this, click); break;

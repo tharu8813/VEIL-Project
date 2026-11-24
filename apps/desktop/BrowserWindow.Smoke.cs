@@ -43,6 +43,16 @@ public partial class BrowserWindow
                     "local suggestions deduplicate and exclude sensitive URL forms");
                 localData.LocalAddressSuggestions = false;
                 Check(SearchPolicy.Suggest(localData, "synthetic").Count == 0, "local suggestions disabled");
+                var sites = SiteDataPolicy.Origins(["https://example.test/path?secret=test", "https://example.test:443/",
+                    "https://example.test:8443/", "http://example.test/", "file:///C:/test", "https://user@example.test/"]);
+                Check(sites.Count == 3 && sites.Contains("https://example.test") &&
+                    sites.Contains("https://example.test:8443") && sites.Contains("http://example.test"),
+                    "site data origins isolate schemes and ports");
+                var domains = SiteDataPolicy.Summarize(["example.test", ".example.test", "sub.example.test", "EXAMPLE.TEST"]);
+                Check(domains.Count == 3 && domains.Single(item => item.Domain == "example.test").Count == 2 &&
+                    !SiteDataPolicy.SameCookieDomain(".example.test", "example.test") &&
+                    !SiteDataPolicy.SameCookieDomain("sub.example.test", "example.test"),
+                    "cookie storage domains never use suffix matching");
                 Check(ResolveAddress("127.0.0.1:8765")?.AbsoluteUri == "http://127.0.0.1:8765/", "fixture address");
                 Check(ResolveAddress("file:///C:/secret") is null &&
                     ResolveAddress("https://username@example.test") is null, "address scheme and credentials rejected");
