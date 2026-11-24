@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -38,6 +39,12 @@ internal sealed class DownloadVault : IDisposable
     private readonly string? tool;
     private HttpClient http;
     private readonly SemaphoreSlim gate = new(1, 1);
+    // Limit live network bodies as well as vault writes. Waiting requests do not open HTTP connections.
+    private readonly SemaphoreSlim captureSlot = new(1, 1);
+    private const int HeaderTimeoutSeconds = 45;
+    private const int BodyIdleSeconds = 60;
+    private const int PipeTimeoutSeconds = 30;
+    private const int CommitTimeoutSeconds = 120;
     private readonly Dictionary<string, string> methods = new(StringComparer.Ordinal);
     private Process? serve;
     private Stream? input;
@@ -277,25 +284,40 @@ internal sealed class DownloadVault : IDisposable
     internal async Task<VaultEntry> CaptureAsync(Uri uri, BrowserDownload download, CoreWebView2 web, bool retry = false)
     {
         CancellationToken cancel = download.Token;
-        if (!Unlocked) throw new InvalidOperationException("The vault is locked.");
-        using var response = await GetFollowingRedirectsAsync(uri, web, cancel, retry);
-        using var body = await response.Content.ReadAsStreamAsync(cancel);
-        return await SealCaptureAsync(body, response.Content.Headers.ContentLength, uri.Host, download);
+        download.WaitForSlot();
+        await captureSlot.WaitAsync(cancel);
+        try
+        {
+            if (!Unlocked) throw new InvalidOperationException("The vault is locked.");
+            download.WaitForTransfer();
+            using var response = await GetFollowingRedirectsAsync(uri, web, cancel, retry);
+            using var body = await response.Content.ReadAsStreamAsync(cancel);
+            return await SealCaptureAsync(body, response.Content.Headers.ContentLength, uri.Host, download);
+        }
+        finally { captureSlot.Release(); }
     }
 
     internal async Task<VaultEntry> CaptureInlineAsync(string raw, Uri source, BrowserDownload download)
     {
         if (!InlineDownloadPolicy.Enabled || !InlineDownloadPolicy.SourceAllowed(source) || !Unlocked)
             throw new InvalidOperationException("Inline download unavailable.");
-        download.Token.ThrowIfCancellationRequested();
-        await RejectThreatAsync(threats?.CheckAsync(source, TimeSpan.FromSeconds(2), download.Token));
-        byte[] bytes = InlineDownloadPolicy.Decode(raw);
+        download.WaitForSlot();
+        await captureSlot.WaitAsync(download.Token);
         try
         {
-            using var body = new MemoryStream(bytes, writable: false);
-            return await SealCaptureAsync(body, bytes.Length, source.Host, download);
+            if (!Unlocked) throw new InvalidOperationException("The vault is locked.");
+            download.WaitForTransfer();
+            download.Token.ThrowIfCancellationRequested();
+            await RejectThreatAsync(threats?.CheckAsync(source, TimeSpan.FromSeconds(2), download.Token));
+            byte[] bytes = InlineDownloadPolicy.Decode(raw);
+            try
+            {
+                using var body = new MemoryStream(bytes, writable: false);
+                return await SealCaptureAsync(body, bytes.Length, source.Host, download);
+            }
+            finally { CryptographicOperations.ZeroMemory(bytes); }
         }
-        finally { CryptographicOperations.ZeroMemory(bytes); }
+        finally { captureSlot.Release(); }
     }
 
     private async Task<VaultEntry> SealCaptureAsync(Stream body, long? declared, string host, BrowserDownload download)
@@ -309,23 +331,40 @@ internal sealed class DownloadVault : IDisposable
             if (!Unlocked) throw new InvalidOperationException("The vault is locked.");
             cancel.ThrowIfCancellationRequested();
             bool canAbort = false;
-            var buffer = new byte[FrameSize];
+            var packet = new byte[FrameSize + sizeof(int)];
+            // Reuse one deadline for body reads; reset only around an actual read.
+            using var idle = CancellationTokenSource.CreateLinkedTokenSource(cancel);
             using var fileHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             try
             {
-                await WriteLineAsync($"seal\t{Path.Combine(Objects, id + ".veil")}");
+                await CapturePipeAsync(async token =>
+                {
+                    await WriteLineAsync($"seal\t{Path.Combine(Objects, id + ".veil")}", token);
+                    return true;
+                }, PipeTimeoutSeconds);
                 canAbort = true;
                 download.Report(0, declared);
-                for (int read; (read = await body.ReadAsync(buffer, cancel)) > 0;)
+                while (true)
                 {
+                    int read;
+                    idle.CancelAfter(TimeSpan.FromSeconds(BodyIdleSeconds));
+                    try { read = await body.ReadAsync(packet.AsMemory(sizeof(int), FrameSize), idle.Token); }
+                    catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
+                    { throw new IOException("Download body idle timeout."); }
+                    finally { if (!idle.IsCancellationRequested) idle.CancelAfter(Timeout.InfiniteTimeSpan); }
+                    if (read == 0) break;
                     cancel.ThrowIfCancellationRequested();
-                    // A cancelled pipe write can leave half a frame and make a subsequent abort ambiguous.
+                    BinaryPrimitives.WriteInt32LittleEndian(packet, read);
+                    // One framed write; if it fails, do not attempt to reuse a possibly partial protocol frame.
                     canAbort = false;
-                    await input!.WriteAsync(BitConverter.GetBytes(read));
-                    await input.WriteAsync(buffer.AsMemory(0, read));
+                    await CapturePipeAsync(async token =>
+                    {
+                        await input!.WriteAsync(packet.AsMemory(0, sizeof(int) + read), token);
+                        return true;
+                    }, PipeTimeoutSeconds);
                     canAbort = true;
-                    fileHash.AppendData(buffer, 0, read);
-                    total += read;
+                    fileHash.AppendData(packet, sizeof(int), read);
+                    total = checked(total + read);
                     download.Report(total, declared);
                 }
                 cancel.ThrowIfCancellationRequested();
@@ -337,9 +376,14 @@ internal sealed class DownloadVault : IDisposable
                 cancel.ThrowIfCancellationRequested();
                 download.Finish();
                 canAbort = false;
-                await input!.WriteAsync(BitConverter.GetBytes(0));
-                await input.WriteAsync(BitConverter.GetBytes(total));
-                await input.FlushAsync();
+                await CapturePipeAsync(async token =>
+                {
+                    BinaryPrimitives.WriteInt32LittleEndian(packet, 0);
+                    BinaryPrimitives.WriteInt64LittleEndian(packet.AsSpan(sizeof(int)), total);
+                    await input!.WriteAsync(packet.AsMemory(0, sizeof(int) + sizeof(long)), token);
+                    await input.FlushAsync(token);
+                    return true;
+                }, PipeTimeoutSeconds);
             }
             catch
             {
@@ -347,17 +391,27 @@ internal sealed class DownloadVault : IDisposable
                 {
                     try
                     {
-                        await input!.WriteAsync(BitConverter.GetBytes(AbortFrame));
-                        await input.FlushAsync();
-                        await ReadLineAsync();
+                        await CapturePipeAsync(async token =>
+                        {
+                            BinaryPrimitives.WriteUInt32LittleEndian(packet, AbortFrame);
+                            await input!.WriteAsync(packet.AsMemory(0, sizeof(int)), token);
+                            await input.FlushAsync(token);
+                            string aborted = await ReadLineAsync(token);
+                            if (!aborted.StartsWith("err\t", StringComparison.Ordinal))
+                                throw new IOException("Unexpected abort response.");
+                            return true;
+                        }, PipeTimeoutSeconds);
                     }
-                    catch (IOException) { CloseBrokenPipe(); }
+                    catch (Exception error) when (error is IOException or InvalidOperationException or OperationCanceledException)
+                    { CloseBrokenPipe(); }
                 }
                 else CloseBrokenPipe();
                 throw;
             }
-            finally { CryptographicOperations.ZeroMemory(buffer); }
-            string reply = await ReadLineAsync();
+            finally { CryptographicOperations.ZeroMemory(packet); }
+            string reply;
+            try { reply = await CapturePipeAsync(ReadLineAsync, CommitTimeoutSeconds); }
+            catch { CloseBrokenPipe(); throw; }
             if (reply != $"ok\t{total}") throw new IOException("The vault did not accept the download.");
             var entry = new VaultEntry(id, download.Name, total, DateTimeOffset.Now, host);
             await SealBytesLockedAsync(Path.Combine(Meta, id + ".veil"), JsonSerializer.SerializeToUtf8Bytes(entry, Json));
@@ -366,6 +420,28 @@ internal sealed class DownloadVault : IDisposable
             return entry;
         }
         finally { gate.Release(); Changed?.Invoke(); }
+    }
+
+    // Pipe cancellation alone is not reliable on every Windows anonymous-pipe implementation.
+    // Kill only the captured key-holding process on deadline so a stuck pipe can unwind.
+    private async Task<T> CapturePipeAsync<T>(Func<CancellationToken, Task<T>> operation, int seconds)
+    {
+        var process = serve ?? throw new IOException("Vault unavailable.");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+        using var interrupt = timeout.Token.Register(() =>
+        {
+            try { if (!process.HasExited) process.Kill(); }
+            catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
+        });
+        try
+        {
+            T result = await operation(timeout.Token);
+            if (timeout.IsCancellationRequested) throw new IOException("Vault pipe timeout.");
+            return result;
+        }
+        catch (Exception error) when (timeout.IsCancellationRequested &&
+            error is IOException or OperationCanceledException or InvalidOperationException)
+        { throw new IOException("Vault pipe timeout.", error); }
     }
 
     private void CloseBrokenPipe()
@@ -541,15 +617,30 @@ internal sealed class DownloadVault : IDisposable
 
     private async Task SealBytesLockedAsync(string path, byte[] data)
     {
-        await WriteLineAsync($"seal\t{path}");
-        await input!.WriteAsync(BitConverter.GetBytes(data.Length));
-        await input.WriteAsync(data);
-        await input.WriteAsync(BitConverter.GetBytes(0));
-        await input.WriteAsync(BitConverter.GetBytes((long)data.Length));
-        await input.FlushAsync();
-        CryptographicOperations.ZeroMemory(data);
-        string reply = await ReadLineAsync();
-        if (reply != $"ok\t{data.Length}") throw new IOException($"The vault did not store metadata ({reply}).");
+        byte[] header = new byte[sizeof(int) + sizeof(long)];
+        try
+        {
+            string reply = await CapturePipeAsync(async token =>
+            {
+                await WriteLineAsync($"seal\t{path}", token);
+                for (int offset = 0; offset < data.Length;)
+                {
+                    int count = Math.Min(FrameSize, data.Length - offset);
+                    BinaryPrimitives.WriteInt32LittleEndian(header, count);
+                    await input!.WriteAsync(header.AsMemory(0, sizeof(int)), token);
+                    await input.WriteAsync(data.AsMemory(offset, count), token);
+                    offset += count;
+                }
+                BinaryPrimitives.WriteInt32LittleEndian(header, 0);
+                BinaryPrimitives.WriteInt64LittleEndian(header.AsSpan(sizeof(int)), data.Length);
+                await input!.WriteAsync(header, token);
+                await input.FlushAsync(token);
+                return await ReadLineAsync(token);
+            }, CommitTimeoutSeconds);
+            if (reply != $"ok\t{data.Length}") throw new IOException("The vault did not store metadata.");
+        }
+        catch { CloseBrokenPipe(); throw; }
+        finally { CryptographicOperations.ZeroMemory(data); }
     }
 
     private Task<byte[]?> ReadSmallLockedAsync(string path) => ReadBoundedLockedAsync(path, "read", 1024 * 1024);
@@ -580,10 +671,10 @@ internal sealed class DownloadVault : IDisposable
 
     /// <summary>Command lines and frames must use the same (async) write path: mixing a buffered sync
     /// Write with WriteAsync on the pipe reorders bytes and desynchronises the protocol.</summary>
-    private async Task WriteLineAsync(string line)
+    private async Task WriteLineAsync(string line, CancellationToken cancel = default)
     {
         var bytes = Encoding.UTF8.GetBytes(line + "\n");
-        try { await input!.WriteAsync(bytes); }
+        try { await input!.WriteAsync(bytes, cancel); }
         finally { CryptographicOperations.ZeroMemory(bytes); }
     }
 
@@ -618,14 +709,15 @@ internal sealed class DownloadVault : IDisposable
         input.Flush();
     }
 
-    private async Task<string> ReadLineAsync()
+    private async Task<string> ReadLineAsync(CancellationToken cancel = default)
     {
         var bytes = new List<byte>();
         var one = new byte[1];
         while (true)
         {
-            if (await output!.ReadAsync(one) == 0) throw new IOException("The vault process ended.");
+            if (await output!.ReadAsync(one, cancel) == 0) throw new IOException("The vault process ended.");
             if (one[0] == (byte)'\n') break;
+            if (bytes.Count >= 16 * 1024) throw new IOException("Vault reply exceeds limit.");
             bytes.Add(one[0]);
         }
         return Encoding.UTF8.GetString(bytes.ToArray()).TrimEnd('\r');
@@ -658,7 +750,11 @@ internal sealed class DownloadVault : IDisposable
             if (cookies.Count > 0)
                 request.Headers.TryAddWithoutValidation("Cookie", string.Join("; ", cookies.Select(c => $"{c.Name}={c.Value}")));
             HttpResponseMessage response;
-            try { response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel); }
+            using var headers = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+            headers.CancelAfter(TimeSpan.FromSeconds(HeaderTimeoutSeconds));
+            try { response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, headers.Token); }
+            catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
+            { throw new DownloadRequestFailure("서버 응답 대기 시간 초과", hop == 0 && !retry); }
             catch (HttpRequestException error) { throw DownloadFailurePolicy.Connection(error, hop == 0 && !retry); }
             if ((int)response.StatusCode is >= 300 and < 400 && response.Headers.Location is { } location)
             {

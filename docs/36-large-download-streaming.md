@@ -1,0 +1,7 @@
+# 36. Large download streaming (Stage 3-5)
+
+- A single cancellable capture slot is acquired before opening an HTTP response or decoding inline data. Queued downloads no longer hold response bodies/connections. Existing vault operation gate still serializes object writes and maintenance.
+- One reusable 64 KiB payload + 4-byte header buffer per active capture; one write per frame, same Rust protocol and SHA-256 checks. Clear the buffer and Rust abort-drain buffer. Metadata uses bounded frames and clears input even on failure.
+- HTTP response headers: 45 s per hop; body inactivity: 60 s per read (not a total transfer cap). Pipe frame/abort: 30 s; seal acknowledgement and metadata: 120 s. These are conservative initial policies, not measured optimal values. A pipe deadline requests termination of the captured key process; on uncertain framing, lock rather than reuse it. No automatic plaintext fallback or resume.
+- Once the commit frame may have been sent, do not retry automatically; encrypted orphan recovery remains possible. Windows process-kill success, pipe cancellation behavior and slow storage require actual validation. Other long maintenance operations are not covered by these capture deadlines. No guarantee about OS swap, engine cache or native allocations.
+- Existing 1 KiB/8 MiB/64 MiB, drop, active/queued cancel tests remain; synthetic queue policy assertion added. Actual multi-GiB throughput/peak RSS and Windows hang/timeout regression NOT RUN. Index size/recovery capacity and storage checks remain separate tasks. No release gate change.
