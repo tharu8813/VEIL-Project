@@ -50,5 +50,5 @@ public partial class BrowserWindow
         { Saved.SmartScreen: false } => " · SmartScreen 꺼짐",
         { Saved.Recovered: true } => " · 보안 설정 복원됨(기본값)",
         _ => "",
-    };
+    } + session.Security.ThreatListSuffix();
 }

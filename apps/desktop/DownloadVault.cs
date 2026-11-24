@@ -287,6 +287,7 @@ internal sealed class DownloadVault : IDisposable
             cancel.ThrowIfCancellationRequested();
             bool canAbort = false;
             var buffer = new byte[FrameSize];
+            using var fileHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             try
             {
                 await WriteLineAsync($"seal\t{Path.Combine(Objects, id + ".veil")}");
@@ -301,12 +302,16 @@ internal sealed class DownloadVault : IDisposable
                     await input!.WriteAsync(BitConverter.GetBytes(read));
                     await input.WriteAsync(buffer.AsMemory(0, read));
                     canAbort = true;
+                    fileHash.AppendData(buffer, 0, read);
                     total += read;
                     download.Report(total, declared);
                 }
                 cancel.ThrowIfCancellationRequested();
                 if (declared is long expected && expected != total)
                     throw new IOException($"Download ended at {total} of {expected} bytes.");
+                // ADR-0008: a listed file is aborted before the commit frame, so it is never published.
+                string sha256 = Convert.ToHexString(fileHash.GetHashAndReset()).ToLowerInvariant();
+                await RejectThreatAsync(threats?.CheckFileAsync(sha256, TimeSpan.FromSeconds(2), cancel));
                 download.Finish();
                 canAbort = false;
                 await input!.WriteAsync(BitConverter.GetBytes(0));
@@ -560,11 +565,26 @@ internal sealed class DownloadVault : IDisposable
         return Encoding.UTF8.GetString(bytes.ToArray()).TrimEnd('\r');
     }
 
+    private ThreatProtection? threats;
+
+    /// <summary>ADR-0008: VEIL threat engines for download sources and file hashes (null: no checks).</summary>
+    internal void ConfigureThreats(ThreatProtection protection) => threats = protection;
+
+    /// <summary>Blocks a Malicious verdict. Unknown and Error pass (fail-open policy) and are not stored.</summary>
+    private async Task RejectThreatAsync(Task<ThreatResult>? check)
+    {
+        if (check is null) return;
+        var result = await check;
+        if (result.Verdict == ThreatVerdict.Malicious) throw new ThreatBlockedException(result.Reason);
+    }
+
     private async Task<HttpResponseMessage> GetFollowingRedirectsAsync(Uri uri, CoreWebView2 web, CancellationToken cancel)
     {
         for (int hop = 0; hop <= MaxRedirects; hop++)
         {
             if (uri.Scheme is not ("http" or "https")) throw new HttpRequestException("Redirect left HTTP(S).");
+            // Every hop is checked before VEIL requests it, so a redirect cannot route around the list.
+            await RejectThreatAsync(threats?.CheckAsync(uri, TimeSpan.FromSeconds(2), cancel));
             var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.TryAddWithoutValidation("User-Agent", web.Settings.UserAgent);
             // Cookies are looked up per hop so each origin only receives its own cookies.

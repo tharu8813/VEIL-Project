@@ -26,6 +26,8 @@ public partial class BrowserWindow : Window
         internal Uri? UpgradedFrom { get; set; }
         /// <summary>The plain-HTTP address the HTTPS warning page offers to open.</summary>
         internal Uri? PendingHttp { get; set; }
+        /// <summary>The address the VEIL threat warning page blocked (ADR-0008).</summary>
+        internal Uri? PendingThreat { get; set; }
         /// <summary>Result of the last completed navigation (diagnostics and tests).</summary>
         internal CoreWebView2WebErrorStatus? LastNavigationError { get; set; }
     }
@@ -252,6 +254,7 @@ public partial class BrowserWindow : Window
     private void OnNavigationStarting(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
     {
         if (HandleHttpsFirst(tab, args)) return;
+        if (HandleThreat(tab, args)) return;
         args.Cancel = args.Uri != "about:blank" &&
             !args.Uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase) &&
             !IsWebUrl(args.Uri) && !IsInternalUrl(args.Uri);
@@ -392,6 +395,10 @@ public partial class BrowserWindow : Window
         catch (OperationCanceledException) when (download.Token.IsCancellationRequested)
         {
             Report(DownloadVault.Cancelled, null, $"{fileName} 다운로드를 취소했습니다.");
+        }
+        catch (ThreatBlockedException threat)
+        {
+            Report(DownloadVault.Blocked, "VEIL 위협 목록", $"{fileName}: {threat.Message}. 저장하지 않았습니다.");
         }
         catch (Exception error) when (error is IOException or System.Net.Http.HttpRequestException or InvalidOperationException
             or OperationCanceledException or UnauthorizedAccessException or System.ComponentModel.Win32Exception
@@ -587,6 +594,7 @@ public partial class BrowserWindow : Window
     private void RefreshChrome()
     {
         UpdateHttpsBar();
+        UpdateThreatBar();
         if (!Address.IsKeyboardFocusWithin)
             Address.Text = Active?.Url is null or "about:blank" ? "" : Active.Url;
         Home.Visibility = Active?.Url is null or "about:blank" ? Visibility.Visible : Visibility.Collapsed;
@@ -624,7 +632,7 @@ public partial class BrowserWindow : Window
         (url.Scheme is "http" or "https") && !string.IsNullOrEmpty(url.Host) && url.UserInfo.Length == 0;
 
     internal static bool IsInternalUrl(string? value) =>
-        value is "veil://bookmarks" or "veil://history" or "veil://downloads" or HttpsWarningUrl;
+        value is "veil://bookmarks" or "veil://history" or "veil://downloads" or HttpsWarningUrl or ThreatWarningUrl;
 
     private static string InternalTitle(string? value) => value switch
     {
@@ -632,6 +640,7 @@ public partial class BrowserWindow : Window
         "veil://history" => "방문 기록",
         "veil://downloads" => "다운로드",
         HttpsWarningUrl => "안전하지 않은 연결",
+        ThreatWarningUrl => "위험한 사이트",
         _ => "새 탭",
     };
 
@@ -703,7 +712,8 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     internal (List<string> Tabs, int Selected) Snapshot() =>
         // The HTTPS warning page is not restored as such: its HTTP address is upgraded again next time.
         (Tabs.Items.Cast<TabItem>().Select(item => (BrowserTab)item.Tag)
-            .Select(tab => tab.Url == HttpsWarningUrl && tab.PendingHttp is { } plain ? plain.AbsoluteUri : tab.Url).ToList(), Tabs.SelectedIndex);
+            .Select(tab => tab.Url == HttpsWarningUrl && tab.PendingHttp is { } plain ? plain.AbsoluteUri
+                : tab.Url == ThreatWarningUrl && tab.PendingThreat is { } blocked ? blocked.AbsoluteUri : tab.Url).ToList(), Tabs.SelectedIndex);
 
     private void SaveTabs()
     {

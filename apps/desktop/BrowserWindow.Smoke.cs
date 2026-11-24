@@ -445,6 +445,72 @@ public partial class BrowserWindow
                         && HttpsBar.Visibility != Visibility.Visible, "native button allows http for that host only");
                     Check(session.Network.Mode == NetworkMode.Standard && NetworkIndicator.Text.StartsWith("표준 보호"), $"indicator: {NetworkIndicator.Text}");
                 }
+                else if (stage == "threats")
+                {
+                    // ADR-0008 local threat list. VEIL_TEST_THREAT_EXPECT: valid | invalid | none.
+                    string expect = Environment.GetEnvironmentVariable("VEIL_TEST_THREAT_EXPECT") ?? "none";
+                    var list = session.Security.ThreatList;
+                    string local = new UriBuilder(uri) { Host = "localhost" }.Uri.AbsoluteUri; // listed host (valid case)
+                    async Task Open(string address)
+                    {
+                        Active!.LastNavigationError = null;
+                        NavigateAddress(address);
+                        await Task.Delay(400);
+                        for (int i = 0; i < 200 && (Active.Loading || Active.Url == "about:blank"); i++) await Task.Delay(75);
+                    }
+                    if (expect == "none")
+                    {
+                        Check(!list.Present && session.Security.Threats.Engines.Count == 0, "no list: no VEIL engine");
+                        await Open(local);
+                        Check(Active!.Url != ThreatWarningUrl, "no list: navigation not blocked");
+                    }
+                    else if (expect == "invalid")
+                    {
+                        Check(list is { Present: true, Valid: false }, $"damaged list reported ({list.Detail})");
+                        Check(NetworkIndicator.Text.Contains("위협 목록 오류"), $"status shows list error: {NetworkIndicator.Text}");
+                        await Open(local);
+                        Check(Active!.Url != ThreatWarningUrl && Active.LastNavigationError is null or Microsoft.Web.WebView2.Core.CoreWebView2WebErrorStatus.Unknown,
+                            $"fail-open: page still opens ({Active.Url})");
+                        Check(LastThreatNotice?.Contains("위협 검사를 할 수 없어") == true, $"navigation notice explains the skipped check: {LastThreatNotice}");
+                    }
+                    else
+                    {
+                        Check(list is { Present: true, Valid: true } && list.Entries >= 3, $"signed list loaded ({list.Detail})");
+                        // Downloads first (before the user allows the host for navigation).
+                        Check(await session.Vault.TryOpenFromDevelopmentEnvironmentAsync(), "vault opened");
+                        int before = session.Vault.Entries.Count;
+                        async Task<string> Capture(string address)
+                        {
+                            try { await session.Vault.CaptureAsync(new Uri(address), new BrowserDownload("threat-check.bin"), Active!.View.CoreWebView2); return "stored"; }
+                            catch (ThreatBlockedException blocked) { return "blocked: " + blocked.Message; }
+                        }
+                        string listedFile = await Capture(origin + "/vault-dl?kind=small");
+                        Check(listedFile.StartsWith("blocked") && listedFile.Contains("파일"), $"listed file hash blocked before publishing ({listedFile})");
+                        string listedHop = await Capture(origin + "/vault-dl?kind=redirect");
+                        Check(listedHop.StartsWith("blocked") && listedHop.Contains("주소"), $"listed redirect target blocked ({listedHop})");
+                        string listedSource = await Capture(local + "vault-dl?kind=large");
+                        Check(listedSource.StartsWith("blocked") && listedSource.Contains("사이트"), $"listed source host blocked ({listedSource})");
+                        Check(session.Vault.Entries.Count == before, "nothing published for blocked downloads");
+                        Check(await Capture(origin + "/vault-dl?kind=large") == "stored", "unlisted download stored (Unknown passes)");
+                        // Navigation: listed host and listed URL show the warning; others open.
+                        await Open(local);
+                        Check(Active!.Url == ThreatWarningUrl && Active.PendingThreat?.Host == "localhost", "listed host shows the warning page");
+                        Check(ThreatBar.Visibility == Visibility.Visible, "native continue bar shown");
+                        await Active.View.ExecuteScriptAsync("location.href = " + JsonSerializer.Serialize(local) + "; null");
+                        await Task.Delay(1500);
+                        Check(Active.Url == ThreatWarningUrl && session.ThreatAllowed.Count == 0, "page script cannot get past the warning");
+                        ProceedThreatClick(this, new RoutedEventArgs());
+                        for (int i = 0; i < 200 && Active.Loading; i++) await Task.Delay(75);
+                        Check(session.ThreatAllowed.Contains("localhost") && Active.Url.StartsWith(local) && ThreatBar.Visibility != Visibility.Visible,
+                            "native button opens the site for this run");
+                        await Open(origin + "/second");
+                        Check(Active.Url == ThreatWarningUrl && Active.PendingThreat?.AbsolutePath == "/second", "listed URL shows the warning page");
+                        await Open(origin + "/");
+                        Check(Active.Url == origin + "/", "unlisted address opens (Unknown is not blocked)");
+                        var (tabs, _) = Snapshot();
+                        Check(!tabs.Contains(ThreatWarningUrl), "warning page is saved as the original address");
+                    }
+                }
                 else if (stage == "jumplist")
                 {
                     // SEC-004 jump-list mitigation: only lists naming this profile are removed.
@@ -610,8 +676,8 @@ public partial class BrowserWindow
                     var second = OpenWindow(["about:blank"], 0);
                     await WaitFor(() => !second.IsRestoring && second.CoreViews().Any(), "new window");
                     AllViews(want, "after new window");
-                    Check(security.Threats.Engines.Count == 0, "no VEIL engine registered by default");
-                    Check(!ThreatProtection.ProductionEnginesEnabled, "production engines disabled");
+                    Check(security.Threats.Engines.Count == 0, "no VEIL engine registered without a list");
+                    Check(LocalThreatList.ProductionKeys.Length == 0, "no production list key yet (no list accepted in Release)");
                     Check((await security.Threats.CheckAsync(new Uri("https://example.test/"), TimeSpan.FromSeconds(1))).Verdict == ThreatVerdict.Unknown,
                         "no engine gives Unknown, not safe");
 

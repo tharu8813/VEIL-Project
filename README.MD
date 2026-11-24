@@ -80,6 +80,7 @@ node tests/phase5/network-guard.mjs
 node tests/phase5/dns-protection.mjs
 node tests/phase5/webrtc-guard.mjs
 node tests/security/smartscreen.mjs
+node tests/security/threat-engine.mjs
 node tests/vm/make-bundle.mjs   # 단일 오프라인 VM 일괄 시험 번들 (docs/10-test-strategy.md)
 node --test tests/security/outside-writes.test.mjs
 node tests/security/browse-session.mjs --runs 3

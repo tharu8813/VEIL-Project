@@ -38,11 +38,22 @@ internal sealed class SecuritySettingsDialog : VeilDialog
             TextWrapping = TextWrapping.Wrap, Foreground = Res("AmberBrush"), Margin = new Thickness(0, 12, 0, 0),
         };
         var state = new TextBlock { Text = $"현재 상태: {security.Describe()}", TextWrapping = TextWrapping.Wrap, Foreground = Res("TextBrush"), Margin = new Thickness(0, 14, 0, 0) };
+        var list = security.ThreatList;
+        var veil = new TextBlock
+        {
+            Text = "VEIL 위협 목록(이 컴퓨터 안에서만 검사, 주소를 보내지 않음): " + (list switch
+            {
+                { Present: false } => "없음. 목록이 없으면 VEIL 자체 검사는 하지 않습니다.",
+                { Valid: true } => $"사용 중 · {list.Detail}" + (list.Expires is { } expires ? $" · 만료 {expires.LocalDateTime:yyyy-MM-dd}" : ""),
+                _ => $"오류({list.Detail}). 검사 없이 탐색하며 SmartScreen은 그대로 동작합니다.",
+            }),
+            TextWrapping = TextWrapping.Wrap, Foreground = list is { Present: true, Valid: false } ? Res("AmberBrush") : Res("MutedBrush"), Margin = new Thickness(0, 10, 0, 0),
+        };
         void Sync() => risk.Visibility = toggle.IsChecked == true ? Visibility.Collapsed : Visibility.Visible;
         toggle.Checked += (_, _) => Sync();
         toggle.Unchecked += (_, _) => Sync();
         Sync();
-        SetBody(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = new StackPanel { Children = { toggle, about, limits, risk, state } } });
+        SetBody(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = new StackPanel { Children = { toggle, about, limits, risk, state, veil } } });
         AddFooterButton("취소", () => DialogResult = false);
         AddFooterButton("저장", () =>
         {
