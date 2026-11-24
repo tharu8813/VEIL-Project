@@ -96,3 +96,5 @@ Phase 0 전체를 무조건 완료했다고 선언하지 말고, 가능한 실�
 ### Phase 7 1차 구현 기록
 
 [Windows 설치 및 업데이트](18-install-update.md): 내부 서명 패키지 생성 및 관리자 오프라인 유지보수 코드 추가. 실제 Windows 설치/업데이트/복구 검증은 NOT RUN이며 공개 배포 게이트는 미통과 상태를 유지한다.
+
+첫 배포 목표는 Internal Alpha `1.0.0-alpha.1`이다. 합격 기준과 남은 작업은 [ADR-0010](decisions/ADR-0010-internal-alpha.md)을 따른다.

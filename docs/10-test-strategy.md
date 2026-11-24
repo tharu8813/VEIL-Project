@@ -54,24 +54,25 @@
 
 | 단계 | 위치 | 명령 |
 |---|---|---|
-| 0. 번들 | 호스트(일반 사용자) | `node tests/vm/make-bundle.mjs`. 커밋된 트리에서 Debug 데스크톱과 `veil-vault.exe`, 소스, 게스트 스크립트, SHA-256 매니페스트, `VEILBAT.viso`를 만든다. 호스트 시스템 설정은 바꾸지 않는다. |
+| 0. 번들 | 호스트(일반 사용자) | `node tests/vm/make-bundle.mjs`. 커밋된 트리에서 Debug 데스크톱과 `veil-vault.exe`, 소스, 게스트 스크립트, SHA-256 매니페스트, `VEILBAT.viso`를 만든다. 패키지 시험용 서명 전 Release 결과물(`PAYLOAD-1.0.0-alpha.1~3.ZIP`, 고지·SBOM 포함)과 루프백 시험 인증서(`TESTCERT.ZIP`, 7일 유효, 게스트에 openssl이 없어서 호스트에서 생성)도 넣는다. 호스트 시스템 설정과 신뢰 저장소는 바꾸지 않는다. |
 | 1. 연결 | 호스트 | VM을 `01-veil-tools-offline` 스냅샷으로 되돌리고 종료한 상태에서, 출력된 `VBoxManage storageattach` 명령으로 DVD를 연결한다. 네트워크 어댑터는 Not attached로 둔다. |
 | 2. 준비 | 게스트 관리자 셸 | `D:\BATCH.PS1 -Stage Prepare -StandardUser <일반 계정>`. 매니페스트 해시 검증 → `C:\VEIL-Batch`에 풀기 → 폐기용 BitLocker VHDX 두 개(V: 1 GiB, W: 256 MiB, XTS-AES-256, 임의 암호는 메모리에만 보관) → 사전 점검 증거 → Procmon 추적 시작(V:와 W:를 보호 볼륨으로 지정). |
-| 3. 실행 | 게스트 일반 사용자 셸 | 2단계가 출력한 `phase34-vm.mjs --run ...` 명령. |
+| 3. 실행 | 게스트 일반 사용자 셸 | 2단계가 출력한 `phase34-vm.mjs --run ... --cert-dir C:\VEIL-Batch\testcert` 명령. |
 | 4. 마무리 | 게스트 관리자 셸 | `C:\VEIL-Batch\BATCH.PS1 -Stage Finish`. 추적 종료·분석 → `RESULTS.ZIP`과 결과표 출력. 모두 PASS면 시험 볼륨을 잠그고 분리한 뒤 삭제한다. FAIL이 하나라도 있으면 볼륨과 증거를 그대로 둔다. |
+| 5. 패키지 | 게스트 관리자 셸 | 추적이 끝난 뒤 `C:\VEIL-Batch\src`에서 `tests\vm\guest-package.ps1 -Stage Sign` → `Install`(운영자 단계) → 운영자 점검 3개를 `-Stage Record`로 기록 → `Update` → `Remove`. 결과는 `C:\VEIL-Batch\PACKAGE-RESULTS.ZIP`. 아래 [패키지 시험](#패키지-시험-adr-0010-e1e2b3) 참고. |
+| 6. 전원 차단 | 게스트 일반 사용자 셸 + 호스트 | 별도 프로필로 `node tests\phase3\power-loss.mjs --arm ...` → 호스트에서 `VBoxManage controlvm <vm> poweroff` → 재부팅·잠금 해제 후 `--check`. |
 
 자동 실행 항목(3단계):
 
 - 보호 볼륨 V:의 프로필: `profile-routing`, `engine-kill`, `vault-capture`, `vault-persistence`, `jump-list`, `desktop-crash-cycle`
-- V:의 작업 폴더에서 실행하는 루프백 시험: `network-guard`, `webrtc-guard`, `dns-protection`, `smartscreen`. 게스트에 openssl이 없으면 뒤의 두 시험은 사유와 함께 NOT RUN으로 남는다.
+- V:의 작업 폴더에서 실행하는 루프백 시험: `network-guard`, `webrtc-guard`, `dns-protection`, `smartscreen`, `phase6`(Phase 6 관리 페이지와 합성 비밀번호 비밀의 디스크 검색). TLS가 필요한 뒤의 세 시험은 번들의 시험 인증서(`--cert-dir`)를 쓴다. 인증서도 openssl도 없으면 사유와 함께 NOT RUN으로 남는다.
 - 작은 볼륨 W:: `profile-disk-full`
 
 4단계 추적 결과는 `physical-writes`로 기록된다.
 
 계속 수동이거나 NOT RUN으로 남는 항목:
 
-- 설치형 Release 서비스(`installed-release`)
-- 복구 드릴(`recovery-backup`)
+- 설치형 Release 서비스(`installed-release`)와 복구 드릴(`recovery-backup`): 5단계 패키지 시험에서 기록한다.
 - 실제 전원 차단(`power-loss`): 기존 arm/check 러너와 호스트의 `VBoxManage controlvm <vm> poweroff`
 - 금고 디스크 부족(`vault-disk-full`)
 - 인터넷 VM 항목(`internet-*`): DNS 실제 경로, IPv6·WebRTC, 절전·네트워크 전환, 실제 SmartScreen 경고·다운로드 판정·Windows 설정 재정의, 실제 사이트 호환성. 오프라인 VM에서는 실행하지 않는다.
@@ -79,6 +80,19 @@
 VirtualBox `keyboardputstring`으로 명령을 입력할 때 주의할 점이 있다. 큰따옴표는 Windows 인수 전달 과정에서 빠지므로 작은따옴표만 쓴다. 인수가 `\`로 끝나면 다음 따옴표가 이스케이프되므로 이런 인수는 피한다. Procmon은 기본 위치(`C:\Tools\Procmon`)에 없으면 바탕 화면의 `ProcessMonitor` 폴더에서 찾는다. 게스트에 openssl이 없으면 DoH를 쓰는 두 시험은 NOT RUN으로 남는다.
 
 결과는 게스트 `C:\VEIL-Batch\RESULTS.ZIP`에 남는다. 그 안의 `summary.json`, 항목별 로그, `outside-writes.json`, `batch.json`이 SECURITY_STATUS 갱신 근거가 된다.
+
+### 패키지 시험 (ADR-0010 E1·E2·B3)
+
+`tests/vm/guest-package.ps1`은 오프라인 VM 안에서만 일회용 코드 서명 인증서를 만들어 VM의 신뢰 저장소에 넣는다. 그 인증서로 서명 전 결과물 3개 버전에 서명하고, 매니페스트는 운영 코드(`Write-VeilPackageManifest`)로 만든다. 오프라인이라 타임스탬프는 넣지 않는다. 시험 후에는 VM을 스냅샷으로 되돌린다.
+
+| 단계 | 판정 |
+|---|---|
+| `Sign` | `package-sign`과 변조 거부 7종 `package-tamper-*`: 정상 통과, 파일 변조, 추가 파일, 누락 파일, 매니페스트 수정, 다른 서명자 지문, 서명 없는 실행 파일(매니페스트를 다시 서명해도 Authenticode에서 거부). 설치용 일회용 BitLocker 볼륨 X:을 만든다. 암호는 운영자가 입력하고 저장하지 않는다. |
+| `Install` (운영자) | `package-install`: 운영 설치 스크립트가 X: 암호 입력, 새 복구 암호 표시, 복구 암호 재입력(B3 드릴)을 요구한다. 그다음 운영자가 `installed-unlock`(일반 사용자로 잠금 해제·탐색), `installed-relock`(정상 종료 후 VHDX 분리), `installed-refuses`(`client.json` 없이 시작 거부, A1)를 확인하고 `-Stage Record`로 남긴다. |
+| `Update` | `package-update`(alpha.1 → alpha.2), `package-same-version`·`package-lower-version` 거부, `package-registration-kept`(클라이언트 고정값 외 등록·`client.json`·VHDX 불변). alpha.3 업데이트를 트리 교체 직후와 커밋 표시 직후에 강제 종료하고 `-RecoverInterruptedUpdate`로 복구한다(`package-interrupt-pre-commit`은 이전 버전으로, `post-commit`은 새 버전으로 복구). 종료 시점을 못 맞추면 NOT RUN으로 남긴다. |
+| `Remove` | `package-remove`: 서비스와 실행 파일 삭제, 등록(복구 보호기 ID 포함)과 VHDX 보존. |
+
+호스트에서는 같은 매니페스트·변조 판정을 `tests/install/package-manifest.test.mjs`가 메모리 인증서로 확인한다. 이때 Authenticode, ACL, 인증서 체인 신뢰 검사는 완화한다. 완화 없는 전체 검사는 이 VM 시험에서만 한다.
 
 ## 인터넷 VM 시험 (Gate D)
 
@@ -98,6 +112,9 @@ ADR-0004 정책 4에 따라 인터넷에 연결된 **별도의 격리 시험 VM*
 | `smartscreen-demo` | Microsoft SmartScreen 데모 피싱 페이지를 켜기·끄기로 비교한다. 켰을 때 차단되고 껐을 때 열리면 PASS, 그 밖에는 OBSERVED. |
 | `site-compat` | 실제 사이트 8개가 HTTPS 우선·추적 방지 엄격 상태에서 열리고, HTTP 전용 사이트는 경고 페이지를 보여야 PASS. |
 | `ipv6-reachability` | 기록만. IPv6 전용 사이트에 도달하는지. |
+| `proxy-doh` | 프록시 보호 + Cloudflare DoH. 실제 사이트와 DoH 서버가 모두 로컬 프록시의 CONNECT로 나가야 하고, 합성 이름이 같은 캡처의 평문 DNS에 없어야 PASS(대조 이름은 `dns-path`와 공유). |
+| `quic-proxy` | 같은 프로필로 두 번 연 페이지의 `nextHopProtocol`. 표준 모드 대조군이 `h3`에 도달하고 프록시 보호가 `h3`가 아니면 PASS. 프록시에서 `h3`면 FAIL. 대조군이 `h3`에 못 미치면 OBSERVED. |
+| `https-downgrade-redirect` | HTTPS에서 HTTP로 리다이렉트하는 페이지(httpbin)가 HTTPS 경고 페이지로 끝나면 PASS, HTTP 페이지가 그대로 열리면 FAIL, 리다이렉트 서비스 문제면 OBSERVED. |
 | 수동(NOT RUN) | 절전·네트워크 전환, Windows "Microsoft Edge용 SmartScreen" 끄기에 따른 재정의(게스트 설정 변경 필요). |
 
 인터넷 VM 준비 전에 호스트에서 확인할 수 있는 부분은 루프백 시험으로 대신한다. `node tests/phase5/webrtc-guard.mjs`는 STUN 없이 프록시 모드의 UDP 후보 0개를 확인한다.

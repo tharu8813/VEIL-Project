@@ -10,7 +10,8 @@
 - `build-package.ps1`: 잠금된 의존성으로 Release 빌드, Rust vault 포함, 세 실행 파일 Authenticode 서명, 모든 파일의 SHA-256/길이 목록과 분리 CMS 서명 생성. 내부 채널의 숫자 0.x 버전만 허용한다.
 - `package-maintenance.ps1`: 신뢰된 로컬 관리자 스크립트에서 설치/업데이트/제거/중단 복구. 패키지의 스크립트는 실행하지 않는다. 입력 폴더의 모든 파일을 제한된 staging에 복사한 뒤 정확한 파일 목록 및 서명/해시를 검증한다.
 - .NET 10 Desktop Runtime x64 및 WebView2 Evergreen은 별도로 검증된 공식 설치 경로로 준비한다. 자체 포함 런타임과 EXE/MSI GUI 설치 프로그램, 시작 메뉴 등록, 자동 업데이트 다운로드는 후속 단계다.
-- MPL 소스 커밋 및 LICENSE/NOTICE 포함. 완전한 제3자 고지/SBOM/재배포 검토는 출시 전 필수.
+- MPL 소스 커밋 및 LICENSE/NOTICE 포함. `scripts/third-party.mjs`로 `THIRD-PARTY-NOTICES.md`와 CycloneDX `sbom.cdx.json`을 생성해 Desktop 폴더에 넣는다. 허용 목록 밖 라이선스가 있으면 빌드가 실패한다. 재배포 법률 검토는 공개 출시 전 별도로 필요하다.
+- 버전: `0.x` 개발 패키지 또는 `1.0.0-alpha.N`·`beta.N`·`rc.N` 사전 릴리스만 허용하고 안정 1.x+는 거부한다. Windows 파일 버전과 업데이트 순서는 [ADR-0010](decisions/ADR-0010-internal-alpha.md#2-버전)의 매핑(`alpha.N → x.y.z.N` 등)을 쓴다.
 
 ## 업데이트 동작
 
@@ -25,7 +26,7 @@
 
 ```powershell
 # 관리자 소유의 신뢰된 소스/유지보수 도구에서 실행. 실제 인증서 및 타임스탬프 URL 필요.
-.\scripts\build-package.ps1 -Version 0.1.0 -OutputDirectory C:\VEIL-package -SignerThumbprint <PIN> -SignTool <SIGNTOOL> -TimestampUrl <HTTPS_TIMESTAMP>
+.\scripts\build-package.ps1 -Version 1.0.0-alpha.1 -OutputDirectory C:\VEIL-package -SignerThumbprint <PIN> -SignTool <SIGNTOOL> -TimestampUrl <HTTPS_TIMESTAMP>
 .\scripts\package-maintenance.ps1 -Update -Package C:\VEIL-package -SignerThumbprint <PIN>
 .\scripts\package-maintenance.ps1 -RecoverInterruptedUpdate -SignerThumbprint <PIN>
 .\scripts\package-maintenance.ps1 -Remove -SignerThumbprint <PIN>
