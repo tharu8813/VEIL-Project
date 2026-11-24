@@ -54,3 +54,7 @@ Dependabot alerts 및 security updates의 활성화 여부는 저장소 Security
 ## 문서 업데이트
 
 중요한 기술 선택과 위험 결정은 `docs/decisions/ADR-XXXX-....md` 형태로 이유를 남긴다. 실제 검증 상태는 `SECURITY_STATUS.md`에 수시 반영한다.
+
+## 1차 오프라인 패키지 유지보수
+
+[18-install-update.md](18-install-update.md)의 내부 패키지 빌드/서명/설치/업데이트/제거 및 중단 복구 경로를 추가했다. 자동 다운로드는 공식 배포 신뢰 경로 확보 후 구현하며 모든 실행 검증은 NOT RUN이다.

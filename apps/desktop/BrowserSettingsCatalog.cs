@@ -83,7 +83,11 @@ internal static class BrowserSettingsCatalog
             new(SettingsSection.Downloads, "다운로드 금고", "암호화된 파일을 관리하고 지원되는 내보내기·복구 기능을 이용합니다.",
                 "vault export backup recovery 다운로드 백업 복구", vaultState, SettingsDestination.Vault),
             new(SettingsSection.Advanced, "브라우저 정보", "VEIL · Windows 데스크톱 · MPL-2.0",
-                "about version license 버전 라이선스 정보", "개발 중 · 출시 보안 검증 미완료"),
+                "about version license 버전 라이선스 정보", "버전: " +
+                    (typeof(BrowserSettingsCatalog).Assembly.GetCustomAttributes(
+                        typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion ?? "개발 빌드") +
+                    " · 출시 보안 검증 미완료 · 관리자 오프라인 업데이트"),
             new(SettingsSection.Advanced, "브라우저 엔진", "Microsoft Edge WebView2 기반. 실제 설치된 런타임은 SDK 버전과 다를 수 있습니다.",
                 "engine chromium webview2 runtime 엔진 런타임", session.EngineHost.DisplayName +
                     (session.EngineHost.RuntimeVersion is { } version ? " · " + version : " · 시작 전")),
