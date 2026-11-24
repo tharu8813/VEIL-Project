@@ -605,7 +605,8 @@ public partial class BrowserWindow : Window
                 Report(DownloadVault.Blocked, "원래 다운로드 페이지 변경", "원래 페이지에서 다시 다운로드하세요.");
                 return;
             }
-            var entry = inlinePayload is null ? await vault.CaptureAsync(uri, download, web, retry) :
+            var entry = inlinePayload is null ? await vault.CaptureAsync(uri, download, web, retry,
+                retryReady: retry ? () => candidate is not null && CanRetry(candidate) : null) :
                 await vault.CaptureInlineAsync(inlinePayload, uri, download);
             Report(DownloadVault.Stored, null, $"{fileName}을(를) 암호화 금고에 보관했습니다.", entry);
         }

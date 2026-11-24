@@ -452,6 +452,140 @@ public partial class BrowserWindow
                     await Task.Delay(TimeSpan.FromSeconds(20));
                     Check(data.History.Count >= 53, "long browse session recorded");
                 }
+#if DEBUG
+                else if (stage == "vault-retry-https")
+                {
+                    var https = new Uri(Environment.GetEnvironmentVariable("VEIL_TEST_RETRY_ORIGIN") ?? "");
+                    Check(https.Scheme == "https" && https.Host == "127.0.0.1" &&
+                        https.AbsolutePath == "/" && https.UserInfo.Length == 0 && https.Query.Length == 0 &&
+                        https.Fragment.Length == 0, "HTTPS retry fixture restricted to loopback");
+                    string authority = https.GetLeftPart(UriPartial.Authority);
+                    var vault = session.Vault;
+                    Check(vault.Available && await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 0,
+                        "new synthetic retry vault opened");
+                    int prompts = 0;
+                    bool consent = true;
+                    UserPrompts.SmokeConfirm = (caption, _) =>
+                    {
+                        Check(caption == "다운로드 다시 시도", "native retry confirmation");
+                        prompts++;
+                        return consent;
+                    };
+                    try
+                    {
+                        async Task Go(string path)
+                        {
+                            NavigateAddress(authority + path);
+                            await WaitForScript($"location.href === {JsonSerializer.Serialize(authority + path)} && document.readyState === 'complete'",
+                                "HTTPS fixture page loaded");
+                        }
+                        async Task Start(string kind, bool offered)
+                        {
+                            await Go("/source/" + kind);
+                            int before = vault.Results.Count;
+                            await Active!.View.ExecuteScriptAsync($"location.href = '/retry-{kind}.bin'; null");
+                            await WaitFor(() => vault.Results.Count == before + 1 && session.ActiveDownloads.Count == 0,
+                                $"initial capture finished ({kind})");
+                            var result = vault.Results[^1];
+                            Check(result.Outcome == DownloadVault.Failed && result.ObjectPath is null &&
+                                result.Detail?.Contains(kind == "forbidden" ? "403" : "503") == true,
+                                $"initial HTTPS error without publication ({kind})");
+                            UpdateDownloadToolbar();
+                            Check((retryDownload is not null) == offered &&
+                                (RetryDownloadButton.Visibility == Visibility.Visible) == offered,
+                                $"retry offer policy ({kind})");
+                        }
+                        void ClickRetry()
+                        {
+                            RetryDownloadButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                        }
+                        async Task Retry(string kind, string expected)
+                        {
+                            int before = vault.Results.Count, count = prompts;
+                            consent = true;
+                            DownloadToolbarClick(DownloadButton, new RoutedEventArgs());
+                            Check(DownloadPopup.IsOpen, "recent downloads popup");
+                            ClickRetry();
+                            ClickRetry(); // candidate was consumed before confirmation or capture
+                            await WaitFor(() => vault.Results.Count == before + 1 && session.ActiveDownloads.Count == 0,
+                                $"explicit HTTPS retry finished ({kind})");
+                            Check(prompts == count + 1 && retryDownload is null && vault.Results[^1].Outcome == expected,
+                                $"single confirmation and no retry chain ({kind})");
+                            Check((vault.Results[^1].ObjectPath is not null) == (expected == DownloadVault.Stored),
+                                $"only successful retry publishes ({kind})");
+                        }
+
+                        await Start("ok", true);
+                        await Retry("ok", DownloadVault.Stored);
+                        Check(vault.Entries.Count == 1 && vault.Entries[0].Name == "veil-retry-ok.bin" &&
+                            await vault.VerifyAsync(vault.Entries[0]) == 1024, "retry publishes exactly one authenticated object");
+                        await Start("decline", true);
+                        int declineCount = prompts, declineResults = vault.Results.Count;
+                        consent = false;
+                        ClickRetry();
+                        ClickRetry();
+                        Check(prompts == declineCount + 1 && retryDownload is null &&
+                            vault.Results.Count == declineResults && session.ActiveDownloads.Count == 0,
+                            "declined retry consumes candidate without transfer");
+                        await Start("repeat", true);
+                        await Retry("repeat", DownloadVault.Failed);
+                        await Start("redirect", true);
+                        await Retry("redirect", DownloadVault.Failed);
+                        Check(vault.Results[^1].Detail?.Contains("리디렉션") == true, "retry redirect rejected");
+                        await Start("forbidden", false);
+                        await Start("expired", true);
+                        retryDownload = retryDownload! with { Expires = DateTimeOffset.UtcNow.AddSeconds(-1) };
+                        UpdateDownloadToolbar();
+                        Check(retryDownload is null, "expired candidate removed");
+                        await Start("navigate", true);
+                        await Go("/source/changed");
+                        Check(retryDownload is null, "navigation invalidates candidate");
+
+                        // Hold the single capture slot with a cancellable synthetic transfer. The native
+                        // retry click passes its first context checks but must not issue a queued replay.
+                        await Start("queued", true);
+                        using (var hold = new BrowserDownload("veil-retry-hold.bin"))
+                        {
+                            var holdTask = vault.CaptureAsync(new Uri(authority + "/hold.bin"), hold, Active!.View.CoreWebView2);
+                            try
+                            {
+                                await WaitFor(() => hold.Bytes > 0, "capture slot occupied");
+                                int before = vault.Results.Count;
+                                consent = true;
+                                ClickRetry();
+                                await WaitFor(() => session.ActiveDownloads.Count == 1 &&
+                                    session.ActiveDownloads[0].Phase == DownloadPhase.Waiting, "retry queued behind capture");
+                                await Go("/source/queued-changed");
+                                hold.Cancel();
+                                try { await holdTask.WaitAsync(TimeSpan.FromSeconds(45)); }
+                                catch (OperationCanceledException) when (hold.Token.IsCancellationRequested) { }
+                                Check(holdTask.IsCanceled, "slot holder cancelled");
+                                await WaitFor(() => vault.Results.Count == before + 1 && session.ActiveDownloads.Count == 0,
+                                    "queued retry rejected after source changed");
+                                Check(vault.Results[^1].Outcome == DownloadVault.Failed && vault.Results[^1].ObjectPath is null &&
+                                    vault.Results[^1].Detail?.Contains("원래 다운로드 페이지 변경") == true,
+                                    "live context required immediately before retry HTTP request");
+                            }
+                            finally
+                            {
+                                hold.Cancel();
+                                try { await holdTask.WaitAsync(TimeSpan.FromSeconds(45)); }
+                                catch (OperationCanceledException) when (hold.Token.IsCancellationRequested) { }
+                            }
+                        }
+                        Check(vault.Entries.Count == 1, "no duplicate or failed objects in index");
+                        vault.Lock();
+                        Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 1 &&
+                            await vault.VerifyAsync(vault.Entries[0]) == 1024, "single authenticated object persists after reopen");
+                        File.WriteAllText(Path.ChangeExtension(report, ".vault.json"), JsonSerializer.Serialize(new
+                        {
+                            vault = vault.Directory,
+                            results = vault.Results,
+                        }));
+                    }
+                    finally { UserPrompts.SmokeConfirm = null; }
+                }
+#endif
                 else if (stage == "vault")
                 {
                     // Phase 4-0: every supported download lands only in the encrypted vault; failures and

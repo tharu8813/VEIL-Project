@@ -34,8 +34,8 @@ public partial class BrowserWindow
         retryDownload = null; // single explicit retry; no duplicate clicks or repeated retry chains
         RetryDownloadButton.Visibility = Visibility.Collapsed;
         DownloadPopup.IsOpen = false;
-        if (MessageBox.Show(this, $"{item.Name}을(를) 원래 서버에 다시 요청합니다. 이전 전송을 이어받지 않습니다. 계속할까요?",
-            "다운로드 다시 시도", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes ||
+        if (!UserPrompts.Confirm(this, $"{item.Name}을(를) 원래 서버에 다시 요청합니다. 이전 전송을 이어받지 않습니다. 계속할까요?",
+            "다운로드 다시 시도", MessageBoxImage.Question) ||
             !CanRetry(item)) return;
         _ = CaptureAsync(item.Tab.View.CoreWebView2, item.Address, item.Name, 0, 0, item, retry: true);
     }
