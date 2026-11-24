@@ -4,10 +4,12 @@ using System.Text;
 namespace Veil.Desktop;
 
 internal enum VaultSort { Recent, Oldest, Name, Largest, Smallest }
+internal enum VaultPreviewKind { None, Text, Png, Jpeg }
 
 internal static class VaultPresentation
 {
     internal const int PreviewLimit = 256 * 1024;
+    internal const int ImagePreviewLimit = 8 * 1024 * 1024;
 
     internal static IReadOnlyList<VaultEntry> Filter(IEnumerable<VaultEntry> entries, string query, VaultSort sort, bool recoveredOnly)
     {
@@ -26,9 +28,19 @@ internal static class VaultPresentation
         return ordered.ThenBy(entry => entry.Id, StringComparer.Ordinal).ToArray();
     }
 
-    internal static bool CanPreview(VaultEntry entry) => !entry.Recovered &&
-        entry.Bytes >= 0 && entry.Bytes <= PreviewLimit &&
-        string.Equals(Path.GetExtension(entry.Name), ".txt", StringComparison.OrdinalIgnoreCase);
+    internal static VaultPreviewKind PreviewKind(VaultEntry entry)
+    {
+        if (entry.Recovered || entry.Bytes < 0) return VaultPreviewKind.None;
+        return Path.GetExtension(entry.Name).ToLowerInvariant() switch
+        {
+            ".txt" when entry.Bytes <= PreviewLimit => VaultPreviewKind.Text,
+            ".png" when entry.Bytes > 0 && entry.Bytes <= ImagePreviewLimit => VaultPreviewKind.Png,
+            ".jpg" or ".jpeg" when entry.Bytes > 0 && entry.Bytes <= ImagePreviewLimit => VaultPreviewKind.Jpeg,
+            _ => VaultPreviewKind.None,
+        };
+    }
+
+    internal static bool CanPreview(VaultEntry entry) => PreviewKind(entry) != VaultPreviewKind.None;
 
     internal static string DecodeText(byte[] bytes)
     {
