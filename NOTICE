@@ -1,0 +1,16 @@
+VEIL — Source Code Form License Notice
+
+This Source Code Form is subject to the terms of the Mozilla Public
+License, v. 2.0. If a copy of the MPL was not distributed with this
+file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+SPDX-License-Identifier: MPL-2.0
+
+This notice applies to VEIL's original source code, scripts, tests and
+documentation in this repository, including files without an individual
+license header, unless a file or component expressly states otherwise.
+Third-party components and their notices remain subject to their own
+license terms. This notice does not grant trademark rights.
+
+See LICENSE for the full license text and docs/LICENSING.md for
+development and distribution guidance.
