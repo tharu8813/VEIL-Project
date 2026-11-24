@@ -17,6 +17,7 @@
 
 | 파일 | 역할 | 읽을 시점 |
 |---|---|---|
+| [DEVELOPMENT.md](DEVELOPMENT.md) | 빌드·실행·자동 시험 안내 (이전 README) | 개발 환경 준비 시 |
 | `01-product-requirements.md` | 사용자 목표·기능·수용 기준 | 항상 |
 | `02-threat-model.md` | 보호 자산, 공격자, 잔여 위험 | 보안 설계 전 |
 | `03-engine-selection.md` | Qt/CEF/Chromium/WebView2 실측 비교 | 엔진 확정 전 |
