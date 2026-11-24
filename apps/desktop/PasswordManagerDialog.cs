@@ -1,0 +1,85 @@
+using System.Windows;
+using System.Windows.Controls;
+
+namespace Veil.Desktop;
+
+internal enum PasswordAction { None, Save, Remove, Reveal, Fill }
+
+/// <summary>Native manager; passwords are never included in list rows, search, or tooltips.</summary>
+internal sealed class PasswordManagerDialog : VeilDialog
+{
+    internal PasswordAction Action { get; private set; }
+    internal SavedLogin? Selected { get; private set; }
+
+    internal PasswordManagerDialog(Window owner, string? origin, List<SavedLogin> entries)
+        : base(owner, "비밀번호 관리자", "", 740, 570)
+    {
+        Subtitle.Text = "저장된 계정 · 비밀번호는 별도 암호로 보호됩니다.";
+        var list = new ListBox { Style = (Style)FindResource("VeilList"), MinHeight = 90, MaxHeight = 210 };
+        foreach (var entry in entries.OrderByDescending(entry => entry.Origin == origin)
+                     .ThenBy(entry => entry.Origin).ThenBy(entry => entry.UserName))
+            list.Items.Add(new ListBoxItem { Tag = entry, Content = Row("", entry.UserName, entry.Origin) });
+        System.Windows.Automation.AutomationProperties.SetName(list, "저장된 계정");
+        var user = new TextBox { MaxLength = 512, Height = 32, Style = (Style)FindResource("PillTextBox"), Tag = "" };
+        var password = new PasswordBox { MaxLength = 2048, Height = 32 };
+        System.Windows.Automation.AutomationProperties.SetName(user, "사용자 이름");
+        System.Windows.Automation.AutomationProperties.SetName(password, "웹사이트 비밀번호");
+        var panel = new StackPanel { Children = { list } };
+        TextBlock Text(string value) => new() { Text = value, TextWrapping = TextWrapping.Wrap,
+            Foreground = Res("MutedBrush"), Margin = new Thickness(0, 8, 0, 5) };
+        panel.Children.Add(Text(origin is null ? "계정을 등록하려면 HTTPS 사이트를 먼저 여세요." : $"현재 사이트: {origin}"));
+        panel.Children.Add(Text("사용자 이름"));
+        panel.Children.Add(user);
+        panel.Children.Add(Text("비밀번호 (직접 입력)"));
+        panel.Children.Add(password);
+        var save = new Button { Content = "현재 사이트에 저장 / 갱신", Height = 32,
+            Style = (Style)FindResource("PrimaryButton"), Margin = new Thickness(0, 8, 0, 0),
+            IsEnabled = origin is not null };
+        save.Click += (_, _) =>
+        {
+            if (origin is null || string.IsNullOrWhiteSpace(user.Text) || password.SecurePassword.Length == 0) return;
+            Selected = new SavedLogin(origin, user.Text, password.Password);
+            Action = PasswordAction.Save;
+            DialogResult = true;
+        };
+        panel.Children.Add(save);
+        panel.Children.Add(Text("자동완성은 현재 사이트와 출처가 일치하는 단일 로그인 폼만 지원합니다. 비밀번호를 자동 제출하거나 다른 사이트로 보내지 않습니다."));
+        SetBody(new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        void Choose(PasswordAction action)
+        {
+            if ((list.SelectedItem as ListBoxItem)?.Tag is not SavedLogin entry) return;
+            if (action == PasswordAction.Fill && entry.Origin != origin) return;
+            if (action == PasswordAction.Remove && MessageBox.Show(this, "선택한 계정을 삭제할까요?",
+                    "비밀번호 삭제", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            Selected = entry;
+            Action = action;
+            DialogResult = true;
+        }
+        AddFooterButton("삭제", () => Choose(PasswordAction.Remove));
+        AddFooterButton("비밀번호 보기", () => Choose(PasswordAction.Reveal));
+        var fill = AddFooterButton("현재 페이지 채우기", () => Choose(PasswordAction.Fill), primary: true);
+        fill.IsEnabled = false;
+        list.SelectionChanged += (_, _) =>
+        {
+            fill.IsEnabled = (list.SelectedItem as ListBoxItem)?.Tag is SavedLogin entry && entry.Origin == origin;
+        };
+        AddFooterButton("닫기", Close);
+        Closed += (_, _) => password.Clear();
+    }
+}
+
+/// <summary>Reveal only after a separate successful authentication; no explicit clipboard action.</summary>
+internal sealed class PasswordRevealDialog : VeilDialog
+{
+    internal PasswordRevealDialog(Window owner, SavedLogin login)
+        : base(owner, "비밀번호 확인", "", 480, 300)
+    {
+        Subtitle.Text = login.Origin;
+        var secret = new TextBlock { Text = login.Password, TextWrapping = TextWrapping.Wrap, FontSize = 17 };
+        SetBody(new StackPanel { Children = {
+            new TextBlock { Text = login.UserName, Margin = new Thickness(0, 0, 0, 12) }, secret
+        } });
+        AddFooterButton("닫기", Close, primary: true);
+        Closed += (_, _) => secret.Text = "";
+    }
+}

@@ -31,6 +31,7 @@ internal sealed class BrowserSession
     internal SecurityManager Security { get; }
     // Shared across windows to prevent stacked prompts and edits during a pending decision.
     internal bool PermissionUiOpen { get; set; }
+    internal bool PasswordUiOpen { get; set; }
 
     /// <summary>Network mode applied to this run's engine (changes take effect after a restart).</summary>
     internal NetworkSettings Network { get; }
