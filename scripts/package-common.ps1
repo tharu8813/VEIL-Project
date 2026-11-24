@@ -24,17 +24,23 @@ function New-VeilRestrictedDirectory([string]$Path) {
     Assert-VeilAdminPath $Path
 }
 
-function Get-VeilTreeFiles([string]$Root, [switch]$Restricted) {
+function Get-VeilTreeFiles([string]$Root, [switch]$Restricted, [switch]$WithRelativePath) {
     $rootItem = Get-Item -LiteralPath $Root -Force
     if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Invalid tree root.' }
     if ($Restricted) { Assert-VeilAdminPath $Root }
-    $pending = [Collections.Generic.Stack[string]]::new()
-    $pending.Push($rootItem.FullName)
+    # Build relative names from enumerated components, not the length of the caller's root.
+    # Windows may expand an 8.3 short alias in child FullName while preserving it in Root.
+    $pending = [Collections.Generic.Stack[object]]::new()
+    $pending.Push(@{ FullName=$rootItem.FullName; Relative='' })
     while ($pending.Count -gt 0) {
-        foreach ($item in Get-ChildItem -LiteralPath $pending.Pop() -Force) {
+        $current = $pending.Pop()
+        foreach ($item in Get-ChildItem -LiteralPath $current.FullName -Force) {
             if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Package/tree contains a link.' }
             if ($Restricted) { Assert-VeilAdminPath $item.FullName }
-            if ($item.PSIsContainer) { $pending.Push($item.FullName) } else { $item }
+            $relative = if ($current.Relative) { $current.Relative + '/' + $item.Name } else { $item.Name }
+            if ($item.PSIsContainer) { $pending.Push(@{ FullName=$item.FullName; Relative=$relative }) }
+            elseif ($WithRelativePath) { [pscustomobject]@{ File=$item; Relative=$relative } }
+            else { $item }
         }
     }
 }
@@ -73,11 +79,12 @@ function Write-VeilPackageManifest([string]$Root,[string]$Version,[string]$Commi
     # Inventory every file (SHA-256 and length) and sign the manifest bytes with a detached CMS signature.
     # Shared by build-package.ps1 and the offline VM package test so both use one manifest format.
     [void](Assert-VeilInternalVersion $Version)
+    $Root = (Get-Item -LiteralPath $Root -Force).FullName
     if ($Commit -notmatch '^[0-9a-f]{40}$') { throw 'Expected a 40-hex source commit.' }
-    $files = @(Get-VeilTreeFiles $Root | ForEach-Object {
-        $name = $_.FullName.Substring($Root.TrimEnd('\').Length+1).Replace('\','/')
+    $files = @(Get-VeilTreeFiles $Root -WithRelativePath | ForEach-Object {
+        $name = $_.Relative
         Assert-VeilRelativeFile $name
-        @{path=$name; bytes=$_.Length; sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
+        @{path=$name; bytes=$_.File.Length; sha256=(Get-FileHash -LiteralPath $_.File.FullName -Algorithm SHA256).Hash}
     } | Sort-Object { $_.path })
     $manifest = @{format=1; channel='internal'; architecture='win-x64'; version=$Version; sourceCommit=$Commit; profileFormat=1; files=$files}
     $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($manifest | ConvertTo-Json -Depth 6))
@@ -97,7 +104,8 @@ function Assert-VeilSignedImage([string]$Path,[string]$Thumbprint) {
 function Read-VeilPackage([string]$Root,[string]$Thumbprint) {
     # Called on an administrator-owned staged copy, never execute package-supplied scripts.
     $rootItem = Get-Item -LiteralPath $Root -Force
-    $files = @(Get-VeilTreeFiles $rootItem.FullName -Restricted)
+    $Root = $rootItem.FullName
+    $files = @(Get-VeilTreeFiles $Root -Restricted -WithRelativePath)
     $manifestPath = Join-Path $Root 'manifest.json'
     $signaturePath = Join-Path $Root 'manifest.p7s'
     foreach ($path in @($manifestPath,$signaturePath)) {
@@ -127,8 +135,9 @@ function Read-VeilPackage([string]$Root,[string]$Thumbprint) {
         if (-not $expected.ContainsKey($required)) { throw 'Required binary missing from manifest.' }
     }
     $actual = @{}
-    foreach ($file in $files) {
-        $name = $file.FullName.Substring($rootItem.FullName.TrimEnd('\').Length + 1).Replace('\','/')
+    foreach ($record in $files) {
+        $file = $record.File
+        $name = $record.Relative
         if ($name -in @('manifest.json','manifest.p7s')) { continue }
         Assert-VeilRelativeFile $name
         if ($actual.ContainsKey($name) -or -not $expected.ContainsKey($name)) { throw 'Unexpected package file.' }

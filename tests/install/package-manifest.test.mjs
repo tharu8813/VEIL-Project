@@ -43,6 +43,9 @@ function New-Tree([string]$Path) {
 }
 $cases = [ordered]@{
     'valid'           = @{ change = {}; expect = $null }
+    'relative-root'   = @{ change = {}; expect = $null; relative = $true }
+    'trailing-root'   = @{ change = {}; expect = $null; trailing = $true }
+    'unsafe-name'     = @{ change = { param($r) [IO.File]::WriteAllText((Join-Path $r 'Desktop/invalid name.dll'), 'x') }; expect = 'Invalid package relative path' }
     'modified-file'   = @{ change = { param($r) [IO.File]::AppendAllText((Join-Path $r 'Desktop/Veil.Desktop.dll'), 'x') }; expect = 'hash or length' }
     'extra-file'      = @{ change = { param($r) [IO.File]::WriteAllText((Join-Path $r 'Desktop/extra.dll'), 'x') }; expect = 'Unexpected package file' }
     'missing-file'    = @{ change = { param($r) Remove-Item (Join-Path $r 'Broker/Veil.VolumeBroker.dll') }; expect = 'missing' }
@@ -56,8 +59,20 @@ $results = [ordered]@{}
 foreach ($name in $cases.Keys) {
     $root = Join-Path '${root.replace(/'/g, "''")}' $name
     New-Tree $root
-    Write-VeilPackageManifest $root '1.0.0-alpha.1' $commit $cert
     $case = $cases[$name]
+    # Alternate root spellings must yield the same manifest names. The hosted runner also
+    # supplies an 8.3 TEMP alias on some images, which exercises the original failure.
+    $manifestRoot = $root
+    if ($case.trailing) { $manifestRoot += [IO.Path]::DirectorySeparatorChar }
+    if ($case.relative) { Push-Location (Split-Path -Parent $root); $manifestRoot = '.\\' + (Split-Path -Leaf $root) }
+    try {
+        Write-VeilPackageManifest $manifestRoot '1.0.0-alpha.1' $commit $cert
+        $written = Get-Content -LiteralPath (Join-Path $root 'manifest.json') -Raw | ConvertFrom-Json
+        $names = @($written.files | ForEach-Object path | Sort-Object)
+        $expectedNames = @('Broker/Veil.VolumeBroker.dll','Broker/Veil.VolumeBroker.exe','Desktop/Veil.Desktop.dll','Desktop/Veil.Desktop.exe','Desktop/veil-vault.exe','Desktop/runtimes/win-x64/native/WebView2Loader.dll' | Sort-Object)
+        if (($names -join '|') -cne ($expectedNames -join '|')) { throw 'Incorrect relative manifest names.' }
+        [void](Read-VeilPackage $manifestRoot $cert.Thumbprint)
+    } finally { if ($case.relative) { Pop-Location } }
     $message = $null
     try { & $case.change $root } catch { $message = $_.Exception.Message }
     $thumbprint = if ($case.thumbprint) { $case.thumbprint } else { $cert.Thumbprint }
@@ -75,7 +90,7 @@ test('package manifests are exact, authenticated and versioned', { skip: process
         const { stdout } = await run('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script(root)],
             { maxBuffer: 4 * 1024 * 1024 });
         const results = JSON.parse(stdout);
-        assert.equal(Object.keys(results).length, 9);
+        assert.equal(Object.keys(results).length, 12);
         for (const [name, result] of Object.entries(results)) assert.equal(result, 'ok', name);
     } finally {
         await rm(root, { recursive: true, force: true });
