@@ -502,7 +502,7 @@ public partial class BrowserWindow : Window
         if (unsupported is not null)
         {
             vault.Results.Add(new VaultResult(fileName, DownloadVault.Blocked, 0, unsupported, null, engineReceived, engineOnDisk));
-            ShowDownloadOutcome(fileName, $"{DownloadVault.Blocked}: {unsupported}", $"{fileName}: 보호 저장을 지원하지 않는 다운로드라 차단했습니다.");
+            ShowDownloadOutcome(fileName, DownloadVault.Blocked, unsupported, $"{fileName}: 보호 저장을 지원하지 않는 다운로드라 차단했습니다.");
             return;
         }
         // WebView2 callbacks cannot safely run a nested modal message loop. Schedule capture
@@ -537,7 +537,7 @@ public partial class BrowserWindow : Window
             vault.Results.Add(new VaultResult(fileName, outcome, entry?.Bytes ?? download.Bytes, detail,
                 entry is null ? null : vault.ObjectPath(entry), engineReceived, engineOnDisk));
             var window = closing ? session.Windows.FirstOrDefault() : this;
-            window?.ShowDownloadOutcome(fileName, detail is null ? outcome : $"{outcome}: {detail}", message);
+            window?.ShowDownloadOutcome(fileName, outcome, detail, message);
         }
 
         bool open = false;
@@ -713,13 +713,15 @@ public partial class BrowserWindow : Window
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return -1; }
     }
 
-    private void ShowDownloadOutcome(string fileName, string label, string message)
+    private void ShowDownloadOutcome(string fileName, string outcome, string? detail, string message)
     {
+        string label = detail is null ? outcome : $"{outcome}: {detail}";
         downloads.Insert(0, $"{fileName} · {label}");
-        if (label != DownloadVault.Stored)
+        if (downloads.Count > 200) downloads.RemoveAt(200);
+        if (outcome != DownloadVault.Stored)
         {
-            session.RecentDownloadIssues.Insert(0, (DateTimeOffset.Now, $"{fileName} · {label}"));
-            if (session.RecentDownloadIssues.Count > 20) session.RecentDownloadIssues.RemoveAt(20);
+            session.RecentDownloadIssues.Insert(0, new DownloadIssue(Guid.NewGuid(), fileName, outcome, detail, DateTimeOffset.Now));
+            if (session.RecentDownloadIssues.Count > 100) session.RecentDownloadIssues.RemoveAt(100);
         }
         Status.Text = message + " Ctrl+J에서 확인할 수 있습니다.";
         Dispatcher.BeginInvoke(() =>
@@ -740,9 +742,8 @@ public partial class BrowserWindow : Window
             window.RefreshDownloadProgress();
             foreach (var tab in window.Tabs.Items.OfType<TabItem>().Select(item => item.Tag).OfType<BrowserTab>().ToArray())
             {
-                if (tab.Url != "veil://downloads" || window.closingTabs.Contains(tab.Item)) continue;
-                try { tab.View.CoreWebView2?.NavigateToString(window.BuildInternalPage("veil://downloads")); }
-                catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
+                if (tab.Url == "veil://downloads" && !window.closingTabs.Contains(tab.Item) &&
+                    tab.ManagementSurface is DownloadOverview overview) overview.Refresh();
             }
         }
     }
@@ -869,7 +870,7 @@ public partial class BrowserWindow : Window
         (url.Scheme is "http" or "https") && !string.IsNullOrEmpty(url.Host) && url.UserInfo.Length == 0;
 
     internal static bool IsInternalUrl(string? value) =>
-        IsManagementUrl(value) || value is "veil://downloads" or HttpsWarningUrl or ThreatWarningUrl;
+        IsManagementUrl(value) || value is HttpsWarningUrl or ThreatWarningUrl;
 
     private static string InternalTitle(string? value) => value switch
     {
@@ -912,24 +913,9 @@ public partial class BrowserWindow : Window
 
     private string BuildInternalPage(string? url)
     {
-        bool vaultVisible = session.VaultOpenGate.CurrentCount > 0 && session.Vault.Unlocked;
-        var rows = url switch
-        {
-            // Bookmarks and history are native management surfaces, never HTML pages.
-            // Vault items appear only while the vault is open; names come from the encrypted index.
-            "veil://downloads" => (vaultVisible ? session.Vault.Entries : []).Select(entry =>
-                    $@"<div class=""row""><strong>{EscapeHtml(entry.Name)}</strong><span>금고 보관 · {entry.Bytes / 1024d / 1024d:0.00} MB · {entry.SavedAt.LocalDateTime:yyyy-MM-dd HH:mm} · 내보내기는 메뉴의 다운로드 금고(Ctrl+Shift+J)</span></div>")
-                .Concat(downloads.Where(entry => !entry.EndsWith(DownloadVault.Stored)).Select(entry =>
-                    $@"<div class=""row""><strong>{EscapeHtml(entry)}</strong><span>보관하지 않음 · 일반 디스크에도 저장하지 않음</span></div>")),
-            _ => [],
-        };
+        // Sensitive download metadata is now rendered only by native chrome.
         string title = InternalTitle(url);
-        string empty = url switch
-        {
-            "veil://downloads" => vaultVisible ? "금고에 보관한 다운로드가 없습니다." : "금고가 잠겨 있습니다. 메뉴의 다운로드 금고에서 열 수 있습니다.",
-            _ => "",
-        };
-        string body = rows.Any() ? string.Concat(rows) : $"<div class=\"empty\">{EscapeHtml(empty)}</div>";
+        const string body = "";
         return $$"""
 <!doctype html>
 <html><head><meta charset="utf-8"><style>
@@ -1237,12 +1223,21 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             if (ReferenceEquals(bookmarkLibrary, dialog)) bookmarkLibrary = null;
         }
     }
+    private void ClearDownloadIssues()
+    {
+        if (!SettingsReady() || Active?.Url != "veil://downloads") return;
+        session.RecentDownloadIssues.Clear();
+        foreach (var window in session.Windows.ToArray())
+            window.retryDownload = null;
+        RefreshSharedDownloadPages();
+    }
+
     private async void DownloadsClick(object sender, RoutedEventArgs args)
     {
         DownloadPopup.IsOpen = false;
         if (!SettingsReady() || openingDownloads) return;
         var existing = Tabs.Items.OfType<TabItem>().FirstOrDefault(item => item.Tag is BrowserTab { Url: "veil://downloads" } && !closingTabs.Contains(item));
-        if (existing is not null) { Tabs.SelectedItem = existing; return; }
+        if (existing is not null) { Tabs.SelectedItem = existing; RefreshChrome(); return; }
         openingDownloads = true;
         try { _ = await OpenTab("veil://downloads"); }
         finally { openingDownloads = false; }

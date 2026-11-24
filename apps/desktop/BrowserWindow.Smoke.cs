@@ -147,6 +147,11 @@ public partial class BrowserWindow
                     "download retry only permits initial transient failures and restricted HTTPS addresses");
                 Check(!DownloadFailurePolicy.Describe(new IOException("synthetic-secret"), DownloadPhase.Streaming, true)
                     .Contains("synthetic-secret"), "download failure detail does not expose raw exceptions");
+                var overviewIssue = new DownloadIssue(Guid.NewGuid(), "synthetic-failed.bin", DownloadVault.Failed, "DNS", DateTimeOffset.Now);
+                Check(DownloadOverviewPolicy.Filter([previewEntry], [overviewIssue], "dns", DownloadFilter.Failed, VaultSort.Recent).Single().Outcome == DownloadVault.Failed &&
+                    DownloadOverviewPolicy.Filter([], [overviewIssue], "", DownloadFilter.Stored, VaultSort.Recent).Count == 0 &&
+                    DownloadOverviewPolicy.Filter([previewEntry], [overviewIssue], "", DownloadFilter.All, VaultSort.Smallest)[0].Bytes == previewEntry.Bytes,
+                    "download overview search, locked storage omission and known-size sort");
                 Check(VaultPresentation.DecodeText("synthetic"u8.ToArray()) == "synthetic" &&
                     VaultPresentation.ExportName(previewEntry with { Name = "CON.txt" }) == "VEIL-download.bin" &&
                     VaultPresentation.Filter([previewEntry], "example", VaultSort.Recent, false).Count == 1,
@@ -1017,7 +1022,8 @@ public partial class BrowserWindow
                         DownloadsClick(this, new RoutedEventArgs());
                         await WaitFor(() => Active?.Url == "veil://downloads" && !DownloadPopup.IsOpen && !openingDownloads,
                             "all downloads opened in tab");
-                        Check(Active?.Title == "다운로드", "downloads tab title");
+                        Check(Active?.Title == "다운로드" && Active.ManagementSurface is DownloadOverview,
+                            "downloads tab uses native overview");
                         Check(Tabs.Items.OfType<TabItem>().Count(item => item.Tag is BrowserTab { Url: "veil://downloads" }) == 1,
                             "repeated download manager invocation opens only one tab");
                         CloseTab((TabItem)Tabs.SelectedItem);
