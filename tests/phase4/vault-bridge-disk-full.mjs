@@ -8,11 +8,13 @@ import { isAbsolute, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseArgs, promisify } from 'node:util';
 import { startFixture } from '../integration/fixture.mjs';
-import { fillToReserve, verifiedDiskFullLab, verifyLabMount } from './vault-disk-full.mjs';
+import { fillToReserve, fillForPublication, verifiedDiskFullLab, verifyLabMount } from './vault-disk-full.mjs';
 
 const { values } = parseArgs({ options: { 'profile-parent': { type: 'string' },
-    'browser-profile-parent': { type: 'string' }, preflight: { type: 'string' } } });
+    'browser-profile-parent': { type: 'string' }, preflight: { type: 'string' }, publication: { type: 'string' } } });
 const smallParent = values['profile-parent'], browserParent = values['browser-profile-parent'];
+const publication = values.publication ?? '';
+assert.ok(['', 'meta', 'index'].includes(publication), 'Unknown publication scenario');
 assert.ok(browserParent && isAbsolute(browserParent), 'verified separate browser lab required');
 const { primary, diskFull, capacity } = await verifiedDiskFullLab(smallParent, values.preflight);
 await verifyLabMount(browserParent, primary);
@@ -30,7 +32,7 @@ const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/
 Object.assign(env, {
     VEIL_DEV_VAULT_PASSPHRASE: 'synthetic-bridge-disk-full-pass',
     VEIL_DEV_VAULT_RECOVERY: 'AAAAA-BBBBB-CCCCC-DDDDD-EEEEE-FFFFF-GGGGG-HHHHH',
-    VEIL_TEST_DISK_FULL_VAULT: smallRoot, VEIL_TEST_OFFLINE_HOSTS: '1',
+    VEIL_TEST_DISK_FULL_VAULT: smallRoot, VEIL_TEST_DISK_FULL_PUBLICATION: publication, VEIL_TEST_OFFLINE_HOSTS: '1',
 });
 let settled = false;
 const execution = promisify(execFile)('dotnet', [desktop, '--smoke', profile, origin, 'vault-bridge-disk-full', report],
@@ -45,11 +47,11 @@ async function waitSignal(name, timeout = 150_000) {
     throw new Error('Desktop did not reach ' + name);
 }
 const result = { scope: 'desktop HTTP/pipe vault bridge, real disk full; not installed service, engine download event or power loss',
-    capacity, status: 'FAIL' };
+    capacity, publication: publication || 'body', status: 'FAIL' };
 try {
     await waitSignal('seed-ready');
     await verifyLabMount(smallParent, diskFull);
-    result.fill = await fillToReserve(smallParent, filler, capacity);
+    result.fill = await (publication ? fillForPublication : fillToReserve)(smallParent, filler, capacity);
     await writeFile(join(evidence, 'filled'), 'filled', { flag: 'wx' });
     await waitSignal('failure-checked');
     await rm(filler);
@@ -59,7 +61,8 @@ try {
     assert.equal(desktopResult.error, null, desktopResult.error);
     assert.equal(done.code, 0, 'desktop failed after disk-full test');
     const vault = JSON.parse(await readFile(join(evidence, 'bridge.vault.json'), 'utf8'));
-    assert.equal(vault.entries.length, 2);
+    assert.equal(vault.entries.length, publication ? 3 : 2);
+    if (publication) assert.equal(vault.publication, publication);
     assert.equal(vault.originalUnchanged, true);
     result.status = 'PASS';
     console.log('PASS real disk-full through desktop vault bridge · evidence ' + evidence);
