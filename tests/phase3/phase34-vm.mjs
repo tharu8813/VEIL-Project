@@ -23,10 +23,12 @@ const localRunners = [
     ['webrtc-guard', 'tests/phase5/webrtc-guard.mjs', [], []],
     ['dns-protection', 'tests/phase5/dns-protection.mjs', [], ['openssl']],
     ['smartscreen', 'tests/security/smartscreen.mjs', [], ['openssl']],
+    // ADR-0010 E3: Phase 6 management pages with their synthetic secrets on the protected volume.
+    ['phase6', 'tests/phase6/phase6.mjs', [], ['openssl']],
 ];
 const manual = [
-    ['installed-release', 'Signed Release installation, live broker lifecycle, and product startup and lock.'],
-    ['recovery-backup', 'Real recovery password verification with the installed broker stopped.'],
+    ['installed-release', 'Signed package install/update/remove: tests/vm/guest-package.ps1 after BATCH.PS1 -Stage Finish (PACKAGE-RESULTS.ZIP).'],
+    ['recovery-backup', 'Recovery password drill inside guest-package.ps1 -Stage Install (operator step).'],
     ['physical-writes', 'Procmon capture and analysis from the elevated guest shell.'],
     ['power-loss', 'Arm the dedicated test, cut VM power explicitly, then check after reboot.'],
     ['vault-disk-full', 'Vault operations while the disk is full. The existing disk-full runner covers profile recovery.'],
@@ -126,7 +128,7 @@ async function main() {
     const { values } = parseArgs({ options: {
         plan: { type: 'boolean' }, run: { type: 'boolean' }, 'isolated-vm': { type: 'boolean' }, preflight: { type: 'string' },
         'desktop-dll': { type: 'string' }, only: { type: 'string', multiple: true, default: [] },
-        'cleanup-on-pass': { type: 'boolean' },
+        'cleanup-on-pass': { type: 'boolean' }, 'cert-dir': { type: 'string' },
     } });
     if (values.plan && values.run) throw new Error('Choose --plan or --run.');
     const preview = makePlan('<verified-protected-folder>', '<optional-small-volume-folder>');
@@ -156,13 +158,17 @@ async function main() {
     const lab = await makeLabFolder(primary);
     const smallLab = diskFull ? await makeLabFolder(diskFull) : undefined;
     const missingTools = [];
-    for (const tool of ['openssl']) {
+    // A certificate made on the host (make-bundle.mjs) replaces openssl, which the offline guest lacks.
+    const certDir = values['cert-dir'];
+    if (certDir && !(await stat(join(certDir, 'test-cert.pem')).catch(() => null))?.isFile()) throw new Error('--cert-dir has no test-cert.pem.');
+    for (const tool of certDir ? [] : ['openssl']) {
         await run(tool, ['version'], { windowsHide: true }).catch(() => missingTools.push(tool));
     }
     const plan = makePlan(lab, smallLab, missingTools);
     const report = join(evidence, 'summary.json');
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^VEIL_(DEV_VAULT|TEST_)/i.test(key)));
     env.VEIL_DESKTOP_DLL = desktop;
+    if (certDir) env.VEIL_TEST_CERT_DIR = resolve(certDir);
     const results = await executePlan(plan, values.only, async test => {
         const log = `${test.id}.log`;
         const before = test.lab ? new Set(await readdir(test.lab)) : null;

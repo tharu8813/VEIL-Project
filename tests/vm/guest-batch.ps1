@@ -85,13 +85,18 @@ if ($Stage -eq 'Prepare') {
     Expand-Archive (Join-Path $Media 'SOURCE.ZIP') $src
     Expand-Archive (Join-Path $Media 'DESKTOP.ZIP') (Join-Path $Work 'desktop')
     Copy-Item (Join-Path $Media 'BATCH.PS1'), (Join-Path $Media 'MANIFEST.JSON') $Work
+    # Unsigned Release payloads for tests\vm\guest-package.ps1 (signed in the VM with a disposable certificate).
+    Copy-Item (Join-Path $Media 'PAYLOAD-*.ZIP') $Work
+    # Loopback TLS test certificate made on the host: the offline guest has no openssl.
+    Expand-Archive (Join-Path $Media 'TESTCERT.ZIP') (Join-Path $Work 'testcert')
     icacls $src /grant ('*{0}:(OI)(CI)(M)' -f $sid) | Out-Null
+    icacls (Join-Path $Work 'testcert') /grant ('*{0}:(OI)(CI)(RX)' -f $sid) | Out-Null
     $guest = Assert-OfflineGuest
 
     # 2. Disposable protected volumes.
     $lab = New-LabVolume 'lab' 1024 'V' $sid
     $small = New-LabVolume 'full' 256 'W' $sid
-    @{ commit = $manifest.commit; boot = $guest.boot; volumes = @($lab, $small) } | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 $state
+    @{ commit = $manifest.commit; boot = $guest.boot; volumes = @($lab, $small); standardUserSid = $sid } | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 $state
 
     # 3. Preflight receipt and write trace.
     Push-Location $src
@@ -109,8 +114,10 @@ if ($Stage -eq 'Prepare') {
     $desktop = Join-Path $Work 'desktop\Veil.Desktop.dll'
     Write-Host ''
     Write-Host "READY. In a NORMAL-USER PowerShell signed in as $StandardUser run:"
-    Write-Host "  cd $src; node tests\phase3\phase34-vm.mjs --run --isolated-vm --preflight .veil-dev\phase34-preflight.json --desktop-dll $desktop"
+    Write-Host "  cd $src; node tests\phase3\phase34-vm.mjs --run --isolated-vm --preflight .veil-dev\phase34-preflight.json --desktop-dll $desktop --cert-dir $Work\testcert"
     Write-Host "Then here (elevated): $Work\BATCH.PS1 -Stage Finish"
+    Write-Host "After Finish (the write trace is stopped), the package tests here (docs/10-test-strategy.md):"
+    Write-Host "  cd $src; .\tests\vm\guest-package.ps1 -Stage Sign   (then Install, the operator checks, Update, Remove)"
     return
 }
 

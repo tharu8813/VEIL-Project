@@ -10,8 +10,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'package-common.ps1')
-[void](Get-VeilVersion $Version)
-if ((Get-VeilVersion $Version).Major -ne 0) { throw 'Only internal 0.x packages may be built before release qualification.' }
+# The four-part value is the Windows file version and the update order (alpha < beta < rc < release).
+$fileVersion = (Assert-VeilInternalVersion $Version).ToString()
 $repo = Split-Path $PSScriptRoot -Parent
 $out = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $out) { throw 'Use a new output directory.' }
@@ -31,7 +31,7 @@ try {
     )) {
         dotnet restore $project.File --locked-mode
         if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed.' }
-        dotnet publish $project.File -c Release --no-restore --self-contained false -o (Join-Path $out $project.Folder) "-p:Version=$Version" "-p:FileVersion=$Version.0" "-p:InformationalVersion=$Version+$commit"
+        dotnet publish $project.File -c Release --no-restore --self-contained false -o (Join-Path $out $project.Folder) "-p:Version=$Version" "-p:FileVersion=$fileVersion" "-p:InformationalVersion=$Version+$commit" "-p:IncludeSourceRevisionInInformationalVersion=false"
         if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
     }
     Copy-Item -LiteralPath 'crates/veil-security/target/release/veil-vault.exe' -Destination (Join-Path $out 'Desktop\veil-vault.exe') -Force
@@ -44,19 +44,10 @@ try {
     foreach ($notice in @('LICENSE','NOTICE')) {
         Copy-Item -LiteralPath $notice -Destination (Join-Path $out "Desktop\$notice")
     }
-    $files = @(Get-VeilTreeFiles $out | ForEach-Object {
-        $name = $_.FullName.Substring($out.TrimEnd('\').Length+1).Replace('\','/')
-        Assert-VeilRelativeFile $name
-        @{path=$name; bytes=$_.Length; sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
-    } | Sort-Object { $_.path })
-    $manifest = @{format=1; channel='internal'; architecture='win-x64'; version=$Version; sourceCommit=$commit; profileFormat=1; files=$files}
-    $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($manifest | ConvertTo-Json -Depth 6))
-    [IO.File]::WriteAllBytes((Join-Path $out 'manifest.json'),$bytes)
-    $cms = [Security.Cryptography.Pkcs.SignedCms]::new([Security.Cryptography.Pkcs.ContentInfo]::new($bytes),$true)
-    $signer = [Security.Cryptography.Pkcs.CmsSigner]::new($cert)
-    $signer.DigestAlgorithm = [Security.Cryptography.Oid]::new('2.16.840.1.101.3.4.2.1')
-    $cms.ComputeSignature($signer)
-    [IO.File]::WriteAllBytes((Join-Path $out 'manifest.p7s'),$cms.Encode())
+    # ADR-0010 E6: third-party notices and CycloneDX SBOM; fails the build on a disallowed license.
+    node scripts/third-party.mjs --notices (Join-Path $out 'Desktop\THIRD-PARTY-NOTICES.md') --sbom (Join-Path $out 'Desktop\sbom.cdx.json') --version $Version --commit $commit
+    if ($LASTEXITCODE -ne 0) { throw 'Third-party notices or license policy failed.' }
+    Write-VeilPackageManifest $out $Version $commit $cert
     Write-Host 'Internal package built. Release approval and runtime verification are still required.'
 }
 finally { Pop-Location }

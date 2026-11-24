@@ -35,7 +35,13 @@ export const PLAN = [
     ['smartscreen-demo', 'Microsoft SmartScreen demo phishing page with SmartScreen on vs off.'],
     ['site-compat', 'Real sites load under HTTPS-first and strict tracking prevention; an HTTP-only site shows the warning page.'],
     ['ipv6-reachability', 'Whether the engine reaches an IPv6-only site (recorded).'],
+    // ADR-0010 D2: the remaining proxy-protection items.
+    ['proxy-doh', 'Proxy protection with secure DNS: the page and the DoH provider go through the proxy; the name never appears in plain DNS (capture).'],
+    ['quic-proxy', 'QUIC is not used in proxy protection (second load is not h3), against a standard-mode control that does reach h3.'],
+    ['https-downgrade-redirect', 'An HTTPS page redirecting to HTTP shows the HTTPS warning page instead of loading the HTTP page.'],
 ];
+export const DOWNGRADE = 'https://httpbin.org/redirect-to?url=http%3A%2F%2Fneverssl.com%2F';
+export const QUIC_SITE = 'https://www.google.com/';
 const MANUAL = [
     ['sleep-network-switch', 'Sleep/resume and network change while proxy protection is on (manual).'],
     ['windows-smartscreen-override', 'Windows "SmartScreen for Microsoft Edge" off overrides VEIL (needs a guest setting change, manual).'],
@@ -87,8 +93,15 @@ async function main() {
         const test = summary.tests.find(t => t.id === 'dns-path');
         const bootstrapTest = summary.tests.find(t => t.id === 'public-doh-bootstrap');
         if (!test?.names) throw new Error('dns-path did not run.');
-        const verdict = judgeCapture(await readFile(values['analyze-capture']), test.names);
+        const bytes = await readFile(values['analyze-capture']);
+        const verdict = judgeCapture(bytes, test.names);
         Object.assign(test, verdict);
+        // proxy-doh reuses the same capture and the same control name (the capture must be trustworthy).
+        const proxyDoh = summary.tests.find(t => t.id === 'proxy-doh');
+        if (proxyDoh?.status === 'PENDING-CAPTURE') {
+            const result = judgeCapture(bytes, { systemName: test.names.systemName, dohName: proxyDoh.names.dohName });
+            Object.assign(proxyDoh, { status: result.status, detail: `${proxyDoh.detail}; capture: ${result.detail}` });
+        }
         Object.assign(bootstrapTest, { status: 'OBSERVED', detail: `provider names in plain DNS: ${verdict.bootstrap.join(', ') || 'none'}` });
         await writeFile(summaryPath + '.next', JSON.stringify(summary, null, 2));
         await rename(summaryPath + '.next', summaryPath);
@@ -110,17 +123,20 @@ async function main() {
     const selected = id => tests.find(t => t.id === id && !t.reason);
     let n = 0;
 
-    async function visit(label, url, { network = null, security = null, evalExpr = null } = {}) {
-        const profile = join(evidence, `${++n}-${label}`, 'profile');
-        await mkdir(profile, { recursive: true });
-        await writeFile(join(profile, 'browser-state.json'), JSON.stringify({ Bookmarks: [], History: [], Tabs: [], Selected: 0, Network: network, Security: security }));
+    async function visit(label, url, { network = null, security = null, evalExpr = null, reuse = null } = {}) {
+        // reuse: a profile from an earlier visit, so a second load can use what the first one learned (Alt-Svc).
+        const profile = reuse ?? join(evidence, `${++n}-${label}`, 'profile');
+        if (!reuse) {
+            await mkdir(profile, { recursive: true });
+            await writeFile(join(profile, 'browser-state.json'), JSON.stringify({ Bookmarks: [], History: [], Tabs: [], Selected: 0, Network: network, Security: security }));
+        } else n++;
         const report = join(evidence, `${n}-${label}.json`);
         await run('dotnet', [desktop, '--smoke', profile, origin, 'visit', report], {
             timeout: 180_000, env: { ...process.env, VEIL_TEST_URL: url, VEIL_TEST_EVAL: evalExpr ?? '' },
         }).catch(async error => { if (!(await readFile(report).catch(() => null))) throw error; });
         const result = JSON.parse(await readFile(report, 'utf8'));
         const field = name => result.checks.find(c => c.startsWith(`visit: ${name}=`))?.slice(`visit: ${name}=`.length);
-        return { error: result.error, url: field('url'), navError: field('error'), title: field('title'), eval: field('eval') };
+        return { error: result.error, url: field('url'), navError: field('error'), title: field('title'), eval: field('eval'), profile };
     }
     const record = async (id, outcome) => { Object.assign(tests.find(t => t.id === id), outcome); await save(); console.log(`${outcome.status.padEnd(8)} ${id} · ${outcome.detail ?? ''}`); };
     const guard = async (id, body) => {
@@ -177,6 +193,42 @@ async function main() {
         await guard('ipv6-reachability', async () => {
             const page = await visit('ipv6', 'https://ipv6.google.com/');
             return { status: 'OBSERVED', detail: `error ${page.navError}, title ${page.title}` };
+        });
+        await guard('proxy-doh', async () => {
+            const { proxy, seen, port } = await startProxy();
+            try {
+                const dohName = `veil-${randomBytes(5).toString('hex')}.example.com`;
+                const network = { Mode: 1, ProxyScheme: 'http', ProxyHost: '127.0.0.1', ProxyPort: port, DnsTemplate: 'https://cloudflare-dns.com/dns-query' };
+                const page = await visit('proxy-doh', `https://${dohName}/`, { network });
+                const site = await visit('proxy-doh-site', SITES[0], { network });
+                const viaProxy = seen.some(target => target.startsWith(`CONNECT ${new URL(SITES[0]).hostname}:`));
+                if (!viaProxy) return { status: 'FAIL', detail: 'real site did not go through the proxy' };
+                // The synthetic name does not exist; what matters is that it was never sent as plain DNS.
+                return { status: 'PENDING-CAPTURE', names: { dohName }, proxied: seen.slice(0, 20),
+                    detail: `synthetic name ${page.navError}; ${SITES[0]} ${site.navError} via proxy; DoH host via proxy ${seen.some(t => t.startsWith('CONNECT cloudflare-dns.com:'))}` };
+            } finally { proxy.close(); }
+        });
+        await guard('quic-proxy', async () => {
+            const protocol = 'performance.getEntriesByType("navigation")[0]?.nextHopProtocol || null';
+            const first = await visit('quic-standard-1', QUIC_SITE, { evalExpr: protocol });
+            const second = await visit('quic-standard-2', QUIC_SITE, { evalExpr: protocol, reuse: first.profile });
+            const { proxy, port } = await startProxy();
+            let proxied;
+            try {
+                const network = { Mode: 1, ProxyScheme: 'http', ProxyHost: '127.0.0.1', ProxyPort: port };
+                const p1 = await visit('quic-proxy-1', QUIC_SITE, { network, evalExpr: protocol });
+                proxied = await visit('quic-proxy-2', QUIC_SITE, { network, evalExpr: protocol, reuse: p1.profile });
+            } finally { proxy.close(); }
+            const control = JSON.parse(second.eval ?? 'null'), measured = JSON.parse(proxied.eval ?? 'null');
+            if (measured === 'h3') return { status: 'FAIL', detail: `proxy protection used h3 (standard control ${control})` };
+            if (control !== 'h3') return { status: 'OBSERVED', detail: `standard control did not reach h3 (${control}); proxy ${measured}: QUIC cannot be shown here` };
+            return { status: 'PASS', detail: `standard second load h3, proxy second load ${measured}` };
+        });
+        await guard('https-downgrade-redirect', async () => {
+            const page = await visit('https-downgrade', DOWNGRADE);
+            if (page.url === 'veil://https-warning') return { status: 'PASS', detail: 'warning page shown for the HTTPS to HTTP redirect' };
+            if (page.url?.startsWith('http://')) return { status: 'FAIL', detail: `HTTP page loaded silently: ${page.url}` };
+            return { status: 'OBSERVED', detail: `redirect service result: ${page.url} ${page.navError}` };
         });
     } finally {
         fixture.close();

@@ -188,7 +188,7 @@ try {
         if (Test-Path -LiteralPath $stage) { Remove-RestrictedTree $stage }
         throw
     }
-    if ((Get-VeilVersion $manifest.version).Major -ne 0) { throw 'Only internal packages are enabled.' }
+    [void](Assert-VeilInternalVersion $manifest.version)
     if ($Install) {
         # The existing installer owns BitLocker recovery registration and service creation.
         if ((Test-Path -LiteralPath $bin) -or (Test-Path -LiteralPath $data)) { throw 'Existing installation/registration requires administrator recovery, not a fresh install.' }

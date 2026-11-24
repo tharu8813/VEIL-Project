@@ -48,12 +48,45 @@ function Assert-VeilRelativeFile([string]$Name) {
 }
 
 function Get-VeilVersion([string]$Version) {
-    # First maintenance implementation accepts numeric stable-format internal versions only.
-    # No prerelease precedence or downgrade is inferred from Windows file-version metadata.
-    if ($Version -notmatch '^(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$') { throw 'Expected numeric MAJOR.MINOR.PATCH.' }
-    $value = [version]$Version
-    if ($value.Major -gt 65535 -or $value.Minor -gt 65535 -or $value.Build -gt 65535) { throw 'Version exceeds Windows version range.' }
+    # ADR-0010: SemVer MAJOR.MINOR.PATCH with an optional alpha.N, beta.N or rc.N prerelease (N 1-99).
+    # Returns a four-part version that is both the Windows file version and the update order:
+    # alpha.N = N, beta.N = 100+N, rc.N = 200+N, release = 1000, so alpha.1 < beta.1 < rc.1 < release.
+    if ($Version -cnotmatch '^(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})(?:-(alpha|beta|rc)\.([1-9][0-9]?))?$') {
+        throw 'Expected MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-(alpha|beta|rc).N with N 1-99.'
+    }
+    $major = [int]$Matches[1]; $minor = [int]$Matches[2]; $patch = [int]$Matches[3]
+    if ($major -gt 65535 -or $minor -gt 65535 -or $patch -gt 65535) { throw 'Version exceeds Windows version range.' }
+    $order = 1000
+    if ($Matches[4]) { $order = @{ alpha = 0; beta = 100; rc = 200 }[$Matches[4]] + [int]$Matches[5] }
+    return [version]::new($major, $minor, $patch, $order)
+}
+
+function Assert-VeilInternalVersion([string]$Version) {
+    # Internal channel: 0.x developer packages or 1.x+ prereleases. A stable 1.x+ release needs separate
+    # release qualification (ADR-0010) and is refused here.
+    $value = Get-VeilVersion $Version
+    if ($value.Major -ne 0 -and $value.Revision -eq 1000) { throw 'Stable releases are not enabled; use an alpha, beta or rc prerelease on the internal channel.' }
     return $value
+}
+
+function Write-VeilPackageManifest([string]$Root,[string]$Version,[string]$Commit,[Security.Cryptography.X509Certificates.X509Certificate2]$Certificate) {
+    # Inventory every file (SHA-256 and length) and sign the manifest bytes with a detached CMS signature.
+    # Shared by build-package.ps1 and the offline VM package test so both use one manifest format.
+    [void](Assert-VeilInternalVersion $Version)
+    if ($Commit -notmatch '^[0-9a-f]{40}$') { throw 'Expected a 40-hex source commit.' }
+    $files = @(Get-VeilTreeFiles $Root | ForEach-Object {
+        $name = $_.FullName.Substring($Root.TrimEnd('\').Length+1).Replace('\','/')
+        Assert-VeilRelativeFile $name
+        @{path=$name; bytes=$_.Length; sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
+    } | Sort-Object { $_.path })
+    $manifest = @{format=1; channel='internal'; architecture='win-x64'; version=$Version; sourceCommit=$Commit; profileFormat=1; files=$files}
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($manifest | ConvertTo-Json -Depth 6))
+    [IO.File]::WriteAllBytes((Join-Path $Root 'manifest.json'),$bytes)
+    $cms = [Security.Cryptography.Pkcs.SignedCms]::new([Security.Cryptography.Pkcs.ContentInfo]::new($bytes),$true)
+    $signer = [Security.Cryptography.Pkcs.CmsSigner]::new($Certificate)
+    $signer.DigestAlgorithm = [Security.Cryptography.Oid]::new('2.16.840.1.101.3.4.2.1')
+    $cms.ComputeSignature($signer)
+    [IO.File]::WriteAllBytes((Join-Path $Root 'manifest.p7s'),$cms.Encode())
 }
 
 function Assert-VeilSignedImage([string]$Path,[string]$Thumbprint) {
