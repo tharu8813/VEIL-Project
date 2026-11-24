@@ -55,6 +55,22 @@ public partial class BrowserWindow
                 Check(BookmarkPolicy.RemoveFolder(localData.BookmarkFolders, localData.Bookmarks, parentFolder.Id) &&
                     localData.Bookmarks[0].FolderId is null && localData.Bookmarks.Count == 1,
                     "deleting last folder promotes bookmarks to root");
+                const string bookmarksHtml = """
+                    <!DOCTYPE NETSCAPE-Bookmark-file-1>
+                    <DL><p><DT><H3>Study &amp; Code</H3><DL><p>
+                    <DT><A HREF="https://example.test/docs?a=1&amp;b=2">Docs &lt;3</A>
+                    <DT><A HREF="javascript:alert(1)">Unsafe</A>
+                    <DT><A HREF="https://example.test/docs?a=1&amp;b=2">Duplicate</A>
+                    </DL><p></DL><p>
+                    """;
+                var importedBookmarks = BookmarkHtml.Parse(bookmarksHtml, []);
+                Check(importedBookmarks is { Skipped: 2, Folders.Count: 1, Entries.Count: 1 } &&
+                    importedBookmarks.Entries[0].FolderId == importedBookmarks.Folders[0].Id &&
+                    importedBookmarks.Entries[0].Title == "Docs <3", "bookmark HTML imports folders, entities and skips unsafe or duplicate URLs");
+                var roundTrip = BookmarkHtml.Parse(System.Text.Encoding.UTF8.GetString(
+                    BookmarkHtml.Export(importedBookmarks.Folders, importedBookmarks.Entries)), []);
+                Check(roundTrip.Folders[0].Name == "Study & Code" && roundTrip.Entries[0].Url == importedBookmarks.Entries[0].Url &&
+                    roundTrip.Entries[0].FolderId == roundTrip.Folders[0].Id, "bookmark HTML round trip preserves hierarchy and URL");
                 var rule = new SitePermissionRule("https://example.test", "camera", SitePermissionPolicy.Ask);
                 Check(SitePermissionPolicy.ValidRules([rule]) &&
                     !SitePermissionPolicy.ValidRules([rule, rule]) &&
