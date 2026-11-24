@@ -29,6 +29,11 @@ internal sealed class BrowserSession
     }
 
     internal SecurityManager Security { get; }
+    // Shared across windows to prevent stacked prompts and edits during a pending decision.
+    internal bool PermissionUiOpen { get; set; }
+    internal bool PasswordUiOpen { get; set; }
+    internal bool SettingsUiOpen { get; set; }
+    internal bool VaultUiOpen { get; set; }
 
     /// <summary>Network mode applied to this run's engine (changes take effect after a restart).</summary>
     internal NetworkSettings Network { get; }
@@ -46,11 +51,13 @@ internal sealed class BrowserSession
     internal string Root { get; }
     internal string StatePath { get; }
     internal BrowserData Data { get; }
-    internal Stack<string> ClosedTabs { get; } = new();
+    internal Stack<ClosedTab> ClosedTabs { get; } = new();
     internal List<string> Downloads { get; } = [];
     internal ObservableCollection<BrowserDownload> ActiveDownloads { get; } = [];
     internal List<BrowserWindow> Windows { get; } = [];
-    internal CoreWebView2Environment? Engine { get; set; }
+    // The first release has exactly one production backend. No fallback or runtime switching.
+    internal IBrowserEngine EngineHost { get; } = new WebView2BrowserEngine();
+    internal CoreWebView2Environment? Engine => (EngineHost as WebView2BrowserEngine)?.Environment;
     internal bool IsEnding { get; set; }
     /// <summary>The shared engine's browser process exited; no window can use it any more.</summary>
     internal bool EngineLost { get; set; }
@@ -63,8 +70,13 @@ internal sealed class BrowserSession
         var (tabs, selected) = open[0].Snapshot();
         Data.Tabs = tabs;
         Data.Selected = selected;
+        Data.PinnedCount = open[0].PinnedTabCount;
         Data.Windows = open.Count == 1 ? null :
-            open.Skip(1).Select(window => window.Snapshot()).Select(s => new WindowTabs(s.Tabs, s.Selected)).ToList();
+            open.Skip(1).Select(window =>
+            {
+                var snapshot = window.Snapshot();
+                return new WindowTabs(snapshot.Tabs, snapshot.Selected, window.PinnedTabCount);
+            }).ToList();
         Data.Save(StatePath);
     }
 }

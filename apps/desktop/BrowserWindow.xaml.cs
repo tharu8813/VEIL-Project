@@ -13,15 +13,19 @@ public partial class BrowserWindow : Window
 {
     /// <summary>A tab and its engine view. <see cref="Owner"/> changes when the tab moves between windows,
     /// so every engine event is routed through it rather than captured at creation.</summary>
-    private sealed class BrowserTab(WebView2 view, BrowserWindow owner)
+    private sealed class BrowserTab(IBrowserEngineView engineView, BrowserWindow owner)
     {
-        internal WebView2 View { get; } = view;
+        internal IBrowserEngineView EngineView { get; } = engineView;
+        // Transitional native boundary: security events, cookies, downloads and CDP remain WebView2-specific.
+        internal WebView2 View => ((WebView2EngineView)EngineView).NativeView;
         internal BrowserWindow Owner { get; set; } = owner;
         internal TabItem Item { get; set; } = null!;
         internal string Title { get; set; } = "새 탭";
         internal string Url { get; set; } = "about:blank";
         internal TabHeader Header { get; set; } = null!;
         internal bool Loading { get; set; }
+        internal bool Pinned { get; set; }
+        internal long NavigationEpoch { get; set; }
         /// <summary>HTTPS-first: the plain-HTTP address this tab is currently trying as HTTPS.</summary>
         internal Uri? UpgradedFrom { get; set; }
         /// <summary>The plain-HTTP address the HTTPS warning page offers to open.</summary>
@@ -35,6 +39,7 @@ public partial class BrowserWindow : Window
     private readonly BrowserSession session;
     private readonly IReadOnlyList<string>? initialUrls;
     private readonly int initialSelected;
+    private readonly int initialPinnedCount;
     private readonly TabItem? adopted;
     private bool closing;
     private bool restoring = true;
@@ -42,7 +47,7 @@ public partial class BrowserWindow : Window
     private DispatcherTimer? downloadPopupTimer;
 
     private BrowserData data => session.Data;
-    private Stack<string> closedTabs => session.ClosedTabs;
+    private Stack<ClosedTab> closedTabs => session.ClosedTabs;
     private List<string> downloads => session.Downloads;
     private string statePath => session.StatePath;
     private CoreWebView2Environment? engine => session.Engine;
@@ -53,11 +58,12 @@ public partial class BrowserWindow : Window
     internal BrowserWindow(string root, DownloadVault vault) : this(new BrowserSession(root, vault), null, 0, null) { }
 
     /// <summary>Additional window: restores <paramref name="urls"/>, or adopts a tab dragged out of another window.</summary>
-    private BrowserWindow(BrowserSession session, IReadOnlyList<string>? urls, int selected, TabItem? adopt)
+    private BrowserWindow(BrowserSession session, IReadOnlyList<string>? urls, int selected, TabItem? adopt, int pinnedCount = 0)
     {
         this.session = session;
         initialUrls = urls;
         initialSelected = selected;
+        initialPinnedCount = pinnedCount;
         adopted = adopt;
         session.Windows.Add(this);
         InitializeComponent();
@@ -65,6 +71,7 @@ public partial class BrowserWindow : Window
         RefreshDownloadProgress();
         InitializeMotion(playIntro: adopt is null);
         InitializeWindowFeatures();
+        InitializeAddressSuggestions();
         Loaded += Start;
         Closing += OnClosing;
         PreviewKeyDown += BrowserKeyDown;
@@ -78,12 +85,13 @@ public partial class BrowserWindow : Window
         if (last || session.IsEnding)
             foreach (var download in session.ActiveDownloads.ToArray()) download.Cancel();
         closing = true;
+        CloseAddressSuggestions();
         session.Windows.Remove(this);
         if (!last && !session.IsEnding)
         {
             // Closing one of several windows closes its tabs; they stay reopenable.
             foreach (TabItem item in Tabs.Items)
-                if (IsWebUrl(((BrowserTab)item.Tag).Url)) closedTabs.Push(((BrowserTab)item.Tag).Url);
+                if (item.Tag is BrowserTab tab && IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
             SaveSession();
         }
         foreach (var view in Pages.Children.OfType<WebView2>())
@@ -101,13 +109,10 @@ public partial class BrowserWindow : Window
         Loaded -= Start;
         try
         {
-            if (session.Engine is null)
-            {
-                string profile = Path.GetFullPath(Path.Combine(session.Root, "webview2"));
-                session.Engine = await Program.CreateEngine(profile, network: session.Network);
-                if (session.Network.Mode == NetworkMode.Proxy)
-                    session.ProxyReachable = await NetworkPolicy.ProxyReachableAsync(session.Network, TimeSpan.FromSeconds(3));
-            }
+            await session.EngineHost.InitializeAsync(session.Root, session.Network);
+            if (closing || session.IsEnding || session.EngineLost) return;
+            if (session.Network.Mode == NetworkMode.Proxy && session.ProxyReachable is null)
+                session.ProxyReachable = await NetworkPolicy.ProxyReachableAsync(session.Network, TimeSpan.FromSeconds(3));
             UpdateNetworkIndicator();
             if (closing) return;
             if (adopted is not null)
@@ -120,13 +125,18 @@ public partial class BrowserWindow : Window
                 var urls = primary ? data.Tabs : initialUrls!;
                 int selected = primary ? data.Selected : initialSelected;
                 string[] list = urls.Count == 0 ? ["about:blank"] : urls.ToArray();
-                foreach (string url in list)
-                    await OpenTab(IsWebUrl(url) || IsInternalUrl(url) ? url : "about:blank");
+                int savedPins = primary ? data.PinnedCount : initialPinnedCount;
+                int pins = savedPins >= 0 && savedPins <= urls.Count ? savedPins : 0;
+                for (int i = 0; i < list.Length; i++)
+                {
+                    string url = list[i];
+                    await OpenTab(IsWebUrl(url) || IsInternalUrl(url) ? url : "about:blank", pinned: i < pins);
+                }
                 if (closing) return;
                 if (Tabs.Items.Count > 0)
                     Tabs.SelectedIndex = Math.Clamp(selected, 0, Tabs.Items.Count - 1);
                 if (primary && data.Windows is { } others)
-                    foreach (var other in others) OpenWindow(other.Tabs, other.Selected, cascade: true);
+                    foreach (var other in others) OpenWindow(other.Tabs, other.Selected, cascade: true, pinnedCount: other.PinnedCount);
             }
             restoring = false;
             Status.Text = "준비";
@@ -140,10 +150,10 @@ public partial class BrowserWindow : Window
 
     /// <summary>Opens another window sharing this profile's engine and data.</summary>
     private BrowserWindow OpenWindow(IReadOnlyList<string> urls, int selected, bool cascade = false,
-        TabItem? adopt = null, Point? at = null)
+        TabItem? adopt = null, Point? at = null, int pinnedCount = 0)
     {
         var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
-        var window = new BrowserWindow(session, urls, selected, adopt)
+        var window = new BrowserWindow(session, urls, selected, adopt, pinnedCount)
         {
             WindowStartupLocation = WindowStartupLocation.Manual,
             Width = bounds.Width,
@@ -160,19 +170,29 @@ public partial class BrowserWindow : Window
     internal IEnumerable<CoreWebView2> CoreViews() => Tabs.Items.OfType<TabItem>()
         .Select(item => (item.Tag as BrowserTab)?.View.CoreWebView2).OfType<CoreWebView2>();
 
-    private async Task<BrowserTab?> OpenTab(string? url, bool select = true, int? index = null)
+    private async Task<BrowserTab?> OpenTab(string? url, bool select = true, int? index = null, bool pinned = false)
     {
-        if (engine is null || closing) return null;
-        var view = new WebView2 { Visibility = Visibility.Hidden };
-        var tab = new BrowserTab(view, this);
+        if (!session.EngineHost.IsReady || closing || session.IsEnding || session.EngineLost) return null;
+        // Reject an unsupported backend before creating or attaching any content.
+        if (session.EngineHost is not WebView2BrowserEngine)
+            throw new InvalidOperationException("The selected engine has no approved security integration.");
+        var engineView = session.EngineHost.CreateView();
+        var tab = new BrowserTab(engineView, this) { Pinned = pinned };
+        var view = tab.View;
         var item = new TabItem { Tag = tab };
         tab.Item = item;
         tab.Header = CreateTabHeader(item, tab);
+        UpdatePinnedHeader(tab);
         Pages.Children.Add(view);
         try
         {
-            await view.EnsureCoreWebView2Async(engine);
-            if (closing) return null;
+            await engineView.InitializeAsync();
+            if (closing || session.IsEnding || session.EngineLost)
+            {
+                engineView.Dispose();
+                Pages.Children.Remove(view);
+                return null;
+            }
             var web = view.CoreWebView2;
             web.Settings.AreHostObjectsAllowed = false;
             web.Settings.IsWebMessageEnabled = false;
@@ -194,11 +214,7 @@ public partial class BrowserWindow : Window
             web.Profile.DefaultDownloadFolderPath = downloadScratch;
             // ADR-0006 standard protection: strict tracking prevention for every profile.
             web.Profile.PreferredTrackingPreventionLevel = CoreWebView2TrackingPreventionLevel.Strict;
-            web.PermissionRequested += (_, args) =>
-            {
-                args.SavesInProfile = false;
-                args.State = CoreWebView2PermissionState.Deny;
-            };
+            web.PermissionRequested += (_, args) => tab.Owner.OnSitePermissionRequested(tab, args);
             web.LaunchingExternalUriScheme += (_, args) => args.Cancel = true;
             web.NavigationStarting += (_, args) => tab.Owner.OnNavigationStarting(tab, args);
             web.SourceChanged += (_, _) => tab.Owner.OnSourceChanged(tab);
@@ -219,7 +235,7 @@ public partial class BrowserWindow : Window
             {
                 if (tab.Owner.Active == tab) tab.Owner.SetFullScreen(web.ContainsFullScreenElement, page: true);
             };
-            Tabs.Items.Insert(Math.Clamp(index ?? Tabs.Items.Count, 0, Tabs.Items.Count), item);
+            Tabs.Items.Insert(TabInsertionIndex(tab.Pinned, index ?? Tabs.Items.Count), item);
             LayoutTabs(item);
             if (select || Tabs.SelectedItem is null) Tabs.SelectedItem = item;
             if (IsInternalUrl(url))
@@ -228,12 +244,12 @@ public partial class BrowserWindow : Window
                 tab.Title = InternalTitle(tab.Url);
                 UpdateTabToolTip(tab);
                 tab.Header.Label.Text = tab.Title;
-                web.NavigateToString(BuildInternalPage(url));
+                engineView.ShowInternalHtml(BuildInternalPage(url));
             }
             else if (url is not null && url != "about:blank")
             {
                 tab.Url = url;
-                web.Navigate(url);
+                engineView.Navigate(url);
             }
             UpdateTabToolTip(tab);
             if (Active == tab) RefreshChrome();
@@ -241,7 +257,7 @@ public partial class BrowserWindow : Window
         }
         catch (Exception)
         {
-            view.Dispose();
+            engineView.Dispose();
             Pages.Children.Remove(view);
             if (Tabs.Items.Contains(item)) Tabs.Items.Remove(item);
             if (!closing) Status.Text = "탭을 열 수 없습니다. WebView2 런타임과 테스트 프로필을 확인하세요.";
@@ -253,6 +269,7 @@ public partial class BrowserWindow : Window
 
     private void OnNavigationStarting(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
     {
+        tab.NavigationEpoch++;
         if (HandleHttpsFirst(tab, args)) return;
         if (HandleThreat(tab, args)) return;
         args.Cancel = args.Uri != "about:blank" &&
@@ -269,7 +286,7 @@ public partial class BrowserWindow : Window
 
     private void OnSourceChanged(BrowserTab tab)
     {
-    if (IsInternalUrl(tab.Url)) return;
+        if (IsInternalUrl(tab.Url)) return;
         tab.Url = tab.View.CoreWebView2.Source;
         UpdateTabToolTip(tab);
         if (Active == tab) RefreshChrome();
@@ -474,10 +491,40 @@ public partial class BrowserWindow : Window
 
     private async void VaultClick(object sender, RoutedEventArgs args)
     {
-        if (await EnsureVaultOpenAsync()) new VaultWindow(this, session.Vault).ShowDialog();
-        else if (session.Vault.UsesProfilePassword)
-            MessageBox.Show(this, "다운로드 금고가 잠겨 있습니다. VEIL을 다시 시작하고 보호 프로필 잠금 해제 단계에서 금고를 여세요.",
-                "다운로드 금고", MessageBoxButton.OK, MessageBoxImage.Information);
+        if (!SettingsReady() || session.VaultUiOpen || session.SettingsUiOpen ||
+            session.PermissionUiOpen || session.PasswordUiOpen) return;
+        session.VaultUiOpen = true;
+        session.PermissionUiOpen = true;
+        try
+        {
+            if (await EnsureVaultOpenAsync())
+            {
+                if (SettingsReady())
+                    new VaultWindow(this, session.Vault, SettingsReady).ShowDialog();
+            }
+            else if (SettingsReady() && session.Vault.UsesProfilePassword)
+                MessageBox.Show(this, "다운로드 금고가 잠겨 있습니다. VEIL을 다시 시작하고 보호 프로필 잠금 해제 단계에서 금고를 여세요.",
+                    "다운로드 금고", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException
+            or System.ComponentModel.Win32Exception or System.Text.Json.JsonException)
+        {
+            if (SettingsReady()) Status.Text = "다운로드 금고를 열지 못했습니다.";
+        }
+        finally
+        {
+            session.VaultUiOpen = false;
+            session.PermissionUiOpen = false;
+            if (SettingsReady())
+                foreach (var window in session.Windows.ToArray())
+                {
+                    if (window.closing) continue;
+                    foreach (var tab in window.Tabs.Items.OfType<TabItem>().Select(item => item.Tag).OfType<BrowserTab>())
+                        if (tab.Url == "veil://downloads" && tab.View.CoreWebView2 is { } web)
+                            try { web.NavigateToString(window.BuildInternalPage("veil://downloads")); }
+                            catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
+                }
+        }
     }
 
     /// <summary>Drops the engine's HTTP disk cache after a cancelled download (twice: the engine can still
@@ -556,20 +603,27 @@ public partial class BrowserWindow : Window
         if (tab.View.CoreWebView2 is { } web) web.IsMuted = !web.IsMuted;
     }
 
-    private static void UpdateTabToolTip(BrowserTab tab) =>
-        tab.Item.ToolTip = tab.Url == "about:blank" ? tab.Title : $"{tab.Title}\n{tab.Url}";
+    private static void UpdateTabToolTip(BrowserTab tab)
+    {
+        string title = (tab.Pinned ? "[고정] " : "") + tab.Title;
+        tab.Item.ToolTip = tab.Url == "about:blank" ? title : $"{title}\n{tab.Url}";
+        System.Windows.Automation.AutomationProperties.SetName(tab.Item, title);
+    }
 
     // ── Tab lifetime ─────────────────────────────────────────────────────────
 
-    private async void CloseTab(TabItem item)
+    private async void CloseTab(TabItem item) => await CloseTabAsync(item);
+
+    private async Task CloseTabAsync(TabItem item, bool protectPinned = false)
     {
-        if (closing || !Tabs.Items.Contains(item)) return;
-        if (!await AnimateTabClose(item) || closing || !Tabs.Items.Contains(item)) return;
+        if (closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
         var tab = (BrowserTab)item.Tag;
-        if (IsWebUrl(tab.Url)) closedTabs.Push(tab.Url);
+        if (protectPinned && tab.Pinned) return;
+        if (!await AnimateTabClose(item) || closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
+        if (IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
         Tabs.Items.Remove(item);
         Pages.Children.Remove(tab.View);
-        tab.View.Dispose();
+        tab.EngineView.Dispose();
         LayoutTabs();
         if (Tabs.Items.Count == 0)
         {
@@ -583,6 +637,8 @@ public partial class BrowserWindow : Window
     private void TabChanged(object sender, SelectionChangedEventArgs args)
     {
         if (!IsLoaded || args.OriginalSource != Tabs || closing) return;
+        CloseAddressSuggestions();
+        SetAddressText(Active?.Url is null or "about:blank" ? "" : Active.Url);
         foreach (TabItem item in Tabs.Items)
             ((BrowserTab)item.Tag).View.Visibility = item == Tabs.SelectedItem ? Visibility.Visible : Visibility.Hidden;
         if (fullScreen && fullScreenFromPage && Active?.View.CoreWebView2?.ContainsFullScreenElement != true) SetFullScreen(false);
@@ -596,7 +652,7 @@ public partial class BrowserWindow : Window
         UpdateHttpsBar();
         UpdateThreatBar();
         if (!Address.IsKeyboardFocusWithin)
-            Address.Text = Active?.Url is null or "about:blank" ? "" : Active.Url;
+            SetAddressText(Active?.Url is null or "about:blank" ? "" : Active.Url);
         Home.Visibility = Active?.Url is null or "about:blank" ? Visibility.Visible : Visibility.Collapsed;
         if (Active is not null)
             Active.View.Visibility = Home.Visibility == Visibility.Visible ? Visibility.Hidden : Visibility.Visible;
@@ -609,8 +665,9 @@ public partial class BrowserWindow : Window
     {
         bool hasDownloads = session.ActiveDownloads.Count > 0;
         if (hasDownloads) DownloadButton.Visibility = Visibility.Visible;
-        DownloadProgressPanel.Visibility = hasDownloads && Active?.Url == "veil://downloads"
+        DownloadProgressPanel.Visibility = Active?.Url == "veil://downloads"
             ? Visibility.Visible : Visibility.Collapsed;
+        ActiveDownloadsList.Visibility = hasDownloads ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void CancelDownloadClick(object sender, RoutedEventArgs args)
@@ -620,8 +677,8 @@ public partial class BrowserWindow : Window
 
     private void UpdateNavigationButtons()
     {
-        Back.IsEnabled = Active?.View.CoreWebView2?.CanGoBack == true;
-        Forward.IsEnabled = Active?.View.CoreWebView2?.CanGoForward == true;
+        Back.IsEnabled = Active?.EngineView.CanGoBack == true;
+        Forward.IsEnabled = Active?.EngineView.CanGoForward == true;
         Reload.IsEnabled = IsWebUrl(Active?.Url);
     }
 
@@ -644,7 +701,7 @@ public partial class BrowserWindow : Window
         _ => "새 탭",
     };
 
-    internal static Uri? ResolveAddress(string input)
+    internal static Uri? ResolveAddress(string input, string? searchEngine = null)
     {
         input = input.Trim();
         if (input.Length == 0) return null;
@@ -660,7 +717,7 @@ public partial class BrowserWindow : Window
                 return candidate.IsLoopback ? new UriBuilder(candidate) { Scheme = "http", Port = candidate.IsDefaultPort ? -1 : candidate.Port }.Uri : candidate;
             if (input.Contains(':')) return null;
         }
-        return new Uri("https://duckduckgo.com/?q=" + Uri.EscapeDataString(input));
+        return SearchPolicy.Search(searchEngine, input);
     }
 
     private string BuildInternalPage(string? url)
@@ -743,7 +800,8 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void FocusAddress()
     {
-        Address.Text = Active?.Url is null or "about:blank" ? "" : Active.Url;
+        CloseAddressSuggestions();
+        SetAddressText(Active?.Url is null or "about:blank" ? "" : Active.Url);
         Address.Focus();
         Address.SelectAll();
     }
@@ -751,9 +809,28 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private void AddressKeyDown(object sender, KeyEventArgs args)
     {
         Key key = args.Key == Key.System ? args.SystemKey : args.Key;
-        if (key == Key.Escape) { FocusAddress(); return; }
+        if (key == Key.Escape)
+        {
+            args.Handled = true;
+            if (AddressSuggestionsPopup.IsOpen) CloseAddressSuggestions();
+            else FocusAddress();
+            return;
+        }
+        if (key is Key.Down or Key.Up && AddressSuggestionsPopup.IsOpen && Keyboard.Modifiers == ModifierKeys.None)
+        {
+            args.Handled = true;
+            MoveAddressSuggestion(key == Key.Down ? 1 : -1);
+            return;
+        }
         if (key != Key.Enter) return;
         args.Handled = true;
+        if (AddressSuggestionsPopup.IsOpen && AddressSuggestionsList.SelectedItem is AddressSuggestion selected &&
+            !Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            OpenAddressSuggestion(selected, Keyboard.Modifiers.HasFlag(ModifierKeys.Alt));
+            return;
+        }
+        CloseAddressSuggestions();
         string text = Address.Text.Trim();
         // Ctrl+Enter completes a bare name to www.<name>.com, as in Chrome and Edge.
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && text.Length > 0 && !text.Contains('.') &&
@@ -762,7 +839,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
         {
             // Alt+Enter opens the address in a new tab next to the current one.
-            if (ResolveAddress(text) is { } url && Active is { } current)
+            if (ResolveAddress(text, data.SearchEngine) is { } url && Active is { } current)
                 _ = OpenTab(url.AbsoluteUri, index: Tabs.Items.IndexOf(current.Item) + 1);
             return;
         }
@@ -771,21 +848,22 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void NavigateAddress(string input)
     {
-        var url = ResolveAddress(input);
+        CloseAddressSuggestions();
+        var url = ResolveAddress(input, data.SearchEngine);
         if (url is null)
         {
             Status.Text = "웹 주소 또는 검색어를 입력하세요.";
             return;
         }
         if (Active is not { } tab) return;
-        Address.Text = url.AbsoluteUri;
+        SetAddressText(url.AbsoluteUri);
         if (IsInternalUrl(url.AbsoluteUri))
         {
             tab.Url = url.AbsoluteUri;
             tab.Title = InternalTitle(tab.Url);
             tab.Header.Label.Text = tab.Title;
             tab.View.Visibility = Visibility.Visible;
-            tab.View.CoreWebView2.NavigateToString(BuildInternalPage(tab.Url));
+            tab.EngineView.ShowInternalHtml(BuildInternalPage(tab.Url));
             RefreshChrome();
             UpdateTabToolTip(tab);
             return;
@@ -793,7 +871,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         tab.Url = url.AbsoluteUri;
         tab.View.Visibility = Visibility.Visible;
         tab.View.Focus();
-        tab.View.CoreWebView2.Navigate(url.AbsoluteUri);
+        tab.EngineView.Navigate(url.AbsoluteUri);
     }
 
     // ── Commands ─────────────────────────────────────────────────────────────
@@ -811,7 +889,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void Zoom(double? change)
     {
-        if (Active is { } tab) tab.View.ZoomFactor = change is null ? 1 : Math.Clamp(tab.View.ZoomFactor + change.Value, 0.25, 5);
+        if (Active is { } tab) tab.EngineView.ZoomFactor = change is null ? 1 : Math.Clamp(tab.EngineView.ZoomFactor + change.Value, 0.25, 5);
     }
 
     private async void NewTabClick(object sender, RoutedEventArgs args)
@@ -823,21 +901,21 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void NewWindowClick(object sender, RoutedEventArgs args)
     {
-        if (engine is not null) OpenWindow(["about:blank"], 0, cascade: true);
+        if (session.EngineHost.IsReady && !session.IsEnding && !session.EngineLost) OpenWindow(["about:blank"], 0, cascade: true);
     }
 
     private async void RestoreClick(object sender, RoutedEventArgs args)
     {
-        if (closedTabs.TryPop(out string? url) && await OpenTab(url) is null) closedTabs.Push(url);
+        if (closedTabs.TryPop(out var closed) && await OpenTab(closed.Url, pinned: closed.Pinned) is null) closedTabs.Push(closed);
     }
 
-    private void BackClick(object sender, RoutedEventArgs args) { if (Back.IsEnabled) Active?.View.GoBack(); }
-    private void ForwardClick(object sender, RoutedEventArgs args) { if (Forward.IsEnabled) Active?.View.GoForward(); }
+    private void BackClick(object sender, RoutedEventArgs args) { if (Back.IsEnabled) Active?.EngineView.GoBack(); }
+    private void ForwardClick(object sender, RoutedEventArgs args) { if (Forward.IsEnabled) Active?.EngineView.GoForward(); }
     private void ReloadClick(object sender, RoutedEventArgs args)
     {
         if (!Reload.IsEnabled) return;
         Motion.Spin((System.Windows.Media.RotateTransform)ReloadGlyph.RenderTransform);
-        Active?.View.Reload();
+        Active?.EngineView.Reload();
     }
 
     private async void HardReload()
@@ -847,7 +925,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         try { await tab.View.CoreWebView2.CallDevToolsProtocolMethodAsync("Page.reload", "{\"ignoreCache\":true}"); }
         catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException)
         {
-            tab.View.Reload();
+            tab.EngineView.Reload();
         }
     }
 
@@ -855,7 +933,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     {
         if (Active is { Loading: true } tab)
         {
-            tab.View.CoreWebView2.Stop();
+            tab.EngineView.Stop();
             Status.Text = "페이지 로드를 중지했습니다.";
         }
     }
@@ -864,7 +942,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     {
         if (Active is not { } tab) return;
         tab.Url = "about:blank";
-        tab.View.CoreWebView2.Navigate("about:blank");
+        tab.EngineView.Navigate("about:blank");
         RefreshChrome();
         FocusAddress();
     }

@@ -26,6 +26,55 @@ public partial class BrowserWindow
                 await WaitFor(() => !restoring, "desktop initialization");
                 Check(ResolveAddress("example.test")?.AbsoluteUri == "https://example.test/", "HTTPS address default");
                 Check(ResolveAddress("한글 브라우저")?.Host == "duckduckgo.com", "search encoding");
+                Check(ResolveAddress("한글 & 검색", "google")?.Host == "www.google.com" &&
+                    ResolveAddress("한글 & 검색", "google")?.Query.Contains("%26") == true &&
+                    ResolveAddress("한글 검색", "bing")?.Host == "www.bing.com" &&
+                    ResolveAddress("한글 검색", "naver")?.Host == "search.naver.com" &&
+                    ResolveAddress("한글 검색", "invalid")?.Host == "duckduckgo.com",
+                    "fixed HTTPS search providers and fallback");
+                var localData = new BrowserData();
+                localData.Bookmarks.Add(new PageEntry("Synthetic", "https://example.test/", DateTimeOffset.Now));
+                localData.History.Add(new PageEntry("Synthetic duplicate", "https://example.test/", DateTimeOffset.Now));
+                localData.History.Add(new PageEntry("Synthetic token", "https://example.test/?token=synthetic", DateTimeOffset.Now));
+                localData.History.Add(new PageEntry("Synthetic fragment", "https://example.test/#secret", DateTimeOffset.Now));
+                localData.History.Add(new PageEntry("Synthetic invalid", "file:///C:/synthetic", DateTimeOffset.Now));
+                Check(SearchPolicy.Suggest(localData, "synthetic").Count == 1 &&
+                    SearchPolicy.Suggest(localData, "synthetic")[0].Url == "https://example.test/",
+                    "local suggestions deduplicate and exclude sensitive URL forms");
+                localData.LocalAddressSuggestions = false;
+                Check(SearchPolicy.Suggest(localData, "synthetic").Count == 0, "local suggestions disabled");
+                var rule = new SitePermissionRule("https://example.test", "camera", SitePermissionPolicy.Ask);
+                Check(SitePermissionPolicy.ValidRules([rule]) &&
+                    !SitePermissionPolicy.ValidRules([rule, rule]) &&
+                    !SitePermissionPolicy.ValidRules([rule with { Mode = "unknown" }]) &&
+                    SitePermissionPolicy.ModeFor([rule], "https://example.test:8443", "camera") == SitePermissionPolicy.Block &&
+                    SitePermissionPolicy.ModeFor([rule], "https://example.test", "microphone") == SitePermissionPolicy.Block &&
+                    SitePermissionPolicy.Origin("http://example.test") is null, "permission policy defaults and exact scope");
+                var unusedEngine = new WebView2BrowserEngine();
+                Check(!unusedEngine.IsReady && unusedEngine.RuntimeVersion is null, "uninitialized engine state");
+                bool refusedView = false;
+                try { using var premature = unusedEngine.CreateView(); }
+                catch (InvalidOperationException) { refusedView = true; }
+                Check(refusedView, "engine refuses view before verified initialization");
+                var previewEntry = new VaultEntry(Guid.NewGuid().ToString("N"), "synthetic.txt", 12, DateTimeOffset.Now, "example.test");
+                Check(VaultPresentation.CanPreview(previewEntry) &&
+                    !VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.html" }) &&
+                    !VaultPresentation.CanPreview(previewEntry with { Bytes = VaultPresentation.PreviewLimit + 1 }) &&
+                    !VaultPresentation.CanPreview(previewEntry with { Recovered = true }), "text preview allowlist");
+                Check(VaultPresentation.DecodeText("synthetic"u8.ToArray()) == "synthetic" &&
+                    VaultPresentation.ExportName(previewEntry with { Name = "CON.txt" }) == "VEIL-download.bin" &&
+                    VaultPresentation.Filter([previewEntry], "example", VaultSort.Recent, false).Count == 1,
+                    "vault presentation and filename policy");
+                var sites = SiteDataPolicy.Origins(["https://example.test/path?secret=test", "https://example.test:443/",
+                    "https://example.test:8443/", "http://example.test/", "file:///C:/test", "https://user@example.test/"]);
+                Check(sites.Count == 3 && sites.Contains("https://example.test") &&
+                    sites.Contains("https://example.test:8443") && sites.Contains("http://example.test"),
+                    "site data origins isolate schemes and ports");
+                var domains = SiteDataPolicy.Summarize(["example.test", ".example.test", "sub.example.test", "EXAMPLE.TEST"]);
+                Check(domains.Count == 3 && domains.Single(item => item.Domain == "example.test").Count == 2 &&
+                    !SiteDataPolicy.SameCookieDomain(".example.test", "example.test") &&
+                    !SiteDataPolicy.SameCookieDomain("sub.example.test", "example.test"),
+                    "cookie storage domains never use suffix matching");
                 Check(ResolveAddress("127.0.0.1:8765")?.AbsoluteUri == "http://127.0.0.1:8765/", "fixture address");
                 Check(ResolveAddress("file:///C:/secret") is null &&
                     ResolveAddress("https://username@example.test") is null, "address scheme and credentials rejected");
@@ -94,12 +143,21 @@ public partial class BrowserWindow
                     RestoreClick(this, new RoutedEventArgs());
                     await ReadyAt("/second");
                     Check(Tabs.Items.Count == 3, "closed tab restored");
+                    SetTabPinned((TabItem)Tabs.Items[0], true);
+                    Check(PinnedTabCount == 1 && ((BrowserTab)((TabItem)Tabs.Items[0]).Tag).Pinned, "tab pinned");
                     Tabs.SelectedIndex = 1;
+                    MoveSelectedTab(-1);
+                    Check(Tabs.SelectedIndex == 1, "normal tab cannot cross pinned boundary");
                     SaveTabs();
+                    Check(BrowserData.Load(statePath).PinnedCount == 1, "pinned count persisted");
                 }
                 else if (stage is "read" or "crash")
                 {
                     Check(Tabs.Items.Count == 3 && Tabs.SelectedIndex == 1, "tabs and selection restored");
+                    Check(PinnedTabCount == 1, "pinned tab restored");
+                    // Only the normal read stage needs unpinned tabs for its existing reorder checks.
+                    // The interrupted-write stage must preserve the pin for the next read process.
+                    if (stage == "read") SetTabPinned((TabItem)Tabs.Items[0], false);
                     await ReadyAt("/");
                     Check(data.Bookmarks.Count == 1 && data.Bookmarks[0].Url == origin + "/", "bookmark restored");
                     Check(data.History.Any(entry => entry.Url.EndsWith("/second")), "history restored");

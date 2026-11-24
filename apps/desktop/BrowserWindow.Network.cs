@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using Microsoft.Web.WebView2.Core;
 
@@ -91,11 +92,28 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
 
     private void NetworkClick(object sender, RoutedEventArgs args)
     {
+        if (closing || restoring || session.IsEnding || session.EngineLost) return;
         var dialog = new NetworkSettingsDialog(this, data.Network ?? NetworkSettings.Standard);
-        if (dialog.ShowDialog() != true || dialog.Result is not { } chosen) return;
+        if (dialog.ShowDialog() != true || dialog.Result is not { } chosen ||
+            closing || session.IsEnding || session.EngineLost) return;
+        if (chosen.Problem is not null)
+        {
+            Status.Text = "네트워크 설정이 올바르지 않습니다.";
+            return;
+        }
+        var previous = data.Network;
         data.Network = chosen == NetworkSettings.Standard ? null : chosen;
-        SaveData();
-        UpdateNetworkIndicator();
-        Status.Text = $"{chosen.Describe()}을(를) 선택했습니다. VEIL을 다시 시작하면 적용됩니다.";
+        try { data.Save(statePath); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            data.Network = previous;
+            Status.Text = "네트워크 설정을 저장하지 못했습니다. 이전 설정을 유지합니다.";
+            return;
+        }
+        foreach (var window in session.Windows.ToArray())
+            if (!window.closing) window.UpdateNetworkIndicator();
+        Status.Text = chosen == session.Network
+            ? "현재 적용된 네트워크 설정을 유지합니다."
+            : "네트워크 설정을 저장했습니다. VEIL을 다시 시작하면 적용됩니다.";
     }
 }

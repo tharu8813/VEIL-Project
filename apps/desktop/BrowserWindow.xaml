@@ -94,8 +94,26 @@
                     <Grid x:Name="AddressHost" Grid.Column="1" Margin="10,0" MaxWidth="860"
                           RenderTransformOrigin="0.5,0.5">
                         <TextBox x:Name="Address" Style="{StaticResource PillTextBox}" Height="34" Tag="&#xE721;"
-                                 ToolTip="주소 또는 DuckDuckGo 검색 (Ctrl+L)" AutomationProperties.Name="주소 또는 검색어"
+                                 ToolTip="주소 또는 검색 (Ctrl+L)" AutomationProperties.Name="주소 또는 검색어"
                                  KeyDown="AddressKeyDown" GotKeyboardFocus="AddressGotFocus" />
+                        <Popup x:Name="AddressSuggestionsPopup" PlacementTarget="{Binding ElementName=Address}"
+                               Placement="Bottom" AllowsTransparency="True" StaysOpen="True" Focusable="False">
+                            <Border Width="{Binding ActualWidth, ElementName=Address}" Background="{StaticResource SurfaceBrush}"
+                                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="10" Padding="5">
+                                <ListBox x:Name="AddressSuggestionsList" Style="{StaticResource VeilList}" MaxHeight="350"
+                                         Focusable="False" AutomationProperties.Name="로컬 주소 추천"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />
+                                                <TextBlock Text="{Binding Url}" TextTrimming="CharacterEllipsis" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Border>
+                        </Popup>
                     </Grid>
                     <StackPanel x:Name="ActionGroup" Grid.Column="2" Orientation="Horizontal">
                         <Button x:Name="BookmarkButton" Style="{StaticResource IconButton}" ToolTip="북마크 추가 (Ctrl+D)"
@@ -126,15 +144,17 @@
                                     <MenuItem Header="새 탭" InputGestureText="Ctrl+T" Click="NewTabClick" />
                                     <MenuItem Header="새 창" InputGestureText="Ctrl+N" Click="NewWindowClick" />
                                     <MenuItem Header="닫은 탭 복원" InputGestureText="Ctrl+Shift+T" Click="RestoreClick" />
+                                    <MenuItem Header="탭 검색" InputGestureText="Ctrl+Shift+A" Click="TabSearchClick" />
                                     <Separator />
                                     <MenuItem Header="북마크 추가" InputGestureText="Ctrl+D" Click="BookmarkClick" />
                                     <MenuItem Header="북마크 관리" InputGestureText="Ctrl+B" Click="BookmarksClick" />
                                     <MenuItem Header="방문 기록" InputGestureText="Ctrl+H" Click="HistoryClick" />
                                     <MenuItem Header="다운로드" InputGestureText="Ctrl+J" Click="DownloadsClick" />
                                     <MenuItem Header="다운로드 금고" InputGestureText="Ctrl+Shift+J" Click="VaultClick" />
-                                    <MenuItem Header="네트워크 보호" Click="NetworkClick" />
-                                    <MenuItem Header="보안" Click="SecurityClick" />
+                                    <MenuItem Header="비밀번호 관리자" Click="PasswordsClick" />
                                     <MenuItem Header="페이지 내 검색" InputGestureText="Ctrl+F" Click="FindClick" />
+                                    <Separator />
+                                    <MenuItem Header="설정" InputGestureText="Ctrl+," Click="SettingsClick" />
                                     <Separator />
                                     <MenuItem Header="전체 화면" InputGestureText="F11" Click="FullScreenClick" />
                                 </ContextMenu>
@@ -223,7 +243,13 @@
             <Border x:Name="DownloadProgressPanel" Grid.Row="4" Visibility="Collapsed"
                     Background="{StaticResource ChromeBrush}" BorderBrush="{StaticResource LineBrush}"
                     BorderThickness="0,0,0,1">
-                <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="18,8">
+                        <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Content="다운로드 금고 열기"
+                                Click="VaultClick" AutomationProperties.Name="다운로드 금고 열기" />
+                        <TextBlock Text="다운로드 관리" VerticalAlignment="Center" Foreground="{StaticResource TextBrush}" />
+                    </DockPanel>
+                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
                     <ItemsControl x:Name="ActiveDownloadsList" MaxWidth="920" Margin="18,8"
                                   AutomationProperties.Name="진행 중인 다운로드">
                         <ItemsControl.ItemTemplate>
@@ -248,7 +274,8 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                </ScrollViewer>
+                    </ScrollViewer>
+                </DockPanel>
             </Border>
 
             <Grid x:Name="Pages" Grid.Row="5" Background="{StaticResource InkBrush}" ClipToBounds="True">

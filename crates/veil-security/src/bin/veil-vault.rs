@@ -44,6 +44,8 @@ fn main() -> ExitCode {
     let mut input = BufReader::new(stdin.lock());
     let result = match args.as_slice() {
         [command, dir] if command == "serve" => serve(Path::new(dir), &mut input).map(|()| String::new()),
+        [command, path] if matches!(command.as_str(), "passwords-read" | "passwords-create" | "passwords-replace") =>
+            password_command(command, Path::new(path), &mut input).map(|()| String::new()),
         _ => one_shot(&args, &mut input),
     };
     match result {
@@ -57,6 +59,28 @@ fn main() -> ExitCode {
             eprintln!("{}", reason(&error));
             ExitCode::FAILURE
         }
+    }
+}
+
+fn password_command(command: &str, path: &Path, input: &mut impl BufRead) -> io::Result<()> {
+    use veil_security::password_store;
+    let mut encoded = Zeroizing::new(String::new());
+    // Bounded hex UTF-8 passphrase line; the following bytes are the JSON payload for writes.
+    if (&mut *input).take(2050).read_line(&mut encoded)? == 0 || !encoded.ends_with('\n') {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid password store request"));
+    }
+    let passphrase = profile_secret(encoded.trim_end_matches(['\r', '\n']))?;
+    drop(encoded);
+    match command {
+        "passwords-read" => {
+            let plain = password_store::read(path, passphrase)?;
+            let mut out = io::stdout().lock();
+            out.write_all(&plain)?;
+            out.flush()
+        }
+        "passwords-create" | "passwords-replace" =>
+            password_store::write(path, passphrase, input, command == "passwords-replace"),
+        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid password store command")),
     }
 }
 

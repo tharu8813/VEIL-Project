@@ -294,6 +294,8 @@ public partial class BrowserWindow
         internal required TextBlock Glyph { get; init; }
         internal required Path Spinner { get; init; }
         internal required Button Audio { get; init; }
+        internal required Button Close { get; init; }
+        internal required TextBlock Pin { get; init; }
     }
 
     private TabHeader CreateTabHeader(TabItem item, BrowserTab tab)
@@ -369,10 +371,17 @@ public partial class BrowserWindow
         Grid.SetColumn(close, 3);
         root.Children.Add(icon);
         root.Children.Add(label);
+        var pin = new TextBlock
+        {
+            Text = "", FontFamily = (FontFamily)FindResource("IconFont"),
+            FontSize = 10, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed,
+        };
+        Grid.SetColumn(pin, 1);
+        root.Children.Add(pin);
         root.Children.Add(audio);
         root.Children.Add(close);
         item.Header = root;
-        return new TabHeader { Root = root, Label = label, Favicon = favicon, Glyph = glyph, Spinner = spinner, Audio = audio };
+        return new TabHeader { Root = root, Label = label, Favicon = favicon, Glyph = glyph, Spinner = spinner, Audio = audio, Close = close, Pin = pin };
     }
 
     private void SetTabLoading(BrowserTab tab, bool loading)
@@ -432,10 +441,13 @@ public partial class BrowserWindow
         var items = Tabs.Items.Cast<TabItem>().Where(item => !closingTabs.Contains(item)).ToList();
         if (items.Count == 0) return;
         double available = TabHost.ActualWidth - NewTab.ActualWidth - NewTab.Margin.Left - 12;
-        double width = available > 0 ? Math.Clamp(available / items.Count - 4, MinTabWidth, MaxTabWidth) : MaxTabWidth;
-        double target = width - 18; // template padding around the header
+        const double pinnedWidth = 84;
+        int pinned = items.Count(item => item.Tag is BrowserTab { Pinned: true });
+        int normal = Math.Max(1, items.Count - pinned);
+        double width = available > 0 ? Math.Clamp((available - pinned * (pinnedWidth + 4)) / normal - 4, MinTabWidth, MaxTabWidth) : MaxTabWidth;
         foreach (var item in items)
         {
+            double target = (item.Tag is BrowserTab { Pinned: true } ? pinnedWidth : width) - 18;
             var root = (FrameworkElement)item.Header;
             if (item == entering && Motion.Enabled)
             {

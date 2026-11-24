@@ -72,7 +72,7 @@ jobs:
 
       - name: Check service installer safety invariants
         shell: pwsh
-        run: node --test tests/install/broker-service-contract.test.mjs
+        run: node --test tests/install/broker-service-contract.test.mjs tests/install/package-maintenance-contract.test.mjs
 
       - name: Test BitLocker recovery flow with a fake provider
         shell: powershell

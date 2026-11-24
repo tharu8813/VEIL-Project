@@ -13,6 +13,7 @@ use zeroize::Zeroizing;
 pub mod vault_credentials;
 pub mod vault_backup;
 pub mod vault_generation;
+pub mod password_store;
 
 const VERSION: &str = "VEIL-KEYRING-1";
 const SCRYPT_LOG_N: u8 = 17;
