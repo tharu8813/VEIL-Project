@@ -160,6 +160,10 @@ public partial class BrowserWindow
 
                 Check(!DownloadFailurePolicy.Describe(new IOException("synthetic-secret"), DownloadPhase.Streaming, true)
                     .Contains("synthetic-secret"), "download failure detail does not expose raw exceptions");
+                Check(DownloadFailurePolicy.Describe(DownloadVault.SealFailure("err\tStorageFull: synthetic-secret"),
+                    DownloadPhase.Publishing, true) == "저장 공간 부족 · 보관 목록 확인 필요" &&
+                    DownloadVault.SealFailure("err\tOther: StorageFull") is not VaultStorageFullException,
+                    "Rust storage-full error classified without raw text or unsafe retry");
                 Check(InlineDownloadPolicy.Decode("data:application/octet-stream;base64,c3ludGhldGlj").SequenceEqual("synthetic"u8.ToArray()) &&
                     InlineDownloadPolicy.Decode("data:text/plain;charset=utf-8,a%20b+%00").SequenceEqual(new byte[] { 97, 32, 98, 43, 0 }) &&
                     InlineDownloadPolicy.SourceAllowed(new Uri("https://example.test/")) &&
@@ -584,6 +588,104 @@ public partial class BrowserWindow
                         }));
                     }
                     finally { UserPrompts.SmokeConfirm = null; }
+                }
+#endif
+#if DEBUG
+                else if (stage == "vault-publication-faults")
+                {
+                    // Fresh synthetic vault only. Obstruct one directory at a time, preserving the
+                    // original ciphertext. This tests filesystem write failure, not actual ENOSPC.
+                    var vault = session.Vault;
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 0,
+                        "fresh publication test vault");
+                    NavigateAddress(origin);
+                    await ReadyAt("/");
+                    async Task<VaultResult> Capture(string kind, string name)
+                    {
+                        int before = vault.Results.Count;
+                        await CaptureAsync(Active!.View.CoreWebView2, new Uri(origin + "/vault-dl?kind=" + kind), name, 0, 0);
+                        Check(vault.Results.Count == before + 1 && session.ActiveDownloads.Count == 0,
+                            "native capture completes once");
+                        return vault.Results[^1];
+                    }
+                    string Digest(string path)
+                    {
+                        using var input = File.OpenRead(path);
+                        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(input));
+                    }
+                    var seed = await Capture("small", "publication-seed.bin");
+                    Check(seed.Outcome == DownloadVault.Stored && vault.Entries.Count == 1, "seed published");
+                    var original = vault.Entries.Single();
+                    string originalPath = vault.ObjectPath(original);
+                    string originalHash = Digest(originalPath);
+                    string objects = Path.Combine(vault.Directory, "objects");
+                    string index = Path.Combine(vault.Directory, "index");
+                    string meta = Path.Combine(vault.Directory, "meta");
+                    string[] ObjectIds() => Directory.GetFiles(objects, "*.veil")
+                        .Select(path => Path.GetFileNameWithoutExtension(path)).Order().ToArray();
+                    async Task<string> Fault(string directory, string kind, string name)
+                    {
+                        var before = ObjectIds();
+                        var indexes = Directory.GetFiles(index, "*.veil").ToDictionary(path => Path.GetFileName(path)!, Digest);
+                        string saved = directory + "-publication-test";
+                        Check(!Directory.Exists(saved) && !File.Exists(saved), "fresh fault path");
+                        Directory.Move(directory, saved);
+                        bool obstructed = false;
+                        try
+                        {
+                            using (var marker = new FileStream(directory, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                                marker.WriteByte(0x52);
+                            obstructed = true;
+                            var result = await Capture(kind, name);
+                            Check(result.Outcome == DownloadVault.Failed && result.ObjectPath is null && retryDownload is null &&
+                                result.Detail?.Contains("보관 목록 확인 필요") == true,
+                                "publication failure reported without automatic retry");
+                            Check(!vault.Unlocked && vault.Entries.Count == 0, "uncertain metadata write locks vault");
+                            Check(Digest(originalPath) == originalHash, "original encrypted object unchanged");
+                            string previousIndex = directory == index ? saved : index;
+                            Check(indexes.All(pair => Digest(Path.Combine(previousIndex, pair.Key)) == pair.Value) &&
+                                Directory.GetFiles(previousIndex, "*.veil").Length == indexes.Count,
+                                "old authenticated index generations unchanged");
+                            string[] added = ObjectIds().Except(before).ToArray();
+                            Check(added.Length == 1 && before.All(id => ObjectIds().Contains(id)),
+                                "only one completed encrypted body retained for recovery");
+                            return added.Single();
+                        }
+                        finally
+                        {
+                            if (obstructed) File.Delete(directory);
+                            Directory.Move(saved, directory);
+                        }
+                    }
+                    string orphan = await Fault(meta, "redirect", "publication-metadata-failure.bin");
+                    Check(!File.Exists(Path.Combine(meta, orphan + ".veil")), "orphan has no published metadata");
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 2,
+                        "reopen rebuilds index after metadata failure");
+                    var recovered = vault.Entries.Single(entry => entry.Id == orphan);
+                    Check(recovered.Recovered && await vault.VerifyAsync(recovered) == 2048 &&
+                        await vault.VerifyAsync(vault.Entries.Single(entry => entry.Id == original.Id)) == 1024,
+                        "orphan and original authenticate; missing filename not invented");
+                    string indexed = await Fault(index, "large", "publication-index-failure.bin");
+                    Check(File.Exists(Path.Combine(meta, indexed + ".veil")), "metadata retained after index failure");
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 3,
+                        "reopen rebuilds index after index failure");
+                    var fromMeta = vault.Entries.Single(entry => entry.Id == indexed);
+                    Check(!fromMeta.Recovered && fromMeta.Name == "publication-index-failure.bin" &&
+                        fromMeta.Bytes == 8L * 1024 * 1024 && await vault.VerifyAsync(fromMeta) == fromMeta.Bytes,
+                        "metadata and authenticated content recovered");
+                    var next = await Capture("small", "publication-after-recovery.bin");
+                    Check(next.Outcome == DownloadVault.Stored && vault.Entries.Count == 4 && Digest(originalPath) == originalHash,
+                        "subsequent explicit download works without changing original");
+                    vault.Lock();
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 4,
+                        "rebuilt index persists across reopen");
+                    Check(vault.Entries.Select(entry => entry.Id).Distinct().Count() == 4 &&
+                        ObjectIds().Length == 4 && !Directory.GetFiles(vault.Directory, ".veil-encrypted-*", SearchOption.AllDirectories).Any(),
+                        "exact encrypted inventory, no duplicate or staging remnants");
+                    var verified = new List<object>();
+                    foreach (var entry in vault.Entries)
+                        verified.Add(new { entry.Id, entry.Name, entry.Recovered, bytes = await vault.VerifyAsync(entry) });
+                    File.WriteAllText(Path.ChangeExtension(report, ".vault.json"), JsonSerializer.Serialize(new { entries = verified }));
                 }
 #endif
                 else if (stage == "vault")
