@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <ApplicationIcon>Assets/veil.ico</ApplicationIcon>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -9,6 +10,7 @@
     <RestorePackagesWithLockFile Condition="'$(VeilWebView2Sdk)' == ''">true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
+    <Resource Include="Assets/veil.ico" />
     <Compile Include="../shared/AdminOnlyFile.cs" Link="Shared/AdminOnlyFile.cs" />
   </ItemGroup>
   <!-- Phase 4-0: the Rust vault bridge. Without it every download is blocked (never stored in plaintext). -->
