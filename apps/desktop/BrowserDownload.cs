@@ -32,6 +32,19 @@ internal sealed class BrowserDownload(string name) : INotifyPropertyChanged, IDi
         Refresh();
     }
 
+    internal void WaitForVault()
+    {
+        StatusText = "금고 설정 또는 잠금 해제 대기 중";
+        Refresh();
+    }
+
+    internal void WaitForTransfer()
+    {
+        if (!CanCancel) return;
+        StatusText = "보호 다운로드 준비 중";
+        Refresh();
+    }
+
     internal void Finish()
     {
         CanCancel = false;
