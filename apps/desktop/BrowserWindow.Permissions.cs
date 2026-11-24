@@ -10,7 +10,7 @@ public partial class BrowserWindow
     private async void SitePermissionsClick(object sender, RoutedEventArgs args)
     {
         if (FocusManagementPage("veil://settings/permissions")) return;
-        if (closing || restoring || session.IsEnding || session.EngineLost || session.PermissionUiOpen) return;
+        if (!SettingsReady() || session.PermissionUiOpen) return;
         session.PermissionUiOpen = true;
         try
         {
@@ -46,6 +46,7 @@ public partial class BrowserWindow
         // No decision is persisted in Chromium. Every raised request starts denied.
         args.SavesInProfile = false;
         args.State = CoreWebView2PermissionState.Deny;
+        if (session.IsPrivate) return;
         var kind = SitePermissionPolicy.Kind(args.PermissionKind);
         var origin = SitePermissionPolicy.Origin(args.Uri);
         long epoch = tab.NavigationEpoch;

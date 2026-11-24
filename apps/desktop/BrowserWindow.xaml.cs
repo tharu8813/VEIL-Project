@@ -71,6 +71,12 @@ public partial class BrowserWindow : Window
         adopted = adopt;
         session.Windows.Add(this);
         InitializeComponent();
+        if (session.IsPrivate)
+        {
+            Title = "VEIL · 일회용 탐색";
+            PrivateIndicator.Visibility = Visibility.Visible;
+            BookmarkButton.Visibility = Visibility.Collapsed;
+        }
         ActiveDownloadsList.ItemsSource = session.ActiveDownloads;
         PopupActiveDownloads.ItemsSource = session.ActiveDownloads;
         InitializeDownloadToolbar();
@@ -108,8 +114,10 @@ public partial class BrowserWindow : Window
         }
         foreach (var tab in Tabs.Items.OfType<TabItem>().Select(item => (BrowserTab)item.Tag).ToArray())
             ClearManagement(tab);
+        if (session.IsPrivate) DeletePrivateProfile();
         foreach (var view in Pages.Children.OfType<WebView2>())
             view.Dispose();
+        session.ReleasePrivate();
     }
 
     internal void PrepareForProtectedShutdown()
@@ -180,17 +188,51 @@ public partial class BrowserWindow : Window
         return window;
     }
 
+    private void PrivateWindowClick(object sender, RoutedEventArgs args)
+    {
+        if (closing || restoring || session.IsEnding || session.EngineLost || !session.EngineHost.IsReady) return;
+        OpenPrivateWindow();
+    }
+
+    private BrowserWindow OpenPrivateWindow()
+    {
+        var window = new BrowserWindow(session.CreatePrivate(), ["about:blank"], 0, null)
+        {
+            Width = Width, Height = Height, ShowActivated = ShowActivated, ShowInTaskbar = ShowInTaskbar,
+        };
+        window.Show();
+        return window;
+    }
+
+    private void DeletePrivateProfile()
+    {
+        // Only a verified, randomly named private profile is ever eligible for deletion.
+        foreach (var view in Pages.Children.OfType<WebView2>())
+        {
+            try
+            {
+                var profile = view.CoreWebView2?.Profile;
+                if (profile is null || !profile.IsInPrivateModeEnabled ||
+                    !string.Equals(profile.ProfileName, session.PrivateProfileName, StringComparison.OrdinalIgnoreCase)) continue;
+                profile.Delete(); // engine schedules deletion; physical erasure is not guaranteed
+                break;
+            }
+            catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException or NotSupportedException) { }
+        }
+    }
+
     /// <summary>Initialized engine views of this window's tabs (Security Manager).</summary>
     internal IEnumerable<CoreWebView2> CoreViews() => Tabs.Items.OfType<TabItem>()
         .Select(item => (item.Tag as BrowserTab)?.View.CoreWebView2).OfType<CoreWebView2>();
 
     private async Task<BrowserTab?> OpenTab(string? url, bool select = true, int? index = null, bool pinned = false)
     {
-        if (!session.EngineHost.IsReady || closing || session.IsEnding || session.EngineLost) return null;
+        if (!session.EngineHost.IsReady || closing || session.IsEnding || session.EngineLost ||
+            (session.IsPrivate && IsInternalUrl(url))) return null;
         // Reject an unsupported backend before creating or attaching any content.
         if (session.EngineHost is not WebView2BrowserEngine)
             throw new InvalidOperationException("The selected engine has no approved security integration.");
-        var engineView = session.EngineHost.CreateView();
+        var engineView = session.EngineHost.CreateView(session.PrivateProfileName);
         var tab = new BrowserTab(engineView, this) { Pinned = pinned };
         var view = tab.View;
         var item = new TabItem { Tag = tab };
@@ -223,7 +265,8 @@ public partial class BrowserWindow : Window
             }
             // SEC-004/007: the engine writes download bytes (GUID.tmp) before DownloadStarting can cancel
             // them. Keep that partial data on the profile volume instead of the user's Downloads folder.
-            string downloadScratch = Path.Combine(session.Root, ProfileScratch.FolderName, "downloads");
+            string downloadScratch = Path.Combine(session.Root, ProfileScratch.FolderName,
+                session.IsPrivate ? session.PrivateProfileName! : "downloads");
             Directory.CreateDirectory(downloadScratch);
             web.Profile.DefaultDownloadFolderPath = downloadScratch;
             // ADR-0006 standard protection: strict tracking prevention for every profile.
@@ -238,8 +281,11 @@ public partial class BrowserWindow : Window
             web.NavigationCompleted += (_, args) => tab.Owner.OnNavigationCompleted(tab, args);
             web.DownloadStarting += (_, args) => tab.Owner.OnDownloadStarting(tab, args);
             // Record navigation methods so the vault never replays a POST download as GET.
-            web.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Document);
-            web.WebResourceRequested += (_, args) => session.Vault.NoteRequest(args.Request.Method, args.Request.Uri);
+            if (!session.IsPrivate)
+            {
+                web.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Document);
+                web.WebResourceRequested += (_, args) => session.Vault.NoteRequest(args.Request.Method, args.Request.Uri);
+            }
             web.NewWindowRequested += (_, args) => tab.Owner.OnNewWindowRequested(tab, args);
             web.WindowCloseRequested += (_, _) => tab.Owner.Dispatcher.BeginInvoke(() => tab.Owner.CloseTab(tab.Item));
             web.IsDocumentPlayingAudioChanged += (_, _) => tab.Owner.UpdateAudio(tab);
@@ -356,7 +402,7 @@ public partial class BrowserWindow : Window
                 return;
             }
         }
-        if (args.IsSuccess && IsWebUrl(tab.Url))
+        if (!session.IsPrivate && args.IsSuccess && IsWebUrl(tab.Url))
             data.History.Insert(0, new PageEntry(tab.Title, tab.Url, DateTimeOffset.Now));
         if (Active == tab)
         {
@@ -380,23 +426,30 @@ public partial class BrowserWindow : Window
             if (Active == tab) Status.Text = "페이지 프로세스가 중단되었습니다. 새로고침(F5)하세요.";
             return;
         }
-        if (session.EngineLost) return;
+        if (closing || session.EngineLost) return;
         session.EngineLost = true;
-        try { session.Save(); }
+        try { session.MainSession.Save(); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         session.IsEnding = true;
-        foreach (var window in session.Windows.ToList())
+        foreach (var window in session.AllWindows.ToList())
             window.Status.Text = "브라우저 엔진이 종료되었습니다. VEIL을 다시 시작하세요.";
         if (smokeRun) return; // the smoke harness observes and closes on its own
         MessageBox.Show(this, "브라우저 엔진이 예기치 않게 종료되었습니다. 열린 탭은 저장되었습니다. VEIL을 다시 시작하세요.",
             "VEIL", MessageBoxButton.OK, MessageBoxImage.Warning);
-        foreach (var window in session.Windows.ToList()) window.Close();
+        foreach (var window in session.AllWindows.ToList()) window.Close();
     }
 
     /// <summary>Phase 4-0: the engine's download is always cancelled. Supported requests are fetched again
     /// by VEIL straight into the encrypted vault; everything else is blocked (no plaintext fallback).</summary>
     private void OnDownloadStarting(BrowserTab tab, CoreWebView2DownloadStartingEventArgs args)
     {
+        if (session.IsPrivate)
+        {
+            args.Cancel = true;
+            args.Handled = true;
+            Status.Text = "일회용 탐색에서는 다운로드를 지원하지 않습니다.";
+            return;
+        }
         var operation = args.DownloadOperation;
         long engineReceived = operation.BytesReceived;
         long engineOnDisk = ScratchBytes();
@@ -682,10 +735,11 @@ public partial class BrowserWindow : Window
         if (closing || session.IsEnding || closingTabs.Contains(item) || !Tabs.Items.Contains(item)) return;
         var tab = (BrowserTab)item.Tag;
         if (protectPinned && tab.Pinned) return;
+        if (session.IsPrivate && Tabs.Items.Count == 1) { Close(); return; }
         // Cancel pending native actions before yielding to the close animation.
         ClearManagement(tab);
         if (!await AnimateTabClose(item) || closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
-        if (IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
+        if (!session.IsPrivate && IsWebUrl(tab.Url)) closedTabs.Push(new ClosedTab(tab.Url, tab.Pinned));
         ClearManagement(tab);
         Tabs.Items.Remove(item);
         Pages.Children.Remove(tab.View);
@@ -732,7 +786,7 @@ public partial class BrowserWindow : Window
     private void RefreshDownloadProgress()
     {
         bool hasDownloads = session.ActiveDownloads.Count > 0;
-        DownloadButton.Visibility = Visibility.Visible;
+        DownloadButton.Visibility = session.IsPrivate ? Visibility.Collapsed : Visibility.Visible;
         UpdateDownloadToolbar();
         DownloadProgressPanel.Visibility = Active?.Url == "veil://downloads"
             ? Visibility.Visible : Visibility.Collapsed;
@@ -863,6 +917,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void SaveData()
     {
+        if (session.IsPrivate) return;
         try { data.Save(statePath); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -925,6 +980,11 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private void NavigateAddress(string input)
     {
         CloseAddressSuggestions();
+        if (session.IsPrivate && IsInternalUrl(input.Trim()))
+        {
+            Status.Text = "일회용 탐색에서는 일반 프로필 관리 페이지를 열 수 없습니다.";
+            return;
+        }
         if (IsManagementUrl(input.Trim())) { OpenManagementRoute(input.Trim()); return; }
         var url = ResolveAddress(input, data.SearchEngine);
         if (url is null)
@@ -982,12 +1042,13 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void NewWindowClick(object sender, RoutedEventArgs args)
     {
+        if (session.IsPrivate) { PrivateWindowClick(sender, args); return; }
         if (session.EngineHost.IsReady && !session.IsEnding && !session.EngineLost) OpenWindow(["about:blank"], 0, cascade: true);
     }
 
     private async void RestoreClick(object sender, RoutedEventArgs args)
     {
-        if (closedTabs.TryPop(out var closed) && await OpenTab(closed.Url, pinned: closed.Pinned) is null) closedTabs.Push(closed);
+        if (!session.IsPrivate && closedTabs.TryPop(out var closed) && await OpenTab(closed.Url, pinned: closed.Pinned) is null) closedTabs.Push(closed);
     }
 
     private void BackClick(object sender, RoutedEventArgs args) { if (Back.IsEnabled) Active?.EngineView.GoBack(); }
@@ -1035,6 +1096,9 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
     private void MenuClick(object sender, RoutedEventArgs args)
     {
         var menu = MenuButton.ContextMenu;
+        if (session.IsPrivate)
+            foreach (var item in menu.Items.OfType<MenuItem>())
+                item.Visibility = Equals(item.Tag, "private-ok") ? Visibility.Visible : Visibility.Collapsed;
         menu.PlacementTarget = MenuButton;
         menu.IsOpen = true;
     }
@@ -1066,7 +1130,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private async Task ShowLibraryAsync(bool editable)
     {
-        if (closing || restoring || session.IsEnding || session.EngineLost) return;
+        if (!SettingsReady()) return;
         string internalUrl = editable ? "veil://bookmarks" : "veil://history";
         if (FocusManagementPage(internalUrl)) return;
         var entries = editable ? data.Bookmarks : data.History;

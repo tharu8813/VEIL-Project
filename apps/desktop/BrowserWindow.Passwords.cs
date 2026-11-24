@@ -8,7 +8,7 @@ namespace Veil.Desktop;
 
 public partial class BrowserWindow
 {
-    private bool PasswordWindowReady() => !closing && !restoring && !session.IsEnding && !session.EngineLost;
+    private bool PasswordWindowReady() => !session.IsPrivate && !closing && !restoring && !session.IsEnding && !session.EngineLost;
 
     private async void PasswordsClick(object sender, RoutedEventArgs args)
     {
@@ -180,12 +180,13 @@ public partial class BrowserWindow
     }
 
     private void UpdateLoginAction() =>
-        LoginActionButton.Visibility = Active is { LoginFormDetected: true } tab && !closingTabs.Contains(tab.Item) &&
+        LoginActionButton.Visibility = !session.IsPrivate && Active is { LoginFormDetected: true } tab && !closingTabs.Contains(tab.Item) &&
             SitePermissionPolicy.Origin(tab.Url) is not null ? Visibility.Visible : Visibility.Collapsed;
 
     // Automatic detection returns only a boolean. Values are read only after an explicit native command.
     private async Task ProbeLoginFormAsync(BrowserTab tab)
     {
+        if (session.IsPrivate) return;
         string? origin = SitePermissionPolicy.Origin(tab.Url);
         long epoch = tab.NavigationEpoch;
         if (origin is null || !PermissionContextMatches(tab, origin, epoch)) return;

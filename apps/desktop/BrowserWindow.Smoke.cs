@@ -264,6 +264,34 @@ public partial class BrowserWindow
                     await WaitForScript("window.smoke === true", "five site storage types restored");
                     if (stage == "read")
                     {
+                        // Private windows are separate from the persisted regular session.
+                        var regularState = File.ReadAllBytes(statePath);
+                        int regularHistory = data.History.Count;
+                        var privateWindow = OpenPrivateWindow();
+                        try
+                        {
+                            await WaitFor(() => !privateWindow.IsRestoring && privateWindow.Active is not null, "private window initialized");
+                            var privateTab = privateWindow.Active!;
+                            var profile = privateTab.View.CoreWebView2.Profile;
+                            Check(profile.IsInPrivateModeEnabled && profile.ProfileName == privateWindow.session.PrivateProfileName &&
+                                !Active!.View.CoreWebView2.Profile.IsInPrivateModeEnabled, "private engine profile verified");
+                            Check(privateWindow.data.Bookmarks.Count == 0 && !privateWindow.SettingsReady() &&
+                                !privateWindow.PasswordWindowReady() && privateWindow.data.LocalAddressSuggestions == false,
+                                "private persistent managers unavailable");
+                            privateWindow.NavigateAddress(origin + "/second");
+                            await WaitFor(() => privateTab.Url == origin + "/second" && !privateTab.Loading &&
+                                privateTab.LastNavigationError is null, "private navigation");
+                            Check((await privateTab.View.CoreWebView2.CookieManager.GetCookiesAsync(origin)).Count == 0,
+                                "regular fixture cookies not visible in private profile");
+                            await privateTab.View.ExecuteScriptAsync("localStorage.setItem('veil-private-marker','synthetic'); null;");
+                            Check(await Active!.View.ExecuteScriptAsync("localStorage.getItem('veil-private-marker')") == "null",
+                                "private local storage isolated");
+                            Check(data.History.Count == regularHistory && privateWindow.data.History.Count == 0 &&
+                                File.ReadAllBytes(statePath).SequenceEqual(regularState), "private navigation not persisted");
+                            Check(await privateWindow.OpenTab("veil://downloads") is null, "private vault route rejected");
+                        }
+                        finally { privateWindow.Close(); }
+                        Check(!session.AllWindows.Contains(privateWindow), "private window released");
                         // Tabs move between windows without reloading; the second window is persisted.
                         var moving = Active!;
                         await moving.View.ExecuteScriptAsync("window.veilMarker = 42; null");

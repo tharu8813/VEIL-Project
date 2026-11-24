@@ -35,12 +35,12 @@ internal sealed class WebView2BrowserEngine : IBrowserEngine
         Environment = await initialization;
     }
 
-    public IBrowserEngineView CreateView() =>
-        new WebView2EngineView(Environment ?? throw new InvalidOperationException("The engine is not initialized."));
+    public IBrowserEngineView CreateView(string? privateProfileName = null) =>
+        new WebView2EngineView(Environment ?? throw new InvalidOperationException("The engine is not initialized."), privateProfileName);
 }
 
 /// <summary>Transitional adapter. No navigation occurs in the constructor or controller initialization.</summary>
-internal sealed class WebView2EngineView(CoreWebView2Environment environment) : IBrowserEngineView
+internal sealed class WebView2EngineView(CoreWebView2Environment environment, string? privateProfileName = null) : IBrowserEngineView
 {
     internal WebView2 NativeView { get; } = new() { Visibility = Visibility.Hidden };
     public FrameworkElement Element => NativeView;
@@ -51,7 +51,21 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment) : 
     public async Task InitializeAsync()
     {
         if (disposed) throw new ObjectDisposedException(nameof(WebView2EngineView));
-        await NativeView.EnsureCoreWebView2Async(environment);
+        if (privateProfileName is null)
+        {
+            await NativeView.EnsureCoreWebView2Async(environment);
+            if (Core.Profile.IsInPrivateModeEnabled) throw new InvalidOperationException("Unexpected private controller.");
+        }
+        else
+        {
+            var options = environment.CreateCoreWebView2ControllerOptions();
+            options.ProfileName = privateProfileName;
+            options.IsInPrivateModeEnabled = true;
+            await NativeView.EnsureCoreWebView2Async(environment, options);
+            if (!Core.Profile.IsInPrivateModeEnabled ||
+                !string.Equals(Core.Profile.ProfileName, privateProfileName, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Private controller verification failed.");
+        }
     }
 
     public bool CanGoBack => !disposed && NativeView.CoreWebView2?.CanGoBack == true;
