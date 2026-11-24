@@ -7,8 +7,10 @@ public partial class BrowserWindow
 {
     private void SecurityClick(object sender, RoutedEventArgs args)
     {
+        if (closing || restoring || session.IsEnding || session.EngineLost) return;
         var dialog = new SecuritySettingsDialog(this, session.Security);
-        if (dialog.ShowDialog() != true || dialog.Result is not { } chosen) return;
+        if (dialog.ShowDialog() != true || dialog.Result is not { } chosen ||
+            closing || session.IsEnding || session.EngineLost) return;
         ChangeSecurity(chosen);
     }
 

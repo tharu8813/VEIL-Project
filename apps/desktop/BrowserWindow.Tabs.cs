@@ -118,6 +118,7 @@ public partial class BrowserWindow
             (Ctrl, Key.H) => () => HistoryClick(this, args),
             (Ctrl, Key.J) => () => DownloadsClick(this, args),
             (Ctrl | Shift, Key.J) => () => VaultClick(this, args),
+            (Ctrl, Key.OemComma) => () => SettingsClick(this, args),
             (Alt, Key.F) or (Alt, Key.E) => () => MenuClick(this, args),
             // Deliberately unavailable in this developer build
             (Ctrl, Key.P) => () => Status.Text = "인쇄와 PDF 저장은 다운로드 금고 검증 전까지 사용할 수 없습니다.",

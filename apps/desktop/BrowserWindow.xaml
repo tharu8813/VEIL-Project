@@ -132,11 +132,10 @@
                                     <MenuItem Header="방문 기록" InputGestureText="Ctrl+H" Click="HistoryClick" />
                                     <MenuItem Header="다운로드" InputGestureText="Ctrl+J" Click="DownloadsClick" />
                                     <MenuItem Header="다운로드 금고" InputGestureText="Ctrl+Shift+J" Click="VaultClick" />
-                                    <MenuItem Header="네트워크 보호" Click="NetworkClick" />
-                                    <MenuItem Header="보안" Click="SecurityClick" />
-                                    <MenuItem Header="사이트 권한" Click="SitePermissionsClick" />
                                     <MenuItem Header="비밀번호 관리자" Click="PasswordsClick" />
                                     <MenuItem Header="페이지 내 검색" InputGestureText="Ctrl+F" Click="FindClick" />
+                                    <Separator />
+                                    <MenuItem Header="설정" InputGestureText="Ctrl+," Click="SettingsClick" />
                                     <Separator />
                                     <MenuItem Header="전체 화면" InputGestureText="F11" Click="FullScreenClick" />
                                 </ContextMenu>
