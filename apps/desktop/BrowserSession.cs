@@ -81,6 +81,16 @@ internal sealed class BrowserSession
     internal string StatePath => persistentStatePath ?? throw new InvalidOperationException("Private sessions have no state file.");
     internal BrowserData Data { get; }
     internal Stack<ClosedTab> ClosedTabs { get; } = new();
+    internal bool RestoringClosedTab { get; set; }
+    internal void RememberClosedTab(ClosedTab tab)
+    {
+        if (IsPrivate || !BrowserWindow.IsWebUrl(tab.Url)) return;
+        ClosedTabs.Push(tab);
+        if (ClosedTabs.Count <= 50) return;
+        var recent = ClosedTabs.Take(50).Reverse().ToArray();
+        ClosedTabs.Clear();
+        foreach (var entry in recent) ClosedTabs.Push(entry);
+    }
     internal List<string> Downloads { get; } = [];
     internal List<(DateTimeOffset At, string Text)> RecentDownloadIssues { get; } = [];
     internal ObservableCollection<BrowserDownload> ActiveDownloads { get; } = [];

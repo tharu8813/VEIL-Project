@@ -45,9 +45,8 @@ public partial class BrowserWindow
         };
         Tabs.PreviewMouseRightButtonUp += (_, args) =>
         {
-            if (TabAt(args.OriginalSource) is not { } item) return;
+            if (TabAt(args.OriginalSource) is not { } item || !CanUseTab(item)) return;
             args.Handled = true;
-            Tabs.SelectedItem = item;
             ShowTabMenu(item);
         };
         // Mouse back/forward buttons over the browser chrome.
@@ -75,8 +74,17 @@ public partial class BrowserWindow
 
     private void BrowserKeyDown(object sender, KeyEventArgs args)
     {
+        if (closing || restoring || session.IsEnding || session.EngineLost || args.Handled) return;
         Key key = args.Key == Key.System ? args.SystemKey : args.Key;
         var modifiers = Keyboard.Modifiers;
+        if ((key == Key.Apps && modifiers == ModifierKeys.None ||
+             key == Key.F10 && modifiers == ModifierKeys.Shift) &&
+            Keyboard.FocusedElement is DependencyObject focused && TabAt(focused) is { } focusedTab && CanUseTab(focusedTab))
+        {
+            args.Handled = true;
+            Dispatcher.BeginInvoke(new Action(() => ShowTabMenu(focusedTab, keyboard: true)));
+            return;
+        }
         const ModifierKeys Ctrl = ModifierKeys.Control, Shift = ModifierKeys.Shift, Alt = ModifierKeys.Alt;
         bool editing = Address.IsKeyboardFocusWithin || FindText.IsKeyboardFocusWithin;
         Action? command = (modifiers, key) switch
@@ -133,49 +141,99 @@ public partial class BrowserWindow
         if (command is null) return;
         args.Handled = true;
         // The WebView2 accelerator callback can block the browser until input routing returns.
-        Dispatcher.BeginInvoke(command);
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!closing && !restoring && !session.IsEnding && !session.EngineLost && IsActive) command();
+        }));
     }
 
     // ── Tab menu ─────────────────────────────────────────────────────────────
 
-    private void ShowTabMenu(TabItem item)
+    private bool CanUseTab(TabItem item) => !closing && !restoring && !session.IsEnding && !session.EngineLost &&
+        Tabs.Items.Contains(item) && !closingTabs.Contains(item) && item.Tag is BrowserTab tab && tab.Owner == this;
+
+    private bool CanMoveTo(TabItem item, BrowserWindow target) =>
+        CanUseTab(item) && !session.IsPrivate && target != this && ReferenceEquals(session, target.session) &&
+        !target.closing && !target.restoring && !target.session.IsEnding && !target.session.EngineLost;
+
+    private bool MoveToExistingWindow(TabItem item, BrowserWindow target, int? index = null)
     {
+        if (!CanMoveTo(item, target)) return false;
+        DetachTab(item);
+        target.AttachTab(item, index ?? target.Tabs.Items.Count);
+        if (target.WindowState == WindowState.Minimized) target.WindowState = WindowState.Normal;
+        target.Activate();
+        return true;
+    }
+
+    private void ShowTabMenu(TabItem item, bool keyboard = false)
+    {
+        if (!CanUseTab(item)) return;
         var tab = (BrowserTab)item.Tag;
         int index = Tabs.Items.IndexOf(item);
-        var menu = new ContextMenu { Style = (Style)FindResource(typeof(ContextMenu)), PlacementTarget = item, Placement = PlacementMode.MousePoint };
+        var menu = new ContextMenu { Style = (Style)FindResource(typeof(ContextMenu)), PlacementTarget = item,
+            Placement = keyboard ? PlacementMode.Bottom : PlacementMode.MousePoint };
         menu.Opened += MenuOpened;
-        void Add(string header, string gesture, Action action, bool enabled = true)
+        MenuItem Entry(string header, string gesture, Action action, bool enabled = true)
         {
-            var entry = new MenuItem { Header = header, InputGestureText = gesture, IsEnabled = enabled, Style = (Style)FindResource(typeof(MenuItem)) };
-            entry.Click += (_, _) => action();
-            menu.Items.Add(entry);
+            var entry = new MenuItem { Header = header, InputGestureText = gesture, IsEnabled = enabled,
+                Style = (Style)FindResource(typeof(MenuItem)) };
+            entry.Click += (_, _) => { if (CanUseTab(item)) action(); };
+            return entry;
         }
+        void Add(string header, string gesture, Action action, bool enabled = true) => menu.Items.Add(Entry(header, gesture, action, enabled));
         void Separate() => menu.Items.Add(new Separator { Style = (Style)FindResource(typeof(Separator)) });
+        bool CanBulk(TabItem candidate) => candidate != item && CanUseTab(candidate) && candidate.Tag is BrowserTab { Pinned: false };
+        TabItem[] Scope(int side)
+        {
+            int current = Tabs.Items.IndexOf(item);
+            if (current < 0) return [];
+            return Tabs.Items.OfType<TabItem>().Where((candidate, position) => CanBulk(candidate) &&
+                (side == 0 || (side < 0 ? position < current : position > current))).ToArray();
+        }
 
-        Add("오른쪽에 새 탭", "", () => _ = OpenTab("about:blank", index: index + 1));
+        Add("오른쪽에 새 탭", "", () => _ = OpenTab("about:blank", index: Tabs.Items.IndexOf(item) + 1));
         Separate();
-        Add("새로고침", "Ctrl+R", () => tab.EngineView.Reload(), IsWebUrl(tab.Url));
-        Add("탭 복제", "", () => _ = OpenTab(tab.Url, index: index + 1), IsWebUrl(tab.Url));
-        Add(tab.View.CoreWebView2?.IsMuted == true ? "사이트 음소거 해제" : "사이트 음소거", "", () => ToggleMute(tab));
-        Add(tab.Pinned ? "탭 고정 해제" : "탭 고정", "", () => SetTabPinned(item, !tab.Pinned), !closingTabs.Contains(item));
-        Add("탭을 새 창으로 이동", "", () => MoveTabToNewWindow(item), !session.IsPrivate && Tabs.Items.Count > 1 && !closingTabs.Contains(item));
+        Add("새로고침", "", () => { if (IsWebUrl(tab.Url)) tab.EngineView.Reload(); }, IsWebUrl(tab.Url));
+        Add("탭 복제", "", () => { if (IsWebUrl(tab.Url)) _ = OpenTab(tab.Url, index: Tabs.Items.IndexOf(item) + 1); }, IsWebUrl(tab.Url));
+        Add(tab.View.CoreWebView2?.IsMuted == true ? "탭 음소거 해제" : "탭 음소거", "", () => ToggleMute(tab));
+        Add(tab.Pinned ? "탭 고정 해제" : "탭 고정", "", () => SetTabPinned(item, !tab.Pinned));
+        if (!session.IsPrivate)
+        {
+            var move = new MenuItem { Header = "탭을 다른 창으로 이동", Style = (Style)FindResource(typeof(MenuItem)) };
+            move.Items.Add(Entry("새 창", "", () => { if (Tabs.Items.Count > 1) MoveTabToNewWindow(item); }, Tabs.Items.Count > 1));
+            int number = 0;
+            foreach (var target in session.Windows.ToArray())
+            {
+                number++;
+                if (!CanMoveTo(item, target)) continue;
+                var destination = target;
+                move.Items.Add(Entry($"창 {number} · 탭 {target.Tabs.Items.Count}개", "",
+                    () => MoveToExistingWindow(item, destination)));
+            }
+            move.IsEnabled = move.Items.OfType<MenuItem>().Any(entry => entry.IsEnabled);
+            menu.Items.Add(move);
+        }
         Separate();
-        Add("탭 닫기", "Ctrl+W", () => CloseTab(item));
-        Add("다른 탭 닫기", "", () => CloseTabs(Tabs.Items.Cast<TabItem>().Where(other => other != item)),
-            Tabs.Items.Cast<TabItem>().Any(other => other != item && other.Tag is BrowserTab { Pinned: false }));
-        Add("오른쪽 탭 닫기", "", () => CloseTabs(Tabs.Items.Cast<TabItem>().Skip(Tabs.Items.IndexOf(item) + 1)),
-            Tabs.Items.Cast<TabItem>().Skip(index + 1).Any(other => other.Tag is BrowserTab { Pinned: false }));
-        Separate();
-        Add("닫은 탭 다시 열기", "Ctrl+Shift+T", () => RestoreClick(this, new RoutedEventArgs()), closedTabs.Count > 0);
+        Add("탭 닫기", "", () => CloseTab(item));
+        Add("다른 탭 닫기", "", () => CloseTabs(Scope(0)), Scope(0).Length > 0);
+        Add("왼쪽 탭 닫기", "", () => CloseTabs(Scope(-1)), Scope(-1).Length > 0);
+        Add("오른쪽 탭 닫기", "", () => CloseTabs(Scope(1)), Scope(1).Length > 0);
+        if (!session.IsPrivate)
+        {
+            Separate();
+            Add("닫은 탭 다시 열기", "Ctrl+Shift+T", () => RestoreClick(this, new RoutedEventArgs()),
+                closedTabs.Count > 0 && !session.RestoringClosedTab);
+        }
         menu.IsOpen = true;
     }
 
     private async void CloseTabs(IEnumerable<TabItem> items)
     {
-        foreach (var item in items.ToList())
+        foreach (var item in items.ToArray())
         {
-            if (closing || session.IsEnding) break;
-            await CloseTabAsync(item, protectPinned: true);
+            if (closing || session.IsEnding || session.EngineLost) break;
+            if (CanUseTab(item)) await CloseTabAsync(item, protectPinned: true);
         }
     }
 
@@ -183,7 +241,7 @@ public partial class BrowserWindow
 
     private void MoveSelectedTab(int direction)
     {
-        if (Tabs.SelectedItem is not TabItem item) return;
+        if (Tabs.SelectedItem is not TabItem item || !CanUseTab(item)) return;
         int from = Tabs.Items.IndexOf(item), to = from + direction;
         if (to < 0 || to >= Tabs.Items.Count || !CanSwapTabs(item, (TabItem)Tabs.Items[to])) return;
         SwapNeighbor(item, from, to);
@@ -239,7 +297,7 @@ public partial class BrowserWindow
         }
 
         // Pulling the tab well above or below the strip tears it off into its own window.
-        if (point.Y < -36 || point.Y > TabRow.ActualHeight + 36)
+        if (!session.IsPrivate && (point.Y < -36 || point.Y > TabRow.ActualHeight + 36))
         {
             var torn = item;
             Tabs.ReleaseMouseCapture();
@@ -285,7 +343,7 @@ public partial class BrowserWindow
 
     private void TearOff(TabItem item)
     {
-        if (session.IsPrivate || closing || closingTabs.Contains(item) || !Tabs.Items.Contains(item)) return;
+        if (session.IsPrivate || !CanUseTab(item)) return;
         if (Tabs.Items.Count == 1)
         {
             // A lone tab carries its whole window, and can be dropped onto another window's tabs.
@@ -300,6 +358,7 @@ public partial class BrowserWindow
     /// <summary>Moves a tab into a new window next to this one; the page keeps running.</summary>
     private BrowserWindow MoveTabToNewWindow(TabItem item, Point? at = null)
     {
+        if (session.IsPrivate || !CanUseTab(item) || Tabs.Items.Count <= 1) return this;
         DetachTab(item);
         return OpenWindow([], 0, cascade: true, adopt: item, at: at);
     }
@@ -311,14 +370,12 @@ public partial class BrowserWindow
         try { window.DragMove(); }
         catch (InvalidOperationException) { return; }
         if (window.closing || window.Tabs.Items.Count != 1) return;
-        var target = window.session.Windows.FirstOrDefault(other => other != window && !other.closing &&
+        var item = (TabItem)window.Tabs.Items[0];
+        var target = window.session.Windows.FirstOrDefault(other => window.CanMoveTo(item, other) &&
             other.OverTabStrip(CursorPixels(), out _));
         if (target is null) return;
         target.OverTabStrip(CursorPixels(), out int index);
-        var item = (TabItem)window.Tabs.Items[0];
-        window.DetachTab(item);
-        target.AttachTab(item, index);
-        target.Activate();
+        window.MoveToExistingWindow(item, target, index);
     }
 
     /// <summary>Removes a tab without closing its page. An emptied extra window closes itself.</summary>
@@ -340,6 +397,8 @@ public partial class BrowserWindow
     private void AttachTab(TabItem item, int index)
     {
         var tab = (BrowserTab)item.Tag;
+        if (!ReferenceEquals(tab.Owner.session, session))
+            throw new InvalidOperationException("Tabs cannot cross browser sessions.");
         tab.Owner = this;
         Pages.Children.Add(tab.View);
         Tabs.Items.Insert(TabInsertionIndex(tab.Pinned, index), item);

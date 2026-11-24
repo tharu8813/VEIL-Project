@@ -27,8 +27,7 @@ public partial class BrowserWindow
 
     private void SetTabPinned(TabItem item, bool pinned)
     {
-        if (closing || session.IsEnding || !Tabs.Items.Contains(item) || closingTabs.Contains(item) ||
-            item.Tag is not BrowserTab tab || tab.Pinned == pinned) return;
+        if (!CanUseTab(item) || item.Tag is not BrowserTab tab || tab.Pinned == pinned) return;
         // Remove before changing the flag so the remaining prefix is valid throughout.
         var selected = Tabs.SelectedItem;
         Tabs.Items.Remove(item);
