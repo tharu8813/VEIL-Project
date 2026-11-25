@@ -50,7 +50,11 @@ internal static class ProfileGate
         {
             var existing = new DirectoryInfo(requested).Parent;
             while (existing is not null && !existing.Exists) existing = existing.Parent;
-            if (existing is not null) Verify(existing.FullName, UnmanagedDevelopmentVolume.Instance, false);
+            if (existing is null)
+                throw new ProfileLocationException("The profile has no accessible existing parent directory.");
+            // Product launches must prove the parent is on the registered, unlocked
+            // protected volume before creating even an empty directory.
+            Verify(existing.FullName, broker, requireProtected);
             Directory.CreateDirectory(requested);
         }
         return Verify(requested, broker, requireProtected);
