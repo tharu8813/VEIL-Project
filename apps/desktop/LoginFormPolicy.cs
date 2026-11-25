@@ -6,8 +6,18 @@ namespace Veil.Desktop;
 internal static class LoginFormPolicy
 {
     private const string Selector = """
-        const visible = el => !el.disabled && !el.readOnly && el.getClientRects().length > 0 &&
-            getComputedStyle(el).visibility === 'visible';
+        const visible = el => {
+            if (!el.isConnected || el.matches(':disabled') || el.readOnly ||
+                el.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+            const rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return false;
+            for (let node = el; node; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.visibility !== 'visible' || style.display === 'none' ||
+                    Number(style.opacity) === 0 || style.contentVisibility === 'hidden') return false;
+            }
+            return true;
+        };
         const hasToken = (el, token) => el.autocomplete.toLowerCase().split(/\s+/).includes(token);
         const passwords = [...document.querySelectorAll('input[type="password"]')];
         if (passwords.length !== 1 || !visible(passwords[0])) return null;
@@ -23,10 +33,11 @@ internal static class LoginFormPolicy
         if (!user) return null;
         """;
 
-    private static string Script(string origin, string action) => $$"""
+    private static string Script(string origin, string page, string action) => $$"""
         (() => {
             try {
                 if (window !== window.top || location.origin !== {{JsonSerializer.Serialize(origin)}} ||
+                    location.href !== new URL({{JsonSerializer.Serialize(page)}}).href ||
                     document.visibilityState !== 'visible') return null;
                 {{Selector}}
                 {{action}}
@@ -34,12 +45,12 @@ internal static class LoginFormPolicy
         })()
         """;
 
-    internal static string Probe(string origin) => Script(origin, "return true;");
-    internal static string Read(string origin) => Script(origin, """
+    internal static string Probe(string origin, string page) => Script(origin, page, "return true;");
+    internal static string Read(string origin, string page) => Script(origin, page, """
         if (!user.value.trim() || user.value.length > 512 || !pass.value || pass.value.length > 2048) return null;
         return { UserName: user.value, Password: pass.value };
         """);
-    internal static string Fill(SavedLogin login) => Script(login.Origin, $$"""
+    internal static string Fill(SavedLogin login, string page) => Script(login.Origin, page, $$"""
         if (pass.value || (user.value && user.value !== {{JsonSerializer.Serialize(login.UserName)}})) return null;
         const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
         set.call(user, {{JsonSerializer.Serialize(login.UserName)}});

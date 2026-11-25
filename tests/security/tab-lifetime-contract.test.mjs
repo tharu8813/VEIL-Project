@@ -111,3 +111,22 @@ test('site-data commands require original live regular WebView and exclusive sel
     assert.match(siteData, /!SourceStillValid\(\) \|\| session\.ActiveDownloads\.Count != 0 \|\| !SiteDataPolicy\.ValidSelection\(selection\)/);
     assert.match(siteData, /var fresh = await web\.CookieManager\.GetCookiesAsync\(""\);\s*if \(!SourceStillValid\(\) \|\| permissionSelectionEpoch != confirmedSelectionEpoch/);
 });
+
+
+const passwordUi = await readFile('apps/desktop/BrowserWindow.Passwords.cs', 'utf8');
+const loginForm = await readFile('apps/desktop/LoginFormPolicy.cs', 'utf8');
+test('login form probe, read and fill are bound to exact original URL in the script', () => {
+    assert.match(loginForm, /window !== window\.top \|\| location\.origin !==[\s\S]*?location\.href !== new URL\(\{\{JsonSerializer\.Serialize\(page\)\}\}\)\.href/);
+    assert.match(loginForm, /el\.closest\('\[hidden\], \[inert\], \[aria-hidden="true"\]'\)/);
+    assert.match(loginForm, /Number\(style\.opacity\) === 0 \|\| style\.contentVisibility === 'hidden'/);
+    assert.match(passwordUi, /LoginFormPolicy\.Probe\(origin, page\)/);
+    assert.match(passwordUi, /LoginFormPolicy\.Read\(origin, page\)/);
+    assert.match(passwordUi, /bool Current\(\) => tab\.Url == page && PermissionContextMatches\(tab, login\.Origin, epoch, selectionEpoch\);\s*if \(!Current\(\)\) return;\s*string result = await tab\.View\.CoreWebView2\.ExecuteScriptAsync\(LoginFormPolicy\.Fill\(login, page\)\);\s*if \(Current\(\)\)/);
+    assert.doesNotMatch(loginForm, /\.submit\(|\.requestSubmit\(/);
+});
+
+
+test('login fill uses double-dollar raw interpolation for JavaScript braces', () => {
+    assert.match(loginForm, /Script\(login\.Origin, page, \$\$"""/);
+    assert.match(loginForm, /set\.call\(pass, \{\{JsonSerializer\.Serialize\(login\.Password\)\}\}\);/);
+});
