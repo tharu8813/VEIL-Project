@@ -31,7 +31,7 @@ internal static class BrowserSettingsCatalog
         var applied = session.Network;
         static string Mode(NetworkSettings settings) =>
             (settings.Mode == NetworkMode.Standard ? "표준 보호" : NetworkPolicy.ProxyName) +
-            (settings.DnsTemplate is null ? " · 시스템 DNS" : " · 보안 DNS");
+            (settings.DnsTemplate is null ? " · 시스템 DNS" : " · 엔진 보안 DNS 설정");
         string networkState = "현재: " + Mode(applied);
         if (chosen != applied) networkState += "\n저장된 설정: " + Mode(chosen) + " (재시작 필요)";
         string proxyState = applied.Mode != NetworkMode.Proxy ? "프록시 모드 미사용" :
@@ -77,7 +77,7 @@ internal static class BrowserSettingsCatalog
             new(SettingsSection.Privacy, "프로필 저장소", "프로필 및 사이트 데이터의 저장 위치 정책입니다. 검증 상태는 별도 출시 기준을 따릅니다.",
                 "profile bitlocker 암호화 잠금 쿠키",
                 vault.UsesProfilePassword ? "등록된 보호 프로필 사용" : "개발 프로필 · 제품 보호 미적용"),
-            new(SettingsSection.Network, "네트워크 보호 및 보안 DNS", "표준 보호, 고정 프록시 및 DNS-over-HTTPS를 설정합니다.",
+            new(SettingsSection.Network, "네트워크 보호 및 보안 DNS", "표준 보호, 고정 프록시 및 엔진 DNS-over-HTTPS를 설정합니다. 금고의 별도 요청에 같은 DoH 설정이 적용되지는 않습니다.",
                 "network proxy doh dns 프록시 https webrtc", networkState + "\n" + proxyState, SettingsDestination.Network),
             new(SettingsSection.Accounts, "비밀번호 관리자", "독립 암호로 보호되는 계정을 등록·관리하고 지원 로그인 폼에 채웁니다.",
                 "password login autofill 로그인 자동완성 아이디 계정", passwordState, SettingsDestination.Passwords),
