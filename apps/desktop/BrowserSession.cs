@@ -23,7 +23,7 @@ internal sealed class BrowserSession
         Network = Data.Network ?? NetworkSettings.Standard;
         if (Network.Problem is { } problem) throw new System.Text.Json.JsonException(problem);
         Vault = vault;
-        Vault.ConfigureNetwork(Network);
+        Vault.ConfigureNetwork(Network, HttpAllowed);
         // ADR-0007: one security policy for every view of this profile's engine (shared user data folder).
         Security = new SecurityManager(Data.Security, () => AllWindows.SelectMany(window => window.CoreViews()));
         // ADR-0008: signed local threat list on the profile volume; the vault uses the same engines.
