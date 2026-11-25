@@ -47,3 +47,18 @@ test('fresh install refuses existing registration before staging; invalid versio
     assert.match(maintenance,/try\s*\{\s*\$manifest=Copy-StagedPackage\s*\[void\]\(Assert-VeilInternalVersion \$manifest.version\)\s*\}\s*catch\s*\{\s*if \(Test-Path -LiteralPath \$stage\) \{ Remove-RestrictedTree \$stage \}\s*throw/);
     assert.ok(maintenance.indexOf("throw 'Unresolved maintenance state.")<preflight);
 });
+
+
+test('package staging uses shared byte copy and authenticates only after copying', () => {
+    assert.match(common,/function Copy-VeilPackageFiles[\s\S]*?Get-VeilTreeFiles \$Source -WithRelativePath[\s\S]*?Assert-VeilRelativeFile \$relative[\s\S]*?\[IO\.File\]::Copy/);
+    assert.match(maintenance,/New-VeilRestrictedDirectory \$stage\s+Copy-VeilPackageFiles \$source \$stage\s+return Read-VeilPackage \$stage \$SignerThumbprint/);
+    assert.match(maintenance,/catch\s*\{\s*if \(Test-Path -LiteralPath \$stage\) \{ Remove-RestrictedTree \$stage \}\s*throw/);
+});
+test('disk-full verdict requires actual Windows disk-full IO error', async () => {
+    const { assertCopyFailure } = await import('../vm/package-staging-disk-full.mjs');
+    assert.doesNotThrow(() => assertCopyFailure({ status: 'FAILED', ioCodes: [112] }));
+    assert.doesNotThrow(() => assertCopyFailure({ status: 'FAILED', ioCodes: [39] }));
+    for (const result of [{ status: 'COPIED', ioCodes: [] }, { status: 'FAILED', ioCodes: [5] },
+        { status: 'FAILED', ioCodes: [] }, { status: 'FAILED', ioCodes: ['112'] }])
+        assert.throws(() => assertCopyFailure(result));
+});
