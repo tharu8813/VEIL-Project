@@ -34,13 +34,20 @@ internal sealed class LocalThreatList : IThreatEngine
     private readonly HashSet<string> urls;
     private readonly HashSet<string> files;
     private readonly string? problem;
+    private readonly DateTimeOffset? expires;
+    private readonly TimeProvider clock;
 
-    private LocalThreatList(HashSet<string> hosts, HashSet<string> urls, HashSet<string> files, string? problem)
+    private string? CurrentProblem => problem ?? (expires is { } expiry && expiry <= clock.GetUtcNow() ? "만료된 목록" : null);
+
+    private LocalThreatList(HashSet<string> hosts, HashSet<string> urls, HashSet<string> files, string? problem,
+        DateTimeOffset? expires, TimeProvider clock)
     {
         this.hosts = hosts;
         this.urls = urls;
         this.files = files;
         this.problem = problem;
+        this.expires = expires;
+        this.clock = clock;
     }
 
     public string Name => "veil-local";
@@ -56,16 +63,24 @@ internal sealed class LocalThreatList : IThreatEngine
     }
 
     /// <summary>Loads the list from <paramref name="folder"/>. Returns null when there is no list.</summary>
-    internal static (LocalThreatList? Engine, ThreatListStatus Status) Load(string folder, IEnumerable<string> trustedKeys, DateTimeOffset now)
+    internal static (LocalThreatList? Engine, ThreatListStatus Status) Load(string folder, IEnumerable<string> trustedKeys, DateTimeOffset now, TimeProvider? clock = null)
     {
         string path = Path.Combine(folder, FileName);
-        if (!File.Exists(path)) return (null, ThreatListStatus.None);
-        LocalThreatList Broken(string reason) => new([], [], [], reason);
+        TimeProvider time = clock ?? TimeProvider.System;
+        LocalThreatList Broken(string reason) => new([], [], [], reason, null, time);
         try
         {
-            var info = new FileInfo(path);
-            if (info.Length > MaxListBytes) return Fail("목록이 너무 큽니다");
-            byte[] bytes = File.ReadAllBytes(path);
+            byte[] bytes;
+            try
+            {
+                using var stream = File.OpenRead(path);
+                if (stream.Length > MaxListBytes) return Fail("목록이 너무 큽니다");
+                bytes = new byte[checked((int)stream.Length)];
+                stream.ReadExactly(bytes);
+                if (stream.ReadByte() != -1) return Fail("목록 크기가 변경되었습니다");
+            }
+            catch (FileNotFoundException) { return (null, ThreatListStatus.None); }
+            catch (DirectoryNotFoundException) { return (null, ThreatListStatus.None); }
             string sigPath = path + ".sig";
             if (!File.Exists(sigPath)) return Fail("서명 없음");
             byte[] signature = Convert.FromBase64String(File.ReadAllText(sigPath).Trim());
@@ -74,12 +89,12 @@ internal sealed class LocalThreatList : IThreatEngine
                 ?? throw new JsonException("empty");
             if (document.Schema != 1) return Fail("지원하지 않는 형식");
             if (document.Expires is not { } expires || expires <= now) return Fail("만료된 목록");
-            if (document.Issued is not { } issued || issued > now.AddDays(1)) return Fail("발급일이 올바르지 않음");
+            if (document.Issued is not { } issued || issued > now.AddDays(1) || issued >= expires) return Fail("발급일이 올바르지 않음");
             var hostSet = Normalize(document.Hosts, NormalizeHost);
             var urlSet = Normalize(document.Urls, Hex);
             var fileSet = Normalize(document.Files, Hex);
             int count = hostSet.Count + urlSet.Count + fileSet.Count;
-            return (new LocalThreatList(hostSet, urlSet, fileSet, null), new ThreatListStatus(true, true, $"{count}개 항목", count, expires));
+            return (new LocalThreatList(hostSet, urlSet, fileSet, null, expires, time), new ThreatListStatus(true, true, $"{count}개 항목", count, expires));
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or FormatException or CryptographicException)
         {
@@ -100,8 +115,17 @@ internal sealed class LocalThreatList : IThreatEngine
         catch (Exception error) when (error is CryptographicException or FormatException) { return false; }
     }
 
-    private static HashSet<string> Normalize(string[]? values, Func<string, string?> normalize) =>
-        (values ?? []).Select(normalize).OfType<string>().ToHashSet(StringComparer.Ordinal);
+    private static HashSet<string> Normalize(string[]? values, Func<string, string?> normalize)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string? value in values ?? [])
+        {
+            if (value is null || normalize(value) is not { } normalized)
+                throw new JsonException("Invalid list entry.");
+            result.Add(normalized);
+        }
+        return result;
+    }
 
     private static string? NormalizeHost(string host)
     {
@@ -122,13 +146,13 @@ internal sealed class LocalThreatList : IThreatEngine
     public ValueTask<ThreatResult> CheckAsync(Uri address, CancellationToken cancel) => new(Check(address));
 
     public ValueTask<ThreatResult> CheckFileAsync(string sha256, CancellationToken cancel) => new(
-        problem is not null ? new ThreatResult(ThreatVerdict.Error, Name, problem)
+        CurrentProblem is { } invalid ? new ThreatResult(ThreatVerdict.Error, Name, invalid)
         : files.Contains(sha256.ToLowerInvariant()) ? new ThreatResult(ThreatVerdict.Malicious, Name, "파일이 VEIL 위협 목록에 있습니다")
         : new ThreatResult(ThreatVerdict.Unknown, Name, "목록에 없음"));
 
     private ThreatResult Check(Uri address)
     {
-        if (problem is not null) return new ThreatResult(ThreatVerdict.Error, Name, problem);
+        if (CurrentProblem is { } invalid) return new ThreatResult(ThreatVerdict.Error, Name, invalid);
         if (address.Scheme is not ("http" or "https")) return new ThreatResult(ThreatVerdict.Unknown, Name, "웹 주소 아님");
         string host = address.IdnHost.TrimEnd('.').ToLowerInvariant();
         // The host itself or any parent domain listed blocks it (bad.example also covers a.bad.example).

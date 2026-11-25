@@ -1712,6 +1712,47 @@ public partial class BrowserWindow
                     }
 
 #if DEBUG
+                    var duplicate = JsonSerializer.Deserialize<SecuritySettings>("{\"SmartScreen\":true,\"SmartScreen\":false}");
+                    Check(duplicate is { SmartScreen: true, Recovered: true }, "duplicate SmartScreen choice restores safe default");
+                    string listLab = Path.Combine(session.Root, "security-expiry-" + Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(listLab);
+                    try
+                    {
+                        using var key = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+                        string[] keys = [Convert.ToBase64String(key.ExportSubjectPublicKeyInfo())];
+                        var clock = new SmokeThreatClock(DateTimeOffset.UtcNow);
+                        var expiry = clock.GetUtcNow().AddMinutes(1);
+                        string listPath = Path.Combine(listLab, LocalThreatList.FileName);
+                        string hash = new string('a', 64);
+                        void WriteList(string?[] hosts, DateTimeOffset issued)
+                        {
+                            byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(new
+                            {
+                                Schema = 1, Issued = issued, Expires = expiry, Hosts = hosts, Files = new[] { hash },
+                            });
+                            File.WriteAllBytes(listPath, bytes);
+                            File.WriteAllText(listPath + ".sig", Convert.ToBase64String(key.SignData(bytes,
+                                System.Security.Cryptography.HashAlgorithmName.SHA256,
+                                System.Security.Cryptography.DSASignatureFormat.Rfc3279DerSequence)));
+                        }
+                        WriteList(["bad.test"], clock.GetUtcNow());
+                        var (loaded, listStatus) = LocalThreatList.Load(listLab, keys, clock.GetUtcNow(), clock);
+                        Check(listStatus.Valid && loaded is not null, "signed unexpired list loaded");
+                        Check((await loaded!.CheckAsync(new Uri("https://bad.test/"), default)).Verdict == ThreatVerdict.Malicious &&
+                            (await loaded.CheckFileAsync(hash, default)).Verdict == ThreatVerdict.Malicious, "valid list blocks host and file");
+                        clock.Now = expiry;
+                        Check((await loaded.CheckAsync(new Uri("https://bad.test/"), default)).Verdict == ThreatVerdict.Error &&
+                            (await loaded.CheckFileAsync(hash, default)).Verdict == ThreatVerdict.Error, "running list expiry yields Error for host and file");
+                        clock.Now = expiry.AddMinutes(-1);
+                        WriteList(["bad.test", null], clock.GetUtcNow());
+                        var (malformed, malformedStatus) = LocalThreatList.Load(listLab, keys, clock.GetUtcNow(), clock);
+                        Check(!malformedStatus.Valid && malformed is not null &&
+                            (await malformed.CheckAsync(new Uri("https://bad.test/"), default)).Verdict == ThreatVerdict.Error, "signed malformed entry rejects entire list");
+                        WriteList(["bad.test"], expiry);
+                        var (_, invalidDates) = LocalThreatList.Load(listLab, keys, clock.GetUtcNow(), clock);
+                        Check(!invalidDates.Valid, "issued date must precede expiry");
+                    }
+                    finally { Directory.Delete(listLab, recursive: true); }
                     // Threat interface with the test-only mock engine (separate registry; the session's stays empty).
                     var threats = new ThreatProtection();
                     Check(threats.Register(new MockThreatEngine(new Dictionary<string, ThreatVerdict>
@@ -1886,4 +1927,12 @@ public partial class BrowserWindow
             }
         };
     }
+#if DEBUG
+    private sealed class SmokeThreatClock(DateTimeOffset now) : TimeProvider
+    {
+        internal DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+#endif
+
 }

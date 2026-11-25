@@ -26,13 +26,15 @@ internal sealed class SecuritySettingsConverter : JsonConverter<SecuritySettings
             reader.Skip();
             return SecuritySettings.Default with { Recovered = true };
         }
-        bool smartScreen = true, damaged = false;
+        bool smartScreen = true, damaged = false, seen = false;
         while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
         {
             string? name = reader.GetString();
             reader.Read();
             if (name == nameof(SecuritySettings.SmartScreen))
             {
+                if (seen) damaged = true;
+                seen = true;
                 if (reader.TokenType is JsonTokenType.True or JsonTokenType.False) smartScreen = reader.GetBoolean();
                 else { damaged = true; reader.Skip(); }
             }
@@ -83,16 +85,19 @@ internal sealed class SecurityManager
     internal string? LastFailure { get; private set; }
     internal ThreatProtection Threats { get; } = new();
     /// <summary>Signed local threat list state (ADR-0008).</summary>
-    internal ThreatListStatus ThreatList { get; private set; } = ThreatListStatus.None;
+    private ThreatListStatus threatList = ThreatListStatus.None;
+    internal ThreatListStatus ThreatList => threatList is { Valid: true, Expires: { } expiry } && expiry <= DateTimeOffset.UtcNow
+        ? threatList with { Valid = false, Detail = "만료된 목록" }
+        : threatList;
 
     /// <summary>Loads <c>&lt;folder&gt;/threat-list.json</c> and registers the local engine when a list exists
     /// (a damaged list is registered too, so every check reports Error instead of silently passing).</summary>
     internal void LoadThreatList(string folder)
     {
         var (engine, status) = LocalThreatList.Load(folder, LocalThreatList.TrustedKeys(), DateTimeOffset.UtcNow);
-        ThreatList = status;
+        threatList = status;
         if (engine is not null && !Threats.Register(engine))
-            ThreatList = status with { Valid = false, Detail = "이 빌드에서 사용할 수 없음" };
+            threatList = status with { Valid = false, Detail = "이 빌드에서 사용할 수 없음" };
     }
 
     /// <summary>Status suffix for the VEIL list; empty when there is no list or it is in use.</summary>
@@ -118,9 +123,11 @@ internal sealed class SecurityManager
     {
         persist(chosen); // throws on failure: the old policy stays saved and applied
         Saved = chosen with { Recovered = false };
+        var current = views().ToList();
+        LastFailure = null;
         bool all = true;
-        foreach (var view in views().ToList()) all &= Set(view, Saved.SmartScreen);
-        State = all ? SmartScreenState.Applied : SmartScreenState.Failed;
+        foreach (var view in current) all &= Set(view, Saved.SmartScreen);
+        State = current.Count == 0 ? SmartScreenState.Pending : all ? SmartScreenState.Applied : SmartScreenState.Failed;
     }
 
     /// <summary>Re-reads every open view; Failed when any view disagrees with the saved value.</summary>
@@ -131,9 +138,10 @@ internal sealed class SecurityManager
         {
             any = true;
             bool? actual = Read(view);
-            if (actual != Saved.SmartScreen) { State = SmartScreenState.Failed; return State; }
+            if (actual != Saved.SmartScreen) { LastFailure = "value not verified"; State = SmartScreenState.Failed; return State; }
         }
-        if (any && State != SmartScreenState.Failed) State = SmartScreenState.Applied;
+        if (!any) State = SmartScreenState.Pending;
+        else if (State != SmartScreenState.Failed) { State = SmartScreenState.Applied; LastFailure = null; }
         return State;
     }
 

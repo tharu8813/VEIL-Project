@@ -40,3 +40,21 @@ test('one shared proxy monitor checks periodically and drops cancelled or supers
     assert.match(browserSource, /session\.ReleasePrivate\(\);\s*session\.StopProxyMonitorIfIdle\(\);/);
     assert.match(policy, /전체 보호 미검증/);
 });
+
+
+const manager = await readFile('apps/desktop/SecurityManager.cs', 'utf8');
+const list = await readFile('apps/desktop/LocalThreatList.cs', 'utf8');
+test('expired or malformed local threat lists never return a usable verdict', () => {
+    assert.match(list, /expiry <= clock\.GetUtcNow\(\) \? "만료된 목록"/);
+    assert.match(list, /CheckFileAsync[\s\S]*?CurrentProblem is \{ \} invalid \? new ThreatResult\(ThreatVerdict\.Error/);
+    assert.match(list, /private ThreatResult Check\(Uri address\)\s*\{\s*if \(CurrentProblem is \{ \} invalid\) return new ThreatResult\(ThreatVerdict\.Error/);
+    assert.match(list, /issued >= expires/);
+    assert.match(list, /value is null \|\| normalize\(value\) is not \{ \} normalized\)\s*throw new JsonException/);
+    assert.match(list, /using var stream = File\.OpenRead\(path\);[\s\S]*?stream\.Length > MaxListBytes[\s\S]*?stream\.ReadExactly\(bytes\);/);
+    assert.match(manager, /threatList is \{ Valid: true, Expires: \{ \} expiry \} && expiry <= DateTimeOffset\.UtcNow/);
+});
+test('duplicate SmartScreen setting uses safe default and empty view set remains pending', () => {
+    assert.match(manager, /if \(seen\) damaged = true;\s*seen = true;/);
+    assert.match(manager, /new SecuritySettings\(damaged \|\| smartScreen\)/);
+    assert.match(manager, /State = current\.Count == 0 \? SmartScreenState\.Pending/);
+});
