@@ -45,10 +45,10 @@ test('queued downloads and preflight requests cannot enter a replacement vault s
 
 test('vault lock never injects a text command into binary frames and verifies helper exit', () => {
     const lock = vault.slice(vault.indexOf('internal void Lock()'), vault.indexOf('// ── Rotation'));
-    assert.match(lock, /lockRequested = true;\s*Entries = \[\];\s*KillServe\(\);\s*serve\?\.Dispose\(\);\s*serve = null;/);
+    assert.match(lock, /lockRequested = true;\s*ready = false;\s*Entries = \[\];\s*KillServe\(\);\s*serve\?\.Dispose\(\);\s*serve = null;/);
     assert.match(lock, /if \(!process\.WaitForExit\(3000\)\)\s*throw new IOException/);
     assert.doesNotMatch(lock, /WriteQuit|\.Write(?:Async)?\(|\.Flush(?:Async)?\(/);
-    assert.match(vault, /internal bool Unlocked => !lockRequested && serve is \{ HasExited: false \}/);
+    assert.match(vault, /private bool TransportOpen => !lockRequested && serve is \{ HasExited: false \};\s*internal bool Unlocked => ready && TransportOpen;/);
     assert.match(vault, /private Stream PipeInput => !lockRequested && input is \{ \} stream \? stream : throw new IOException/);
     assert.match(vault, /private Stream PipeOutput => !lockRequested && output is \{ \} stream \? stream : throw new IOException/);
     assert.match(vault, /if \(canAbort && ReferenceEquals\(serve, session\) && Unlocked\)/);
@@ -64,4 +64,13 @@ test('bounded vault commands and plaintext responses have deadlines without forc
     assert.match(command, /await WriteLineAsync\(line, token\);[\s\S]*?await WriteProfileCommandAsync\(line, profilePassword, recoveryCode, token\);[\s\S]*?await PipeInput\.FlushAsync\(token\);[\s\S]*?return await ReadLineAsync\(token\);/);
     assert.match(command, /if \(!BoundedCommand\(line\)\) return await Exchange\(CancellationToken\.None\);[\s\S]*?return await CapturePipeAsync\(Exchange, seconds\);[\s\S]*?catch \{ CloseBrokenPipe\(\); throw; \}/);
     assert.match(vault, /await PipeOutput\.ReadExactlyAsync\(bytes, token\);[\s\S]*?\}, PipeTimeoutSeconds\);[\s\S]*?CryptographicOperations\.ZeroMemory\(bytes\);[\s\S]*?CloseBrokenPipe\(\);/);
+});
+
+test('vault open stays unavailable until index recovery completes in the same gate', () => {
+    const opening = vault.slice(vault.indexOf('private async Task<string?> StartAsync('), vault.indexOf('internal void Lock()'));
+    assert.match(opening, /await gate\.WaitAsync\(\);[\s\S]*?Process opening = serve;[\s\S]*?await LoadIndexLockedAsync\(opening\);\s*RequireTransportSession\(opening\);\s*ready = true;\s*return null;[\s\S]*?finally \{ gate\.Release\(\); Changed\?\.Invoke\(\); \}/);
+    assert.doesNotMatch(opening, /await LoadIndexAsync\(/);
+    assert.match(vault, /SmokeBeforeIndexPublish\?\.Invoke\(\);\s*#endif\s*RequireTransportSession\(session\);\s*Entries = loaded!;/);
+    const save = vault.slice(vault.indexOf('private async Task SaveIndexLockedAsync('), vault.indexOf('// ── Protocol'));
+    assert.match(save, /await SealBytesLockedAsync\([^;]+;\s*RequireTransportSession\(session\);\s*foreach/);
 });
