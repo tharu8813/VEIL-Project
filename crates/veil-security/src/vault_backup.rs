@@ -112,19 +112,59 @@ fn write_record(
     if !fs::symlink_metadata(path)?.file_type().is_file() {
         return Err(invalid("Vault backup entry is not a regular file"));
     }
-    let verified = keys.verify(Purpose::Download, path)?;
-    if kind == META && verified > crate::SMALL_OBJECT_LIMIT as u64 {
+    #[cfg(windows)]
+    let mut file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_SHARE_READ: prevent other write/delete handles while copying.
+        OpenOptions::new().read(true).share_mode(1).open(path)?
+    };
+    #[cfg(not(windows))]
+    let mut file = File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(invalid("Vault backup entry is not a regular file"));
+    }
+    let length = metadata.len();
+    if kind == META && length > crate::SMALL_OBJECT_LIMIT as u64 + ENVELOPE_LIMIT as u64 {
         return Err(invalid("Vault metadata exceeds size limit"));
     }
-    let mut file = File::open(path)?;
-    let length = file.metadata()?.len();
     output.write_all(&[kind])?;
     output.write_all(id.as_bytes())?;
     output.write_all(&length.to_le_bytes())?;
-    if transfer(&mut file, output)? != length {
+    // Authenticate the exact ciphertext bytes streamed into the encrypted backup,
+    // rather than reopening the pathname after a separate verification pass.
+    {
+        let mut record = CopyWhileReading { source: (&mut file).take(length), output };
+        keys.read_object_from(Purpose::Download, &mut record, |plaintext| {
+            if kind == META {
+                crate::read_bounded(plaintext, crate::SMALL_OBJECT_LIMIT)?;
+            } else {
+                transfer(plaintext, &mut io::sink())?;
+            }
+            Ok(())
+        })?;
+        if record.source.limit() != 0 {
+            return Err(invalid("Vault changed during backup"));
+        }
+    }
+    if file.read(&mut [0u8; 1])? != 0 {
         return Err(invalid("Vault changed during backup"));
     }
     Ok(())
+}
+
+// The outer encrypted backup is published only if every inner record authenticates.
+struct CopyWhileReading<'a, R> {
+    source: R,
+    output: &'a mut dyn Write,
+}
+
+impl<R: Read> Read for CopyWhileReading<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = self.source.read(buffer)?;
+        self.output.write_all(&buffer[..count])?;
+        Ok(count)
+    }
 }
 
 fn read_records(keys: &Keyring, staging: &Path, data: &mut dyn Read) -> io::Result<()> {
