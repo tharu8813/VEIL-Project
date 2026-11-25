@@ -25,6 +25,7 @@ public partial class BrowserWindow
         {
             // The status-bar indicator keeps "위협 목록 오류" visible; this line explains the individual navigation.
             LastThreatNotice = $"VEIL 위협 검사를 할 수 없어 그대로 엽니다 ({result.Reason}).";
+            UpdateSecurityIndicators();
             if (Active == tab) Status.Text = LastThreatNotice;
             return false;
         }
