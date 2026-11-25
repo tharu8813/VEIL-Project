@@ -7,6 +7,9 @@ on:
       - 'tests/chromium/identity-source-audit.test.py'
       - '.github/workflows/chromium-identity-audit.yml'
       - 'chromium/candidate.json'
+      - 'scripts/chromium/review-startup-spans.py'
+      - 'scripts/chromium/pinned_gitiles.py'
+      - 'tests/chromium/startup-spans.test.py'
   workflow_dispatch:
 
 permissions:
@@ -24,3 +27,7 @@ jobs:
         run: python3 tests/chromium/identity-source-audit.test.py
       - name: Survey exact upstream files without executing them
         run: python3 scripts/chromium/audit-identity-source.py
+      - name: Test bounded exact source windows
+        run: python3 tests/chromium/startup-spans.test.py
+      - name: Review pinned startup and COM source windows
+        run: python3 scripts/chromium/review-startup-spans.py
