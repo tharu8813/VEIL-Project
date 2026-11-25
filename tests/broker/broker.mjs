@@ -148,6 +148,24 @@ try {
     assert.ok(relocked, 'volume stayed unlocked after the unlocking client exited');
     assert.equal((await command(a, 'Detach')).status.attached, false);
 
+    // The fake OS unlocks, then throws before returning its result. The child
+    // must receive failure and its exit must still trigger the broker's watcher.
+    const ambiguousConfig = config('ambiguous-unlock');
+    ambiguousConfig.fake.throwAfterUnlock = true;
+    const ambiguous = await startBroker('ambiguous-unlock', ambiguousConfig);
+    assert.equal((await command(ambiguous, 'Attach')).status.attached, true);
+    const ambiguousChild = await run(process.execPath, ['-e', clientScript,
+        `\\\\.\\pipe\\${ambiguous.settings.pipeName}`, secret]);
+    assert.deepEqual(JSON.parse(ambiguousChild.stdout), { ok: false, error: 'BackendFailure' });
+    let ambiguousRelocked = false;
+    for (let i = 0; i < 40 && !ambiguousRelocked; i++) {
+        ambiguousRelocked = (await command(ambiguous, 'Status')).status.unlocked === false;
+        if (!ambiguousRelocked) await delay(250);
+    }
+    assert.ok(ambiguousRelocked, 'ambiguous unlock remained open after client exit');
+    assert.match(ambiguous.stdout, /"event":"client-exit-lock"[^\n]*"result":"ok"/);
+    assert.equal((await command(ambiguous, 'Detach')).status.attached, false);
+
     // B: unsigned development client allowed; the startup gate follows the broker state.
     const b = await startBroker('b', config('b', { allowUnsignedClients: true }));
     evidence.gateDetached = await gate({ pipeName: b.settings.pipeName });
