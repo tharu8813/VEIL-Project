@@ -32,6 +32,16 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Chromium C0 diagnostics (hosted runner only)
+        shell: powershell
+        run: |
+          node --test tests/chromium/resolve-tag.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/chromium/inventory.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\scripts\chromium\Get-BuildReadiness.ps1 -Workspace "$env:RUNNER_TEMP\chromium"
+          # Read-only observations. No Chromium checkout/build or user-machine verification.
+
       - name: Restore locked dependencies
         shell: pwsh
         run: |
