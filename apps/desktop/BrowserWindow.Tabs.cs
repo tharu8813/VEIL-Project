@@ -150,7 +150,7 @@ public partial class BrowserWindow
     // ── Tab menu ─────────────────────────────────────────────────────────────
 
     private bool CanUseTab(TabItem item) => !closing && !restoring && !session.IsEnding && !session.EngineLost &&
-        Tabs.Items.Contains(item) && !closingTabs.Contains(item) && item.Tag is BrowserTab tab && tab.Owner == this;
+        Tabs.Items.Contains(item) && !closingTabs.Contains(item) && item.Tag is BrowserTab { Closing: false } tab && tab.Owner == this;
 
     private bool CanMoveTo(TabItem item, BrowserWindow target) =>
         CanUseTab(item) && !session.IsPrivate && target != this && ReferenceEquals(session, target.session) &&
