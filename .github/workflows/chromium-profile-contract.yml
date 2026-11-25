@@ -10,6 +10,9 @@ on:
       - 'chromium/dev/config-path-win.h'
       - 'chromium/dev/config-schema.h'
       - 'chromium/dev/client-migration-contract.h'
+      - 'chromium/dev/client-hash-win.h'
+      - 'tests/chromium/client-hash-win.test.cc'
+      - 'tests/chromium/client-hash-win.test.ps1'
       - 'tests/chromium/client-migration-contract.test.cc'
       - 'scripts/broker-service.ps1'
       - 'tests/chromium/installer-config-shape.test.cc'
@@ -285,3 +288,16 @@ jobs:
           & cmd.exe /d /c $command
           if ($LASTEXITCODE -ne 0) { throw 'Installer config fixture compile failed.' }
           & .\tests\chromium\installer-config-shape.test.ps1 -Executable $exe
+      - name: Compile and test native synthetic executable hash
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-client-hash.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-client-hash.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\client-hash-win.test.cc bcrypt.lib advapi32.lib' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Client hash compile failed.' }
+          & .\tests\chromium\client-hash-win.test.ps1 -Executable $exe
