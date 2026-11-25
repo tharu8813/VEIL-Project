@@ -4,6 +4,8 @@
 #define VEIL_CHROMIUM_DEV_MANIFEST_ENTRY_CONTRACT_H_
 #include "client-migration-contract.h"
 #include <set>
+#include <vector>
+#include <map>
 
 namespace veil::chromium_dev {
 inline constexpr std::size_t kManifestEntryLimit = 4u * 1024u * 1024u;
@@ -14,6 +16,15 @@ struct ManifestClientEntry {
   std::string version;
   std::string sha256;
   std::uint64_t bytes = 0;
+};
+struct ManifestFileEntry {
+  std::string path;
+  std::string sha256;
+  std::uint64_t bytes = 0;
+};
+struct ManifestInventory {
+  ManifestClientEntry client;
+  std::vector<ManifestFileEntry> files;
 };
 enum class ManifestEntryResult { kRejected, kMalformed, kNoClient, kEntryOnly };
 
@@ -77,7 +88,8 @@ inline std::string FoldPath(std::string value) {
     if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
   return value;
 }
-inline bool ReadFiles(Reader& reader, ManifestClientEntry* entry, bool* found) {
+inline bool ReadFiles(Reader& reader, ManifestClientEntry* entry, bool* found,
+                      std::vector<ManifestFileEntry>* files) {
   if (!reader.Take('[')) return false;
   std::set<std::string> paths;
   if (reader.Take(']')) return true;
@@ -107,9 +119,10 @@ inline bool ReadFiles(Reader& reader, ManifestClientEntry* entry, bool* found) {
     if (path == kSyntheticClientEntry) {
       if (!bytes || bytes > 512ULL * 1024u * 1024u) return false;
       *found = true;
-      entry->sha256 = std::move(hash);
+      entry->sha256 = hash;
       entry->bytes = bytes;
     }
+    files->push_back({std::move(path), std::move(hash), bytes});
     if (reader.Take(']')) {
       // Reject a file also used as an ancestor directory, regardless of order.
       for (const auto& name : paths) {
@@ -126,8 +139,8 @@ inline bool ReadFiles(Reader& reader, ManifestClientEntry* entry, bool* found) {
 }
 }  // namespace manifest_entry_detail
 
-inline ManifestEntryResult ParseSyntheticManifestClient(
-    std::string_view json, ManifestClientEntry* output) {
+inline ManifestEntryResult ParseSyntheticManifestInventory(
+    std::string_view json, ManifestInventory* output) {
   using namespace manifest_entry_detail;
   if (!output || json.empty() || json.size() > kManifestEntryLimit)
     return ManifestEntryResult::kRejected;
@@ -137,7 +150,8 @@ inline ManifestEntryResult ParseSyntheticManifestClient(
       "format", "channel", "architecture", "version", "sourceCommit", "profileFormat", "files"};
   unsigned seen = 0;
   bool found = false;
-  ManifestClientEntry entry;
+  ManifestInventory inventory;
+  auto& entry = inventory.client;
   for (std::size_t count = 0; count < names.size(); ++count) {
     if (count && !reader.Take(',')) return ManifestEntryResult::kMalformed;
     std::string key, value;
@@ -165,15 +179,23 @@ inline ManifestEntryResult ParseSyntheticManifestClient(
           return ManifestEntryResult::kMalformed;
         break;
       case 6:
-        if (!ReadFiles(reader, &entry, &found)) return ManifestEntryResult::kMalformed;
+        if (!ReadFiles(reader, &entry, &found, &inventory.files)) return ManifestEntryResult::kMalformed;
         break;
       default: return ManifestEntryResult::kMalformed;
     }
   }
   if (seen != 127 || !reader.Take('}') || !reader.End()) return ManifestEntryResult::kMalformed;
   if (!found) return ManifestEntryResult::kNoClient;
-  *output = std::move(entry);
+  *output = std::move(inventory);
   return ManifestEntryResult::kEntryOnly;
+}
+inline ManifestEntryResult ParseSyntheticManifestClient(
+    std::string_view json, ManifestClientEntry* output) {
+  if (!output) return ManifestEntryResult::kRejected;
+  ManifestInventory inventory;
+  const auto result = ParseSyntheticManifestInventory(json, &inventory);
+  if (result == ManifestEntryResult::kEntryOnly) *output = std::move(inventory.client);
+  return result;
 }
 }  // namespace veil::chromium_dev
 #endif
