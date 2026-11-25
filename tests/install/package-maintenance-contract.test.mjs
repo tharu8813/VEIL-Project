@@ -44,15 +44,15 @@ test('fresh install refuses existing registration before staging; invalid versio
     const preflight=maintenance.indexOf("throw 'Existing installation/registration requires administrator recovery, not a fresh install.'");
     assert.ok(preflight>=0 && preflight<staging);
     assert.match(maintenance.slice(maintenance.lastIndexOf('if ($Install)',preflight),preflight),/Get-CimInstance Win32_Service/);
-    assert.match(maintenance,/try\s*\{\s*\$manifest=Copy-StagedPackage\s*\[void\]\(Assert-VeilInternalVersion \$manifest.version\)\s*\}\s*catch\s*\{\s*if \(Test-Path -LiteralPath \$stage\) \{ Remove-RestrictedTree \$stage \}\s*throw/);
+    assert.match(maintenance,/try\s*\{\s*\$manifest=Copy-StagedPackage\s*\[void\]\(Assert-VeilInternalVersion \$manifest.version\)\s*\}\s*catch\s*\{\s*if \(\$script:ownsStage -and \(Test-Path -LiteralPath \$stage\)\) \{ Remove-RestrictedTree \$stage \}\s*throw/);
     assert.ok(maintenance.indexOf("throw 'Unresolved maintenance state.")<preflight);
 });
 
 
 test('package staging uses shared byte copy and authenticates only after copying', () => {
     assert.match(common,/function Copy-VeilPackageFiles[\s\S]*?Get-VeilTreeFiles \$Source -WithRelativePath[\s\S]*?Assert-VeilRelativeFile \$relative[\s\S]*?\[IO\.File\]::Copy/);
-    assert.match(maintenance,/New-VeilRestrictedDirectory \$stage\s+Copy-VeilPackageFiles \$source \$stage\s+return Read-VeilPackage \$stage \$SignerThumbprint/);
-    assert.match(maintenance,/catch\s*\{\s*if \(Test-Path -LiteralPath \$stage\) \{ Remove-RestrictedTree \$stage \}\s*throw/);
+    assert.match(maintenance,/New-VeilRestrictedDirectory \$stage\s+\$script:ownsStage=\$true\s+Copy-VeilPackageFiles \$source \$stage\s+return Read-VeilPackage \$stage \$SignerThumbprint/);
+    assert.match(maintenance,/catch\s*\{\s*if \(\$script:ownsStage -and \(Test-Path -LiteralPath \$stage\)\) \{ Remove-RestrictedTree \$stage \}\s*throw/);
 });
 test('disk-full verdict requires actual Windows disk-full IO error', async () => {
     const { assertCopyFailure } = await import('../vm/package-staging-disk-full.mjs');
@@ -61,4 +61,14 @@ test('disk-full verdict requires actual Windows disk-full IO error', async () =>
     for (const result of [{ status: 'COPIED', ioCodes: [] }, { status: 'FAILED', ioCodes: [5] },
         { status: 'FAILED', ioCodes: [] }, { status: 'FAILED', ioCodes: ['112'] }])
         assert.throws(() => assertCopyFailure(result));
+});
+
+test('a refused operation cannot remove preexisting staging in its finally block', () => {
+    assert.match(maintenance, /\$script:ownsStage=\$false\s+try/);
+    assert.match(maintenance, /New-VeilRestrictedDirectory \$stage\s+\$script:ownsStage=\$true/);
+    assert.match(maintenance, /if \(\$held -and \$Update -and \$script:ownsStage -and -not \(Test-Path -LiteralPath \$journal\)/);
+});
+test('rollback authenticates the old package before restoring the registration', () => {
+    assert.match(maintenance, /Read-VeilPackage \$bin \$SignerThumbprint\)[\s\S]*?Rollback binary and registration do not match\.[\s\S]*?Restore-VeilRegistration \$backup \$config/);
+    assert.match(maintenance, /function Restore-VeilRegistration[\s\S]*?Get-FileHash -LiteralPath \$BackupPath[\s\S]*?Get-FileHash -LiteralPath \$ConfigPath[\s\S]*?return[\s\S]*?Write-Durable \$RestorePath[\s\S]*?\[IO\.File\]::Replace/);
 });
