@@ -121,6 +121,7 @@ public partial class BrowserWindow : Window
         foreach (var view in Pages.Children.OfType<WebView2>())
             view.Dispose();
         session.ReleasePrivate();
+        session.StopProxyMonitorIfIdle();
     }
 
     internal void PrepareForProtectedShutdown()
@@ -136,8 +137,7 @@ public partial class BrowserWindow : Window
         {
             await session.EngineHost.InitializeAsync(session.Root, session.Network);
             if (closing || session.IsEnding || session.EngineLost) return;
-            if (session.Network.Mode == NetworkMode.Proxy && session.ProxyReachable is null)
-                session.ProxyReachable = await NetworkPolicy.ProxyReachableAsync(session.Network, TimeSpan.FromSeconds(3));
+            await session.StartProxyMonitorAsync();
             UpdateNetworkIndicator();
             if (closing) return;
             if (adopted is not null)
