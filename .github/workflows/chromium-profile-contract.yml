@@ -9,6 +9,9 @@ on:
       - 'chromium/dev/config-acl-win.h'
       - 'chromium/dev/config-path-win.h'
       - 'chromium/dev/config-schema.h'
+      - 'scripts/broker-service.ps1'
+      - 'tests/chromium/installer-config-shape.test.cc'
+      - 'tests/chromium/installer-config-shape.test.ps1'
       - 'chromium/dev/config-loader-win.h'
       - 'tests/chromium/config-loader-win.test.cc'
       - 'tests/chromium/config-schema.test.cc'
@@ -265,3 +268,16 @@ jobs:
             }
             [IO.Directory]::Delete($root)
           }
+      - name: Compile and test installer-shaped configuration fixture
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-installer-config-shape.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-installer-config-shape.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\installer-config-shape.test.cc' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Installer config fixture compile failed.' }
+          & .\tests\chromium\installer-config-shape.test.ps1 -Executable $exe

@@ -24,8 +24,29 @@ inline bool IsSyntheticPipeName(std::string_view name) {
   return true;
 }
 
-// Require all six explicit legacy fields. This deliberately accepts only a
-// conservative ASCII subset and product-shaped flags, not arbitrary JSON.
+// Schema-only path syntax: accept interior ASCII spaces (Program Files)
+// without weakening the separate filesystem/profile contract. Strip spaces
+// only for conservative component validation, never from the returned path.
+inline bool SafeConfigPath(std::wstring_view path) {
+  if (path.size() < 4 || path.size() >= 260 || !IsLetter(path[0]) ||
+      path[1] != L':' || path[2] != L'\\') return false;
+  auto tail = path.substr(3);
+  while (true) {
+    const auto pos = tail.find(L'\\');
+    const auto part = tail.substr(0, pos);
+    if (part.empty() || part.front() == L' ' || part.back() == L' ') return false;
+    std::wstring compact;
+    for (const auto c : part)
+      if (c != L' ') compact.push_back(c);
+    if (!SafeComponent(compact)) return false;
+    if (pos == std::wstring_view::npos) return true;
+    tail.remove_prefix(pos + 1);
+  }
+}
+
+// The legacy installer emits five fields; C# defaults omitted development
+// to false. Require all five, optionally accept explicit false development.
+// Conservative ASCII subset; a match is not filesystem or trust evidence.
 inline ConfigSchemaResult DecodeSyntheticConfig(std::string_view json,
                                                  ConfigSnapshot* output) {
   if (!output || json.empty() || json.size() > kConfigSchemaLimit)
@@ -38,11 +59,15 @@ inline ConfigSchemaResult DecodeSyntheticConfig(std::string_view json,
       "pipeName", "volumeId", "brokerImage", "development",
       "requireWindowsService", "profilePath"};
   unsigned seen = 0;
-  bool development = true;
+  bool development = false;
+  bool closed = false;
   bool require_service = false;
   ConfigSnapshot snapshot;
   for (std::size_t count = 0; count < names.size(); ++count) {
-    if (count && !reader.Take(',')) return ConfigSchemaResult::kMalformed;
+    if (count) {
+      if (reader.Take('}')) { closed = true; break; }
+      if (!reader.Take(',')) return ConfigSchemaResult::kMalformed;
+    }
     std::string key;
     if (!reader.String(&key) || !reader.Take(':')) return ConfigSchemaResult::kMalformed;
     std::size_t i = 0;
@@ -66,13 +91,14 @@ inline ConfigSchemaResult DecodeSyntheticConfig(std::string_view json,
       default: return ConfigSchemaResult::kMalformed;
     }
   }
-  if (seen != 63 || !reader.Take('}') || !reader.End())
+  constexpr unsigned required = 63u & ~(1u << 3);
+  if ((seen & required) != required || (!closed && !reader.Take('}')) || !reader.End())
     return ConfigSchemaResult::kMalformed;
   std::string request;
   if (development || !require_service || !IsSyntheticPipeName(snapshot.pipe_name) ||
       !EncodeStatusRequest(snapshot.volume_id, &request) ||
-      !SafeDedicatedPath(snapshot.broker_image) ||
-      !SafeDedicatedPath(snapshot.profile_path))
+      !SafeConfigPath(snapshot.broker_image) ||
+      !SafeConfigPath(snapshot.profile_path))
     return ConfigSchemaResult::kRejected;
   // No paths are opened and no pipe connection can be made by this parser.
   *output = std::move(snapshot);

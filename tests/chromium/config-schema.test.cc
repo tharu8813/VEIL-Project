@@ -58,6 +58,22 @@ int main() {
   boundary.resize(kConfigSchemaLimit, ' ');
   if (DecodeSyntheticConfig(boundary, &result) != ConfigSchemaResult::kSnapshotOnly ||
       DecodeSyntheticConfig(valid, nullptr) != ConfigSchemaResult::kMalformed) return 6;
+  const std::string installed = R"({"volumeId":"0123456789abcdef0123456789abcdef","pipeName":"VEIL.VolumeBroker","brokerImage":"C:\\Program Files\\VEIL\\Broker\\Veil.VolumeBroker.exe","profilePath":"D:\\VEIL Profile","requireWindowsService":true})";
+  if (DecodeSyntheticConfig(installed, &result) != ConfigSchemaResult::kSnapshotOnly ||
+      result.broker_image != L"C:\\Program Files\\VEIL\\Broker\\Veil.VolumeBroker.exe" ||
+      result.profile_path != L"D:\\VEIL Profile" ||
+      result.pipe_name != "VEIL.VolumeBroker") return 8;
+  if (SafeDedicatedPath(result.profile_path)) return 9;
+  for (const auto bad : {L"D:\\CON .txt", L"D:\\ Program", L"D:\\Program ",
+       L"D:\\foo. ", L"D:\\.. \\Profile", L"D:\\foo:stream", L"D:\\foo\\",
+       L"D:\\N U L.txt", L"\\\\server\\path", L"D:relative"})
+    if (SafeConfigPath(bad)) return 10;
+  const auto absent = mutate("\"development\":false,", "");
+  if (DecodeSyntheticConfig(absent, &result) != ConfigSchemaResult::kSnapshotOnly ||
+      DecodeSyntheticConfig(mutate("\"requireWindowsService\":true,", ""), &result) !=
+          ConfigSchemaResult::kMalformed ||
+      DecodeSyntheticConfig(mutate("\"development\":false,", "\"development\":null,"), &result) !=
+          ConfigSchemaResult::kMalformed) return 11;
   // Existing wire parser still rejects embedded newlines despite shared reader change.
   BrokerStatusSnapshot wire;
   if (DecodeStatusFrame("{\"ok\":false,\n\"error\":\"AccessDenied\"}\n", &wire) !=
