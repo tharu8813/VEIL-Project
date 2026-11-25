@@ -10,6 +10,11 @@ public partial class BrowserWindow
 {
     internal const string HttpsWarningUrl = "veil://https-warning";
     private const string AllowHttpUrl = "veil://allow-http";
+#if DEBUG
+    private BrowserTab? smokeRedirectTab;
+    private Uri? smokeExpectedHttpRedirect;
+    private int smokeCancelledHttpRedirects;
+#endif
 
     /// <summary>Returns true when the navigation was handled here (cancelled and replaced).</summary>
     private bool HandleHttpsFirst(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
@@ -24,6 +29,10 @@ public partial class BrowserWindow
         if (!Uri.TryCreate(args.Uri, UriKind.Absolute, out var uri) || NetworkPolicy.HttpsUpgrade(uri, session.HttpAllowed) is not { } secure)
             return false;
         args.Cancel = true;
+#if DEBUG
+        if (args.IsRedirected && tab == smokeRedirectTab && uri.Equals(smokeExpectedHttpRedirect))
+            smokeCancelledHttpRedirects++;
+#endif
         // A site that redirects its HTTPS address back to HTTP cannot be upgraded: warn instead of looping.
         if (args.IsRedirected && tab.UpgradedFrom?.IdnHost == uri.IdnHost)
         {

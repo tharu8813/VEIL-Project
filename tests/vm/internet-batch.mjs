@@ -148,6 +148,37 @@ export function judgeProxyDohCapture(bytes, systemName, evidence) {
     return { ...capture, detail: capture.detail + '; provider tunnel observed (encrypted query contents not verified)' };
 }
 
+// Independent HTTPS-only control: inspect the Location without following any HTTP redirect.
+export function matchesDowngradeControl(status, location, source, target) {
+    if (![301, 302, 303, 307, 308].includes(status) || typeof location !== 'string') return false;
+    try {
+        const from = new URL(source), expected = new URL(target), actual = new URL(location, from);
+        return from.protocol === 'https:' && expected.protocol === 'http:' && actual.href === expected.href;
+    } catch { return false; }
+}
+
+export function judgeDowngrade(control, page, target) {
+    if (page?.url?.toLowerCase().startsWith('http://'))
+        return { status: 'FAIL', detail: 'HTTP address reached without native consent' };
+    if (!page || page.error !== null || !/^\d+$/.test(page.httpExceptions ?? '') || Number(page.httpExceptions) !== 0)
+        return { status: 'FAIL', detail: 'browser result or zero HTTP exception evidence missing' };
+    if (!/^\d+$/.test(page.cancelledHttpRedirects ?? ''))
+        return { status: 'FAIL', detail: 'redirect cancellation evidence missing' };
+    const cancelled = Number(page.cancelledHttpRedirects);
+    if (!Number.isSafeInteger(cancelled))
+        return { status: 'FAIL', detail: 'invalid redirect evidence' };
+    if (page.url === 'veil://https-warning') {
+        if (page.pendingHttp !== target || page.nativeHttpBar !== 'True' || cancelled < 1)
+            return { status: 'FAIL', detail: 'warning lacks exact cancelled redirect or native consent bar' };
+        if (control?.matched !== true)
+            return { status: 'OBSERVED', detail: 'browser cancelled the redirect; independent HTTPS redirect control not confirmed' };
+        return { status: 'PASS', detail: 'verified HTTPS redirect, cancelled HTTP navigation and matching native warning; no HTTP exception' };
+    }
+    return { status: 'OBSERVED', detail: cancelled > 0
+        ? 'HTTP redirect cancelled, but expected warning not observed (secure upgrade or other result)'
+        : 'expected HTTP redirect not observed in browser' };
+}
+
 async function main() {
     const { values } = parseArgs({ options: {
         plan: { type: 'boolean' }, run: { type: 'boolean' }, 'internet-vm': { type: 'boolean' },
@@ -193,7 +224,7 @@ async function main() {
     const selected = id => tests.find(t => t.id === id && !t.reason);
     let n = 0;
 
-    async function visit(label, url, { network = null, security = null, evalExpr = null, reuse = null } = {}) {
+    async function visit(label, url, { network = null, security = null, evalExpr = null, reuse = null, downgradeTarget = null } = {}) {
         // reuse: a profile from an earlier visit, so a second load can use what the first one learned (Alt-Svc).
         const profile = reuse ?? join(evidence, `${++n}-${label}`, 'profile');
         if (!reuse) {
@@ -202,12 +233,14 @@ async function main() {
         } else n++;
         const report = join(evidence, `${n}-${label}.json`);
         await run('dotnet', [desktop, '--smoke', profile, origin, 'visit', report], {
-            timeout: 180_000, env: { ...process.env, VEIL_TEST_URL: url, VEIL_TEST_EVAL: evalExpr ?? '' },
+            timeout: 180_000, env: { ...process.env, VEIL_TEST_URL: url, VEIL_TEST_EVAL: evalExpr ?? '', VEIL_TEST_DOWNGRADE_TARGET: downgradeTarget ?? '' },
         });
         const result = JSON.parse(await readFile(report, 'utf8'));
         if (result.error !== null || !Array.isArray(result.checks)) throw new Error('Desktop visit failed: ' + (result.error ?? 'missing checks'));
         const field = name => result.checks.find(c => c.startsWith(`visit: ${name}=`))?.slice(`visit: ${name}=`.length);
-        return { error: result.error, url: field('url'), navError: field('error'), title: field('title'), eval: field('eval'), profile };
+        return { error: result.error, url: field('url'), navError: field('error'), title: field('title'), eval: field('eval'), profile,
+            cancelledHttpRedirects: field('cancelledHttpRedirects'), pendingHttp: field('pendingHttp'),
+            nativeHttpBar: field('nativeHttpBar'), httpExceptions: field('httpExceptions') };
     }
     const record = async (id, outcome) => { Object.assign(tests.find(t => t.id === id), outcome); await save(); console.log(`${outcome.status.padEnd(8)} ${id} · ${outcome.detail ?? ''}`); };
     const guard = async (id, body) => {
@@ -301,10 +334,18 @@ async function main() {
             return judgeQuic(second, proxied, QUIC_SITE, viaProxy);
         });
         await guard('https-downgrade-redirect', async () => {
-            const page = await visit('https-downgrade', DOWNGRADE);
-            if (page.url === 'veil://https-warning') return { status: 'PASS', detail: 'warning page shown for the HTTPS to HTTP redirect' };
-            if (page.url?.startsWith('http://')) return { status: 'FAIL', detail: `HTTP page loaded silently: ${page.url}` };
-            return { status: 'OBSERVED', detail: `redirect service result: ${page.url} ${page.navError}` };
+            let control;
+            try {
+                const response = await fetch(DOWNGRADE, { redirect: 'manual', signal: AbortSignal.timeout(15000) });
+                const location = response.headers.get('location');
+                control = { status: response.status, location,
+                    matched: matchesDowngradeControl(response.status, location, DOWNGRADE, HTTP_ONLY) };
+                await response.body?.cancel();
+            } catch (error) {
+                control = { matched: false, error: error.name };
+            }
+            const page = await visit('https-downgrade', DOWNGRADE, { downgradeTarget: HTTP_ONLY });
+            return { ...judgeDowngrade(control, page, HTTP_ONLY), control, page };
         });
     } finally {
         fixture.close();
