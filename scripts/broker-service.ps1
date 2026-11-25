@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory, ParameterSetName = 'VerifyRecovery')][switch]$VerifyRecovery,
     [Parameter(Mandatory, ParameterSetName = 'Install')][string]$BrokerSource,
     [Parameter(Mandatory, ParameterSetName = 'Install')][string]$DesktopSource,
+    [Parameter(ParameterSetName = 'Install')][string]$PackageRoot,
     [Parameter(Mandatory, ParameterSetName = 'Install')][string]$ImagePath,
     [Parameter(Mandatory, ParameterSetName = 'Install')][string]$ProfilePath,
     [Parameter(Mandatory, ParameterSetName = 'Install')][guid]$VolumeGuid,
@@ -25,6 +26,7 @@ $brokerConfig = Join-Path $dataRoot 'broker.json'
 $clientConfig = Join-Path $dataRoot 'client.json'
 $trusted = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
 . (Join-Path $PSScriptRoot 'bitlocker-recovery.ps1')
+. (Join-Path $PSScriptRoot 'package-common.ps1')
 
 function Assert-AdminOnly([string]$Path) {
     $item = Get-Item -LiteralPath $Path -Force
@@ -40,11 +42,8 @@ function Assert-AdminOnly([string]$Path) {
 }
 
 function New-RestrictedDirectory([string]$Path) {
-    $acl = [Security.AccessControl.DirectorySecurity]::new()
-    $acl.SetSecurityDescriptorSddlForm('O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)')
-    New-Item -ItemType Directory -Path $Path | Out-Null
-    Set-Acl -LiteralPath $Path -AclObject $acl
-    Assert-AdminOnly $Path
+    # Apply the restricted ACL at creation, not after a permissive window.
+    New-VeilRestrictedDirectory $Path
 }
 
 function Assert-Signed([string]$Path) {
@@ -149,9 +148,19 @@ try {
     $binCreated = $true
     New-RestrictedDirectory $dataRoot
     $dataCreated = $true
-    foreach ($source in @(@{ From=$BrokerSource; To=(Split-Path -Parent $brokerImage) }, @{ From=$DesktopSource; To=(Split-Path -Parent $desktopImage) })) {
-        New-Item -ItemType Directory -Path $source.To | Out-Null
-        Copy-Item -Path (Join-Path $source.From '*') -Destination $source.To -Recurse
+    if ($PackageRoot) {
+        # The package installer supplies its restricted, already authenticated staging tree.
+        # Copy the complete inventory, including manifest and signature, before SCM registration.
+        Assert-VeilAdminPath $PackageRoot
+        [void](Read-VeilPackage $PackageRoot $SignerThumbprint)
+        Copy-VeilPackageFiles $PackageRoot $binRoot
+        [void](Read-VeilPackage $binRoot $SignerThumbprint)
+    } else {
+        # Legacy developer-only installation without a package manifest.
+        foreach ($source in @(@{ From=$BrokerSource; To=(Split-Path -Parent $brokerImage) }, @{ From=$DesktopSource; To=(Split-Path -Parent $desktopImage) })) {
+            New-Item -ItemType Directory -Path $source.To | Out-Null
+            Copy-Item -Path (Join-Path $source.From '*') -Destination $source.To -Recurse
+        }
     }
     Assert-Signed $brokerImage
     Assert-Signed $desktopImage
@@ -173,7 +182,8 @@ try {
         Set-Acl -LiteralPath $file -AclObject $acl
         Assert-AdminOnly $file
     }
-    New-Service -Name $serviceName -BinaryPathName $serviceCommand -DisplayName 'VEIL Volume Broker' -StartupType Automatic | Out-Null
+    # Do not permit automatic boot activation before recovery policy and startup are verified.
+    New-Service -Name $serviceName -BinaryPathName $serviceCommand -DisplayName 'VEIL Volume Broker' -StartupType Manual | Out-Null
     $installed = $true
     # Restart the privileged broker on failure, including an unexpected non-zero service exit.
     # Its startup gate refuses to accept clients until it has checked and secured any orphaned mount.
@@ -188,12 +198,21 @@ try {
         $controller.WaitForStatus('Running', [TimeSpan]::FromMinutes(1))
     }
     finally { $controller.Dispose() }
+    Set-Service -Name $serviceName -StartupType Automatic
 }
 catch {
-    # After SCM registration, preserve the files for diagnosis and explicit recovery.
-    if (-not $installed) {
-        if ($binCreated) { Remove-VeilTree $binRoot $env:ProgramFiles }
-        if ($dataCreated) { Remove-VeilTree $dataRoot $env:ProgramData }
+    # New-Service may fail after SCM has created a record. Recheck before deleting
+    # any binaries or registration; an unknown SCM state must preserve evidence.
+    $installError = $_
+    $observed = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+    if ($installed -or $observed) {
+        if ($observed -and $observed.PathName -eq $serviceCommand -and $observed.StartName -eq 'LocalSystem') {
+            Set-Service -Name $serviceName -StartupType Disabled
+        }
+        # Never remove files or a volume once SCM registration may exist.
+        throw $installError
     }
-    throw
+    if ($binCreated) { Remove-VeilTree $binRoot $env:ProgramFiles }
+    if ($dataCreated) { Remove-VeilTree $dataRoot $env:ProgramData }
+    throw $installError
 }
