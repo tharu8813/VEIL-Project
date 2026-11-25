@@ -6,6 +6,8 @@ on:
       - 'chromium/dev/volume-evidence-contract.h'
       - 'chromium/dev/broker-status-wire.h'
       - 'chromium/dev/broker-identity-win.h'
+      - 'chromium/dev/synthetic-pipe-transport-win.h'
+      - 'tests/chromium/synthetic-pipe-transport-win.test.cc'
       - 'tests/chromium/broker-identity-win.test.cc'
       - 'tests/chromium/broker-status-wire.test.cc'
       - 'chromium/dev/volume-observation-win.h'
@@ -128,3 +130,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Broker identity compile failed.' }
           & $exe
           if ($LASTEXITCODE -ne 0) { throw 'Broker identity observation failed.' }
+      - name: Compile and test synthetic local pipe transport
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-synthetic-pipe.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-synthetic-pipe.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\synthetic-pipe-transport-win.test.cc' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic pipe compile failed.' }
+          $process = Start-Process -FilePath $exe -NoNewWindow -PassThru
+          if (-not $process.WaitForExit(20000)) {
+            $process.Kill()
+            $process.WaitForExit()
+            throw 'Synthetic pipe fixture exceeded outer watchdog.'
+          }
+          if ($process.ExitCode -ne 0) { throw "Synthetic pipe test failed: $($process.ExitCode)" }
