@@ -15,7 +15,7 @@ try {
     $request2 = [Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=VEIL synthetic second signer',$rsa2,[Security.Cryptography.HashAlgorithmName]::SHA256,[Security.Cryptography.RSASignaturePadding]::Pkcs1)
     $cert = $request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1),[DateTimeOffset]::UtcNow.AddDays(1))
     $cert2 = $request2.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1),[DateTimeOffset]::UtcNow.AddDays(1))
-    $bytes = [Text.UTF8Encoding]::new($false).GetBytes('{"format":1,"channel":"internal","architecture":"win-x64","fixture":true}')
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes('{"format":1,"channel":"internal","architecture":"win-x64","version":"1.1.0-alpha.1","sourceCommit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","profileFormat":1,"files":[{"path":"Chromium/client-fixture.exe","bytes":123,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}')
     $content = [Security.Cryptography.Pkcs.ContentInfo]::new($bytes)
     $signer = [Security.Cryptography.Pkcs.CmsSigner]::new($cert)
     $signer.IncludeOption = [Security.Cryptography.X509Certificates.X509IncludeOption]::EndCertOnly
