@@ -9,6 +9,7 @@ on:
       - 'chromium/dev/config-acl-win.h'
       - 'chromium/dev/config-path-win.h'
       - 'tests/chromium/config-path-win.test.cc'
+      - 'tests/chromium/config-handle-read-win.test.cc'
       - 'tests/chromium/config-path-win.test.ps1'
       - 'tests/chromium/config-acl-win.test.cc'
       - 'chromium/dev/synthetic-pipe-transport-win.h'
@@ -210,3 +211,26 @@ jobs:
           & cmd.exe /d /c $command
           if ($LASTEXITCODE -ne 0) { throw 'Config path compile failed.' }
           & .\tests\chromium\config-path-win.test.ps1 -Executable $exe
+      - name: Compile and test same-handle synthetic config read
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-config-handle-read.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-config-handle-read.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\config-handle-read-win.test.cc advapi32.lib' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Config handle read compile failed.' }
+          $root = Join-Path $env:RUNNER_TEMP ('veil-config-read-fixture-' + [Guid]::NewGuid().ToString('N'))
+          if (Test-Path -LiteralPath $root) { throw 'Fixture already exists.' }
+          $null = New-Item -ItemType Directory -Path $root
+          try {
+            & $exe $root
+            if ($LASTEXITCODE -ne 0) { throw "Config handle read failed: $LASTEXITCODE" }
+          } finally {
+            $file = Join-Path $root 'client-fixture.json'
+            if (Test-Path -LiteralPath $file) { [IO.File]::Delete($file) }
+            [IO.Directory]::Delete($root)
+          }
