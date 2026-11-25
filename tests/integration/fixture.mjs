@@ -119,6 +119,10 @@ export async function startFixture(port = 0, { ipv6 = false } = {}) {
         requests.set(url.pathname, (requests.get(url.pathname) ?? 0) + 1);
         // Phase 5: the test proxy marks what it forwards; anything unmarked reached this server directly.
         if (!request.headers['x-veil-proxied']) direct.set(url.pathname, (direct.get(url.pathname) ?? 0) + 1);
+        if (/^\/network-transition\/(before|blocked|after)$/.test(url.pathname)) {
+            response.setHeader('Cache-Control', 'no-store');
+            return send('<title>VEIL transition ' + url.pathname.split('/').at(-1) + '</title>', 'text/html; charset=utf-8');
+        }
         switch (url.pathname) {
             case '/network-control': return send('VEIL_DIRECT_CONTROL');
             case '/': return send(page, 'text/html; charset=utf-8');

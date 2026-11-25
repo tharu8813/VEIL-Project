@@ -1339,6 +1339,62 @@ public partial class BrowserWindow
                     string title = await Active.View.ExecuteScriptAsync("document.title");
                     checks.Add($"dns probe: error={Active.LastNavigationError?.ToString() ?? "none"} title={title}");
                 }
+#if DEBUG
+                else if (stage == "network-transition")
+                {
+                    Check(session.Network.Mode == NetworkMode.Proxy && session.Network.ProxyScheme == "http" &&
+                        session.Network.ProxyHost == "127.0.0.1", "fixed loopback proxy mode");
+                    var vault = session.Vault;
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 0,
+                        "synthetic empty vault");
+                    string controls = Path.GetDirectoryName(report)!;
+                    uint pid = Active!.View.CoreWebView2.BrowserProcessId;
+                    foreach (string phase in new[] { "before", "blocked", "after" })
+                    {
+                        string signal = Path.Combine(controls, phase + ".go");
+                        for (int i = 0; !File.Exists(signal) && i < 3000; i++) await Task.Delay(100);
+                        Check(File.Exists(signal), "operator/runner released " + phase);
+                        Check(Active!.View.CoreWebView2.BrowserProcessId == pid, "same engine before " + phase);
+                        string target = origin + "/network-transition/" + phase;
+                        Active.LastNavigationError = null;
+                        NavigateAddress(target);
+                        string marker = JsonSerializer.Serialize("VEIL transition " + phase);
+                        string title = "";
+                        for (int i = 0; i < 400; i++)
+                        {
+                            await Task.Delay(100);
+                            if (Active.Loading) continue;
+                            title = await Active.View.ExecuteScriptAsync("document.title");
+                            if (Active.LastNavigationError is not null || (Active.Url == target && title == marker)) break;
+                        }
+                        bool loaded = Active.Url == target && title == marker && Active.LastNavigationError is null;
+                        bool blocked = Active.LastNavigationError is not null && !loaded;
+                        Check(phase == "blocked" ? blocked : loaded, "navigation result " + phase);
+                        int count = vault.Entries.Count;
+                        bool stored = false;
+                        string? failureName = null;
+                        using (var download = new BrowserDownload("transition-" + phase + ".bin"))
+                        {
+                            try
+                            {
+                                var entry = await vault.CaptureAsync(new Uri(origin + "/vault-dl?kind=small&phase=" + phase), download,
+                                    Active.View.CoreWebView2);
+                                stored = entry.Bytes == 1024 && await vault.VerifyAsync(entry) == 1024;
+                            }
+                            catch (Exception failure) when (failure is System.Net.Http.HttpRequestException or TaskCanceledException)
+                            { failureName = failure.GetType().Name; }
+                        }
+                        Check(phase == "blocked" ? !stored && failureName is not null && vault.Entries.Count == count :
+                            stored && vault.Entries.Count == count + 1, "vault request result " + phase);
+                        Check(Active.View.CoreWebView2.BrowserProcessId == pid, "same engine after " + phase);
+                        File.WriteAllText(Path.Combine(controls, phase + ".done.json"), JsonSerializer.Serialize(new
+                        {
+                            phase, pid, loaded, blocked, stored, failureName, entries = vault.Entries.Count,
+                        }));
+                    }
+                    Check(vault.Entries.Count == 2, "exactly two authenticated downloads across transition");
+                }
+#endif
                 else if (stage == "network-proxy")
                 {
                     // ADR-0006 proxy mode: browsing and VEIL's own vault requests use only the proxy.

@@ -180,3 +180,17 @@ node tests/phase3/power-loss.mjs --check --isolated-vm --confirm-power-cut --pre
 ```
 
 동일 VM UUID·다른 부팅·동일 VHDX 및 볼륨 GUID·프로필 경로·바이너리 해시·fixture 출처를 확인한다. 100개 이상 완료 트랜잭션을 관찰하지 못하면 arm하지 않고, 확인된 레코드 수보다 복구 결과가 적거나 프로세스가 실패하면 PASS를 기록하지 않는다. 실제 호스트 전원 차단은 운영자의 확인이며 다른 부팅 증거만으로 물리 차단을 증명하지 않는다. 호스트 기록은 별도로 보존한다. 실패 후에는 원본 증거를 보존하고 새로운 시험 디렉터리에서 다시 시작한다. 실제 VM 실행 **NOT RUN**, B2/C2 미통과. 이 러너는 금고 전원 차단 시험을 대신하지 않는다.
+
+
+### 동일 브라우저 세션 프록시 중단·복구
+
+일반 사용자 Windows 셸에서 node tests/phase5/proxy-transition.mjs 를 실행한다. 오프라인 일괄 시험에도 포함되며 합성 데이터만 사용한다. 고정 로컬 HTTP 프록시를 같은 포트에서 중단 후 재개한다. 같은 WebView2 브라우저 PID, 시작/차단/복구의 서로 다른 캐시 금지 URL, 정확한 원본 요청 수, 전체 직접 요청 0, 금고 인증과 항목 수 1/1/2가 모두 필요하다. 제품 Release에 시험 단계는 없다.
+
+실제 절전 또는 네트워크 전환은 별도의 폐기용 인터넷 VirtualBox VM에서 일반 사용자 셸로 각각 실행한다.
+
+```powershell
+node tests/phase5/proxy-transition.mjs --internet-vm --operator-transition sleep-resume
+node tests/phase5/proxy-transition.mjs --internet-vm --operator-transition network-switch
+```
+
+OPERATOR 안내 뒤 프록시가 중단된 동안 운영자가 지정된 동작을 수행하고 출력된 operator.done 파일을 만든다. 실제 절전/복귀 및 어댑터 변경은 자동 실행하지 않는다. 운영자 확인만으로 OS 이벤트를 입증하지 않으며, OS 이벤트 로그와 외부 패킷 증거가 별도로 필요하다. PASS 범위는 로컬 프록시 중단·재개에 한정하고, 운영자 전환은 OBSERVED, 외부 네트워크 및 OS 수준 차단은 NOT RUN으로 남긴다. 실제 Windows/VM 실행 NOT RUN.
