@@ -72,27 +72,47 @@ public partial class BrowserWindow
 
     // ── Keyboard shortcuts ──────────────────────────────────────────────────
 
+    // Leave IME/dead-key processing to WPF rather than interpreting a composition as a browser command.
+    private static bool IsCompositionKey(Key key) => key is Key.ImeProcessed or Key.DeadCharProcessed;
+
     private void BrowserKeyDown(object sender, KeyEventArgs args)
     {
         if (closing || restoring || session.IsEnding || session.EngineLost || args.Handled) return;
         Key key = args.Key == Key.System ? args.SystemKey : args.Key;
+        if (IsCompositionKey(key)) return;
         var modifiers = Keyboard.Modifiers;
         if ((key == Key.Apps && modifiers == ModifierKeys.None ||
              key == Key.F10 && modifiers == ModifierKeys.Shift) &&
             Keyboard.FocusedElement is DependencyObject focused && TabAt(focused) is { } focusedTab && CanUseTab(focusedTab))
         {
             args.Handled = true;
-            Dispatcher.BeginInvoke(new Action(() => ShowTabMenu(focusedTab, keyboard: true)));
+            long focus = managementFocusEpoch;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (IsActive && managementFocusEpoch == focus && CanUseTab(focusedTab) &&
+                    Keyboard.FocusedElement is DependencyObject currentFocus && TabAt(currentFocus) == focusedTab)
+                    ShowTabMenu(focusedTab, keyboard: true);
+            }));
             return;
         }
         const ModifierKeys Ctrl = ModifierKeys.Control, Shift = ModifierKeys.Shift, Alt = ModifierKeys.Alt;
-        bool editing = Address.IsKeyboardFocusWithin || FindText.IsKeyboardFocusWithin;
+        bool editing = Address.IsKeyboardFocusWithin || FindText.IsKeyboardFocusWithin ||
+            Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase or PasswordBox;
+        var originalTab = Active;
+        long originalEpoch = originalTab?.NavigationEpoch ?? -1;
+        long originalFocus = managementFocusEpoch;
+        // Tab cycling must remain repeatable. Page commands, however, must not act on a replacement tab.
+        bool windowCommand = (modifiers, key) is
+            (Ctrl, Key.T or Key.N or Key.Tab or Key.PageDown or Key.PageUp) or
+            (Ctrl | Shift, Key.T or Key.N or Key.Tab or Key.W or Key.A) or
+            (Ctrl, >= Key.D1 and <= Key.D9) or (Ctrl, >= Key.NumPad1 and <= Key.NumPad9) or
+            (ModifierKeys.None, Key.F11);
         Action? command = (modifiers, key) switch
         {
             // Tabs and windows
             (Ctrl, Key.T) => () => NewTabClick(this, args),
             (Ctrl, Key.N) => () => NewWindowClick(this, args),
-            (Ctrl, Key.W) or (Ctrl, Key.F4) => () => { if (Tabs.SelectedItem is TabItem item) CloseTab(item); },
+            (Ctrl, Key.W) or (Ctrl, Key.F4) => () => { if (originalTab is not null && CanUseTab(originalTab.Item)) CloseTab(originalTab.Item); },
             (Ctrl | Shift, Key.W) => Close,
             (Ctrl | Shift, Key.T) => () => RestoreClick(this, args),
             (Ctrl | Shift, Key.A) => () => TabSearchClick(this, args),
@@ -143,7 +163,12 @@ public partial class BrowserWindow
         // The WebView2 accelerator callback can block the browser until input routing returns.
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (!closing && !restoring && !session.IsEnding && !session.EngineLost && IsActive) command();
+            if (closing || restoring || session.IsEnding || session.EngineLost || !IsActive) return;
+            if (!windowCommand && (managementFocusEpoch != originalFocus || Active != originalTab ||
+                originalTab is not null && (!CanUseTab(originalTab.Item) || originalTab.NavigationEpoch != originalEpoch))) return;
+            try { command(); }
+            catch (Exception error) when (RecoverableFailure.Is(error))
+            { if (!closing) Status.Text = "단축키 작업을 완료하지 못했습니다."; }
         }));
     }
 
