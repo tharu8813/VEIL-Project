@@ -1,0 +1,26 @@
+name: Chromium combined startup source candidate
+on:
+  pull_request:
+    paths:
+      - 'scripts/chromium/generate-delegate-failure-candidate.py'
+      - 'scripts/chromium/generate-existing-profile-candidate.py'
+      - 'scripts/chromium/generate-cache-failure-candidate.py'
+      - 'tests/chromium/delegate-failure-candidate.test.py'
+      - 'scripts/chromium/pinned_gitiles.py'
+      - 'chromium/candidate.json'
+      - '.github/workflows/chromium-delegate-candidate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  delegate-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test delegate rewrite and candidate composition
+        run: python3 tests/chromium/delegate-failure-candidate.test.py
+      - name: Validate two exact upstream source fixtures
+        run: python3 scripts/chromium/generate-delegate-failure-candidate.py
