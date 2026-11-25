@@ -97,6 +97,10 @@ jobs:
         shell: pwsh
         run: node --test tests/security/download-retry-contract.test.mjs tests/security/network-policy-contract.test.mjs
 
+      - name: Test fixed HTTP proxy and refusal of direct fallback
+        shell: pwsh
+        run: dotnet run --project tests/security/NetworkPolicyCheck/NetworkPolicyCheck.csproj -c Release
+
       # Hosted runners may be elevated and do not provide an interactive desktop.
       # Running the WPF smoke suite or broker authorization test here would
       # incorrectly test the runner, not a regular Windows user's security token.
