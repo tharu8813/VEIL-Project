@@ -192,6 +192,29 @@ function Restore-PreActivation {
     Start-Broker
     Remove-RestrictedTree $journal
 }
+function Restore-StagingOnly {
+    # A process may have stopped before creating its journal. This is not an
+    # interrupted tree replacement: require an intact, active installed version.
+    if ((Test-Path -LiteralPath $journal) -or (Test-Path -LiteralPath $previous) -or
+        (Test-Path -LiteralPath $failed) -or -not (Test-Path -LiteralPath $stage)) {
+        throw 'Staging-only recovery requires exactly one staging tree and no transaction artifacts.'
+    }
+    Assert-RegisteredService
+    Assert-ClosedAndDetached
+    $registered=Get-CimInstance Win32_Service -Filter "Name='$service'"
+    if (-not $registered -or $registered.PathName -ne $serviceCommand -or
+        $registered.StartName -ne 'LocalSystem' -or $registered.State -ne 'Running' -or
+        $registered.StartMode -ne 'Auto') { throw 'Installed service is not active; administrator review required.' }
+    [void](Read-VeilPackage $bin $SignerThumbprint)
+    $current=Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
+    if (@($current.clientImages).Count -ne 1 -or $current.clientImages[0] -ne $client -or
+        $current.clientSha256 -ne (Get-FileHash -LiteralPath $client -Algorithm SHA256).Hash) {
+        throw 'Installed client registration mismatch.'
+    }
+    # Do not start, stop, or replace the installed service, registration or binaries.
+    Remove-RestrictedTree $stage
+    Write-Host 'Abandoned staging removed. Existing installation was not changed.'
+}
 function Copy-StagedPackage {
     # Copy only bytes into a restricted staging directory. Re-validate the complete signed inventory
     # AFTER copying; never execute anything from the caller-controlled source.
@@ -214,7 +237,11 @@ try {
     if (-not $held) { throw 'Another maintenance operation is running.' }
     if ($RecoverInterruptedUpdate) {
         Assert-RegisteredService
-        if (-not (Test-Path -LiteralPath $journal)) { throw 'No interrupted transaction.' }
+        if (-not (Test-Path -LiteralPath $journal)) {
+            Restore-StagingOnly
+            return
+        }
+        Assert-Tree $journal
         if (Test-Path -LiteralPath $committed) {
             Assert-CommitMarker $committed
             # Never restore older binaries after activation may have occurred. Verify the committed
