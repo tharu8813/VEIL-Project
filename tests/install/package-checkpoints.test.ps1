@@ -35,7 +35,7 @@ Check (Refused { New-VeilCheckpointSource $source 'unknown' $signal }) 'unknown 
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
 Check ($errors.Count -eq 0) 'production script parses'
-foreach ($name in @('Write-Durable','Assert-CommitMarker')) {
+foreach ($name in @('Write-Durable','Assert-CommitMarker','Restore-VeilRegistration')) {
     $nodes = @($ast.FindAll({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $true))
@@ -55,6 +55,24 @@ try {
     Check ([Convert]::ToBase64String([IO.File]::ReadAllBytes($record)) -ceq [Convert]::ToBase64String($payload)) 'complete backup published'
     Check (Refused { Write-Durable $record ([byte[]](2)) }) 'existing record cannot be overwritten'
     Check ([Convert]::ToBase64String([IO.File]::ReadAllBytes($record)) -ceq [Convert]::ToBase64String($payload)) 'existing record preserved'
+    $config = Join-Path $lab 'broker.json'
+    $restore = Join-Path $lab 'broker.restore.json'
+    [IO.File]::WriteAllBytes($config,$payload)
+    # Allow reads but deny replacement/deletion: identical registration needs no write.
+    $locked = [IO.File]::Open($config,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+    try { Restore-VeilRegistration $record $config $restore }
+    finally { $locked.Dispose() }
+    Check (-not (Test-Path -LiteralPath $restore)) 'unchanged registration requires no staging write'
+    [IO.File]::WriteAllBytes($config,[byte[]](2))
+    $locked = [IO.File]::Open($config,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+    try {
+        Check (Refused { Restore-VeilRegistration $record $config $restore }) 'changed locked registration fails closed'
+    } finally { $locked.Dispose() }
+    Check ([IO.File]::ReadAllBytes($config)[0] -eq 2) 'failed replacement preserves current registration'
+    Check ([Convert]::ToBase64String([IO.File]::ReadAllBytes($record)) -ceq [Convert]::ToBase64String($payload)) 'failed replacement preserves backup'
+    Restore-VeilRegistration $record $config $restore
+    Check ([Convert]::ToBase64String([IO.File]::ReadAllBytes($config)) -ceq [Convert]::ToBase64String($payload)) 'retry restores exact registration'
+    Check (-not (Test-Path -LiteralPath $restore)) 'successful replacement consumes staging file'
     $marker = Join-Path $lab 'committed'
     $script:RejectJournalAcl = $true
     Check (Refused { Write-Durable $marker ([byte[]](1)) }) 'pre-publication failure refused'
