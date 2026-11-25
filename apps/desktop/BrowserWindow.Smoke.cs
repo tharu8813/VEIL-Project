@@ -744,6 +744,37 @@ public partial class BrowserWindow
                     Check(vault.Entries.Select(entry => entry.Id).Distinct().Count() == 4 &&
                         ObjectIds().Length == 4 && !Directory.GetFiles(vault.Directory, ".veil-encrypted-*", SearchOption.AllDirectories).Any(),
                         "exact encrypted inventory, no duplicate or staging remnants");
+                    // Deletion is tested with an extra disposable object. Keep the
+                    // four original publication-test objects and evidence intact.
+                    var extra = await Capture("small", "deletion-failure.bin");
+                    Check(extra.Outcome == DownloadVault.Stored && vault.Entries.Count == 5, "deletion fixture published");
+                    var victim = vault.Entries.Single(e => e.Name == "deletion-failure.bin");
+                    string victimObject = vault.ObjectPath(victim);
+                    string victimMeta = Path.Combine(meta, victim.Id + ".veil");
+                    bool refusedObjectDelete = false;
+                    using (File.Open(victimObject, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    {
+                        try { await vault.DeleteAsync(victim); }
+                        catch (IOException) { refusedObjectDelete = true; }
+                    }
+                    Check(refusedObjectDelete && !vault.Unlocked && vault.Entries.Count == 0 &&
+                        File.Exists(victimObject) && File.Exists(victimMeta), "object delete failure invalidates session without deleting metadata");
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() &&
+                        vault.Entries.Count == 5 && await vault.VerifyAsync(vault.Entries.Single(e => e.Id == victim.Id)) == 1024,
+                        "failed object deletion preserves authenticated object on reopen");
+                    victim = vault.Entries.Single(e => e.Id == victim.Id);
+                    bool refusedMetaDelete = false;
+                    using (File.Open(victimMeta, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    {
+                        try { await vault.DeleteAsync(victim); }
+                        catch (IOException) { refusedMetaDelete = true; }
+                    }
+                    Check(refusedMetaDelete && !vault.Unlocked && vault.Entries.Count == 0 &&
+                        !File.Exists(victimObject) && File.Exists(victimMeta), "partial deletion invalidates session");
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 4 &&
+                        !vault.Entries.Any(e => e.Id == victim.Id) && ObjectIds().Length == 4 &&
+                        Digest(originalPath) == originalHash, "reopening reconciles index without resurrecting deleted object");
+                    // Orphan metadata is encrypted and intentionally not automatically removed.
                     var verified = new List<object>();
                     foreach (var entry in vault.Entries)
                         verified.Add(new { entry.Id, entry.Name, entry.Recovered, bytes = await vault.VerifyAsync(entry) });
