@@ -6,6 +6,8 @@ on:
       - 'chromium/dev/volume-evidence-contract.h'
       - 'chromium/dev/broker-status-wire.h'
       - 'chromium/dev/broker-identity-win.h'
+      - 'chromium/dev/config-acl-win.h'
+      - 'tests/chromium/config-acl-win.test.cc'
       - 'chromium/dev/synthetic-pipe-transport-win.h'
       - 'tests/chromium/synthetic-pipe-transport-win.test.cc'
       - 'tests/chromium/synthetic-pipe-identity-order.test.cc'
@@ -169,3 +171,26 @@ jobs:
             throw 'Pipe identity fixture exceeded outer watchdog.'
           }
           if ($process.ExitCode -ne 0) { throw "Pipe identity test failed: $($process.ExitCode)" }
+      - name: Compile and test standalone config ACL observation
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-config-acl.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-config-acl.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\config-acl-win.test.cc advapi32.lib' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Config ACL compile failed.' }
+          $root = Join-Path $env:RUNNER_TEMP ('veil-config-acl-fixture-' + [Guid]::NewGuid().ToString('N'))
+          if (Test-Path -LiteralPath $root) { throw 'Fixture already exists.' }
+          $null = New-Item -ItemType Directory -Path $root
+          try {
+            & $exe $root
+            if ($LASTEXITCODE -ne 0) { throw "Config ACL observation failed: $LASTEXITCODE" }
+          } finally {
+            $file = Join-Path $root 'untrusted-fixture.json'
+            if (Test-Path -LiteralPath $file) { [IO.File]::Delete($file) }
+            [IO.Directory]::Delete($root)
+          }
