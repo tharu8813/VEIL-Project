@@ -1,0 +1,45 @@
+name: Chromium development profile contract
+on:
+  pull_request:
+    paths:
+      - 'chromium/dev/profile-path-contract.h'
+      - 'tests/chromium/profile-path-contract.test.cc'
+      - 'chromium/dev/profile-filesystem-win.h'
+      - 'tests/chromium/profile-filesystem-win.test.cc'
+      - 'tests/chromium/profile-filesystem-win.test.ps1'
+      - '.github/workflows/chromium-profile-contract.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lexical-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile and test standalone C++17 contract
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/profile-path-contract.test.cc -o "$RUNNER_TEMP/profile-contract"
+          "$RUNNER_TEMP/profile-contract"
+  windows-filesystem-observation:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build standalone Windows observation fixture
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-profile-observation.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-profile-observation.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\profile-filesystem-win.test.cc' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone Windows compilation failed.' }
+          & .\tests\chromium\profile-filesystem-win.test.ps1 -Executable $exe
