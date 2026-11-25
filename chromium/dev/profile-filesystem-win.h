@@ -97,6 +97,15 @@ class DirectoryHandleRetention {
   DirectoryHandleRetention& operator=(const DirectoryHandleRetention&) = delete;
   ~DirectoryHandleRetention() { Reset(); }
 
+  // Read the final retained handle, rather than reopening a DOS path.
+  // A zero or oversized result is unavailable; no handle escapes the owner.
+  DWORD ReadFinalVolumePath(std::array<wchar_t, 1024>& buffer) const noexcept {
+    if (count_ == 0) return 0;
+    return GetFinalPathNameByHandleW(
+        handles_[count_ - 1], buffer.data(), static_cast<DWORD>(buffer.size()),
+        FILE_NAME_NORMALIZED | VOLUME_NAME_GUID);
+  }
+
   void Reset() noexcept {
     while (count_ != 0) CloseHandle(handles_[--count_]);
   }
