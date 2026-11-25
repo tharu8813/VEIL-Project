@@ -1,0 +1,26 @@
+name: Chromium identity source audit
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/chromium/audit-identity-source.py'
+      - 'tests/chromium/identity-source-audit.test.py'
+      - '.github/workflows/chromium-identity-audit.yml'
+      - 'chromium/candidate.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test evidence parser
+        run: python3 tests/chromium/identity-source-audit.test.py
+      - name: Survey exact upstream files without executing them
+        run: python3 scripts/chromium/audit-identity-source.py
