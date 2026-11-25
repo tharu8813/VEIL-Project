@@ -9,6 +9,8 @@ on:
       - 'chromium/dev/config-acl-win.h'
       - 'chromium/dev/config-path-win.h'
       - 'chromium/dev/config-schema.h'
+      - 'chromium/dev/config-loader-win.h'
+      - 'tests/chromium/config-loader-win.test.cc'
       - 'tests/chromium/config-schema.test.cc'
       - 'tests/chromium/config-path-win.test.cc'
       - 'tests/chromium/config-handle-read-win.test.cc'
@@ -236,5 +238,30 @@ jobs:
           } finally {
             $file = Join-Path $root 'client-fixture.json'
             if (Test-Path -LiteralPath $file) { [IO.File]::Delete($file) }
+            [IO.Directory]::Delete($root)
+          }
+      - name: Compile and test synthetic configuration loader
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-config-loader.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-config-loader.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\config-loader-win.test.cc advapi32.lib' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Config loader compile failed.' }
+          $root = Join-Path $env:RUNNER_TEMP ('veil-config-loader-fixture-' + [Guid]::NewGuid().ToString('N'))
+          if (Test-Path -LiteralPath $root) { throw 'Fixture already exists.' }
+          $null = New-Item -ItemType Directory -Path $root
+          try {
+            & $exe $root
+            if ($LASTEXITCODE -ne 0) { throw "Config loader failed: $LASTEXITCODE" }
+          } finally {
+            foreach ($name in @('alias.json','client-fixture.json')) {
+              $file = Join-Path $root $name
+              if (Test-Path -LiteralPath $file) { [IO.File]::Delete($file) }
+            }
             [IO.Directory]::Delete($root)
           }
