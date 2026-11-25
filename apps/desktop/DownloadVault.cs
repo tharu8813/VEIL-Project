@@ -476,21 +476,30 @@ internal sealed class DownloadVault : IDisposable
             catch { CloseBrokenPipe(); throw; }
             RequireCaptureSession(session);
             if (reply != $"ok\t{total}") throw SealFailure(reply);
-            var entry = new VaultEntry(id, download.Name, total, DateTimeOffset.Now, host);
+            try
+            {
+                var entry = new VaultEntry(id, download.Name, total, DateTimeOffset.Now, host);
 #if DEBUG
-            if (SmokeBeforePublication is { } beforeMeta) await beforeMeta("meta");
+                if (SmokeBeforePublication is { } beforeMeta) await beforeMeta("meta");
 #endif
-            RequireCaptureSession(session);
-            await SealBytesLockedAsync(Path.Combine(Meta, id + ".veil"), JsonSerializer.SerializeToUtf8Bytes(entry, Json));
-            RequireCaptureSession(session);
-            Entries = [entry, .. Entries];
+                RequireCaptureSession(session);
+                await SealBytesLockedAsync(Path.Combine(Meta, id + ".veil"), JsonSerializer.SerializeToUtf8Bytes(entry, Json));
+                RequireCaptureSession(session);
+                Entries = [entry, .. Entries];
 #if DEBUG
-            if (SmokeBeforePublication is { } beforeIndex) await beforeIndex("index");
+                if (SmokeBeforePublication is { } beforeIndex) await beforeIndex("index");
 #endif
-            RequireCaptureSession(session);
-            await SaveIndexLockedAsync();
-            RequireCaptureSession(session);
-            return entry;
+                RequireCaptureSession(session);
+                await SaveIndexLockedAsync();
+                RequireCaptureSession(session);
+                return entry;
+            }
+            catch
+            {
+                // The body was committed. Preserve it and require index recovery on reopen.
+                if (ReferenceEquals(serve, session)) Lock();
+                throw;
+            }
         }
         finally { gate.Release(); Changed?.Invoke(); }
     }
