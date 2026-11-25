@@ -223,3 +223,25 @@ Check(NetworkPolicy.DownloadAddressAllowed(publicHttps, publicHttp, null), "HTTP
 Check(!NetworkPolicy.DownloadAddressAllowed(new Uri("https://user:secret@example.com/file"), null, null), "URL credentials accepted");
 Check(!NetworkPolicy.DownloadAddressAllowed(new Uri("file:///synthetic"), null, null), "non-HTTP address accepted");
 Console.WriteLine("PASS: vault HTTP exceptions and downgrade refusal");
+
+
+// A TCP-only status check is observational, independent of actual proxy routing.
+using var statusListener = new TcpListener(IPAddress.Loopback, 0);
+statusListener.Start();
+var statusSettings = new NetworkSettings(NetworkMode.Proxy, "http", "127.0.0.1",
+    ((IPEndPoint)statusListener.LocalEndpoint).Port);
+Check(await NetworkPolicy.ProxyReachableAsync(statusSettings, TimeSpan.FromSeconds(3)), "TCP status did not detect live listener");
+statusListener.Stop();
+Check(!await NetworkPolicy.ProxyReachableAsync(statusSettings, TimeSpan.FromSeconds(3)), "TCP status did not detect stopped listener");
+statusListener.Start();
+statusSettings = statusSettings with { ProxyPort = ((IPEndPoint)statusListener.LocalEndpoint).Port };
+Check(await NetworkPolicy.ProxyReachableAsync(statusSettings, TimeSpan.FromSeconds(3)), "TCP status did not detect restarted listener");
+using var stoppedProbe = new CancellationTokenSource();
+stoppedProbe.Cancel();
+Check(!await NetworkPolicy.ProxyReachableAsync(statusSettings, TimeSpan.FromSeconds(3), stoppedProbe.Token), "cancelled TCP probe succeeded");
+var statusTime = new DateTimeOffset(2026, 11, 25, 12, 34, 56, TimeSpan.Zero);
+Check(NetworkPolicy.ProxyStatusText(null, null).Contains("미확인"), "unmeasured status claimed a result");
+Check(NetworkPolicy.ProxyStatusText(true, statusTime).Contains("12:34:56") &&
+    NetworkPolicy.ProxyStatusText(true, statusTime).Contains("전체 보호 미검증"), "TCP result overclaims protection");
+Check(NetworkPolicy.ProxyStatusText(false, statusTime).Contains("TCP 연결 실패"), "failed status mislabeled");
+Console.WriteLine("PASS: TCP status probe and honest status presentation");
