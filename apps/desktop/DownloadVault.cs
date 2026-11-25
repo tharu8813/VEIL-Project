@@ -49,6 +49,7 @@ internal sealed class DownloadVault : IDisposable
     private readonly Dictionary<string, string> methods = new(StringComparer.Ordinal);
     private Process? serve;
     private bool lockRequested = true;
+    private bool ready;
     private Stream? input;
     private Stream? output;
 
@@ -77,7 +78,8 @@ internal sealed class DownloadVault : IDisposable
         File.Exists(Path.Combine(root, "keyring.bundle")) ||
         File.Exists(Path.Combine(root, "keyring.age")) ||
         File.Exists(Path.Combine(root, "keyring.recovery.age"));
-    internal bool Unlocked => !lockRequested && serve is { HasExited: false };
+    private bool TransportOpen => !lockRequested && serve is { HasExited: false };
+    internal bool Unlocked => ready && TransportOpen;
     internal string Directory => root;
     internal List<VaultEntry> Entries { get; private set; } = [];
     internal List<VaultResult> Results { get; } = [];
@@ -89,6 +91,7 @@ internal sealed class DownloadVault : IDisposable
     internal Action? SmokeAfterFrame;
     internal Func<CancellationToken, Task>? SmokeBeforeBoundedReply;
     internal int? SmokeCommandTimeoutSeconds;
+    internal Action? SmokeBeforeIndexPublish;
 #endif
 
     // ── Opening ─────────────────────────────────────────────────────────────
@@ -161,6 +164,7 @@ internal sealed class DownloadVault : IDisposable
             input = serve.StandardInput.BaseStream;
             output = serve.StandardOutput.BaseStream;
             lockRequested = false;
+            Process opening = serve;
             string reply = await CommandLockedAsync(first, profilePassword, recoveryCode);
             if (reply != "ok")
             {
@@ -168,25 +172,24 @@ internal sealed class DownloadVault : IDisposable
                 if (restoring) return "백업을 복원하지 못했습니다. 백업 암호와 파일을 확인하세요. 복원에는 새 금고 위치가 필요합니다.";
                 return first.StartsWith("create") ? "금고를 만들지 못했습니다." : "암호 또는 복구 코드가 맞지 않습니다.";
             }
+            RequireTransportSession(opening);
             string location = await CommandLockedAsync("location");
             if (!location.StartsWith("ok\t", StringComparison.Ordinal))
                 throw new IOException("The vault did not report its active storage.");
+            RequireTransportSession(opening);
             SetActiveRoot(location[3..]);
             CleanStaging();
+            await LoadIndexLockedAsync(opening);
+            RequireTransportSession(opening);
+            ready = true;
+            return null;
         }
         catch
         {
             Lock();
             throw;
         }
-        finally { gate.Release(); }
-        try { await LoadIndexAsync(); }
-        catch
-        {
-            Lock();
-            throw;
-        }
-        return null;
+        finally { gate.Release(); Changed?.Invoke(); }
     }
 
     /// <summary>Ends the key-holding process; the vault must be opened again.</summary>
@@ -196,6 +199,7 @@ internal sealed class DownloadVault : IDisposable
         // Disable access immediately, but retain the process reference if exit cannot
         // be verified so a later open cannot replace a still-live key holder.
         lockRequested = true;
+        ready = false;
         Entries = [];
         KillServe();
         serve?.Dispose();
@@ -307,6 +311,12 @@ internal sealed class DownloadVault : IDisposable
         var session = serve;
         RequireCaptureSession(session);
         return session!;
+    }
+
+    private void RequireTransportSession(Process? session)
+    {
+        if (session is null || !ReferenceEquals(serve, session) || !TransportOpen)
+            throw new IOException("The vault session changed.");
     }
 
     private void RequireCaptureSession(Process? session)
@@ -585,47 +595,60 @@ internal sealed class DownloadVault : IDisposable
         await gate.WaitAsync();
         try
         {
-            List<VaultEntry>? loaded = null;
-            foreach (var file in new DirectoryInfo(Index).GetFiles("*.veil").OrderByDescending(f => f.Name))
-            {
-                var bytes = await ReadSmallLockedAsync(file.FullName);
-                if (bytes is null) continue;
-                try
-                {
-                    var candidate = JsonSerializer.Deserialize<List<VaultEntry>>(bytes, Json);
-                    if (ValidIndex(candidate)) loaded = candidate;
-                }
-                catch (JsonException) { }
-                finally { CryptographicOperations.ZeroMemory(bytes); }
-                if (loaded is not null) break;
-            }
-            var objects = new DirectoryInfo(Objects).GetFiles("*.veil")
-                .Select(file => Path.GetFileNameWithoutExtension(file.Name))
-                .Where(id => Guid.TryParseExact(id, "N", out _))
-                .ToHashSet();
-            bool rebuilt = loaded is null || loaded.Select(e => e.Id).ToHashSet().SetEquals(objects) is false;
-            if (rebuilt)
-            {
-                var entries = new List<VaultEntry>();
-                foreach (string id in objects)
-                {
-                    var meta = await ReadSmallLockedAsync(Path.Combine(Meta, id + ".veil"));
-                    VaultEntry? entry = null;
-                    if (meta is not null)
-                    {
-                        try { entry = JsonSerializer.Deserialize<VaultEntry>(meta, Json); }
-                        catch (JsonException) { }
-                        finally { CryptographicOperations.ZeroMemory(meta); }
-                    }
-                    entries.Add(ValidEntry(entry) && entry!.Id == id ? entry
-                        : new VaultEntry(id, $"복구된 항목 {id[..8]}", new FileInfo(Path.Combine(Objects, id + ".veil")).Length, DateTimeOffset.Now, null, Recovered: true));
-                }
-                loaded = entries.OrderByDescending(e => e.SavedAt).ToList();
-            }
-            Entries = loaded!;
-            if (rebuilt) await SaveIndexLockedAsync();
+            if (!Unlocked) throw new IOException("The vault is locked.");
+            await LoadIndexLockedAsync(serve!);
         }
+        catch { Lock(); throw; }
         finally { gate.Release(); Changed?.Invoke(); }
+    }
+
+    private async Task LoadIndexLockedAsync(Process session)
+    {
+        RequireTransportSession(session);
+        List<VaultEntry>? loaded = null;
+        foreach (var file in new DirectoryInfo(Index).GetFiles("*.veil").OrderByDescending(f => f.Name))
+        {
+            var bytes = await ReadSmallLockedAsync(file.FullName);
+            if (bytes is null) continue;
+            try
+            {
+                var candidate = JsonSerializer.Deserialize<List<VaultEntry>>(bytes, Json);
+                if (ValidIndex(candidate)) loaded = candidate;
+            }
+            catch (JsonException) { }
+            finally { CryptographicOperations.ZeroMemory(bytes); }
+            if (loaded is not null) break;
+        }
+        var objects = new DirectoryInfo(Objects).GetFiles("*.veil")
+            .Select(file => Path.GetFileNameWithoutExtension(file.Name))
+            .Where(id => Guid.TryParseExact(id, "N", out _))
+            .ToHashSet();
+        bool rebuilt = loaded is null || loaded.Select(e => e.Id).ToHashSet().SetEquals(objects) is false;
+        if (rebuilt)
+        {
+            var entries = new List<VaultEntry>();
+            foreach (string id in objects)
+            {
+                var meta = await ReadSmallLockedAsync(Path.Combine(Meta, id + ".veil"));
+                VaultEntry? entry = null;
+                if (meta is not null)
+                {
+                    try { entry = JsonSerializer.Deserialize<VaultEntry>(meta, Json); }
+                    catch (JsonException) { }
+                    finally { CryptographicOperations.ZeroMemory(meta); }
+                }
+                entries.Add(ValidEntry(entry) && entry!.Id == id ? entry
+                    : new VaultEntry(id, $"복구된 항목 {id[..8]}", new FileInfo(Path.Combine(Objects, id + ".veil")).Length, DateTimeOffset.Now, null, Recovered: true));
+            }
+            loaded = entries.OrderByDescending(e => e.SavedAt).ToList();
+        }
+#if DEBUG
+        SmokeBeforeIndexPublish?.Invoke();
+#endif
+        RequireTransportSession(session);
+        Entries = loaded!;
+        if (rebuilt) await SaveIndexLockedAsync();
+        RequireTransportSession(session);
     }
 
     // Authentication alone does not guarantee a usable index schema.
@@ -640,8 +663,11 @@ internal sealed class DownloadVault : IDisposable
 
     private async Task SaveIndexLockedAsync()
     {
+        Process session = serve ?? throw new IOException("The vault is locked.");
+        RequireTransportSession(session);
         string name = DateTime.UtcNow.ToString("yyyyMMddHHmmssfffffff") + ".veil";
         await SealBytesLockedAsync(Path.Combine(Index, name), JsonSerializer.SerializeToUtf8Bytes(Entries, Json));
+        RequireTransportSession(session);
         foreach (var old in new DirectoryInfo(Index).GetFiles("*.veil").OrderByDescending(f => f.Name).Skip(2))
             try { old.Delete(); } catch (IOException) { }
     }
