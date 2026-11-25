@@ -782,6 +782,27 @@ public partial class BrowserWindow
                         Check(vault.Entries.Count == 4 && ObjectIds().Length == 4, "uncached item can be deleted");
                     }
                     finally { vault.SmokeIndexCacheLimit = null; }
+                    // Exercise a failure outside the Rust write itself, after body and metadata commit.
+                    vault.SmokeBeforePublication = phase => phase == "index"
+                        ? Task.FromException(new UnauthorizedAccessException("synthetic-publication-denied"))
+                        : Task.CompletedTask;
+                    try
+                    {
+                        var denied = await Capture("small", "publication-access-denied.bin");
+                        Check(denied.Outcome == DownloadVault.Failed && denied.ObjectPath is null &&
+                            denied.Detail == "금고 저장소 접근 권한 오류 · 보관 목록 확인 필요" &&
+                            retryDownload is null && !vault.Unlocked && vault.Entries.Count == 0 &&
+                            ObjectIds().Length == 5 && Digest(originalPath) == originalHash,
+                            "post-commit access failure invalidates session and requires inventory check");
+                    }
+                    finally { vault.SmokeBeforePublication = null; }
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 5,
+                        "post-commit access failure recovers complete item");
+                    var deniedItem = vault.Entries.Single(e => e.Name == "publication-access-denied.bin");
+                    Check(await vault.VerifyAsync(deniedItem) == 1024 && !deniedItem.Recovered &&
+                        Digest(originalPath) == originalHash, "metadata and both objects authenticate after recovery");
+                    await vault.DeleteAsync(deniedItem);
+                    Check(vault.Entries.Count == 4 && ObjectIds().Length == 4, "disposable failure fixture removed");
                     // Deletion is tested with an extra disposable object. Keep the
                     // four original publication-test objects and evidence intact.
                     var extra = await Capture("small", "deletion-failure.bin");
