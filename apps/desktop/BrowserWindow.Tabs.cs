@@ -381,6 +381,9 @@ public partial class BrowserWindow
         window.MoveToExistingWindow(item, target, index);
     }
 
+#if DEBUG
+    private bool smokeFailTabTransfer;
+#endif
     /// <summary>Move the live page before closing its old window or persisting the new layout.</summary>
     private bool TransferTabTo(TabItem item, BrowserWindow target, int index, bool initializingTarget = false)
     {
@@ -393,6 +396,9 @@ public partial class BrowserWindow
         try
         {
             DetachTab(item);
+#if DEBUG
+            if (smokeFailTabTransfer) throw new InvalidOperationException("Synthetic adoption failure.");
+#endif
             target.AttachTab(item, index);
             if (Tabs.Items.Count == 0) Close();
             else LayoutTabs();
