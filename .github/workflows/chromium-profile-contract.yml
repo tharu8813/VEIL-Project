@@ -9,6 +9,8 @@ on:
       - 'chromium/dev/config-acl-win.h'
       - 'chromium/dev/config-path-win.h'
       - 'chromium/dev/config-schema.h'
+      - 'chromium/dev/client-migration-contract.h'
+      - 'tests/chromium/client-migration-contract.test.cc'
       - 'scripts/broker-service.ps1'
       - 'tests/chromium/installer-config-shape.test.cc'
       - 'tests/chromium/installer-config-shape.test.ps1'
@@ -64,6 +66,8 @@ jobs:
           "$RUNNER_TEMP/broker-status-wire"
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/config-schema.test.cc -o "$RUNNER_TEMP/config-schema"
           "$RUNNER_TEMP/config-schema"
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/client-migration-contract.test.cc -o "$RUNNER_TEMP/client-migration-contract"
+          "$RUNNER_TEMP/client-migration-contract"
   windows-filesystem-observation:
     runs-on: windows-latest
     timeout-minutes: 10
