@@ -21,6 +21,27 @@ PATTERNS = re.compile(
 )
 
 
+def verify_tree_identity(tree_id, entries):
+    """Reconstruct Git's canonical tree bytes, not just the reported ID."""
+    modes = {0o40000: "tree", 0o100644: "blob", 0o100755: "blob",
+             0o120000: "blob", 0o160000: "commit"}
+    records = []
+    for name, item in entries.items():
+        mode = item.get("mode")
+        if type(mode) is not int or modes.get(mode) != item.get("type") or mode not in modes:
+            raise ValueError("Invalid Git tree mode/type")
+        if name in (".", "..") or "\0" in name or "/" in name:
+            raise ValueError("Invalid Git tree filename")
+        encoded = name.encode("utf-8", errors="strict")
+        sort_key = encoded + (b"/" if mode == 0o40000 else b"")
+        record = format(mode, "o").encode("ascii") + b" " + encoded + b"\0" + bytes.fromhex(item["id"])
+        records.append((sort_key, record))
+    raw = b"".join(record for _, record in sorted(records))
+    actual = hashlib.sha1(b"tree " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
+    if actual != tree_id:
+        raise ValueError("Git tree content hash mismatch")
+
+
 def read_tree(revision, directory, *, opener=None, sleeper=None):
     if not HEX.fullmatch(revision) or directory not in ("", "docs", "build"):
         raise ValueError("Unexpected revision or tree path")
@@ -58,6 +79,7 @@ def read_tree(revision, directory, *, opener=None, sleeper=None):
                 if not HEX.fullmatch(item.get("id", "")):
                     raise ValueError("Invalid entry identity")
                 entries[name] = item
+            verify_tree_identity(result["id"], entries)
             return result["id"], entries
         sleeper(2 ** (attempt - 1))
     raise AssertionError("Unreachable retry state")

@@ -2,10 +2,12 @@
 import json
 import pathlib
 import sys
+import subprocess
+import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts/chromium"))
-from observe_build_requirements import observe, read_tree
+from observe_build_requirements import observe, read_tree, verify_tree_identity
 
 
 class Response:
@@ -30,8 +32,39 @@ class RequirementsTest(unittest.TestCase):
                 read_tree("a" * 40, "", opener=lambda url, timeout: Response(url, body))
         with self.assertRaises(ValueError):
             read_tree("a" * 40, "", opener=lambda url, timeout: Response(url + "x", b""))
-        body = b")]}'\n" + json.dumps({"id": "a" * 40, "entries": [entry]}).encode()
+        tree_id = self.git_tree_id([entry])
+        body = b")]}'\n" + json.dumps({"id": tree_id, "entries": [entry]}).encode()
         self.assertEqual(read_tree("a" * 40, "", opener=lambda url, timeout: Response(url, body))[1]["DEPS"], entry)
+
+    @staticmethod
+    def git_tree_id(entries):
+        # Independent Git oracle: mktree handles canonical directory ordering.
+        with tempfile.TemporaryDirectory() as root:
+            subprocess.run(["git", "init", "--bare", "-q", root], check=True)
+            raw = b"".join((format(e["mode"], "o") + " " + e["type"] + " " +
+                            e["id"] + "\t" + e["name"]).encode("utf-8") + b"\0"
+                           for e in entries)
+            return subprocess.check_output(["git", "-C", root, "mktree", "--missing", "-z"],
+                                           input=raw).decode("ascii").strip()
+
+    def test_git_tree_content_hash_and_tamper(self):
+        entries = [
+            {"name": "dir", "type": "tree", "mode": 16384, "id": "a" * 40},
+            {"name": "dir.txt", "type": "blob", "mode": 33188, "id": "b" * 40},
+            {"name": "é.txt", "type": "blob", "mode": 33261, "id": "c" * 40},
+            {"name": "link", "type": "blob", "mode": 40960, "id": "d" * 40},
+            {"name": "module", "type": "commit", "mode": 57344, "id": "e" * 40},
+        ]
+        digest = self.git_tree_id(entries)
+        verify_tree_identity(digest, {e["name"]: e for e in entries})
+        body = b")]}'\n" + json.dumps({"id": digest, "entries": entries}).encode()
+        self.assertEqual(read_tree("a" * 40, "", opener=lambda url, timeout: Response(url, body))[0], digest)
+        for field, value in (("id", "f" * 40), ("mode", 33261), ("type", "commit")):
+            changed = [dict(e) for e in entries]
+            changed[1][field] = value
+            body = b")]}'\n" + json.dumps({"id": digest, "entries": changed}).encode()
+            with self.assertRaises(ValueError):
+                read_tree("a" * 40, "", opener=lambda url, timeout: Response(url, body))
 
     def test_observation_binds_tree_and_blob(self):
         def entry(kind, digest):
