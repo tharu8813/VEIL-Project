@@ -29,10 +29,11 @@ public partial class BrowserWindow
                 return;
             }
             var tab = Active;
+            string? page = tab?.Url;
             long epoch = tab?.NavigationEpoch ?? -1;
             long selectionEpoch = permissionSelectionEpoch;
             string? origin = SitePermissionPolicy.Origin(tab?.Url);
-            if (tab is null || origin is null || !PermissionContextMatches(tab, origin, epoch, selectionEpoch))
+            if (tab is null || origin is null || tab.Url != page || !PermissionContextMatches(tab, origin, epoch, selectionEpoch))
                 origin = null;
 
             bool exists = store.Exists;
@@ -60,7 +61,7 @@ public partial class BrowserWindow
             if (!PasswordWindowReady()) return;
             entries = await store.ReadAsync(password);
             if (!PasswordWindowReady()) return;
-            if (tab is null || origin is null || !PermissionContextMatches(tab, origin, epoch, selectionEpoch))
+            if (tab is null || origin is null || tab.Url != page || !PermissionContextMatches(tab, origin, epoch, selectionEpoch))
                 origin = null;
             var dialog = new PasswordManagerDialog(this, origin, entries);
             if (await ShowManagementPageAsync("veil://passwords", dialog) != true || !PasswordWindowReady()) return;
@@ -77,7 +78,7 @@ public partial class BrowserWindow
             switch (dialog.Action)
             {
                 case PasswordAction.Save:
-                    if (tab is null || origin is null || selected.Origin != origin ||
+                    if (tab is null || origin is null || page is null || tab.Url != page || selected.Origin != origin ||
                         !PermissionContextMatches(tab, origin, epoch, selectionEpoch)) return;
                     entries.RemoveAll(entry => entry.Origin == selected.Origin && entry.UserName == selected.UserName);
                     entries.Add(selected);
@@ -102,9 +103,9 @@ public partial class BrowserWindow
                     finally { verified.Clear(); }
                     break;
                 case PasswordAction.Fill:
-                    if (tab is null || origin is null || selected.Origin != origin ||
+                    if (tab is null || origin is null || page is null || tab.Url != page || selected.Origin != origin ||
                         !PermissionContextMatches(tab, origin, epoch, selectionEpoch)) return;
-                    await FillLoginAsync(tab, selected, epoch, selectionEpoch);
+                    await FillLoginAsync(tab, selected, page, epoch, selectionEpoch);
                     break;
             }
         }
@@ -187,21 +188,22 @@ public partial class BrowserWindow
     }
 
     private void UpdateLoginAction() =>
-        LoginActionButton.Visibility = !session.IsPrivate && Active is { LoginFormDetected: true } tab && !closingTabs.Contains(tab.Item) &&
+        LoginActionButton.Visibility = !session.IsPrivate && Active is { LoginFormDetected: true } tab && CanUseTab(tab.Item) &&
             SitePermissionPolicy.Origin(tab.Url) is not null ? Visibility.Visible : Visibility.Collapsed;
 
     // Automatic detection returns only a boolean. Values are read only after an explicit native command.
     private async Task ProbeLoginFormAsync(BrowserTab tab)
     {
         if (session.IsPrivate) return;
-        string? origin = SitePermissionPolicy.Origin(tab.Url);
+        string page = tab.Url;
+        string? origin = SitePermissionPolicy.Origin(page);
         long epoch = tab.NavigationEpoch;
         long selectionEpoch = permissionSelectionEpoch;
         if (origin is null || !PermissionContextMatches(tab, origin, epoch, selectionEpoch)) return;
         try
         {
-            string result = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Probe(origin));
-            if (!PermissionContextMatches(tab, origin, epoch, selectionEpoch)) return;
+            string result = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Probe(origin, page));
+            if (tab.Url != page || !PermissionContextMatches(tab, origin, epoch, selectionEpoch)) return;
             tab.LoginFormDetected = result == "true";
             UpdateLoginAction();
         }
@@ -255,7 +257,7 @@ public partial class BrowserWindow
             if (!Current()) return;
             if (save)
             {
-                string json = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Read(origin));
+                string json = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Read(origin, page));
                 if (!Current()) return;
                 var login = LoginFormPolicy.Decode(origin, json);
                 if (login is null)
@@ -277,7 +279,7 @@ public partial class BrowserWindow
                 if (matches.Count == 0) { Status.Text = "현재 사이트에 저장된 계정이 없습니다."; return; }
                 var picker = new LoginPickerDialog(this, origin, matches);
                 if (picker.ShowDialog() != true || !Current() || picker.Selected is not { } selected) return;
-                await FillLoginAsync(tab, selected, epoch, selectionEpoch);
+                await FillLoginAsync(tab, selected, page, epoch, selectionEpoch);
             }
         }
         catch (Exception error) when (RecoverableFailure.Is(error))
@@ -294,11 +296,12 @@ public partial class BrowserWindow
         }
     }
 
-    private async Task FillLoginAsync(BrowserTab tab, SavedLogin login, long epoch, long selectionEpoch)
+    private async Task FillLoginAsync(BrowserTab tab, SavedLogin login, string page, long epoch, long selectionEpoch)
     {
-        if (!PermissionContextMatches(tab, login.Origin, epoch, selectionEpoch)) return;
-        string result = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Fill(login));
-        if (PermissionContextMatches(tab, login.Origin, epoch, selectionEpoch))
+        bool Current() => tab.Url == page && PermissionContextMatches(tab, login.Origin, epoch, selectionEpoch);
+        if (!Current()) return;
+        string result = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Fill(login, page));
+        if (Current())
             Status.Text = result == "true" ? "로그인 정보를 채웠습니다. 제출은 직접 진행하세요." :
                 "지원되는 로그인 폼을 찾지 못했습니다. 직접 입력하세요.";
     }
