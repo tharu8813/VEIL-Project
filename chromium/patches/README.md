@@ -1,0 +1,7 @@
+# Chromium patch series
+
+The ordered series.json is tied to the development candidate's exact upstream commit. It is intentionally empty until a first product patch is reviewed. Store UTF-8 unified Git diffs named 0001-short-name.patch, etc., with SHA-256 over the exact committed bytes and a nonempty purpose. Set Git attributes to preserve LF for patch bytes. Never add a patch that disables sandbox, certificate checks, site isolation or protection failure handling.
+
+Run `node scripts/chromium/patch-series.mjs` to validate the manifest and hashes. Once the pinned upstream checkout exists, run `node scripts/chromium/patch-series.mjs --check D:\veil-chromium\chromium\src`. The checker validates identity and tracked cleanliness, applies the ordered series to an isolated temporary Git index and object store, and reports the resulting tree identity. No real checkout/index changes, no build and no patch installation. Use a trusted dedicated checkout; this is not a hardened sandbox for untrusted Git repositories. A tree hash in the temporary store is an observation, not a published Git object.
+
+The original C1 upstream build runner continues refusing modified sources. Actual patch materialization, separate patched build receipt, upstream rebase and real Chromium compatibility are later work. Synthetic tests exercise ordering, conflicts, hashes and original-checkout preservation. Existing security gates are unchanged.
