@@ -91,7 +91,7 @@ jobs:
       # SEC-004: the Procmon trace analyzer is pure parsing; the capture itself runs only in the VM.
       - name: Check local-write evidence analyzers
         shell: pwsh
-        run: node --test tests/security/async-handlers.test.mjs tests/security/outside-writes.test.mjs tests/security/jump-list-evidence.test.mjs tests/phase3/phase34-vm.test.mjs tests/phase3/power-loss.test.mjs tests/vm/internet-batch.test.mjs
+        run: node --test tests/security/async-handlers.test.mjs tests/security/profile-gate-contract.test.mjs tests/security/outside-writes.test.mjs tests/security/jump-list-evidence.test.mjs tests/phase3/phase34-vm.test.mjs tests/phase3/power-loss.test.mjs tests/vm/internet-batch.test.mjs
 
       - name: Check download retry context contract
         shell: pwsh
