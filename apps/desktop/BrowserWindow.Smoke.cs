@@ -647,6 +647,26 @@ public partial class BrowserWindow
                     string meta = Path.Combine(vault.Directory, "meta");
                     string[] ObjectIds() => Directory.GetFiles(objects, "*.veil")
                         .Select(path => Path.GetFileNameWithoutExtension(path)).Order().ToArray();
+                    // Lock while a binary body frame is in progress, before the commit frame.
+                    int interruptedFrames = 0;
+                    vault.SmokeAfterFrame = () =>
+                    {
+                        interruptedFrames++;
+                        vault.Lock();
+                    };
+                    try
+                    {
+                        var interrupted = await Capture("large", "interrupted-vault-session.bin");
+                        Check(interruptedFrames == 1 && interrupted.Outcome == DownloadVault.Failed &&
+                            interrupted.ObjectPath is null && !vault.Unlocked && vault.Entries.Count == 0,
+                            "locking during frame transfer refuses publication");
+                    }
+                    finally { vault.SmokeAfterFrame = null; }
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() &&
+                        vault.Entries.Count == 1 && ObjectIds().Length == 1 &&
+                        Digest(originalPath) == originalHash && await vault.VerifyAsync(vault.Entries.Single()) == 1024 &&
+                        !Directory.GetFiles(vault.Directory, ".veil-encrypted-*", SearchOption.AllDirectories).Any(),
+                        "interrupted frame leaves original intact and staging is cleaned after reopen");
                     async Task<string> Fault(string directory, string kind, string name)
                     {
                         var before = ObjectIds();

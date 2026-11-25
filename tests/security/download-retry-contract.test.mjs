@@ -35,3 +35,17 @@ test('queued downloads and preflight requests cannot enter a replacement vault s
     assert.match(vault, /private async Task<VaultEntry> SealCaptureAsync\([^)]*Process session\)[\s\S]*?await gate\.WaitAsync\(cancel\);[\s\S]*?RequireCaptureSession\(session\);/);
     assert.match(vault, /void RequireLiveRetry\(\)\s*\{\s*RequireCaptureSession\(session\);\s*cancel\.ThrowIfCancellationRequested\(\);/);
 });
+
+test('vault lock never injects a text command into binary frames and verifies helper exit', () => {
+    const lock = vault.slice(vault.indexOf('internal void Lock()'), vault.indexOf('// ── Rotation'));
+    assert.match(lock, /lockRequested = true;\s*Entries = \[\];\s*KillServe\(\);\s*serve\?\.Dispose\(\);\s*serve = null;/);
+    assert.match(lock, /if \(!process\.WaitForExit\(3000\)\)\s*throw new IOException/);
+    assert.doesNotMatch(lock, /WriteQuit|\.Write(?:Async)?\(|\.Flush(?:Async)?\(/);
+    assert.match(vault, /internal bool Unlocked => !lockRequested && serve is \{ HasExited: false \}/);
+    assert.match(vault, /private Stream PipeInput => !lockRequested && input is \{ \} stream \? stream : throw new IOException/);
+    assert.match(vault, /private Stream PipeOutput => !lockRequested && output is \{ \} stream \? stream : throw new IOException/);
+    assert.match(vault, /if \(canAbort && ReferenceEquals\(serve, session\) && Unlocked\)/);
+    assert.match(vault, /SmokeAfterFrame\?\.Invoke\(\);\s*#endif\s*RequireCaptureSession\(session\);/);
+    assert.match(vault, /await SaveIndexLockedAsync\(\);\s*RequireCaptureSession\(session\);\s*return entry;/);
+    assert.doesNotMatch(vault, /private void WriteQuit\(/);
+});

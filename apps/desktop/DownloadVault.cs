@@ -47,6 +47,7 @@ internal sealed class DownloadVault : IDisposable
     private const int CommitTimeoutSeconds = 120;
     private readonly Dictionary<string, string> methods = new(StringComparer.Ordinal);
     private Process? serve;
+    private bool lockRequested = true;
     private Stream? input;
     private Stream? output;
 
@@ -75,7 +76,7 @@ internal sealed class DownloadVault : IDisposable
         File.Exists(Path.Combine(root, "keyring.bundle")) ||
         File.Exists(Path.Combine(root, "keyring.age")) ||
         File.Exists(Path.Combine(root, "keyring.recovery.age"));
-    internal bool Unlocked => serve is { HasExited: false };
+    internal bool Unlocked => !lockRequested && serve is { HasExited: false };
     internal string Directory => root;
     internal List<VaultEntry> Entries { get; private set; } = [];
     internal List<VaultResult> Results { get; } = [];
@@ -84,6 +85,7 @@ internal sealed class DownloadVault : IDisposable
     // Instance-scoped test barrier; never injects an error or exists in Release.
     internal Func<string, Task>? SmokeBeforePublication;
     internal Func<Task>? SmokeAfterResponse;
+    internal Action? SmokeAfterFrame;
 #endif
 
     // ── Opening ─────────────────────────────────────────────────────────────
@@ -155,6 +157,7 @@ internal sealed class DownloadVault : IDisposable
             serve = Process.Start(info) ?? throw new IOException("veil-vault could not start");
             input = serve.StandardInput.BaseStream;
             output = serve.StandardOutput.BaseStream;
+            lockRequested = false;
             string reply = await CommandLockedAsync(first, profilePassword, recoveryCode);
             if (reply != "ok")
             {
@@ -186,25 +189,34 @@ internal sealed class DownloadVault : IDisposable
     /// <summary>Ends the key-holding process; the vault must be opened again.</summary>
     internal void Lock()
     {
-        try { if (serve is { HasExited: false }) { WriteQuit(); serve.WaitForExit(3000); } }
-        catch (IOException) { }
+        // Never send a text command into a possibly incomplete binary seal frame.
+        // Disable access immediately, but retain the process reference if exit cannot
+        // be verified so a later open cannot replace a still-live key holder.
+        lockRequested = true;
+        Entries = [];
         KillServe();
         serve?.Dispose();
         serve = null;
         input = output = null;
         activeRoot = root;
-        Entries = [];
     }
 
     private void KillServe()
     {
+        var process = serve;
+        if (process is null) return;
         try
         {
-            if (serve is not { HasExited: false }) return;
-            serve.Kill();
-            serve.WaitForExit(3000);
+            if (!process.HasExited)
+            {
+                try { process.Kill(); }
+                catch (InvalidOperationException) when (process.HasExited) { }
+            }
+            if (!process.WaitForExit(3000))
+                throw new IOException("The vault process did not exit.");
         }
-        catch (InvalidOperationException) { }
+        catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception)
+        { throw new IOException("The vault process exit could not be verified.", error); }
     }
 
     // ── Rotation ────────────────────────────────────────────────────────────
@@ -381,6 +393,7 @@ internal sealed class DownloadVault : IDisposable
                     catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
                     { throw new IOException("Download body idle timeout."); }
                     finally { if (!idle.IsCancellationRequested) idle.CancelAfter(Timeout.InfiniteTimeSpan); }
+                    RequireCaptureSession(session);
                     if (read == 0) break;
                     cancel.ThrowIfCancellationRequested();
                     BinaryPrimitives.WriteInt32LittleEndian(packet, read);
@@ -388,13 +401,17 @@ internal sealed class DownloadVault : IDisposable
                     canAbort = false;
                     await CapturePipeAsync(async token =>
                     {
-                        await input!.WriteAsync(packet.AsMemory(0, sizeof(int) + read), token);
+                        await PipeInput.WriteAsync(packet.AsMemory(0, sizeof(int) + read), token);
                         return true;
                     }, PipeTimeoutSeconds);
                     canAbort = true;
                     fileHash.AppendData(packet, sizeof(int), read);
                     total = checked(total + read);
                     download.Report(total, declared);
+#if DEBUG
+                    SmokeAfterFrame?.Invoke();
+#endif
+                    RequireCaptureSession(session);
                 }
                 cancel.ThrowIfCancellationRequested();
                 if (declared is long expected && expected != total)
@@ -402,6 +419,7 @@ internal sealed class DownloadVault : IDisposable
                 // ADR-0008: a listed file is aborted before the commit frame, so it is never published.
                 string sha256 = Convert.ToHexString(fileHash.GetHashAndReset()).ToLowerInvariant();
                 await RejectThreatAsync(threats?.CheckFileAsync(sha256, TimeSpan.FromSeconds(2), cancel));
+                RequireCaptureSession(session);
                 cancel.ThrowIfCancellationRequested();
                 download.Finish();
                 canAbort = false;
@@ -409,22 +427,22 @@ internal sealed class DownloadVault : IDisposable
                 {
                     BinaryPrimitives.WriteInt32LittleEndian(packet, 0);
                     BinaryPrimitives.WriteInt64LittleEndian(packet.AsSpan(sizeof(int)), total);
-                    await input!.WriteAsync(packet.AsMemory(0, sizeof(int) + sizeof(long)), token);
-                    await input.FlushAsync(token);
+                    await PipeInput.WriteAsync(packet.AsMemory(0, sizeof(int) + sizeof(long)), token);
+                    await PipeInput.FlushAsync(token);
                     return true;
                 }, PipeTimeoutSeconds);
             }
             catch
             {
-                if (canAbort)
+                if (canAbort && ReferenceEquals(serve, session) && Unlocked)
                 {
                     try
                     {
                         await CapturePipeAsync(async token =>
                         {
                             BinaryPrimitives.WriteUInt32LittleEndian(packet, AbortFrame);
-                            await input!.WriteAsync(packet.AsMemory(0, sizeof(int)), token);
-                            await input.FlushAsync(token);
+                            await PipeInput.WriteAsync(packet.AsMemory(0, sizeof(int)), token);
+                            await PipeInput.FlushAsync(token);
                             string aborted = await ReadLineAsync(token);
                             if (!aborted.StartsWith("err\t", StringComparison.Ordinal))
                                 throw new IOException("Unexpected abort response.");
@@ -434,24 +452,29 @@ internal sealed class DownloadVault : IDisposable
                     catch (Exception error) when (error is IOException or InvalidOperationException or OperationCanceledException)
                     { CloseBrokenPipe(); }
                 }
-                else CloseBrokenPipe();
+                else if (ReferenceEquals(serve, session)) CloseBrokenPipe();
                 throw;
             }
             finally { CryptographicOperations.ZeroMemory(packet); }
             string reply;
             try { reply = await CapturePipeAsync(ReadLineAsync, CommitTimeoutSeconds); }
             catch { CloseBrokenPipe(); throw; }
+            RequireCaptureSession(session);
             if (reply != $"ok\t{total}") throw SealFailure(reply);
             var entry = new VaultEntry(id, download.Name, total, DateTimeOffset.Now, host);
 #if DEBUG
             if (SmokeBeforePublication is { } beforeMeta) await beforeMeta("meta");
 #endif
+            RequireCaptureSession(session);
             await SealBytesLockedAsync(Path.Combine(Meta, id + ".veil"), JsonSerializer.SerializeToUtf8Bytes(entry, Json));
+            RequireCaptureSession(session);
             Entries = [entry, .. Entries];
 #if DEBUG
             if (SmokeBeforePublication is { } beforeIndex) await beforeIndex("index");
 #endif
+            RequireCaptureSession(session);
             await SaveIndexLockedAsync();
+            RequireCaptureSession(session);
             return entry;
         }
         finally { gate.Release(); Changed?.Invoke(); }
@@ -481,7 +504,6 @@ internal sealed class DownloadVault : IDisposable
 
     private void CloseBrokenPipe()
     {
-        KillServe();
         Lock();
     }
 
@@ -667,7 +689,7 @@ internal sealed class DownloadVault : IDisposable
     {
         if (profilePassword.IsEmpty) await WriteLineAsync(line);
         else await WriteProfileCommandAsync(line, profilePassword, recoveryCode);
-        await input!.FlushAsync();
+        await PipeInput.FlushAsync();
         return await ReadLineAsync();
     }
 
@@ -683,14 +705,14 @@ internal sealed class DownloadVault : IDisposable
                 {
                     int count = Math.Min(FrameSize, data.Length - offset);
                     BinaryPrimitives.WriteInt32LittleEndian(header, count);
-                    await input!.WriteAsync(header.AsMemory(0, sizeof(int)), token);
-                    await input.WriteAsync(data.AsMemory(offset, count), token);
+                    await PipeInput.WriteAsync(header.AsMemory(0, sizeof(int)), token);
+                    await PipeInput.WriteAsync(data.AsMemory(offset, count), token);
                     offset += count;
                 }
                 BinaryPrimitives.WriteInt32LittleEndian(header, 0);
                 BinaryPrimitives.WriteInt64LittleEndian(header.AsSpan(sizeof(int)), data.Length);
-                await input!.WriteAsync(header, token);
-                await input.FlushAsync(token);
+                await PipeInput.WriteAsync(header, token);
+                await PipeInput.FlushAsync(token);
                 return await ReadLineAsync(token);
             }, CommitTimeoutSeconds);
             if (reply != $"ok\t{data.Length}") throw SealFailure(reply);
@@ -719,7 +741,7 @@ internal sealed class DownloadVault : IDisposable
         var bytes = new byte[length];
         try
         {
-            await output!.ReadExactlyAsync(bytes);
+            await PipeOutput.ReadExactlyAsync(bytes);
             return bytes;
         }
         catch
@@ -735,7 +757,7 @@ internal sealed class DownloadVault : IDisposable
     private async Task WriteLineAsync(string line, CancellationToken cancel = default)
     {
         var bytes = Encoding.UTF8.GetBytes(line + "\n");
-        try { await input!.WriteAsync(bytes, cancel); }
+        try { await PipeInput.WriteAsync(bytes, cancel); }
         finally { CryptographicOperations.ZeroMemory(bytes); }
     }
 
@@ -755,7 +777,7 @@ internal sealed class DownloadVault : IDisposable
                 packet[offset++] = "0123456789abcdef"u8[value & 15];
             }
             Encoding.UTF8.GetBytes(suffix, packet.AsSpan(offset));
-            await input!.WriteAsync(packet);
+            await PipeInput.WriteAsync(packet);
         }
         finally
         {
@@ -764,11 +786,8 @@ internal sealed class DownloadVault : IDisposable
         }
     }
 
-    private void WriteQuit()
-    {
-        input!.Write("quit\n"u8);
-        input.Flush();
-    }
+    private Stream PipeInput => !lockRequested && input is { } stream ? stream : throw new IOException("The vault is locked.");
+    private Stream PipeOutput => !lockRequested && output is { } stream ? stream : throw new IOException("The vault is locked.");
 
     private async Task<string> ReadLineAsync(CancellationToken cancel = default)
     {
@@ -776,7 +795,7 @@ internal sealed class DownloadVault : IDisposable
         var one = new byte[1];
         while (true)
         {
-            if (await output!.ReadAsync(one, cancel) == 0) throw new IOException("The vault process ended.");
+            if (await PipeOutput.ReadAsync(one, cancel) == 0) throw new IOException("The vault process ended.");
             if (one[0] == (byte)'\n') break;
             if (bytes.Count >= 16 * 1024) throw new IOException("Vault reply exceeds limit.");
             bytes.Add(one[0]);
@@ -851,9 +870,7 @@ internal sealed class DownloadVault : IDisposable
     public void Dispose()
     {
         http.Dispose();
-        // At application exit a suspended download may still hold the pipe with an incomplete frame.
-        if (!gate.Wait(0)) KillServe();
-        else gate.Release();
+        // Lock never writes into a possibly incomplete frame, including at exit.
         Lock();
     }
 }
