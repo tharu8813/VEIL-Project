@@ -25,3 +25,7 @@ Use two independently acquired clean pinned Git checkouts in separate directorie
 Only 0001 and 0002 are registered; nine-field Windows identity candidate remains unregistered. No patched browser may be launched yet. Synthetic tests cover plan, actual target-only patch writes, conflict rejection and root/dirty checks; actual Chromium materialization NOT RUN.
 
 Windows test fixture correction: configure checkout line-ending behavior before cloning, not after the first checkout. For real trusted checkouts follow the pinned upstream Git/checkout requirements and verify clean status; do not normalize or rewrite a dirty source tree automatically. An unexpected byte difference may cause a refusal. PR #125's first synthetic Windows run failed; corrected tests are pending CI.
+
+## Index cleanliness hardening
+
+PR #125 corrected head 9f01dce4e25d962976dc109da99faf72ef3333a3 passed all five checks and merged at e7d614b8f605bd997b34a585d56c38eb76460e36. The materializer now rejects assume-unchanged and skip-worktree index entries on either checkout before plan or execution, even if Git status appears clean. It never clears these flags automatically. The NUL-delimited listing has a bounded 128 MiB output limit and fails closed on overflow. Four synthetic regressions cover both flags on both checkouts; new CI pending. This does not prove protection against hostile Git configuration, ignored files, or concurrent filesystem mutation; actual Chromium materialization, build and runtime remain NOT RUN.
