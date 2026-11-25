@@ -4,6 +4,9 @@ on:
     paths:
       - 'chromium/dev/profile-path-contract.h'
       - 'chromium/dev/diagnostic-path-contract.h'
+      - 'chromium/dev/diagnostic-observation-win.h'
+      - 'tests/chromium/diagnostic-observation-win.test.cc'
+      - 'tests/chromium/diagnostic-observation-win.test.ps1'
       - 'tests/chromium/diagnostic-path-contract.test.cc'
       - 'tests/chromium/profile-path-contract.test.cc'
       - 'chromium/dev/profile-filesystem-win.h'
@@ -72,3 +75,16 @@ jobs:
           } finally {
             [IO.Directory]::Delete($root)
           }
+      - name: Compile and test standalone diagnostic observation
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-diagnostic-observation.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-diagnostic-observation.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\diagnostic-observation-win.test.cc advapi32.lib' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic observation compile failed.' }
+          & .\tests\chromium\diagnostic-observation-win.test.ps1 -Executable $exe
