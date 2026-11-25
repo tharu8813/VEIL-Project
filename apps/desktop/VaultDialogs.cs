@@ -224,6 +224,19 @@ internal sealed class VaultSetupDialog : VeilDialog
         bool accepted = setup.ShowDialog() == true;
         if (failure is not null) throw new InvalidOperationException("Vault wizard smoke failed.", failure);
         if (!accepted) throw new InvalidOperationException("Vault wizard did not finish.");
+
+        using var cancelled = new CancellationTokenSource();
+        var interrupted = new VaultSetupDialog(owner, "금고 설정 취소 테스트", askPassphrase: true, issueCode: true);
+        interrupted.Loaded += (_, _) => interrupted.Dispatcher.BeginInvoke(new Action(cancelled.Cancel),
+            DispatcherPriority.Background);
+        if (interrupted.ShowForVaultOpen(cancelled.Token) || interrupted.IsVisible ||
+            interrupted.Passphrase is not null || interrupted.RecoveryCode is not null)
+            throw new InvalidOperationException("Cancelled vault setup accepted or remained visible.");
+
+        var unlock = new VaultUnlockDialog(owner);
+        if (unlock.ShowCancellable(cancelled.Token))
+            throw new InvalidOperationException("Pre-cancelled vault unlock accepted.");
+        unlock.Close();
     }
 
     private UIElement Page(string text, params UIElement[] children)
