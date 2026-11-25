@@ -11,7 +11,7 @@ test('retry consumes its candidate and rechecks before capture', () => {
     assert.match(browser, /retryReady: retry \? \(\) => candidate is not null && CanRetry\(candidate\) : null/);
 });
 test('retry context required after slot, threat check and cookie lookup, before HTTP', () => {
-    assert.match(vault, /await captureSlot\.WaitAsync\(cancel\);[\s\S]*?GetFollowingRedirectsAsync\(uri, web, cancel, retry, retryReady\)/);
+    assert.match(vault, /await captureSlot\.WaitAsync\(cancel\);[\s\S]*?GetFollowingRedirectsAsync\(uri, web, cancel, retry, retryReady, session\)/);
     const request = vault.slice(vault.indexOf('private async Task<HttpResponseMessage> GetFollowingRedirectsAsync'));
     assert.match(request, /retry && \(!DownloadFailurePolicy\.SafeRetryAddress\(uri\) \|\| retryReady\?\.Invoke\(\) != true\)/);
     assert.match(request, /RequireLiveRetry\(\);[\s\S]*?await RejectThreatAsync[\s\S]*?RequireLiveRetry\(\);[\s\S]*?GetCookiesAsync[\s\S]*?RequireLiveRetry\(\);[\s\S]*?http\.SendAsync/);
@@ -24,4 +24,14 @@ test('authenticated index and metadata still require valid unique records', () =
     assert.match(vault, /entries is not null && entries\.All\(ValidEntry\) &&\s*entries\.Select\(e => e\.Id\)\.Distinct\(StringComparer\.OrdinalIgnoreCase\)\.Count\(\) == entries\.Count/);
     assert.match(vault, /entry is not null && Guid\.TryParseExact\(entry\.Id, "N", out _\) &&\s*!string\.IsNullOrWhiteSpace\(entry\.Name\) && entry\.Bytes >= 0/);
     assert.match(vault, /finally \{ CryptographicOperations\.ZeroMemory\(meta\); \}[\s\S]*?entries\.Add\(ValidEntry\(entry\) && entry!\.Id == id \? entry/);
+});
+
+test('queued downloads and preflight requests cannot enter a replacement vault session', () => {
+    assert.match(vault, /if \(session is null \|\| !ReferenceEquals\(serve, session\) \|\| !Unlocked\)\s*throw new DownloadRequestFailure\([^;]+false\);/);
+    const capture = vault.slice(vault.indexOf('internal async Task<VaultEntry> CaptureAsync('), vault.indexOf('internal async Task<VaultEntry> CaptureInlineAsync('));
+    assert.match(capture, /Process session = CaptureSession\(\);[\s\S]*?await captureSlot\.WaitAsync\(cancel\);[\s\S]*?RequireCaptureSession\(session\);[\s\S]*?GetFollowingRedirectsAsync\([^;]+session\);[\s\S]*?RequireCaptureSession\(session\);[\s\S]*?SealCaptureAsync\([^;]+session\);/);
+    const inline = vault.slice(vault.indexOf('internal async Task<VaultEntry> CaptureInlineAsync('), vault.indexOf('private async Task<VaultEntry> SealCaptureAsync('));
+    assert.match(inline, /Process session = CaptureSession\(\);[\s\S]*?await captureSlot\.WaitAsync\(download\.Token\);[\s\S]*?RequireCaptureSession\(session\);[\s\S]*?await RejectThreatAsync[\s\S]*?RequireCaptureSession\(session\);[\s\S]*?SealCaptureAsync\([^;]+session\);/);
+    assert.match(vault, /private async Task<VaultEntry> SealCaptureAsync\([^)]*Process session\)[\s\S]*?await gate\.WaitAsync\(cancel\);[\s\S]*?RequireCaptureSession\(session\);/);
+    assert.match(vault, /void RequireLiveRetry\(\)\s*\{\s*RequireCaptureSession\(session\);\s*cancel\.ThrowIfCancellationRequested\(\);/);
 });

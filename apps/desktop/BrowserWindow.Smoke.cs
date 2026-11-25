@@ -621,6 +621,22 @@ public partial class BrowserWindow
                         using var input = File.OpenRead(path);
                         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(input));
                     }
+                    // Reopen after HTTP headers but before any vault frame is sent.
+                    // A stale request must never publish in the replacement session.
+                    bool reopened = false;
+                    vault.SmokeAfterResponse = async () =>
+                    {
+                        vault.Lock();
+                        reopened = await vault.TryOpenFromDevelopmentEnvironmentAsync();
+                    };
+                    try
+                    {
+                        var stale = await Capture("small", "stale-vault-session.bin");
+                        Check(reopened && stale.Outcome == DownloadVault.Failed && stale.ObjectPath is null &&
+                            stale.Detail?.Contains("금고 세션 변경") == true && vault.Entries.Count == 0,
+                            "request from previous vault session rejected without publication");
+                    }
+                    finally { vault.SmokeAfterResponse = null; }
                     var seed = await Capture("small", "publication-seed.bin");
                     Check(seed.Outcome == DownloadVault.Stored && vault.Entries.Count == 1, "seed published");
                     var original = vault.Entries.Single();
