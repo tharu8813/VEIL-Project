@@ -6,6 +6,7 @@ on:
       - 'scripts/chromium/generate-ui-name-candidate.py'
       - 'tests/chromium/ui-name-candidate.test.py'
       - '.github/workflows/chromium-ui-name-candidate.yml'
+      - 'scripts/chromium/pinned_gitiles.py'
       - 'chromium/candidate.json'
       - 'chromium/patches/**'
   workflow_dispatch:

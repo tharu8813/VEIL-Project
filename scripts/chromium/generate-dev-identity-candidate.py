@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: MPL-2.0
 """Generate review-only Windows development identity changes, never install or launch."""
-import base64
 import difflib
 import hashlib
 import json
@@ -8,7 +7,7 @@ import pathlib
 import re
 import subprocess
 import tempfile
-import urllib.request
+from pinned_gitiles import fetch_pinned_blob
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 REV = "1de57fa19722fa6d6841d4f596c394d015580656"
@@ -44,15 +43,8 @@ def main():
     pin = json.loads((ROOT / "chromium/candidate.json").read_text(encoding="utf-8"))
     if pin["revision"] != REV:
         raise ValueError("Review generator for the new upstream revision")
-    url = "https://chromium.googlesource.com/chromium/src/+/" + REV + "/" + REL + "?format=TEXT"
-    with urllib.request.urlopen(url, timeout=45) as response:
-        encoded = response.read(65537)
-    if len(encoded) > 65536:
-        raise ValueError("Unexpected source size")
-    original = base64.b64decode(encoded.strip(), validate=True)
-    blob = hashlib.sha1(b"blob " + str(len(original)).encode() + b"\0" + original).hexdigest()
-    if blob != BLOB:
-        raise ValueError("Pinned install identity blob mismatch")
+    original = fetch_pinned_blob(REV, REL, BLOB, 65536)
+    blob = BLOB
     modified = rewrite(original)
     diff = "".join(difflib.unified_diff(original.decode().splitlines(keepends=True),
                                        modified.decode().splitlines(keepends=True),

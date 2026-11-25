@@ -13,3 +13,6 @@ Status: PR #115 canonical source/depot_tools identity checks PASS; compatibility
 
 
 VEIL-specific patches are tracked separately in [patches/](patches/README.md). The first product-name metadata patch is present; actual patch materialization and patched builds are not enabled.
+
+
+The new [source-only patch materializer](patches/README.md#source-only-materialization-development-not-run-against-chromium) has a read-only default and requires a second independent, clean checkout for explicit execution. Actual patched builds and dependency sync are not supported by this tool.
