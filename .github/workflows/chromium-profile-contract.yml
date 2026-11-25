@@ -8,6 +8,8 @@ on:
       - 'chromium/dev/broker-identity-win.h'
       - 'chromium/dev/config-acl-win.h'
       - 'chromium/dev/config-path-win.h'
+      - 'chromium/dev/config-schema.h'
+      - 'tests/chromium/config-schema.test.cc'
       - 'tests/chromium/config-path-win.test.cc'
       - 'tests/chromium/config-handle-read-win.test.cc'
       - 'tests/chromium/config-path-win.test.ps1'
@@ -55,6 +57,8 @@ jobs:
           "$RUNNER_TEMP/volume-evidence-contract"
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/broker-status-wire.test.cc -o "$RUNNER_TEMP/broker-status-wire"
           "$RUNNER_TEMP/broker-status-wire"
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/config-schema.test.cc -o "$RUNNER_TEMP/config-schema"
+          "$RUNNER_TEMP/config-schema"
   windows-filesystem-observation:
     runs-on: windows-latest
     timeout-minutes: 10
