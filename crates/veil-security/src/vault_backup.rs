@@ -18,6 +18,12 @@ pub fn export(
     password: SecretString,
 ) -> io::Result<u64> {
     require_new_destination(destination)?;
+    for directory in [vault.to_path_buf(), vault.join("objects"), vault.join("meta")] {
+        let metadata = fs::symlink_metadata(directory)?;
+        if !metadata.is_dir() || redirected(&metadata) {
+            return Err(invalid("Vault backup directory is missing or redirected"));
+        }
+    }
     let parent = destination
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -47,8 +53,10 @@ pub fn export(
                 }
                 write_record(keys, data, OBJECT, id, &object)?;
                 let meta = vault.join("meta").join(format!("{id}.veil"));
-                if meta.try_exists()? {
-                    write_record(keys, data, META, id, &meta)?;
+                match fs::symlink_metadata(&meta) {
+                    Ok(_) => write_record(keys, data, META, id, &meta)?,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+                    Err(error) => return Err(error),
                 }
                 count += 1;
             }
@@ -66,7 +74,7 @@ pub fn restore(
     code: SecretString,
 ) -> io::Result<Keyring> {
     require_new_destination(vault)?;
-    let mut source = BufReader::new(File::open(source)?);
+    let mut source = BufReader::new(open_regular_read(source)?);
     let mut magic = [0; MAGIC.len()];
     source.read_exact(&mut magic)?;
     if &magic != MAGIC {
@@ -92,7 +100,7 @@ pub fn restore(
     for name in ["objects", "meta", "index"] {
         fs::create_dir(staging.path().join(name))?;
     }
-    keys.read_object_from(Purpose::Backup, source, |data| {
+    keys.read_object_from(Purpose::Backup, &mut source, |data| {
         read_records(&keys, staging.path(), data)
     })?;
     vault_credentials::write_new(staging.path(), &keys, &envelope, code)?;
@@ -102,6 +110,39 @@ pub fn restore(
     Ok(keys)
 }
 
+fn redirected(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+/// Refuse redirected/nonregular input and hold a read-only sharing lease on Windows.
+fn open_regular_read(path: &Path) -> io::Result<File> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() || redirected(&metadata) {
+        return Err(invalid("Vault backup input is not a regular file"));
+    }
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_SHARE_READ and FILE_FLAG_OPEN_REPARSE_POINT.
+        OpenOptions::new().read(true).share_mode(1).custom_flags(0x00200000).open(path)?
+    };
+    #[cfg(not(windows))]
+    let file = File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || redirected(&metadata) {
+        return Err(invalid("Vault backup input is not a regular file"));
+    }
+    Ok(file)
+}
+
 fn write_record(
     keys: &Keyring,
     output: &mut dyn Write,
@@ -109,22 +150,8 @@ fn write_record(
     id: &str,
     path: &Path,
 ) -> io::Result<()> {
-    if !fs::symlink_metadata(path)?.file_type().is_file() {
-        return Err(invalid("Vault backup entry is not a regular file"));
-    }
-    #[cfg(windows)]
-    let mut file = {
-        use std::os::windows::fs::OpenOptionsExt;
-        // FILE_SHARE_READ: prevent other write/delete handles while copying.
-        OpenOptions::new().read(true).share_mode(1).open(path)?
-    };
-    #[cfg(not(windows))]
-    let mut file = File::open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Err(invalid("Vault backup entry is not a regular file"));
-    }
-    let length = metadata.len();
+    let mut file = open_regular_read(path)?;
+    let length = file.metadata()?.len();
     if kind == META && length > crate::SMALL_OBJECT_LIMIT as u64 + ENVELOPE_LIMIT as u64 {
         return Err(invalid("Vault metadata exceeds size limit"));
     }
@@ -241,6 +268,57 @@ mod record_tests {
     use super::*;
 
     const ID: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn nonregular_restore_source_is_rejected_without_creating_destination() {
+        let lab = tempfile::tempdir().unwrap();
+        let destination = lab.path().join("restored");
+        let result = restore(lab.path(), &destination, SecretString::from("synthetic-password"),
+            SecretString::from("synthetic-code"));
+        assert_eq!(result.err().unwrap().kind(), io::ErrorKind::InvalidData);
+        assert!(!destination.exists());
+        assert_eq!(fs::read_dir(lab.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_input_and_backup_directory_are_rejected() {
+        use std::os::unix::fs::symlink;
+        let lab = tempfile::tempdir().unwrap();
+        let real = lab.path().join("source");
+        fs::write(&real, b"synthetic").unwrap();
+        let link = lab.path().join("link");
+        symlink(&real, &link).unwrap();
+        assert_eq!(open_regular_read(&link).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        let vault = lab.path().join("vault");
+        fs::create_dir(&vault).unwrap();
+        fs::create_dir(vault.join("meta")).unwrap();
+        let external = lab.path().join("external");
+        fs::create_dir(&external).unwrap();
+        symlink(&external, vault.join("objects")).unwrap();
+        let destination = lab.path().join("backup.veil");
+        let result = export(&Keyring::generate(), &vault, &destination, SecretString::from("synthetic-password"));
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert!(!destination.exists());
+        assert_eq!(fs::read(&real).unwrap(), b"synthetic");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restore_refuses_existing_source_writer_before_creating_destination() {
+        let lab = tempfile::tempdir().unwrap();
+        let source = lab.path().join("source.veil");
+        fs::write(&source, b"synthetic").unwrap();
+        let writer = OpenOptions::new().write(true).open(&source).unwrap();
+        let destination = lab.path().join("restored");
+        let result = restore(&source, &destination, SecretString::from("synthetic-password"),
+            SecretString::from("synthetic-code"));
+        assert_eq!(result.err().unwrap().raw_os_error(), Some(32));
+        assert!(!destination.exists());
+        drop(writer);
+        assert!(open_regular_read(&source).is_ok());
+        assert_eq!(fs::read_dir(lab.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn backup_record_contains_exact_authenticated_ciphertext() {
