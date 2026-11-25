@@ -17,3 +17,11 @@ test('retry context required after slot, threat check and cookie lookup, before 
     assert.match(request, /RequireLiveRetry\(\);[\s\S]*?await RejectThreatAsync[\s\S]*?RequireLiveRetry\(\);[\s\S]*?GetCookiesAsync[\s\S]*?RequireLiveRetry\(\);[\s\S]*?http\.SendAsync/);
     assert.match(request, /if \(retry\) throw new DownloadRequestFailure\([^;]+false\);/);
 });
+
+test('authenticated index and metadata still require valid unique records', () => {
+    assert.match(vault, /if \(ValidIndex\(candidate\)\) loaded = candidate;/);
+    assert.match(vault, /finally \{ CryptographicOperations\.ZeroMemory\(bytes\); \}\s*if \(loaded is not null\) break;/);
+    assert.match(vault, /entries is not null && entries\.All\(ValidEntry\) &&\s*entries\.Select\(e => e\.Id\)\.Distinct\(StringComparer\.OrdinalIgnoreCase\)\.Count\(\) == entries\.Count/);
+    assert.match(vault, /entry is not null && Guid\.TryParseExact\(entry\.Id, "N", out _\) &&\s*!string\.IsNullOrWhiteSpace\(entry\.Name\) && entry\.Bytes >= 0/);
+    assert.match(vault, /finally \{ CryptographicOperations\.ZeroMemory\(meta\); \}[\s\S]*?entries\.Add\(ValidEntry\(entry\) && entry!\.Id == id \? entry/);
+});
