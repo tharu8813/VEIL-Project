@@ -1,0 +1,24 @@
+name: Chromium early startup source candidate
+on:
+  pull_request:
+    paths:
+      - 'scripts/chromium/generate-existing-profile-candidate.py'
+      - 'tests/chromium/existing-profile-candidate.test.py'
+      - 'scripts/chromium/pinned_gitiles.py'
+      - 'chromium/candidate.json'
+      - '.github/workflows/chromium-startup-candidate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test exact source rewrite
+        run: python3 tests/chromium/existing-profile-candidate.test.py
+      - name: Verify pinned source and review-only diff
+        run: python3 scripts/chromium/generate-existing-profile-candidate.py
