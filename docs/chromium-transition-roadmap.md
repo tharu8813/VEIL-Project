@@ -82,6 +82,10 @@ PR #117 [CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45626931436)
 
 PR #118 최초 [Windows CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45633289302)는 9개 중 8개 통과, 순차 적용 테스트의 Expected checkout root 오류로 실패. Git/Node 경로 표현의 문자열 비교 대신 실제 디렉터리 identity(dev/ino) 비교와 Git 환경 경로 정규화 적용. 잘못된 root/dirty/충돌의 오류 원인도 구분하도록 회귀 시험 강화. 수정 head Windows CI 결과는 아직 NOT RUN이며 기존 .NET 단계는 최초 실패로 skipped. 실제 Chromium 제품 패치, 소스 동기화, 컴파일, sandbox 미검증 상태 유지.
 
+## C2 제품명 메타데이터 선행 패치 (2026-11-25)
+
+PR #118 수정 head [Windows/Rust CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45635676966) 10/10 PASS, [원격 검증](https://github.com/tharu8813/VEIL-Project/actions/runs/45635676757) PASS, main 병합 28d252a106e558960235c03815952df83b65f9d3. 고정 Chromium SHA의 chrome/app/theme/chromium/BRANDING (blob f8363d5b294fe210ebfdd18374e95b54d6ff5c17)을 확인하여 0001-veil-product-name.patch 작성: PRODUCT_FULLNAME/SHORTNAME만 VEIL로 변경, upstream 저작권/installer/OS 식별자 보존. 별도 원격 단일 blob 적용 시험을 추가하며 결과는 신규 CI 전 NOT RUN. 실제 전체 series 적용, 빌드, UI 및 보안 검증 NOT RUN. C0 IN PROGRESS / C1 준비 유지, C2 선행 패치만 존재하며 독립 브라우저 완료 아님. 프로필/설치 격리 이전 patched 제품 실행 금지.
+
 ## C0 증거 및 다음 행동
 
 - [x] 전환 방향 문서화(이 PR에서 제안), 기존 보안 요구 유지.
