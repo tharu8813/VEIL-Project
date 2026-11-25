@@ -5,6 +5,9 @@ on:
       - 'chromium/dev/profile-path-contract.h'
       - 'tests/chromium/profile-path-contract.test.cc'
       - 'chromium/dev/profile-filesystem-win.h'
+      - 'chromium/dev/profile-policy-win.h'
+      - 'chromium/dev/profile-combined-win.h'
+      - 'tests/chromium/profile-combined-win.test.cc'
       - 'tests/chromium/profile-filesystem-win.test.cc'
       - 'tests/chromium/profile-filesystem-win.test.ps1'
       - '.github/workflows/chromium-profile-contract.yml'
@@ -43,3 +46,25 @@ jobs:
           & cmd.exe /d /c $command
           if ($LASTEXITCODE -ne 0) { throw 'Standalone Windows compilation failed.' }
           & .\tests\chromium\profile-filesystem-win.test.ps1 -Executable $exe
+      - name: Compile and test combined standalone observation
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-combined-observation.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-combined-observation.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\profile-combined-win.test.cc advapi32.lib' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Combined standalone compile failed.' }
+          $root = Join-Path $env:RUNNER_TEMP ('veil-combined-fixture-' + [Guid]::NewGuid().ToString('N'))
+          if (Test-Path -LiteralPath $root) { throw 'Fixture already exists.' }
+          $null = New-Item -ItemType Directory -Path $root
+          try {
+            & $exe $root
+            if ($LASTEXITCODE -ne 0) { throw 'Combined observation test failed.' }
+            if (Test-Path -LiteralPath (Join-Path $root 'missing')) { throw 'Unexpected creation.' }
+          } finally {
+            [IO.Directory]::Delete($root)
+          }
