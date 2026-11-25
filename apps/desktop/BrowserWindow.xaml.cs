@@ -46,6 +46,7 @@ public partial class BrowserWindow : Window
     private readonly int initialSelected;
     private readonly int initialPinnedCount;
     private readonly TabItem? adopted;
+    private readonly BrowserWindow? adoptionSource;
     private bool closing;
     private bool restoring = true;
     private bool smokeRun;
@@ -72,6 +73,7 @@ public partial class BrowserWindow : Window
         initialSelected = selected;
         initialPinnedCount = pinnedCount;
         adopted = adopt;
+        adoptionSource = (adopt?.Tag as BrowserTab)?.Owner;
         session.Windows.Add(this);
         InitializeComponent();
         if (session.IsPrivate)
@@ -141,10 +143,14 @@ public partial class BrowserWindow : Window
             if (closing || session.IsEnding || session.EngineLost) return;
             await session.StartProxyMonitorAsync();
             UpdateNetworkIndicator();
-            if (closing) return;
+            if (closing || session.IsEnding || session.EngineLost) return;
             if (adopted is not null)
             {
-                AttachTab(adopted, 0);
+                if (adoptionSource is null || !adoptionSource.TransferTabTo(adopted, this, 0, initializingTarget: true))
+                {
+                    Close();
+                    return;
+                }
             }
             else
             {
@@ -166,6 +172,7 @@ public partial class BrowserWindow : Window
                     foreach (var other in others) OpenWindow(other.Tabs, other.Selected, cascade: true, pinnedCount: other.PinnedCount);
             }
             restoring = false;
+            if (adopted is not null) SaveSession();
             Status.Text = "준비";
             if (startupAddress is { } external)
             {
@@ -176,7 +183,11 @@ public partial class BrowserWindow : Window
         }
         catch (Exception)
         {
-            if (!closing) Status.Text = "테스트 엔진을 시작하지 못했습니다. WebView2 런타임과 프로필 위치를 확인하세요.";
+            if (!closing)
+            {
+                if (adopted is not null && !Tabs.Items.Contains(adopted)) { Close(); return; }
+                Status.Text = "테스트 엔진을 시작하지 못했습니다. WebView2 런타임과 프로필 위치를 확인하세요.";
+            }
         }
     }
 
