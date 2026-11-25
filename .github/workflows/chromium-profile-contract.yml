@@ -7,6 +7,9 @@ on:
       - 'chromium/dev/broker-status-wire.h'
       - 'chromium/dev/broker-identity-win.h'
       - 'chromium/dev/config-acl-win.h'
+      - 'chromium/dev/config-path-win.h'
+      - 'tests/chromium/config-path-win.test.cc'
+      - 'tests/chromium/config-path-win.test.ps1'
       - 'tests/chromium/config-acl-win.test.cc'
       - 'chromium/dev/synthetic-pipe-transport-win.h'
       - 'tests/chromium/synthetic-pipe-transport-win.test.cc'
@@ -194,3 +197,16 @@ jobs:
             if (Test-Path -LiteralPath $file) { [IO.File]::Delete($file) }
             [IO.Directory]::Delete($root)
           }
+      - name: Compile and test standalone config path observation
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-config-path.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-config-path.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\config-path-win.test.cc advapi32.lib' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Config path compile failed.' }
+          & .\tests\chromium\config-path-win.test.ps1 -Executable $exe
