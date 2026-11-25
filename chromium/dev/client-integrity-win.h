@@ -7,14 +7,14 @@
 namespace veil::chromium_dev {
 enum class ClientIntegrityObservation {
   kRejected, kUnavailable, kUnsafePath, kHashRejected, kHashMismatch,
-  kSignatureRejected, kChanged, kObservationsOnly,
+  kSignatureRejected, kChanged, kObservationsOnly, kSizeMismatch,
 };
 
 template <class SignatureObserver>
 ClientIntegrityObservation ObserveSyntheticClientIntegrityWith(
     std::wstring_view expected_root, std::wstring_view selected_root,
     std::string_view expected_hash, std::string* observed,
-    SignatureObserver signature) {
+    SignatureObserver signature, std::uint64_t expected_bytes = 0) {
   if (!observed || !ValidClientHash(expected_hash) ||
       Evaluate(expected_root, selected_root, false, false) !=
           PathDecision::kLexicalMatchOnly) return ClientIntegrityObservation::kRejected;
@@ -32,6 +32,10 @@ ClientIntegrityObservation ObserveSyntheticClientIntegrityWith(
   BY_HANDLE_FILE_INFORMATION before{}, after{};
   if (!GetFileInformationByHandle(file.get(), &before))
     return ClientIntegrityObservation::kUnavailable;
+  const auto observed_size = (static_cast<std::uint64_t>(before.nFileSizeHigh) << 32) |
+      static_cast<std::uint64_t>(before.nFileSizeLow);
+  if (expected_bytes && observed_size != expected_bytes)
+    return ClientIntegrityObservation::kSizeMismatch;
   auto unchanged = [&] {
     return GetFileInformationByHandle(file.get(), &after) &&
         client_hash_detail::SameFileInfo(before, after) &&
