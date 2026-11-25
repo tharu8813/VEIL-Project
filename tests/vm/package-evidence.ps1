@@ -9,7 +9,8 @@ $script:VeilPackageSignChecks = @('package-sign', 'package-tamper-valid', 'packa
 $script:VeilPackageManualChecks = @('installed-unlock', 'installed-relock', 'installed-refuses')
 $script:VeilPackageInstallChecks = @('package-install') + $script:VeilPackageManualChecks
 $script:VeilPackageUpdateChecks = @('package-update', 'package-same-version', 'package-lower-version',
-    'package-registration-kept', 'package-interrupt-pre-commit', 'package-interrupt-post-commit')
+    'package-registration-kept', 'package-interrupt-backup-written', 'package-interrupt-old-tree-moved',
+    'package-interrupt-new-tree-published', 'package-interrupt-pre-commit', 'package-interrupt-post-commit')
 $script:VeilPackageRequiredChecks = $script:VeilPackageSignChecks + $script:VeilPackageInstallChecks +
     $script:VeilPackageUpdateChecks + @('package-remove')
 

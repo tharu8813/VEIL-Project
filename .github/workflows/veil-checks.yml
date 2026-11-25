@@ -80,7 +80,9 @@ jobs:
 
       - name: Check VM package evidence completeness
         shell: powershell
-        run: .\tests\install\package-evidence.test.ps1
+        run: |
+          .\tests\install\package-evidence.test.ps1
+          .\tests\install\package-checkpoints.test.ps1
 
       - name: Test BitLocker recovery flow with a fake provider
         shell: powershell
