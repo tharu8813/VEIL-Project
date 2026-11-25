@@ -66,6 +66,10 @@ PR #113 CI [45621410099](https://github.com/tharu8813/VEIL-Project/actions/runs/
 
 PR #114 CI [45622662168](https://github.com/tharu8813/VEIL-Project/actions/runs/45622662168): 후보/태그 합성 테스트 6/6 PASS, 기존 빌드 및 Rust/보안 검사 PASS. 호스팅 Windows 여유 73 GiB 관측으로 전체 빌드는 일반 CI에서 실행하지 않는다. 공식 depot_tools Gitiles에서 2960e876ad78502c616e27e1a89b9e01ca77ca7e (2026-11-23) 후보 관측. candidate.json에 고정 후보를 추가하며 임의 override 거부. 공식 canonical Git tag 교차검증과 depot_tools commit object 확인은 별도 읽기 전용 CI에서 실행하도록 준비했다(결과 NOT RUN). Sync 기본 계획 출력/불일치 거부 시험을 Windows CI에 추가한다. sync에서 pre-DEPS hooks도 명시적으로 차단한다. 실제 사용자 Windows 환경, 소스 sync, toolchain 호환성, build, sandbox NOT RUN. C0 IN PROGRESS / C1 준비 유지.
 
+## C1 공식 원격 검증 및 빌드 실행 준비 (2026-11-25)
+
+PR #115 [원격 검증 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45623627714) 로그: canonical Chromium tag와 후보 SHA 일치(REMOTE_MATCH_ONLY), depot_tools commit object 2960e876ad78502c616e27e1a89b9e01ca77ca7e 일치. [기존 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45623627505): 합성 테스트 6/6 및 plan-only/override 차단 PASS. 실제 Windows 머신/호환성/DEPS 전체 검증/동기화/빌드/런타임/샌드박스는 NOT RUN. 새 Build-Upstream.ps1은 기본 plan-only, 명시적 hook 승인, pin/origin/작업 트리 확인, 별도 GN 출력, 로컬 로그/실행 파일 SHA 증거를 제공한다. plan 테스트는 신규 CI 전 NOT RUN. 출력 관측은 제품 출시/보안 승인이 아니다. C0 IN PROGRESS / C1 준비 유지.
+
 ## C0 증거 및 다음 행동
 
 - [x] 전환 방향 문서화(이 PR에서 제안), 기존 보안 요구 유지.
@@ -73,7 +77,8 @@ PR #114 CI [45622662168](https://github.com/tharu8813/VEIL-Project/actions/runs/
 - [x] 독립 개발 브랜치 사용, 기존 소스/테스트 이동·삭제 없음.
 - [x] PR #113 merge-test checkout에서 inventory 키워드 조사 실행 및 결과 검토. 전체 호출 그래프는 NOT RUN.
 - [ ] Windows 빌드 머신, SDK/VS, Git/depot_tools, NTFS/공간 실제 확인 (NOT RUN).
-- [ ] Stable 후보 tag/commit 및 toolchain 확인 (NOT RUN; C1 pin 선정 전).
+- [x] Stable 후보 canonical tag/commit 및 depot_tools commit object 교차검증 (PR #115).
+- [ ] 선택된 소스와 toolchain 호환성 및 전체 DEPS 검토 (NOT RUN).
 - [ ] 이 PR 검토/CI 및 이후 자동 개발 작업의 로드맵 연결 확인 (미완료).
 - [ ] C1 진입 승인 및 원본 빌드 (NOT RUN).
 
