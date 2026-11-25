@@ -1,0 +1,26 @@
+name: Chromium UI name candidate
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/chromium/generate-ui-name-candidate.py'
+      - 'tests/chromium/ui-name-candidate.test.py'
+      - '.github/workflows/chromium-ui-name-candidate.yml'
+      - 'chromium/candidate.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  review-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test scoped rewrite
+        run: python3 tests/chromium/ui-name-candidate.test.py
+      - name: Generate review-only patch against exact upstream source
+        run: python3 scripts/chromium/generate-ui-name-candidate.py
