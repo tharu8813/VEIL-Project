@@ -11,7 +11,8 @@ int wmain(int argc, wchar_t** argv) {
   CutoverJournalRecord record{std::string(32, 'a'), J::kPrepared,
       {L"C:\\Program Files\\VEIL\\Desktop\\Veil.Desktop.exe", std::string(64, 'b')},
       {L"C:\\Program Files\\VEIL\\Chromium\\client-fixture.exe", std::string(64, 'c')},
-      std::string(64, 'd'), std::string(64, 'e')};
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"};
   CutoverJournalRecord out;
   out.transaction_id = "sentinel";
   auto policy = [](HANDLE file, bool) { return GetFileType(file) == FILE_TYPE_DISK; };
@@ -56,6 +57,16 @@ int wmain(int argc, wchar_t** argv) {
   if (read() != R::kEmpty || out.transaction_id != "sentinel" ||
       ObserveSyntheticJournalHistoryWith(root, root + L"\\wrong", &out, policy) != R::kRejected)
     return 3;
+  const auto registration = root + L"\\registration-fixture.json";
+  const auto backup = root + L"\\registration-backup.json";
+  auto replace_bytes = [](const std::wstring& path, std::string_view bytes) {
+    config_path_detail::Handle file(CreateFileW(path.c_str(), GENERIC_WRITE, 0,
+        nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+    DWORD count = 0;
+    return file.valid() && WriteFile(file.get(), bytes.data(), static_cast<DWORD>(bytes.size()),
+        &count, nullptr) && count == static_cast<DWORD>(bytes.size());
+  };
+  if (!replace_bytes(registration, "abc")) return 27;
   auto next = record;
   next.state = J::kRegistrationReplaced;
   if (publish(next) != R::kConflict) return 4;
@@ -63,15 +74,34 @@ int wmain(int argc, wchar_t** argv) {
     SyntheticJournalSession<decltype(policy)> session(root, root, policy);
     if (session.status() != R::kLeaseOnly ||
         session.Read(&out) != R::kEmpty || out.transaction_id != "sentinel" ||
+        session.VerifyRegistrationArtifacts() != R::kEmpty) return 28;
+    auto wrong_backup = record;
+    wrong_backup.backup_sha256[0] = 'f';
+    if (session.CreateRegistrationBackup(wrong_backup) != R::kDigestMismatch ||
+        session.CreateRegistrationBackup(record) != R::kBackupOnly ||
+        session.CreateRegistrationBackup(record) != R::kConflict ||
         session.Publish(record) != R::kPublishedOnly ||
         session.Read(&out) != R::kHistoryOnly || out.state != J::kPrepared ||
         out.transaction_id != record.transaction_id ||
-        session.Publish(record) != R::kConflict) return 22;
+        session.Publish(record) != R::kConflict ||
+        session.VerifyRegistrationArtifacts() != R::kLegacyBytesOnly) return 22;
+    if (!replace_bytes(registration, "hello") ||
+        session.VerifyRegistrationArtifacts() != R::kTargetBytesOnly ||
+        !replace_bytes(registration, "abd") ||
+        session.VerifyRegistrationArtifacts() != R::kDigestMismatch ||
+        !replace_bytes(registration, "abc")) return 29;
+    if (!replace_bytes(backup, "abd") ||
+        session.VerifyRegistrationArtifacts() != R::kDigestMismatch ||
+        !replace_bytes(backup, "abc") ||
+        session.VerifyRegistrationArtifacts() != R::kLegacyBytesOnly) return 30;
+    std::cout << "PASS: same-handle fixture backup copy and digest binding, current legacy/target/mismatch classification, tampered backup refusal\n";
     // Competing API calls must fail even between session operations.
     if (read() != R::kBusy || publish(next) != R::kBusy ||
         out.state != J::kPrepared) return 23;
     SyntheticJournalSession<decltype(policy)> competitor(root, root, policy);
     if (competitor.status() != R::kBusy || competitor.Read(&out) != R::kBusy ||
+        competitor.VerifyRegistrationArtifacts() != R::kBusy ||
+        competitor.CreateRegistrationBackup(record) != R::kBusy ||
         competitor.Publish(next) != R::kBusy) return 24;
     std::cout << "PASS: retained journal session excludes competing calls between stages\n";
   }

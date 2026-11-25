@@ -17,7 +17,7 @@ try {
     & $Executable $root normal
     if ($LASTEXITCODE -ne 0) { throw "Journal storage fixture failed: $LASTEXITCODE" }
 } finally {
-    foreach ($name in @('prepared.json','registration-replaced.json','activation-committed.json','record.pending','alias.json','maintenance.lock','alias-lock')) {
+    foreach ($name in @('prepared.json','registration-replaced.json','activation-committed.json','record.pending','alias.json','maintenance.lock','alias-lock','registration-fixture.json','registration-backup.json','backup.pending')) {
         $file = Join-Path $root $name
         if (Test-Path -LiteralPath $file) { [IO.File]::Delete($file) }
     }
