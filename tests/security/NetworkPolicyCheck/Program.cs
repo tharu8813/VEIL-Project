@@ -107,3 +107,63 @@ try
 }
 finally { Directory.Delete(lab, recursive: true); }
 Console.WriteLine("PASS: DoH template validation and engine state publication");
+
+
+// The socket guard must fail before dialing any endpoint other than the configured proxy.
+using (var guardDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+{
+    bool directRefused = false;
+    try
+    {
+        using var stream = await NetworkPolicy.ConnectProxyAsync(settings.ProxyUri!,
+            new DnsEndPoint("127.0.0.1", originPort), guardDeadline.Token);
+    }
+    catch (HttpRequestException) { directRefused = true; }
+    Check(directRefused && !origin.Pending(), "TCP guard did not refuse a direct destination");
+}
+
+// A real SOCKS5 negotiation on a synthetic loopback proxy. No public origin is contacted.
+using var socksDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+using var socks = new TcpListener(IPAddress.Loopback, 0);
+socks.Start();
+int socksPort = ((IPEndPoint)socks.LocalEndpoint).Port;
+var socksSettings = new NetworkSettings(NetworkMode.Proxy, "socks5", "127.0.0.1", socksPort);
+using var socksHttp = new HttpClient(NetworkPolicy.Handler(socksSettings));
+const string syntheticHost = "veil-socks-dns.invalid";
+var socksTarget = new Uri($"http://{syntheticHost}:{originPort}/synthetic");
+var socksPending = socksHttp.GetStringAsync(socksTarget, socksDeadline.Token);
+using (var peer = await socks.AcceptTcpClientAsync(socksDeadline.Token))
+{
+    using var stream = peer.GetStream();
+    byte[] hello = new byte[2];
+    await stream.ReadExactlyAsync(hello, socksDeadline.Token);
+    Check(hello[0] == 5 && hello[1] > 0, "invalid SOCKS greeting");
+    byte[] methods = new byte[hello[1]];
+    await stream.ReadExactlyAsync(methods, socksDeadline.Token);
+    Check(methods.SequenceEqual(new byte[] { 0 }), "unexpected SOCKS authentication method");
+    await stream.WriteAsync(new byte[] { 5, 0 }, socksDeadline.Token);
+    byte[] request = new byte[5];
+    await stream.ReadExactlyAsync(request, socksDeadline.Token);
+    Check(request[0] == 5 && request[1] == 1 && request[2] == 0 && request[3] == 3 && request[4] > 0,
+        "SOCKS destination was not forwarded as a domain name");
+    byte[] name = new byte[request[4]];
+    byte[] port = new byte[2];
+    await stream.ReadExactlyAsync(name, socksDeadline.Token);
+    await stream.ReadExactlyAsync(port, socksDeadline.Token);
+    Check(Encoding.ASCII.GetString(name) == syntheticHost && (port[0] << 8 | port[1]) == originPort,
+        "SOCKS destination authority changed");
+    await stream.WriteAsync(new byte[] { 5, 0, 0, 1, 127, 0, 0, 1, 0, 0 }, socksDeadline.Token);
+    using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+    Check(await reader.ReadLineAsync(socksDeadline.Token) == "GET /synthetic HTTP/1.1", "invalid tunneled HTTP request");
+    while (await reader.ReadLineAsync(socksDeadline.Token) is { Length: > 0 }) { }
+    await stream.WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nsocks"u8.ToArray(), socksDeadline.Token);
+    await stream.FlushAsync(socksDeadline.Token);
+}
+Check(await socksPending == "socks" && !origin.Pending(), "SOCKS request did not remain on proxy");
+socks.Stop();
+using var socksFailing = new HttpClient(NetworkPolicy.Handler(socksSettings));
+bool socksRefused = false;
+try { _ = await socksFailing.GetStringAsync(target, socksDeadline.Token); }
+catch (HttpRequestException) { socksRefused = true; }
+Check(socksRefused && !origin.Pending(), "SOCKS proxy outage allowed direct fallback");
+Console.WriteLine("PASS: proxy socket boundary and SOCKS5 remote hostname forwarding");
