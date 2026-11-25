@@ -45,6 +45,30 @@ int main() {
       ClassifyValueResult(ERROR_SUCCESS) != PolicyValueObservation::kPresent ||
       ClassifyValueResult(ERROR_FILE_NOT_FOUND) != PolicyValueObservation::kAbsent)
     return 4;
+  // Exhaust all 3^4 outcomes, including simultaneous values and failures.
+  constexpr std::array<PolicyValueObservation, 3> outcomes{
+      PolicyValueObservation::kAbsent, PolicyValueObservation::kPresent,
+      PolicyValueObservation::kUnknown};
+  for (unsigned combination = 0; combination < 81; ++combination) {
+    unsigned code = combination;
+    std::array<PolicyValueObservation, 4> slots{};
+    bool present = false, unknown = false;
+    for (auto& slot : slots) {
+      slot = outcomes[code % 3];
+      code /= 3;
+      present |= slot == PolicyValueObservation::kPresent;
+      unknown |= slot == PolicyValueObservation::kUnknown;
+    }
+    unsigned calls = 0;
+    auto observer = [&](HKEY, REGSAM) {
+      if (calls >= slots.size()) return PolicyValueObservation::kUnknown;
+      return slots[calls++];
+    };
+    const auto expected = present ? PolicyObservation::kOverrideObserved
+        : unknown ? PolicyObservation::kUnknown : PolicyObservation::kNoValueObserved;
+    if (ObserveProfilePolicyWith(observer) != expected || calls != slots.size())
+      return 6;
+  }
   // Exercise the read-only native path without assuming the runner's state.
   auto observed = ObserveDevelopmentProfilePolicy();
   if (observed != PolicyObservation::kUnknown &&
