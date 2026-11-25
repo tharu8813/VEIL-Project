@@ -38,12 +38,14 @@ function Get-GitText([string]$Path,[string[]]$GitArgs) {
     if ($LASTEXITCODE -ne 0) { throw "Git check failed: $Path" }
     return $s.Trim()
 }
+. (Join-Path $PSScriptRoot 'Assert-BuildIndex.ps1')
 function Assert-Pins {
     foreach ($entry in @(@{path=$src;revision=$pin.revision;url=$pin.upstream},@{path=$depot;revision=$pin.depotToolsRevision;url=$pin.depotToolsUpstream})) {
         $top=Get-GitText $entry.path @('rev-parse','--show-toplevel')
         if (-not ([IO.Path]::GetFullPath($top).Equals([IO.Path]::GetFullPath($entry.path),[StringComparison]::OrdinalIgnoreCase))) { throw 'Unexpected Git checkout root.' }
         if ((Get-GitText $entry.path @('rev-parse','HEAD')) -cne $entry.revision) { throw 'Checkout revision mismatch.' }
         if ((Get-GitText $entry.path @('remote','get-url','origin')) -cne $entry.url) { throw 'Checkout origin mismatch.' }
+        Assert-VeilOrdinaryBuildIndex -Checkout $entry.path
         if (Get-GitText $entry.path @('status','--porcelain','--untracked-files=no')) { throw 'Tracked upstream files are modified.' }
     }
 }
