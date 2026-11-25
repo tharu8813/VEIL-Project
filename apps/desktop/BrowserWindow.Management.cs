@@ -7,6 +7,7 @@ namespace Veil.Desktop;
 public partial class BrowserWindow
 {
     private readonly HashSet<string> openingManagement = new(StringComparer.Ordinal);
+    private long managementFocusEpoch;
 
     internal static bool IsManagementUrl(string? url) => url is
         "veil://settings" or "veil://bookmarks" or "veil://history" or "veil://passwords" or "veil://vault" or "veil://downloads" or
@@ -130,9 +131,12 @@ public partial class BrowserWindow
             long epoch = tab.NavigationEpoch;
             bool ContextValid() => Active == tab && tab.ManagementSurface == page &&
                 tab.Url == route && tab.NavigationEpoch == epoch && CanUseTab(tab.Item) && SettingsReady() && IsActive;
+            long confirmedFocus = -1;
             page = dialog.TakePage(accepted =>
             {
-                if (ContextValid()) completion.TrySetResult(accepted);
+                if (completion.Task.IsCompleted || !ContextValid()) return;
+                confirmedFocus = managementFocusEpoch;
+                completion.TrySetResult(accepted);
             });
             tab.ManagementSurface = page;
             tab.CancelManagement = () => completion.TrySetResult(false);
@@ -141,17 +145,19 @@ public partial class BrowserWindow
             RefreshChrome();
             bool accepted = await completion.Task;
             // Cancel if the page was detached or left between the native click and its continuation.
-            accepted = accepted && ContextValid();
+            accepted = accepted && ContextValid() && confirmedFocus == managementFocusEpoch;
             if (tab.ManagementSurface == page)
             {
                 ClearManagement(tab);
                 if (SettingsReady() && Active == tab && Tabs.Items.Contains(tab.Item))
                 {
-                    if (previous is not null && previous != tab && previous.Owner == this &&
-                        Tabs.Items.Contains(previous.Item) && !closingTabs.Contains(previous.Item))
+                    if (previous is not null && previous != tab && CanUseTab(previous.Item))
+                    {
                         Tabs.SelectedItem = previous.Item;
-                    // The user's confirmed action must not wait for a visual close animation.
-                    CloseTab(tab.Item);
+                        // The user's confirmed action must not wait for a visual close animation.
+                        CloseTab(tab.Item);
+                    }
+                    else RefreshChrome(); // Keep a harmless landing when no previous live tab exists.
                 }
                 else if (SettingsReady()) RefreshChrome();
             }
