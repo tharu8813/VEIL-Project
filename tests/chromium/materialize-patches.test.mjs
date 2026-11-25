@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {materialize} from '../../scripts/chromium/materialize-patches.mjs';
+import {materialize,verifyMaterialized} from '../../scripts/chromium/materialize-patches.mjs';
 const origin='https://example.invalid/chromium.git';
 function fixture(t){
   const dir=mkdtempSync(join(tmpdir(),'veil-materialize-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
@@ -80,3 +80,26 @@ for(const flag of ['--assume-unchanged','--skip-worktree']){
     });
   }
 }
+
+test('recheck accepts only the exact staged patch tree',t=>{
+  const f=fixture(t);
+  assert.throws(()=>verifyMaterialized(f),/tree mismatch/);
+  const applied=materialize({...f,execute:true});
+  const result=verifyMaterialized(f);
+  assert.equal(result.status,'PATCHED_TREE_RECHECKED_ONLY');
+  assert.equal(result.expectedTree,applied.expectedTree);
+  assert.equal(result.releaseApproved,false);
+  assert.equal(result.build,'NOT RUN');
+  writeFileSync(join(f.target,'a.txt'),'different\n');
+  assert.throws(()=>verifyMaterialized(f),/Unstaged changes/);
+  f.git(f.target,'add','a.txt');
+  assert.throws(()=>verifyMaterialized(f),/tree mismatch/);
+});
+test('recheck refuses untracked files and hidden index flags',t=>{
+  const f=fixture(t);materialize({...f,execute:true});
+  writeFileSync(join(f.target,'extra.txt'),'unexpected');
+  assert.throws(()=>verifyMaterialized(f),/Untracked files/);
+  rmSync(join(f.target,'extra.txt'));
+  f.git(f.target,'update-index','--assume-unchanged','a.txt');
+  assert.throws(()=>verifyMaterialized(f),/index entry refused/);
+});
