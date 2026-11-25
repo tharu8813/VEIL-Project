@@ -15,6 +15,7 @@ function Reset-FakeRecovery {
     $script:recoveryPresent = $false
     $script:extraPassphrase = $false
     $script:failLock = $false
+    $script:autoUnlock = $false
     $script:reportOtherVolume = $false
     $script:prompts = 0
     $script:generated = 0
@@ -71,7 +72,7 @@ function Invoke-CimMethod {
         'GetLockStatus' { $result.LockStatus = [int]$script:locked }
         'GetConversionStatus' { $result.ConversionStatus = 1 }
         'GetProtectionStatus' { $result.ProtectionStatus = 1 }
-        'IsAutoUnlockEnabled' { $result.IsAutoUnlockEnabled = $false }
+        'IsAutoUnlockEnabled' { $result.IsAutoUnlockEnabled = $script:autoUnlock }
         'GetKeyProtectors' {
             if ($Arguments.KeyProtectorType -eq 8) {
                 $result.VolumeKeyProtectorID = @($script:primary.ToString('B'))
@@ -178,3 +179,18 @@ if (-not $attached -or $locked -or ($calls -contains 'UnlockWithNumericalPasswor
     throw 'Lock failure did not stop the test without forced detach.'
 }
 Write-Output 'PASS failure to lock blocks registration and leaves the image for safe cleanup'
+
+foreach ($unsafe in @($true, $null, 0, 'False')) {
+    Reset-FakeRecovery
+    $script:autoUnlock = $unsafe
+    $secretInputs.Enqueue($normalPassword)
+    Assert-Rejected { Register-VeilRecoveryBackup $image $volumePath $primary } 'without automatic unlock'
+    if ($attached -or -not $locked -or $generated -ne 0 -or $shown -ne 0) { throw 'Unsafe automatic unlock state reached registration.' }
+    Reset-FakeRecovery
+    $script:autoUnlock = $unsafe
+    $script:recoveryPresent = $true
+    $secretInputs.Enqueue($recoveryPassword)
+    Assert-Rejected { Test-VeilRecoveryBackup $image $volumePath $recovery } 'without automatic unlock'
+    if ($attached -or -not $locked) { throw 'Unsafe recovery drill did not relock and detach.' }
+}
+Write-Output 'PASS enrollment and recovery drill refuse enabled or unknown automatic unlock state'

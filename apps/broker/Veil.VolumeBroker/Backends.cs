@@ -92,6 +92,15 @@ internal sealed class WindowsBitLockerBackend(BrokerConfig config) : IBitLockerB
             $conversion = $v | Invoke-CimMethod -MethodName GetConversionStatus
             $ids = $v | Invoke-CimMethod -MethodName GetKeyProtectors -Arguments @{ KeyProtectorType = [uint32]{{(config.RecoveryProtectorId is null ? 0 : 8)}} }
             if ($protection.ReturnValue -ne 0 -or $conversion.ReturnValue -ne 0 -or $ids.ReturnValue -ne 0) { throw 'BitLocker protection verification failed.' }
+            # Keep lock status available even if the auto-unlock query fails:
+            # unknown policy is never a valid protection attestation.
+            $autoUnlockDisabled = $false
+            try {
+                $automatic = $v | Invoke-CimMethod -MethodName IsAutoUnlockEnabled
+                $autoUnlockDisabled = ($automatic.ReturnValue -eq 0 -and
+                    $automatic.IsAutoUnlockEnabled -is [bool] -and -not $automatic.IsAutoUnlockEnabled)
+            }
+            catch { $autoUnlockDisabled = $false }
             $recovery = @()
             if ({{(config.RecoveryProtectorId is not null ? "$true" : "$false")}}) {
                 try {
@@ -100,7 +109,7 @@ internal sealed class WindowsBitLockerBackend(BrokerConfig config) : IBitLockerB
                 }
                 catch { $recovery = @() }
             }
-            @{ attached = $true; volumeGuid = $guid; conversion = $conversion.ConversionStatus; protection = $protection.ProtectionStatus; lock = 0; protectors = @($ids.VolumeKeyProtectorID); recoveryProtectors = $recovery } | ConvertTo-Json -Compress
+            @{ attached = $true; volumeGuid = $guid; conversion = $conversion.ConversionStatus; protection = $protection.ProtectionStatus; autoUnlockDisabled = $autoUnlockDisabled; lock = 0; protectors = @($ids.VolumeKeyProtectorID); recoveryProtectors = $recovery } | ConvertTo-Json -Compress
             """, null);
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
@@ -113,8 +122,12 @@ internal sealed class WindowsBitLockerBackend(BrokerConfig config) : IBitLockerB
             protector &= ids.ValueKind == JsonValueKind.Array && ids.GetArrayLength() == 1 &&
                 root.TryGetProperty("recoveryProtectors", out var numeric) && numeric.ValueKind == JsonValueKind.Array &&
                 numeric.EnumerateArray().Any(id => SameProtector(id, recovery));
+        // ProtectionOn is an attestation of the runtime protection policy, not
+        // just the raw WMI flag. Missing/failed auto-unlock evidence fails closed.
+        bool autoUnlockDisabled = root.TryGetProperty("autoUnlockDisabled", out var automatic) &&
+            automatic.ValueKind == JsonValueKind.True;
         // ConversionStatus 1 = FullyEncrypted, ProtectionStatus 1 = On, LockStatus 0 = Unlocked.
-        return new(true, guid, Number("conversion") == 1, Number("protection") == 1, Number("lock") == 0, protector,
+        return new(true, guid, Number("conversion") == 1, Number("protection") == 1 && autoUnlockDisabled, Number("lock") == 0, protector,
             root.TryGetProperty("readyToUnlock", out var ready) && ready.GetBoolean());
     }
 
