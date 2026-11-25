@@ -331,3 +331,32 @@ foreach (var selection in new SiteDataSelection[] {
 })
     Check(!SiteDataPolicy.ValidSelection(selection), "ambiguous site-data scope accepted");
 Console.WriteLine("PASS: exclusive site-data deletion and inspection scopes");
+
+
+// A failed diagnostic sink must not interrupt a lock/unlock operation's caller.
+var previousOutput = Console.Out;
+string logRoot = Path.Combine(Path.GetTempPath(), "veil-log-test-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(logRoot);
+try
+{
+    using var capture = new StringWriter();
+    Console.SetOut(capture);
+    new Veil.VolumeBroker.BrokerLog(null, console: false).Write("service-test");
+    Check(capture.ToString().Length == 0, "production service unexpectedly wrote diagnostics");
+    new Veil.VolumeBroker.BrokerLog(Path.Combine(logRoot, "missing", "log.jsonl")).Write("file-error", new { code = "synthetic" });
+    Check(capture.ToString().Contains("file-error"), "file sink failure blocked console diagnostics");
+
+    using var closedOutput = new StringWriter();
+    closedOutput.Dispose();
+    Console.SetOut(closedOutput);
+    string file = Path.Combine(logRoot, "events.jsonl");
+    new Veil.VolumeBroker.BrokerLog(file).Write("console-error", new { code = "synthetic" });
+    Check(File.ReadAllText(file).Contains("console-error"), "console failure blocked file diagnostics");
+    new Veil.VolumeBroker.BrokerLog(Path.Combine(logRoot, "missing", "log.jsonl")).Write("both-error");
+}
+finally
+{
+    Console.SetOut(previousOutput);
+    Directory.Delete(logRoot, recursive: true);
+}
+Console.WriteLine("PASS: broker diagnostic sink failures do not escape and service output is disabled");

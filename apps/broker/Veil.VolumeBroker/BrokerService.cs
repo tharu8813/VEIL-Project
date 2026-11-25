@@ -47,7 +47,7 @@ internal sealed class BrokerService
             using var identity = WindowsIdentity.GetCurrent();
             if (!identity.IsSystem) throw new UnauthorizedAccessException("The broker service requires LocalSystem.");
             var config = BrokerConfig.Load(BrokerConfig.DefaultPath, development: false);
-            var broker = new Broker(config, new WindowsBitLockerBackend(config), new BrokerLog(null));
+            var broker = new Broker(config, new WindowsBitLockerBackend(config), new BrokerLog(null, console: false));
             bool ownsVolume = false;
             try
             {

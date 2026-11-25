@@ -22,7 +22,7 @@ try
 catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
     System.Text.Json.JsonException or ArgumentException)
 {
-    Console.Error.WriteLine($"Configuration refused: {error.GetType().Name}: {error.Message}");
+    Console.Error.WriteLine($"Configuration refused: {error.GetType().Name}");
     return 3;
 }
 

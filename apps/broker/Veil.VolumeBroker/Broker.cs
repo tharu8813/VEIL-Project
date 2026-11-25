@@ -1,26 +1,8 @@
 using System.IO.Pipes;
 using Microsoft.Win32.SafeHandles;
 using System.Security.Cryptography;
-using System.Text.Json;
 
 namespace Veil.VolumeBroker;
-
-/// <summary>Event log that records command names, results and process IDs only — never request bytes.</summary>
-internal sealed class BrokerLog(string? path)
-{
-    private readonly object gate = new();
-
-    internal void Write(string name, object? fields = null)
-    {
-        string line = JsonSerializer.Serialize(new { time = DateTimeOffset.UtcNow, @event = name, fields });
-        lock (gate)
-        {
-            Console.Out.WriteLine(line);
-            Console.Out.Flush();
-            if (path is not null) File.AppendAllText(path, line + Environment.NewLine);
-        }
-    }
-}
 
 internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, BrokerLog log)
 {
