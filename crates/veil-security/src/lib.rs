@@ -6,7 +6,7 @@ pub use age::secrecy::SecretString;
 use age::{Decryptor, Encryptor, scrypt, x25519};
 use std::cell::Cell;
 use std::fs::File;
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use zeroize::Zeroizing;
 
@@ -85,16 +85,33 @@ impl Keyring {
     }
 
     /// Decrypts an object to a new plaintext file. The file appears at `destination` only after the
-    /// whole object authenticated; on any failure nothing is left behind. The destination must not exist.
+    /// whole object authenticated. Normal errors clean staging; abrupt termination can leave plaintext
+    /// staging in the selected directory. The destination must not exist.
     pub fn export_new(&self, purpose: Purpose, object: &Path, destination: &Path) -> io::Result<u64> {
-        let mut total = 0;
-        self.read_object(purpose, object, |plaintext| {
+        require_new_export_destination(destination)?;
+        // Authenticate before opening a plaintext staging file. Keep the same
+        // handle for the second, independently authenticated streaming pass.
+        #[cfg(windows)]
+        let mut source = {
+            use std::os::windows::fs::OpenOptionsExt;
+            // FILE_SHARE_READ only: refuse other writers and deletion while exporting.
+            std::fs::OpenOptions::new().read(true).share_mode(1).open(object)?
+        };
+        #[cfg(not(windows))]
+        let mut source = File::open(object)?;
+        let verified = self.read_object_from(purpose, &mut source, |plaintext| {
+            transfer(plaintext, &mut io::sink())
+        })?;
+        source.seek(SeekFrom::Start(0))?;
+        self.read_object_from(purpose, &mut source, |plaintext| {
             publish_new_plain(destination, |staging| {
-                total = transfer(plaintext, staging)?;
+                if transfer(plaintext, staging)? != verified {
+                    return Err(invalid("Vault object changed during export"));
+                }
                 Ok(())
             })
         })?;
-        Ok(total)
+        Ok(verified)
     }
 
     /// Reads a complete, authenticated envelope before returning usable keys.
@@ -318,8 +335,19 @@ fn publish_replace(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>)
     Ok(())
 }
 
+fn require_new_export_destination(path: &Path) -> io::Result<()> {
+    // symlink_metadata also detects a dangling symbolic link.
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Err(io::Error::new(io::ErrorKind::AlreadyExists, "Export destination exists")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 /// Like `publish_new`, but for exported plaintext: the staging name does not claim to be ciphertext.
 fn publish_new_plain(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
+    // Repeat the collision check after authentication and keep atomic no-clobber publication.
+    require_new_export_destination(path)?;
     let parent = path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -341,4 +369,83 @@ fn invalid(message: &'static str) -> io::Error {
 
 fn decryption_error(_: age::DecryptError) -> io::Error {
     invalid("Cannot authenticate or decode age data")
+}
+
+#[cfg(test)]
+mod export_publication_tests {
+    use super::*;
+
+    #[test]
+    fn corrupt_object_is_rejected_before_staging_even_with_missing_destination_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.veil");
+        let keys = Keyring::generate();
+        let payload = vec![0x5a; BUFFER_SIZE * 3];
+        keys.seal_new(Purpose::Download, &source, &payload[..]).unwrap();
+        let destination = dir.path().join("valid.bin");
+        assert_eq!(keys.export_new(Purpose::Download, &source, &destination).unwrap(), payload.len() as u64);
+        assert_eq!(std::fs::read(&destination).unwrap(), payload);
+        let mut ciphertext = std::fs::read(&source).unwrap();
+        *ciphertext.last_mut().unwrap() ^= 1;
+        std::fs::write(&source, ciphertext).unwrap();
+        let expected = keys.verify(Purpose::Download, &source).unwrap_err().kind();
+        let missing_parent = dir.path().join("absent").join("export.bin");
+        let actual = keys.export_new(Purpose::Download, &source, &missing_parent).unwrap_err().kind();
+        assert_eq!(actual, expected);
+        assert_ne!(actual, io::ErrorKind::NotFound);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn export_refuses_source_with_an_existing_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.veil");
+        let keys = Keyring::generate();
+        keys.seal_new(Purpose::Download, &source, &b"synthetic"[..]).unwrap();
+        let writer = std::fs::OpenOptions::new().write(true).open(&source).unwrap();
+        let destination = dir.path().join("export.bin");
+        assert!(keys.export_new(Purpose::Download, &source, &destination).is_err());
+        assert!(!destination.exists());
+        drop(writer);
+        assert_eq!(keys.export_new(Purpose::Download, &source, &destination).unwrap(), 9);
+    }
+
+    #[test]
+    fn known_collision_does_not_start_plaintext_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("existing.bin");
+        std::fs::write(&destination, b"original").unwrap();
+        let error = publish_new_plain(&destination, |_| panic!("plaintext writer must not run")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        let error = publish_new_plain(dir.path(), |_| panic!("directory collision must not start writing")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn concurrent_collision_preserves_destination_and_removes_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("race.bin");
+        let error = publish_new_plain(&destination, |staging| {
+            staging.write_all(b"synthetic plaintext")?;
+            std::fs::write(&destination, b"concurrent file")
+        }).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"concurrent file");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn normal_write_failure_removes_plaintext_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("failed.bin");
+        let error = publish_new_plain(&destination, |staging| {
+            staging.write_all(b"synthetic plaintext")?;
+            Err(invalid("synthetic late authentication failure"))
+        }).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
 }
