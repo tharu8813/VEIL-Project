@@ -11,13 +11,16 @@
 namespace veil::chromium_dev {
 enum class JournalStorageObservation {
   kRejected, kUnavailable, kUnsafe, kPending, kInvalidHistory, kConflict,
-  kEmpty, kHistoryOnly, kPublishedOnly, kBusy, kLeaseOnly,
+  kEmpty, kHistoryOnly, kPublishedOnly, kBusy, kLeaseOnly, kBackupOnly, kLegacyBytesOnly, kTargetBytesOnly, kDigestMismatch,
 };
 namespace journal_storage_detail {
 inline constexpr std::array<std::wstring_view, 3> names{
     L"prepared.json", L"registration-replaced.json", L"activation-committed.json"};
 inline constexpr std::wstring_view pending = L"record.pending";
 inline constexpr std::wstring_view lock_name = L"maintenance.lock";
+inline constexpr std::wstring_view registration_name = L"registration-fixture.json";
+inline constexpr std::wstring_view backup_name = L"registration-backup.json";
+inline constexpr std::wstring_view backup_pending = L"backup.pending";
 inline bool FixtureRoot(std::wstring_view expected, std::wstring_view selected) {
   if (Evaluate(expected, selected, false, false) != PathDecision::kLexicalMatchOnly)
     return false;
@@ -93,6 +96,9 @@ JournalStorageObservation ReadHistory(const std::wstring& root, HANDLE parent,
   const auto pending_state = Exists(Path(root, pending));
   if (pending_state == Presence::kPresent) return R::kPending;
   if (pending_state != Presence::kAbsent) return R::kUnavailable;
+  const auto backup_pending_state = Exists(Path(root, backup_pending));
+  if (backup_pending_state == Presence::kPresent) return R::kPending;
+  if (backup_pending_state != Presence::kAbsent) return R::kUnavailable;
   bool gap = false, found = false;
   CutoverJournalRecord last;
   for (std::size_t i = 0; i < names.size(); ++i) {
@@ -128,7 +134,8 @@ JournalStorageObservation ReadHistory(const std::wstring& root, HANDLE parent,
   }
   if (ValidateDirectoryHandle(parent, root) != FilesystemObservation::kObservedOnly ||
       !policy(parent, true)) return R::kUnsafe;
-  if (Exists(Path(root, pending)) != Presence::kAbsent) return R::kPending;
+  if (Exists(Path(root, pending)) != Presence::kAbsent ||
+      Exists(Path(root, backup_pending)) != Presence::kAbsent) return R::kPending;
   if (!found) return R::kEmpty;
   *output = std::move(last);
   return R::kHistoryOnly;
@@ -145,6 +152,31 @@ inline bool RenameNoReplace(HANDLE file, const std::wstring& destination) {
   std::memcpy(rename->FileName, destination.data(), length);
   return SetFileInformationByHandle(file, FileRenameInfo, rename,
       static_cast<DWORD>(offset + length)) != FALSE;
+}
+// Bounded opaque fixture bytes. Check digest and content on the same handle;
+// no claim that these bytes form a valid broker registration or signed package.
+template <class Policy>
+bool ReadRegistrationBytes(HANDLE file, const std::wstring& path, Policy& policy,
+    std::string* bytes, std::string* digest) {
+  BY_HANDLE_FILE_INFORMATION before{}, after{};
+  LARGE_INTEGER size{}, start{};
+  std::string candidate, hash, second;
+  if (config_path_detail::ObserveFileShape(file, path) != ConfigPathObservation::kObservedOnly ||
+      !policy(file, false) || !GetFileInformationByHandle(file, &before) ||
+      !GetFileSizeEx(file, &size) || size.QuadPart <= 0 ||
+      size.QuadPart > config_path_detail::kConfigFixtureLimit ||
+      client_hash_detail::HashFixtureHandle(file, &hash) != ClientHashObservation::kMatchesOnly ||
+      !SetFilePointerEx(file, start, nullptr, FILE_BEGIN) ||
+      config_path_detail::ReadBoundedFixture(file, &candidate) !=
+          ConfigPathObservation::kContentObservedOnly ||
+      client_hash_detail::HashFixtureHandle(file, &second) != ClientHashObservation::kMatchesOnly ||
+      !SameClientHash(hash, second) || !GetFileInformationByHandle(file, &after) ||
+      !client_hash_detail::SameFileInfo(before, after) ||
+      config_path_detail::ObserveFileShape(file, path) != ConfigPathObservation::kObservedOnly ||
+      !policy(file, false)) return false;
+  *bytes = std::move(candidate);
+  *digest = std::move(hash);
+  return true;
 }
 inline bool NativePolicy(HANDLE handle, bool directory) {
   return ObservePayloadObjectPolicy(handle, directory) == PayloadObjectObservation::kObservedOnly;
@@ -184,6 +216,84 @@ class SyntheticJournalSession {
     if (!lease_.Recheck(root_, parent_->get(), policy_)) return R::kUnsafe;
     if (result == R::kHistoryOnly) *output = std::move(candidate);
     return result;
+  }
+  // Create a byte-for-byte legacy fixture backup before any journal record.
+  // The requested hash is bound to the proposed prepared record, not trusted
+  // independently; a later explicit observation binds it to stored history.
+  R CreateRegistrationBackup(const CutoverJournalRecord& prepared) {
+    using namespace journal_storage_detail;
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (!cutover_journal_detail::ValidRecord(prepared) ||
+        prepared.state != CutoverJournalState::kPrepared) return R::kRejected;
+    if (status_ != R::kLeaseOnly) return status_;
+    if (!lease_.Recheck(root_, parent_->get(), policy_)) return R::kUnsafe;
+    CutoverJournalRecord previous;
+    const auto history = ReadHistory(root_, parent_->get(), &previous, policy_);
+    if (history != R::kEmpty) return history == R::kHistoryOnly ? R::kConflict : history;
+    const auto source = Path(root_, registration_name);
+    const auto target = Path(root_, backup_name);
+    const auto temp = Path(root_, backup_pending);
+    if (!SafeDedicatedPath(source) || !SafeDedicatedPath(target) || !SafeDedicatedPath(temp))
+      return R::kRejected;
+    if (Exists(target) != Presence::kAbsent) return R::kConflict;
+    config_path_detail::Handle original(CreateFileW(source.c_str(), GENERIC_READ,
+        FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (!original.valid()) return R::kUnavailable;
+    std::string bytes, digest;
+    if (!ReadRegistrationBytes(original.get(), source, policy_, &bytes, &digest)) return R::kUnsafe;
+    if (!SameClientHash(digest, prepared.backup_sha256)) return R::kDigestMismatch;
+    config_path_detail::Handle backup(CreateFileW(temp.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE,
+        0, nullptr, CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH, nullptr));
+    if (!backup.valid()) return R::kConflict;
+    if (config_path_detail::ObserveFileShape(backup.get(), temp) != ConfigPathObservation::kObservedOnly ||
+        !policy_(backup.get(), false)) return R::kUnsafe;
+    DWORD written = 0;
+    const DWORD length = static_cast<DWORD>(bytes.size());
+    if (!WriteFile(backup.get(), bytes.data(), length, &written, nullptr) ||
+        written != length || !FlushFileBuffers(backup.get())) return R::kPending;
+    std::string reread, copied_hash, original_again, original_hash;
+    if (!ReadRegistrationBytes(backup.get(), temp, policy_, &reread, &copied_hash) ||
+        !ReadRegistrationBytes(original.get(), source, policy_, &original_again, &original_hash) ||
+        reread != bytes || original_again != bytes || !SameClientHash(digest, copied_hash) ||
+        !SameClientHash(digest, original_hash) ||
+        !lease_.Recheck(root_, parent_->get(), policy_)) return R::kPending;
+    if (!RenameNoReplace(backup.get(), target)) return R::kPending;
+    if (!FlushFileBuffers(backup.get()) ||
+        config_path_detail::ObserveFileShape(backup.get(), target) != ConfigPathObservation::kObservedOnly ||
+        !policy_(backup.get(), false) || !lease_.Recheck(root_, parent_->get(), policy_))
+      return R::kUnavailable;
+    return R::kBackupOnly;
+  }
+  // Observe stored history and both files under the same cooperative lease.
+  // The result is bytes-only; it is not authorization or activation evidence.
+  R VerifyRegistrationArtifacts() {
+    using namespace journal_storage_detail;
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (status_ != R::kLeaseOnly) return status_;
+    if (!lease_.Recheck(root_, parent_->get(), policy_)) return R::kUnsafe;
+    CutoverJournalRecord record;
+    const auto history = ReadHistory(root_, parent_->get(), &record, policy_);
+    if (history != R::kHistoryOnly) return history;
+    const auto source = Path(root_, registration_name);
+    const auto target = Path(root_, backup_name);
+    if (!SafeDedicatedPath(source) || !SafeDedicatedPath(target)) return R::kRejected;
+    config_path_detail::Handle original(CreateFileW(source.c_str(), GENERIC_READ,
+        FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    config_path_detail::Handle backup(CreateFileW(target.c_str(), GENERIC_READ,
+        FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (!original.valid() || !backup.valid()) return R::kUnavailable;
+    std::string bytes, digest, saved, saved_hash;
+    if (!ReadRegistrationBytes(original.get(), source, policy_, &bytes, &digest) ||
+        !ReadRegistrationBytes(backup.get(), target, policy_, &saved, &saved_hash) ||
+        !lease_.Recheck(root_, parent_->get(), policy_)) return R::kUnsafe;
+    if (!SameClientHash(saved_hash, record.backup_sha256)) return R::kDigestMismatch;
+    if (SameClientHash(digest, record.backup_sha256) && bytes == saved) return R::kLegacyBytesOnly;
+    if (SameClientHash(digest, record.target_registration_sha256)) return R::kTargetBytesOnly;
+    return R::kDigestMismatch;
   }
   R Publish(const CutoverJournalRecord& next) {
     using namespace journal_storage_detail;
