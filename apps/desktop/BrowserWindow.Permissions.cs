@@ -16,6 +16,7 @@ public partial class BrowserWindow
         {
             var dialog = new SitePermissionsDialog(this, SitePermissionPolicy.Origin(Active?.Url), data.SitePermissions);
             if (await ShowManagementPageAsync("veil://settings/permissions", dialog) != true || closing || session.IsEnding || session.EngineLost) return;
+            if (!SitePermissionPolicy.ValidRules(dialog.Result.ToList())) return;
             var previous = data.SitePermissions;
             data.SitePermissions = dialog.Result.Count == 0 ? null : dialog.Result.ToList();
             try { data.Save(statePath); }
@@ -34,10 +35,13 @@ public partial class BrowserWindow
         finally { session.PermissionUiOpen = false; }
     }
 
-    private bool PermissionContextMatches(BrowserTab tab, string origin, long epoch)
+    private long permissionSelectionEpoch;
+
+    private bool PermissionContextMatches(BrowserTab tab, string origin, long epoch, long selectionEpoch)
     {
         if (closing || restoring || session.IsEnding || session.EngineLost ||
-            tab.Owner != this || Active != tab || !IsActive || closingTabs.Contains(tab.Item) || tab.NavigationEpoch != epoch ||
+            !CanUseTab(tab.Item) || Active != tab || !IsActive || tab.NavigationEpoch != epoch ||
+            permissionSelectionEpoch != selectionEpoch ||
             tab.PendingHttp is not null || tab.PendingThreat is not null ||
             SitePermissionPolicy.Origin(tab.Url) != origin)
             return false;
@@ -54,8 +58,9 @@ public partial class BrowserWindow
         var kind = SitePermissionPolicy.Kind(args.PermissionKind);
         var origin = SitePermissionPolicy.Origin(args.Uri);
         long epoch = tab.NavigationEpoch;
+        long selectionEpoch = permissionSelectionEpoch;
         if (kind is null || origin is null || !args.IsUserInitiated || session.PermissionUiOpen ||
-            !PermissionContextMatches(tab, origin, epoch))
+            !PermissionContextMatches(tab, origin, epoch, selectionEpoch))
             return;
 
         string mode = SitePermissionPolicy.ModeFor(data.SitePermissions, origin, kind);
@@ -75,14 +80,14 @@ public partial class BrowserWindow
             {
                 try
                 {
-                    if (!PermissionContextMatches(tab, origin, epoch) ||
+                    if (!PermissionContextMatches(tab, origin, epoch, selectionEpoch) ||
                         SitePermissionPolicy.ModeFor(data.SitePermissions, origin, kind) != SitePermissionPolicy.Ask)
                         return;
                     string label = SitePermissionPolicy.Kinds.First(item => item.Key == kind).Label;
                     bool accepted = UserPrompts.Confirm(this,
                         $"{origin}\n이 사이트에 {label} 권한을 이번 요청에 한해 허용할까요?", "사이트 권한 요청", MessageBoxImage.Question);
                     // Navigation, window transfer, close or lock may occur during the nested message loop.
-                    if (accepted && PermissionContextMatches(tab, origin, epoch) &&
+                    if (accepted && PermissionContextMatches(tab, origin, epoch, selectionEpoch) &&
                         SitePermissionPolicy.ModeFor(data.SitePermissions, origin, kind) == SitePermissionPolicy.Ask)
                         args.State = CoreWebView2PermissionState.Allow;
                 }
