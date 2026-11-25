@@ -145,3 +145,17 @@ test('page find ignores old requests after tab, query or navigation changes', ()
     assert.match(browser, /if \(Current\(\)\) Status\.Text = result == "true" \? "일치하는 텍스트를 찾았습니다."/);
     assert.match(browser, /private void FindCloseClick[\s\S]*?findRequestEpoch\+\+;\s*ShowFindBar\(false\);/);
 });
+
+
+const networkUi = await readFile('apps/desktop/BrowserWindow.Network.cs', 'utf8');
+const threatsUi = await readFile('apps/desktop/BrowserWindow.Threats.cs', 'utf8');
+test('navigation completion and deferred protection actions are scoped to the live navigation', () => {
+    assert.match(browser, /if \(!AcceptTabEvents\(tab\) \|\| tab\.NavigationId != args\.NavigationId\) return;/);
+    assert.match(browser, /if \(tab\.NavigationId != args\.NavigationId\)[\s\S]*?tab\.ExpectedUpgrade = null;\s*tab\.NavigationId = args\.NavigationId;/);
+    assert.match(browser, /if \(tab\.UpgradedFrom is \{ \} plain && tab\.ExpectedUpgrade is null\)/);
+    assert.match(networkUi, /private void QueueNavigationAction[\s\S]*?long epoch = tab\.NavigationEpoch;[\s\S]*?if \(!CanUseTab\(tab\.Item\) \|\| tab\.NavigationEpoch != epoch\) return;/);
+    assert.match(networkUi, /tab\.ExpectedUpgrade = secure;\s*QueueNavigationAction\(tab,/);
+    assert.match(threatsUi, /QueueNavigationAction\(tab, \(\) => ShowThreatWarning/);
+    assert.match(networkUi, /PendingHttp: \{ \} plain \} tab \|\| !CanUseTab\(tab\.Item\)/);
+    assert.match(threatsUi, /PendingThreat: \{ \} blocked \} tab \|\| !CanUseTab\(tab\.Item\)/);
+});
