@@ -30,6 +30,7 @@ internal sealed class DownloadVault : IDisposable
     internal const string Failed = "실패";
     internal const string Cancelled = "취소됨";
     private const int FrameSize = 64 * 1024;
+    private const int SmallObjectLimit = 1024 * 1024;
     private const int MaxRedirects = 10;
     private const uint AbortFrame = uint.MaxValue;
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
@@ -92,6 +93,7 @@ internal sealed class DownloadVault : IDisposable
     internal Func<CancellationToken, Task>? SmokeBeforeBoundedReply;
     internal int? SmokeCommandTimeoutSeconds;
     internal Action? SmokeBeforeIndexPublish;
+    internal int? SmokeIndexCacheLimit;
 #endif
 
     // ── Opening ─────────────────────────────────────────────────────────────
@@ -665,8 +667,20 @@ internal sealed class DownloadVault : IDisposable
     {
         Process session = serve ?? throw new IOException("The vault is locked.");
         RequireTransportSession(session);
+        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(Entries, Json);
+        int limit = SmallObjectLimit;
+#if DEBUG
+        limit = Math.Min(limit, SmokeIndexCacheLimit ?? limit);
+#endif
+        // The index is only a cache. The authenticated objects and per-item metadata
+        // remain authoritative, even when the complete list exceeds the read budget.
+        if (bytes.Length > limit)
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+            return;
+        }
         string name = DateTime.UtcNow.ToString("yyyyMMddHHmmssfffffff") + ".veil";
-        await SealBytesLockedAsync(Path.Combine(Index, name), JsonSerializer.SerializeToUtf8Bytes(Entries, Json));
+        await SealBytesLockedAsync(Path.Combine(Index, name), bytes);
         RequireTransportSession(session);
         foreach (var old in new DirectoryInfo(Index).GetFiles("*.veil").OrderByDescending(f => f.Name).Skip(2))
             try { old.Delete(); } catch (IOException) { }
@@ -791,7 +805,7 @@ internal sealed class DownloadVault : IDisposable
         reply.StartsWith("err\tStorageFull:", StringComparison.Ordinal)
             ? new VaultStorageFullException() : new IOException("The vault did not accept the encrypted write.");
 
-    private Task<byte[]?> ReadSmallLockedAsync(string path) => ReadBoundedLockedAsync(path, "read", 1024 * 1024);
+    private Task<byte[]?> ReadSmallLockedAsync(string path) => ReadBoundedLockedAsync(path, "read", SmallObjectLimit);
 
     private async Task<byte[]?> ReadBoundedLockedAsync(string path, string command, int limit)
     {
