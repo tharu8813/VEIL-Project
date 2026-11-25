@@ -61,3 +61,22 @@ test('unexpected CRLF bytes are refused without rewriting target or source',t=>{
   assert.deepEqual(readFileSync(join(f.target,'.git','index')),index);
   assert.equal(readFileSync(join(f.upstream,'a.txt'),'utf8'),'first\n');
 });
+
+for(const flag of ['--assume-unchanged','--skip-worktree']){
+  for(const side of ['upstream','target']){
+    test(`${flag} on ${side} refuses hidden changes without mutation`,t=>{
+      const f=fixture(t),root=f[side],other=f[side==='upstream'?'target':'upstream'];
+      f.git(root,'update-index',flag,'a.txt');
+      writeFileSync(join(root,'a.txt'),'hidden change\n');
+      assert.equal(f.git(root,'status','--porcelain'),'');
+      const before=readFileSync(join(root,'.git','index')),otherIndex=readFileSync(join(other,'.git','index'));
+      for(const execute of [false,true]){
+        assert.throws(()=>materialize({...f,execute}),/index entry refused/);
+        assert.deepEqual(readFileSync(join(root,'.git','index')),before);
+        assert.deepEqual(readFileSync(join(other,'.git','index')),otherIndex);
+        assert.equal(readFileSync(join(root,'a.txt'),'utf8'),'hidden change\n');
+        assert.equal(readFileSync(join(other,'a.txt'),'utf8'),'first\n');
+      }
+    });
+  }
+}

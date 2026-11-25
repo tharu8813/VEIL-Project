@@ -25,14 +25,22 @@ function envForGit(){
   return {...Object.fromEntries(Object.entries(process.env).filter(([k])=>!k.toUpperCase().startsWith('GIT_'))),
     GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null',GIT_TERMINAL_PROMPT:'0',GIT_OPTIONAL_LOCKS:'0'};
 }
-function runGit(cwd,args,input){
+function runGit(cwd,args,input,maxBuffer=16*1024*1024){
   return execFileSync('git',['--no-replace-objects','-C',cwd,...args],{
-    env:envForGit(),input,encoding:'utf8',timeout:120000,maxBuffer:16*1024*1024,stdio:['pipe','pipe','pipe']
+    env:envForGit(),input,encoding:'utf8',timeout:120000,maxBuffer,stdio:['pipe','pipe','pipe']
   }).trim();
 }
 function checkRoot(root,revision,origin){
   if(!sameDirectory(root,runGit(root,['rev-parse','--show-toplevel'])))throw Error('Expected Git checkout root');
   if(runGit(root,['rev-parse','HEAD'])!==revision||runGit(root,['remote','get-url','origin'])!==origin)throw Error('Checkout identity mismatch');
+  // Git status can hide changes when index entries are marked assume-unchanged
+  // or skip-worktree. Require a full ordinary checkout; never clear flags.
+  // NUL records preserve unusual filenames. Bound the larger Chromium listing.
+  const entries=runGit(root,['ls-files','-v','-z'],undefined,128*1024*1024);
+  for(const entry of entries.split('\0')){
+    if(entry && (/^[a-z] /u.test(entry)||entry.startsWith('S ')))
+      throw Error('Assume-unchanged or skip-worktree index entry refused');
+  }
   if(runGit(root,['status','--porcelain','--untracked-files=all','--ignore-submodules=none']))throw Error('Checkout must be clean, including untracked files');
   // Require independent ordinary .git directories, not a worktree or submodule.
   const gitDir=ordinaryDirectory(join(root,'.git'));
