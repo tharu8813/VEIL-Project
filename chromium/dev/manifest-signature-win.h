@@ -7,7 +7,7 @@
 namespace veil::chromium_dev {
 enum class ManifestSignatureObservation {
   kRejected, kMalformed, kSignatureRejected, kSignerMismatch,
-  kSignatureAndPinOnly,
+  kSignatureAndPinOnly, kCertificatePolicyRejected,
 };
 inline constexpr std::size_t kManifestFixtureLimit = 4u * 1024u * 1024u;
 
@@ -25,9 +25,10 @@ class Certificate {
 // Cryptographic integrity and exact DER pin only. No chain/EKU/revocation,
 // manifest schema, filesystem provenance, package inventory or launch approval.
 // A caller-supplied pin must never be treated as trusted provisioning.
-inline ManifestSignatureObservation ObserveSyntheticManifestSignature(
+template <class CertificateObserver>
+ManifestSignatureObservation ObserveSyntheticManifestSignatureWith(
     std::string_view manifest, std::string_view detached_cms,
-    std::string_view expected_signer_sha256) {
+    std::string_view expected_signer_sha256, CertificateObserver observe_certificate) {
   if (!ValidClientHash(expected_signer_sha256) || manifest.empty() ||
       detached_cms.empty() || manifest.size() > kManifestFixtureLimit ||
       detached_cms.size() > kManifestFixtureLimit)
@@ -63,9 +64,19 @@ inline ManifestSignatureObservation ObserveSyntheticManifestSignature(
     pin[i++] = hex[byte >> 4];
     pin[i++] = hex[byte & 15];
   }
-  return SameClientHash(std::string_view(pin.data(), pin.size()), expected_signer_sha256)
-      ? ManifestSignatureObservation::kSignatureAndPinOnly
-      : ManifestSignatureObservation::kSignerMismatch;
+  if (!SameClientHash(std::string_view(pin.data(), pin.size()), expected_signer_sha256))
+    return ManifestSignatureObservation::kSignerMismatch;
+  if (!observe_certificate(signer.value))
+    return ManifestSignatureObservation::kCertificatePolicyRejected;
+  return ManifestSignatureObservation::kSignatureAndPinOnly;
+}
+
+inline ManifestSignatureObservation ObserveSyntheticManifestSignature(
+    std::string_view manifest, std::string_view detached_cms,
+    std::string_view expected_signer_sha256) {
+  // Legacy fixture contract remains signature/pin observation only.
+  return ObserveSyntheticManifestSignatureWith(manifest, detached_cms,
+      expected_signer_sha256, [](PCCERT_CONTEXT) { return true; });
 }
 }  // namespace veil::chromium_dev
 #endif
