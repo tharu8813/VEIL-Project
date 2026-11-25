@@ -25,3 +25,8 @@ It queries only the official source remote; no checkout, hooks or build. It reje
     node --test tests/chromium/resolve-tag.test.mjs
 
 The existing Windows CI runs inventory, readiness observation and parser tests. It does not resolve the external tag or prove local-machine readiness.
+
+
+## C1 preparation
+
+Read [bootstrap runbook](../../chromium/README.md). Verify the mirror-observed candidate using `node scripts/chromium/verify-candidate.mjs --verify-remote`. Source bootstrap defaults to plan only and requires an explicitly reviewed depot_tools SHA. It refuses an existing workspace. No actual sync or build has been validated.

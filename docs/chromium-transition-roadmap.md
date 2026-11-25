@@ -58,12 +58,16 @@ C1 이후 C3의 일반 UI 개발과 C4~C7의 보안 개발은 병행 가능하�
 
 [업스트림 후보 기록](chromium-upstream-candidate.md): 일반 Stable 158.0.8127.89 후보를 조사했다. 정확한 tag/commit은 아직 미확정이다. 인터넷 연결된 신뢰 머신에서 읽기 전용 resolve-tag 도구를 실행해 후보의 정확한 참조를 확인한다. 기존 CI에 inventory 실행, Windows 호스팅 러너 준비 상태 관측 및 태그 파서 합성 시험을 추가한다. CI 결과 확인 전 모두 NOT RUN이며 호스팅 러너 정보는 사용자 빌드 머신이나 Chromium 실행 증거가 아니다.
 
+## C0 CI 실측 및 C1 준비 (2026-11-25)
+
+PR #113 CI [45621410099](https://github.com/tharu8813/VEIL-Project/actions/runs/45621410099): 합성 태그 테스트 3/3 PASS. PR merge-test checkout 2410a59ef1d70e39f9fb159aaf703c6fad10af29에서 추적 범위 182개, 키워드 일치 105개, 읽기 실패 0. WebView2 43파일/226줄, 보호 프로필 34/138, 금고 34/147, 네트워크 34/606, 브로커 27/81 (중복 포함, 의존성 그래프 아님). 호스팅 AMD64/NTFS, 여유 109.9 GiB, gclient/gn/autoninja 미발견. 사용자 빌드 머신 증거 아님. 실제 Chromium 코드 검색 미러에서 158.0.8127.89 commit 1de57fa19722fa6d6841d4f596c394d015580656 관측. canonical remote 교차검증 및 depot_tools pin 미완료. [C1 준비 런북](../chromium/README.md)과 read-only 기본 source sync 도구, GN 후보 설정 추가. C0 IN PROGRESS / C1 준비만, 실제 checkout/build/보안 검증 NOT RUN.
+
 ## C0 증거 및 다음 행동
 
 - [x] 전환 방향 문서화(이 PR에서 제안), 기존 보안 요구 유지.
 - [x] 기준 SHA 트리 및 주요 엔진 결합 지점 표본 조사.
 - [x] 독립 개발 브랜치 사용, 기존 소스/테스트 이동·삭제 없음.
-- [ ] 전체 의존성 inventory 실제 checkout 실행 및 검토 (NOT RUN).
+- [x] PR #113 merge-test checkout에서 inventory 키워드 조사 실행 및 결과 검토. 전체 호출 그래프는 NOT RUN.
 - [ ] Windows 빌드 머신, SDK/VS, Git/depot_tools, NTFS/공간 실제 확인 (NOT RUN).
 - [ ] Stable 후보 tag/commit 및 toolchain 확인 (NOT RUN; C1 pin 선정 전).
 - [ ] 이 PR 검토/CI 및 이후 자동 개발 작업의 로드맵 연결 확인 (미완료).

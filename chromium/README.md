@@ -1,0 +1,12 @@
+# C1 source bootstrap (NOT RUN)
+
+The development candidate is recorded in candidate.json; it is not an approved production pin. Review the official Stable release and the selected revision's Windows build instructions before starting. Main's official guide currently lists Visual Studio 2026 with Desktop C++ and MFC/ATL, Windows SDK 10.0.28000.2270, and NTFS with at least 100 GB free; exact selected revision requirements must still be checked.
+
+1. Select a reviewed exact depot_tools commit from https://chromium.googlesource.com/chromium/tools/depot_tools.git; no default is intentionally provided. Record its SHA and review its compatibility with the selected source. Verify Windows toolchain and disk space (recommend 300 GiB or more).
+2. From a clean VEIL checkout run `node scripts/chromium/verify-candidate.mjs --verify-remote`. The result must be REMOTE_MATCH_ONLY.
+3. Run `powershell -NoProfile -File scripts/chromium/Sync-Source.ps1 -Workspace D:\veil-chromium -DepotToolsRevision <reviewed-sha>` to inspect the plan. Add `-Execute` only on a dedicated trusted build machine, using a new folder, after reviewing toolchain, source and DEPS trust. This downloads upstream tooling and dependencies and executes gclient; it does not run explicit gclient runhooks. If interrupted, preserve diagnostics and choose an approved recovery strategy; no automatic deletion.
+4. Verify source and depot_tools HEAD, DEPS hash and dependency revisions. Compare the selected revision's build guide. Use cmd.exe, prepend the pinned depot_tools path and set DEPOT_TOOLS_UPDATE=0 and DEPOT_TOOLS_WIN_TOOLCHAIN=0. Run gclient runhooks from the Chromium source only after approval of the upstream dependencies and hook execution. Record results.
+5. Copy gn/Debug.args.gn and gn/Release.args.gn to separate new Chromium out directories as args.gn; use `gn gen out\VeilDebug` / `gn gen out\VeilRelease`, then `autoninja -C out\VeilDebug chrome` / release equivalent. Check that depot_tools did not change. Capture build log, args, source and toolchain revisions.
+6. Run the original binary with a new disposable synthetic-data user-data-dir, as a normal user. Verify actual renderer sandbox tokens and site isolation. Do not use real accounts, share the legacy profile, run as administrator, disable sandbox, or call the build VEIL.
+
+Status: script and GN templates written; real remote match, depot_tools selection, sync, hooks, build, runtime and sandbox are NOT RUN. No full Chromium builds on the ordinary hosted CI. See ../docs/chromium-transition-roadmap.md.
