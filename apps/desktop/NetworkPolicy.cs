@@ -242,12 +242,23 @@ internal static class NetworkPolicy
         public bool IsBypassed(Uri host) => false;
     }
 
-    /// <summary>Path check shown in the UI: can the proxy be reached at all? Blocking does not depend on it.</summary>
-    internal static async Task<bool> ProxyReachableAsync(NetworkSettings settings, TimeSpan timeout)
+    // A TCP handshake does not prove the proxy protocol or absence of traffic leaks.
+    internal static string ProxyStatusText(bool? reachable, DateTimeOffset? checkedAt)
     {
-        if (settings.ProxyUri is not { } proxy) return false;
+        if (reachable is null || checkedAt is null) return "프록시 TCP 경로 미확인";
+        string time = checkedAt.Value.ToString("HH:mm:ss");
+        return reachable.Value
+            ? $"TCP 경로 확인됨 ({time}) · 전체 보호 미검증"
+            : $"TCP 연결 실패 ({time}) · 직접 연결 폴백 없음";
+    }
+
+    /// <summary>Path check shown in the UI: can the proxy be reached at all? Blocking does not depend on it.</summary>
+    internal static async Task<bool> ProxyReachableAsync(NetworkSettings settings, TimeSpan timeout, CancellationToken cancellation = default)
+    {
+        if (cancellation.IsCancellationRequested || settings.ProxyUri is not { } proxy) return false;
         using var client = new TcpClient();
-        using var cancel = new CancellationTokenSource(timeout);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        cancel.CancelAfter(timeout);
         try
         {
             await client.ConnectAsync(proxy.IdnHost, proxy.Port, cancel.Token);

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 
 namespace Veil.Desktop;
@@ -65,8 +66,88 @@ internal sealed class BrowserSession
 
     /// <summary>Network mode applied to this run's engine (changes take effect after a restart).</summary>
     internal NetworkSettings Network { get; }
-    /// <summary>Proxy path check result for the UI; null until checked or in standard mode.</summary>
-    internal bool? ProxyReachable { get; set; }
+    // The private windows use the same engine and applied proxy as the main session.
+    private DispatcherTimer? proxyTimer;
+    private CancellationTokenSource? proxyMonitor;
+    private bool proxyChecking;
+    private bool? proxyReachable;
+    private DateTimeOffset? proxyCheckedAt;
+    internal bool? ProxyReachable => MainSession.proxyReachable;
+    internal DateTimeOffset? ProxyCheckedAt => MainSession.proxyCheckedAt;
+
+    internal Task StartProxyMonitorAsync() => MainSession.StartMainProxyMonitorAsync();
+
+    private async Task StartMainProxyMonitorAsync()
+    {
+        if (Network.Mode != NetworkMode.Proxy || proxyMonitor is not null || IsEnding || EngineLost) return;
+        proxyMonitor = new CancellationTokenSource();
+        proxyTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
+        proxyTimer.Tick += ProxyMonitorTick;
+        proxyTimer.Start();
+        try { await RefreshProxyAsync(); }
+        catch (Exception) { StopProxyMonitor(); }
+    }
+
+    private async void ProxyMonitorTick(object? sender, EventArgs args)
+    {
+        try { await RefreshProxyAsync(); }
+        catch (Exception) { StopProxyMonitor(); }
+    }
+
+    private async Task RefreshProxyAsync()
+    {
+        if (proxyMonitor is not { } monitor || proxyChecking || IsEnding || EngineLost) return;
+        proxyChecking = true;
+        proxyReachable = null;
+        proxyCheckedAt = null;
+        NotifyProxyWindows();
+        try
+        {
+            bool reachable = await NetworkPolicy.ProxyReachableAsync(Network, TimeSpan.FromSeconds(3), monitor.Token);
+            if (!ReferenceEquals(proxyMonitor, monitor) || IsEnding || EngineLost) return;
+            proxyReachable = reachable;
+            proxyCheckedAt = DateTimeOffset.Now;
+        }
+        finally
+        {
+            if (ReferenceEquals(proxyMonitor, monitor))
+            {
+                proxyChecking = false;
+                NotifyProxyWindows();
+            }
+        }
+    }
+
+    private void NotifyProxyWindows()
+    {
+        foreach (var window in AllWindows.ToArray())
+            if (!window.IsClosing) window.UpdateNetworkIndicator();
+    }
+
+    internal void StopProxyMonitorIfIdle()
+    {
+        var main = MainSession;
+        if (!main.AllWindows.Any(window => !window.IsClosing)) main.StopProxyMonitor();
+    }
+
+    private void StopProxyMonitor()
+    {
+        if (proxyMonitor is null) return;
+        if (proxyTimer is { } timer)
+        {
+            timer.Stop();
+            timer.Tick -= ProxyMonitorTick;
+            proxyTimer = null;
+        }
+        var monitor = proxyMonitor;
+        proxyMonitor = null;
+        monitor?.Cancel();
+        monitor?.Dispose();
+        proxyChecking = false;
+        proxyReachable = null;
+        proxyCheckedAt = null;
+        NotifyProxyWindows();
+    }
     /// <summary>Hosts the user explicitly allowed over plain HTTP in this run (HTTPS-first exceptions).</summary>
     internal HashSet<string> HttpAllowed { get; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Hosts the user explicitly chose to open despite a VEIL threat warning, for this run only.</summary>
@@ -99,7 +180,7 @@ internal sealed class BrowserSession
     // The first release has exactly one production backend. No fallback or runtime switching.
     internal IBrowserEngine EngineHost { get; } = new WebView2BrowserEngine();
     internal CoreWebView2Environment? Engine => (EngineHost as WebView2BrowserEngine)?.Environment;
-    internal bool IsEnding { get => MainSession.ending; set => MainSession.ending = value; }
+    internal bool IsEnding { get => MainSession.ending; set { MainSession.ending = value; if (value) MainSession.StopProxyMonitor(); } }
     /// <summary>The shared engine's browser process exited; no window can use it any more.</summary>
     internal bool EngineLost { get => MainSession.engineLost; set => MainSession.engineLost = value; }
 

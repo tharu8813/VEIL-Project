@@ -35,7 +35,7 @@ internal static class BrowserSettingsCatalog
         string networkState = "현재: " + Mode(applied);
         if (chosen != applied) networkState += "\n저장된 설정: " + Mode(chosen) + " (재시작 필요)";
         string proxyState = applied.Mode != NetworkMode.Proxy ? "프록시 모드 미사용" :
-            session.ProxyReachable == true ? "시작 시 경로 확인됨" : "경로 미확인 또는 연결 실패";
+            NetworkPolicy.ProxyStatusText(session.ProxyReachable, session.ProxyCheckedAt);
         string smartScreen = (session.Security.Saved.SmartScreen ? "사용 설정" : "사용 안 함") + " · " +
             (session.Security.State switch
             {

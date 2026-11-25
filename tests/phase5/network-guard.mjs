@@ -62,7 +62,7 @@ try {
     const up = await stage(profile, 'network-proxy', join(evidence, 'proxy-up.json'), true);
     assert.equal(up.error, null, up.error);
     const check = prefix => up.checks.find(c => c.startsWith(prefix));
-    assert.match(check('indicator:'), /경로 확인됨/);
+    assert.match(check('indicator:'), /TCP 경로 확인됨/);
     assert.match(check('page title:'), /두 번째 페이지/, 'page did not load through the proxy');
     assert.equal(check('vault download:'), 'vault download: stored 1024');
     assert.ok(seen.includes('/second') && seen.includes('/vault-dl'), `proxy saw: ${seen.join(', ')}`);
@@ -79,7 +79,7 @@ try {
     const down = await stage(profile, 'network-proxy', join(evidence, 'proxy-down.json'));
     assert.equal(down.error, null, down.error);
     const downCheck = prefix => down.checks.find(c => c.startsWith(prefix));
-    assert.match(downCheck('indicator:'), /차단됨/);
+    assert.match(downCheck('indicator:'), /TCP 연결 실패/);
     assert.doesNotMatch(downCheck('page title:'), /두 번째 페이지/, 'page loaded without the proxy');
     assert.match(downCheck('vault download:'), /^vault download: failed/);
     assert.equal(directTotal(), directBefore, `direct requests after proxy stop: ${JSON.stringify([...direct])}`);
