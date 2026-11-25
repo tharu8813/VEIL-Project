@@ -127,7 +127,7 @@ function Read-VeilPackage([string]$Root,[string]$Thumbprint) {
         $name = [string]$entry.path
         Assert-VeilRelativeFile $name
         if ($expected.ContainsKey($name) -or $entry.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
-            $entry.bytes -isnot [ValueType] -or $entry.bytes -lt 0) { throw 'Invalid or duplicate manifest entry.' }
+            ($entry.bytes -isnot [int] -and $entry.bytes -isnot [long]) -or $entry.bytes -lt 0) { throw 'Invalid or duplicate manifest entry.' }
         $expected.Add($name,$entry)
     }
     foreach ($required in @('Desktop/Veil.Desktop.exe','Desktop/Veil.Desktop.dll','Desktop/veil-vault.exe',

@@ -46,6 +46,18 @@ function New-Tree([string]$Path) {
         [IO.File]::WriteAllText($target, "synthetic $f")
     }
 }
+function Edit-SignedTestManifest([string]$Root, [scriptblock]$Change) {
+    $path = Join-Path $Root 'manifest.json'
+    $manifest = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    & $Change $manifest
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($manifest | ConvertTo-Json -Depth 8))
+    [IO.File]::WriteAllBytes($path, $bytes)
+    $cms = [Security.Cryptography.Pkcs.SignedCms]::new([Security.Cryptography.Pkcs.ContentInfo]::new($bytes), $true)
+    $signer = [Security.Cryptography.Pkcs.CmsSigner]::new($cert)
+    $signer.DigestAlgorithm = [Security.Cryptography.Oid]::new('2.16.840.1.101.3.4.2.1')
+    $cms.ComputeSignature($signer)
+    [IO.File]::WriteAllBytes((Join-Path $Root 'manifest.p7s'), $cms.Encode())
+}
 $cases = [ordered]@{
     'valid'           = @{ change = {}; expect = $null }
     'relative-root'   = @{ change = {}; expect = $null; relative = $true }
@@ -58,6 +70,13 @@ $cases = [ordered]@{
     'wrong-signer'    = @{ change = {}; thumbprint = $other.Thumbprint; expect = 'signer mismatch' }
     'other-signature' = @{ change = { param($r) Remove-Item (Join-Path $r 'manifest.p7s'), (Join-Path $r 'manifest.json'); Write-VeilPackageManifest $r '1.0.0-alpha.1' $commit $other }; expect = 'signer mismatch' }
     'bad-version'     = @{ change = { param($r) Remove-Item (Join-Path $r 'manifest.p7s'), (Join-Path $r 'manifest.json'); Write-VeilPackageManifest $r '1.0.0' $commit $cert }; expect = 'Stable releases' }
+    'signed-duplicate-path' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.files = @($m.files) + @($m.files[0]) } }; expect = 'Invalid or duplicate manifest entry' }
+    'signed-unsafe-path' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.files[0].path = 'Desktop/../outside.dll' } }; expect = 'Unsafe package path' }
+    'signed-missing-required' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.files = @($m.files | Where-Object path -ne 'Desktop/veil-vault.exe') } }; expect = 'Required binary missing' }
+    'signed-boolean-length' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.files[0].bytes = $true } }; expect = 'Invalid or duplicate manifest entry' }
+    'signed-fractional-length' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.files[0].bytes = 0.5 } }; expect = 'Invalid or duplicate manifest entry' }
+    'signed-bad-hash' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.files[0].sha256 = 'not-a-hash' } }; expect = 'Invalid or duplicate manifest entry' }
+    'signed-profile-format' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.profileFormat = 2 } }; expect = 'Unsupported package contract' }
     'bad-path'        = @{ change = { param($r) Assert-VeilRelativeFile 'Desktop/CON.txt' }; expect = 'Unsafe package path' }
 }
 $results = [ordered]@{}
@@ -95,7 +114,7 @@ test('package manifests are exact, authenticated and versioned', { skip: process
         const { stdout } = await run('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script(root)],
             { maxBuffer: 4 * 1024 * 1024 });
         const results = JSON.parse(stdout);
-        assert.equal(Object.keys(results).length, 12);
+        assert.equal(Object.keys(results).length, 19);
         for (const [name, result] of Object.entries(results)) assert.equal(result, 'ok', name);
     } finally {
         await rm(root, { recursive: true, force: true });

@@ -8,7 +8,7 @@ function Check([bool]$Passed, [string]$Name) {
 function Refused([scriptblock]$Action) {
     try { & $Action; return $false } catch { return $true }
 }
-Check ($script:VeilPackageRequiredChecks.Count -eq 19) 'all required package checks enumerated'
+Check ($script:VeilPackageRequiredChecks.Count -eq 26) 'all required package checks enumerated'
 $good = @($script:VeilPackageRequiredChecks | ForEach-Object {
     [pscustomobject]@{ id = $_; status = 'PASS'; source = $(if ($_ -cin $script:VeilPackageManualChecks) { 'operator' } else { 'automatic' }) }
 })

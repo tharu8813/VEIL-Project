@@ -2,7 +2,10 @@
 # Pure evidence inventory for the disposable VM package test. No installation or trust changes.
 $script:VeilPackageSignChecks = @('package-sign', 'package-tamper-valid', 'package-tamper-modified-file',
     'package-tamper-extra-file', 'package-tamper-missing-file', 'package-tamper-edited-manifest',
-    'package-tamper-wrong-signer', 'package-tamper-unsigned-binary')
+    'package-tamper-wrong-signer', 'package-tamper-unsigned-binary',
+    'package-tamper-signed-duplicate-path', 'package-tamper-signed-unsafe-path',
+    'package-tamper-signed-missing-required', 'package-tamper-signed-boolean-length',
+    'package-tamper-signed-fractional-length', 'package-tamper-signed-bad-hash', 'package-tamper-signed-profile-format')
 $script:VeilPackageManualChecks = @('installed-unlock', 'installed-relock', 'installed-refuses')
 $script:VeilPackageInstallChecks = @('package-install') + $script:VeilPackageManualChecks
 $script:VeilPackageUpdateChecks = @('package-update', 'package-same-version', 'package-lower-version',
