@@ -8,5 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../../apps/desktop/NetworkPolicy.cs" Link="NetworkPolicy.cs" />
+    <Compile Include="../../../apps/desktop/AddressInputPolicy.cs" Link="AddressInputPolicy.cs" />
   </ItemGroup>
 </Project>
