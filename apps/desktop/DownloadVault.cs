@@ -39,6 +39,7 @@ internal sealed class DownloadVault : IDisposable
     private string activeRoot;
     private readonly string? tool;
     private HttpClient http;
+    private IReadOnlySet<string>? httpAllowed;
     private readonly SemaphoreSlim gate = new(1, 1);
     // Limit live network bodies as well as vault writes. Waiting requests do not open HTTP connections.
     private readonly SemaphoreSlim captureSlot = new(1, 1);
@@ -66,10 +67,11 @@ internal sealed class DownloadVault : IDisposable
 
     /// <summary>ADR-0006: VEIL's own download requests follow the engine's network mode. In proxy mode they
     /// use only that proxy (no system proxy, no direct fallback).</summary>
-    internal void ConfigureNetwork(NetworkSettings settings)
+    internal void ConfigureNetwork(NetworkSettings settings, IReadOnlySet<string>? allowedHttpHosts = null)
     {
         var previous = http;
         http = new HttpClient(NetworkPolicy.Handler(settings)) { Timeout = Timeout.InfiniteTimeSpan };
+        httpAllowed = allowedHttpHosts;
         previous.Dispose();
     }
 
@@ -920,18 +922,25 @@ internal sealed class DownloadVault : IDisposable
                 throw new DownloadRequestFailure("원래 다운로드 페이지 변경 · 다시 다운로드하세요.", false);
         }
         RequireLiveRetry();
+        Uri? previousAddress = null;
         for (int hop = 0; hop <= MaxRedirects; hop++)
         {
-            if (uri.Scheme is not ("http" or "https")) throw new HttpRequestException("Redirect left HTTP(S).");
+            if (!NetworkPolicy.DownloadAddressAllowed(uri, previousAddress, httpAllowed))
+                throw new DownloadRequestFailure("안전하지 않은 다운로드 주소 · 원래 페이지에서 다시 확인하세요.", false);
             // Every hop is checked before VEIL requests it, so a redirect cannot route around the list.
             await RejectThreatAsync(threats?.CheckAsync(uri, TimeSpan.FromSeconds(2), cancel));
             RequireLiveRetry();
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri)
+            {
+                Version = HttpVersion.Version11,
+                VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+            };
             request.Headers.TryAddWithoutValidation("User-Agent", web.Settings.UserAgent);
             // Cookies are looked up per hop so each origin only receives its own cookies.
             var cookies = await web.CookieManager.GetCookiesAsync(uri.AbsoluteUri);
-            if (cookies.Count > 0)
-                request.Headers.TryAddWithoutValidation("Cookie", string.Join("; ", cookies.Select(c => $"{c.Name}={c.Value}")));
+            var permittedCookies = cookies.Where(c => uri.Scheme == Uri.UriSchemeHttps || !c.IsSecure).ToArray();
+            if (permittedCookies.Length > 0)
+                request.Headers.TryAddWithoutValidation("Cookie", string.Join("; ", permittedCookies.Select(c => $"{c.Name}={c.Value}")));
             HttpResponseMessage response;
             using var headers = CancellationTokenSource.CreateLinkedTokenSource(cancel);
             headers.CancelAfter(TimeSpan.FromSeconds(HeaderTimeoutSeconds));
@@ -944,6 +953,7 @@ internal sealed class DownloadVault : IDisposable
             {
                 response.Dispose();
                 if (retry) throw new DownloadRequestFailure("재시도 중 리디렉션 발생 · 원래 페이지에서 다시 다운로드하세요.", false);
+                previousAddress = uri;
                 uri = location.IsAbsoluteUri ? location : new Uri(uri, location);
                 continue;
             }
