@@ -23,6 +23,16 @@ internal static class SiteDataPolicy
         catch (Exception error) when (error is UriFormatException or ArgumentException) { return null; }
     }
 
+    internal static bool ValidSelection(SiteDataSelection selection)
+    {
+        bool all = selection.ClearAllCookies || selection.ClearAllStorage || selection.ClearDiskCache;
+        if (selection.CookieDomain is { } domain)
+            return ValidDomain(domain) && selection.Origin is null && !all && !selection.InspectUsage;
+        if (selection.Origin is { } origin)
+            return Origin(origin) == origin && !all;
+        return all && !selection.InspectUsage;
+    }
+
     internal static bool SameCookieDomain(string stored, string selected) =>
         string.Equals(stored, selected, StringComparison.OrdinalIgnoreCase);
 

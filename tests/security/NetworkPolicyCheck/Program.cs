@@ -310,3 +310,24 @@ try { cancelledDownload.Finish(); }
 catch (OperationCanceledException) { cancelledFinish = true; }
 Check(cancelledFinish, "cancelled transfer crossed publication boundary");
 Console.WriteLine("PASS: download progress, authentication, publication and cancellation states");
+
+
+foreach (var selection in new SiteDataSelection[] {
+    new("https://example.test", null, false, false, false),
+    new("https://example.test:8443", null, false, false, false, true),
+    new(null, ".example.test", false, false, false),
+    new(null, null, true, true, false),
+})
+    Check(SiteDataPolicy.ValidSelection(selection), "valid site-data scope refused");
+foreach (var selection in new SiteDataSelection[] {
+    new("https://example.test", ".example.test", false, false, false),
+    new("https://example.test", null, true, false, false),
+    new(null, ".example.test", false, true, false),
+    new(null, ".example.test", false, false, false, true),
+    new(null, null, false, false, false),
+    new(null, null, true, false, false, true),
+    new("https://example.test/path", null, false, false, false),
+    new(null, "bad/domain", false, false, false),
+})
+    Check(!SiteDataPolicy.ValidSelection(selection), "ambiguous site-data scope accepted");
+Console.WriteLine("PASS: exclusive site-data deletion and inspection scopes");

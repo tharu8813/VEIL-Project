@@ -30,8 +30,9 @@ public partial class BrowserWindow
             }
             var tab = Active;
             long epoch = tab?.NavigationEpoch ?? -1;
+            long selectionEpoch = permissionSelectionEpoch;
             string? origin = SitePermissionPolicy.Origin(tab?.Url);
-            if (tab is null || origin is null || !PermissionContextMatches(tab, origin, epoch))
+            if (tab is null || origin is null || !PermissionContextMatches(tab, origin, epoch, selectionEpoch))
                 origin = null;
 
             bool exists = store.Exists;
@@ -59,10 +60,13 @@ public partial class BrowserWindow
             if (!PasswordWindowReady()) return;
             entries = await store.ReadAsync(password);
             if (!PasswordWindowReady()) return;
-            if (tab is null || origin is null || !PermissionContextMatches(tab, origin, epoch))
+            if (tab is null || origin is null || !PermissionContextMatches(tab, origin, epoch, selectionEpoch))
                 origin = null;
             var dialog = new PasswordManagerDialog(this, origin, entries);
             if (await ShowManagementPageAsync("veil://passwords", dialog) != true || !PasswordWindowReady()) return;
+            // The native manager intentionally switches tabs and then restores the original tab.
+            // Its own confirmation guard verifies the intervening management context.
+            selectionEpoch = permissionSelectionEpoch;
             if (dialog.Action is PasswordAction.Rotate or PasswordAction.Backup or PasswordAction.Restore)
             {
                 await MaintainPasswordsAsync(store, password, entries, dialog.Action);
@@ -74,7 +78,7 @@ public partial class BrowserWindow
             {
                 case PasswordAction.Save:
                     if (tab is null || origin is null || selected.Origin != origin ||
-                        !PermissionContextMatches(tab, origin, epoch)) return;
+                        !PermissionContextMatches(tab, origin, epoch, selectionEpoch)) return;
                     entries.RemoveAll(entry => entry.Origin == selected.Origin && entry.UserName == selected.UserName);
                     entries.Add(selected);
                     await store.WriteAsync(password, entries, replace: true);
@@ -99,8 +103,8 @@ public partial class BrowserWindow
                     break;
                 case PasswordAction.Fill:
                     if (tab is null || origin is null || selected.Origin != origin ||
-                        !PermissionContextMatches(tab, origin, epoch)) return;
-                    await FillLoginAsync(tab, selected, epoch);
+                        !PermissionContextMatches(tab, origin, epoch, selectionEpoch)) return;
+                    await FillLoginAsync(tab, selected, epoch, selectionEpoch);
                     break;
             }
         }
@@ -192,11 +196,12 @@ public partial class BrowserWindow
         if (session.IsPrivate) return;
         string? origin = SitePermissionPolicy.Origin(tab.Url);
         long epoch = tab.NavigationEpoch;
-        if (origin is null || !PermissionContextMatches(tab, origin, epoch)) return;
+        long selectionEpoch = permissionSelectionEpoch;
+        if (origin is null || !PermissionContextMatches(tab, origin, epoch, selectionEpoch)) return;
         try
         {
             string result = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Probe(origin));
-            if (!PermissionContextMatches(tab, origin, epoch)) return;
+            if (!PermissionContextMatches(tab, origin, epoch, selectionEpoch)) return;
             tab.LoginFormDetected = result == "true";
             UpdateLoginAction();
         }
@@ -218,8 +223,9 @@ public partial class BrowserWindow
         if (!PasswordWindowReady() || session.PasswordUiOpen || session.PermissionUiOpen || session.SettingsUiOpen ||
             Active is not { } tab || SitePermissionPolicy.Origin(tab.Url) is not { } origin) return;
         long epoch = tab.NavigationEpoch;
+        long selectionEpoch = permissionSelectionEpoch;
         string page = tab.Url;
-        bool Current() => tab.Url == page && PermissionContextMatches(tab, origin, epoch);
+        bool Current() => tab.Url == page && PermissionContextMatches(tab, origin, epoch, selectionEpoch);
         if (!Current()) return;
         session.PasswordUiOpen = true;
         session.PermissionUiOpen = true;
@@ -271,7 +277,7 @@ public partial class BrowserWindow
                 if (matches.Count == 0) { Status.Text = "현재 사이트에 저장된 계정이 없습니다."; return; }
                 var picker = new LoginPickerDialog(this, origin, matches);
                 if (picker.ShowDialog() != true || !Current() || picker.Selected is not { } selected) return;
-                await FillLoginAsync(tab, selected, epoch);
+                await FillLoginAsync(tab, selected, epoch, selectionEpoch);
             }
         }
         catch (Exception error) when (RecoverableFailure.Is(error))
@@ -288,11 +294,11 @@ public partial class BrowserWindow
         }
     }
 
-    private async Task FillLoginAsync(BrowserTab tab, SavedLogin login, long epoch)
+    private async Task FillLoginAsync(BrowserTab tab, SavedLogin login, long epoch, long selectionEpoch)
     {
-        if (!PermissionContextMatches(tab, login.Origin, epoch)) return;
+        if (!PermissionContextMatches(tab, login.Origin, epoch, selectionEpoch)) return;
         string result = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Fill(login));
-        if (PasswordWindowReady())
+        if (PermissionContextMatches(tab, login.Origin, epoch, selectionEpoch))
             Status.Text = result == "true" ? "로그인 정보를 채웠습니다. 제출은 직접 진행하세요." :
                 "지원되는 로그인 폼을 찾지 못했습니다. 직접 입력하세요.";
     }

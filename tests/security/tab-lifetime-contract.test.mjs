@@ -94,3 +94,20 @@ test('recent download popup caches only the newest eight stored entries and drop
     assert.match(toolbar, /DownloadPopupEmpty\.Visibility = visible && rows\.Length == 0/);
     assert.match(toolbar, /items\.Any\(item => item\.IsIndeterminate\)/);
 });
+
+
+const permissions = await readFile('apps/desktop/BrowserWindow.Permissions.cs', 'utf8');
+const siteData = await readFile('apps/desktop/BrowserWindow.SiteData.cs', 'utf8');
+test('permission grants require the original live tab and selection epoch', () => {
+    assert.match(permissions, /args\.SavesInProfile = false;\s*args\.State = CoreWebView2PermissionState\.Deny;\s*if \(session\.IsPrivate\) return;/);
+    assert.match(permissions, /!CanUseTab\(tab\.Item\) \|\| Active != tab \|\| !IsActive \|\| tab\.NavigationEpoch != epoch \|\|\s*permissionSelectionEpoch != selectionEpoch/);
+    assert.match(permissions, /if \(accepted && PermissionContextMatches\(tab, origin, epoch, selectionEpoch\)/);
+    assert.match(permissions, /!SitePermissionPolicy\.ValidRules\(dialog\.Result\.ToList\(\)\)/);
+    assert.match(browser, /managementFocusEpoch\+\+;\s*permissionSelectionEpoch\+\+;/);
+});
+test('site-data commands require original live regular WebView and exclusive selected scope', () => {
+    assert.match(siteData, /bool SourceStillValid\(\) => SiteDataReady\(\) && IsActive && Active == source && CanUseTab\(source\.Item\) &&\s*source\.NavigationEpoch == epoch && ReferenceEquals\(source\.View\.CoreWebView2, web\) &&\s*!web\.Profile\.IsInPrivateModeEnabled;/);
+    assert.match(siteData, /GetCookiesAsync\(""\)\)[\s\S]*?if \(!SourceStillValid\(\) \|\| permissionSelectionEpoch != selectionEpoch/);
+    assert.match(siteData, /!SourceStillValid\(\) \|\| session\.ActiveDownloads\.Count != 0 \|\| !SiteDataPolicy\.ValidSelection\(selection\)/);
+    assert.match(siteData, /var fresh = await web\.CookieManager\.GetCookiesAsync\(""\);\s*if \(!SourceStillValid\(\) \|\| permissionSelectionEpoch != confirmedSelectionEpoch/);
+});

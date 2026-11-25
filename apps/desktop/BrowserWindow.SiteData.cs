@@ -20,8 +20,14 @@ public partial class BrowserWindow
             return;
         }
         CloseAddressSuggestions();
-        var web = Active?.View.CoreWebView2;
-        if (web is null) return;
+        if (Active is not { } source || !CanUseTab(source.Item) || !IsActive ||
+            source.View.CoreWebView2 is not { } web) return;
+        long epoch = source.NavigationEpoch;
+        long selectionEpoch = permissionSelectionEpoch;
+        bool SourceStillValid() => SiteDataReady() && IsActive && Active == source && CanUseTab(source.Item) &&
+            source.NavigationEpoch == epoch && ReferenceEquals(source.View.CoreWebView2, web) &&
+            !web.Profile.IsInPrivateModeEnabled;
+        string? initialOrigin = SiteDataPolicy.Origin(source.Url);
         session.SettingsUiOpen = true;
         session.PermissionUiOpen = true;
         try
@@ -29,16 +35,17 @@ public partial class BrowserWindow
             // Empty URI selects all cookies in this engine profile, without contacting websites.
             var domains = SiteDataPolicy.Summarize((await web.CookieManager.GetCookiesAsync(""))
                 .Select(cookie => cookie.Domain));
-            if (!SiteDataReady()) return;
+            if (!SourceStillValid() || permissionSelectionEpoch != selectionEpoch || session.ActiveDownloads.Count != 0) return;
             var urls = session.Windows.Where(window => !window.closing)
                 .SelectMany(window => window.Tabs.Items.OfType<TabItem>())
                 .Select(item => ((BrowserTab)item.Tag).Url)
                 .Concat(data.Bookmarks.Select(entry => entry.Url))
                 .Concat(data.History.Select(entry => entry.Url));
             var origins = SiteDataPolicy.Origins(urls);
-            var dialog = new SiteDataDialog(this, domains, origins, SiteDataPolicy.Origin(Active?.Url));
+            var dialog = new SiteDataDialog(this, domains, origins, initialOrigin);
             if (await ShowManagementPageAsync("veil://settings/site-data", dialog) != true || dialog.Result is not { } selection ||
-                !SiteDataReady() || session.ActiveDownloads.Count != 0) return;
+                !SourceStillValid() || session.ActiveDownloads.Count != 0 || !SiteDataPolicy.ValidSelection(selection)) return;
+            long confirmedSelectionEpoch = permissionSelectionEpoch;
 
             // The manager never accepts arbitrary commands, URLs, scripts, cookie values or file paths.
             // Recheck the selected scope against the native snapshot before acting.
@@ -46,7 +53,8 @@ public partial class BrowserWindow
             {
                 if (!SiteDataPolicy.ValidDomain(domain) || !domains.Any(item => SiteDataPolicy.SameCookieDomain(item.Domain, domain))) return;
                 var fresh = await web.CookieManager.GetCookiesAsync("");
-                if (!SiteDataReady() || session.ActiveDownloads.Count != 0) return;
+                if (!SourceStillValid() || permissionSelectionEpoch != confirmedSelectionEpoch ||
+                    session.ActiveDownloads.Count != 0) return;
                 int requested = 0;
                 foreach (var cookie in fresh)
                 {
@@ -74,7 +82,7 @@ public partial class BrowserWindow
                 {
                     string response = await web.CallDevToolsProtocolMethodAsync("Storage.getUsageAndQuota",
                         JsonSerializer.Serialize(new { origin }));
-                    if (!SiteDataReady()) return;
+                    if (!SourceStillValid() || permissionSelectionEpoch != confirmedSelectionEpoch) return;
                     using var json = JsonDocument.Parse(response);
                     if (json.RootElement.TryGetProperty("usage", out var usage) &&
                         usage.TryGetDouble(out double bytes) && double.IsFinite(bytes) && bytes >= 0)

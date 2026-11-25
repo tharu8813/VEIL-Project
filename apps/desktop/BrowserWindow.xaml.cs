@@ -929,6 +929,7 @@ public partial class BrowserWindow : Window
     {
         if (!IsLoaded || args.OriginalSource != Tabs || closing) return;
         managementFocusEpoch++;
+        permissionSelectionEpoch++;
         CloseAddressSuggestions();
         foreach (var tab in Tabs.Items.OfType<TabItem>().Select(item => (BrowserTab)item.Tag).ToArray())
             if (tab != Active && tab.Url == "veil://passwords" && tab.CancelManagement is not null) ClearManagement(tab);
