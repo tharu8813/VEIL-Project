@@ -183,7 +183,7 @@ internal static class NetworkPolicy
     internal static SocketsHttpHandler Handler(NetworkSettings settings)
     {
         RequireValid(settings);
-        return new SocketsHttpHandler
+        var handler = new SocketsHttpHandler
         {
             UseCookies = false,
             AllowAutoRedirect = false,
@@ -193,6 +193,33 @@ internal static class NetworkPolicy
                 ? new FixedProxy(settings.ProxyUri ?? throw new InvalidOperationException(settings.Problem))
                 : null,
         };
+        if (settings.Mode == NetworkMode.Proxy)
+        {
+            Uri proxy = settings.ProxyUri!;
+            handler.ConnectCallback = (context, cancel) => ConnectProxyAsync(proxy, context.DnsEndPoint, cancel);
+        }
+        return handler;
+    }
+
+    // Defense in depth: even a transport request for a different TCP endpoint must fail.
+    // Only the configured proxy host itself may be resolved locally by this path.
+    internal static async ValueTask<Stream> ConnectProxyAsync(Uri proxy, DnsEndPoint endpoint, CancellationToken cancel)
+    {
+        if (endpoint.Port != proxy.Port ||
+            !string.Equals(CanonicalProxyHost(endpoint.Host), CanonicalProxyHost(proxy.IdnHost), StringComparison.OrdinalIgnoreCase))
+            throw new HttpRequestException("A direct connection is forbidden in proxy mode.");
+
+        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
+        try
+        {
+            await socket.ConnectAsync(endpoint, cancel);
+            return new NetworkStream(socket, ownsSocket: true);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
     }
 
     // Do not delegate bypass decisions to platform proxy heuristics (including loopback).
