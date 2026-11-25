@@ -35,6 +35,7 @@ $src = Join-Path $Work 'src'
 $guest = Get-VeilPhase34Guest
 if (-not $guest.virtualBox -or -not $guest.noDefaultRoute) { throw 'Use the offline VirtualBox test VM (no default route).' }
 . (Join-Path $src 'scripts\package-common.ps1')
+. (Join-Path $src 'tests\vm\package-evidence.ps1')
 $maintenance = Join-Path $src 'scripts\package-maintenance.ps1'
 $packages = 'C:\VEIL-Packages'
 $stateFile = Join-Path $Work 'package-state.json'
@@ -45,11 +46,18 @@ $programData = [Environment]::GetFolderPath('CommonApplicationData')
 $bin = Join-Path $programFiles 'VEIL'
 $data = Join-Path $programData 'VEIL'
 
-function Save-Result([string]$Id, [string]$Status, [string]$Detail) {
-    $all = @()
-    if (Test-Path $resultsFile) { $all = @(Get-Content $resultsFile -Raw | ConvertFrom-Json) }
-    $all += [pscustomobject]@{ id = $Id; status = $Status; detail = $Detail; at = (Get-Date).ToString('o') }
-    $all | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 $resultsFile
+function Read-Results {
+    if (Test-Path -LiteralPath $resultsFile) { Get-Content -LiteralPath $resultsFile -Raw | ConvertFrom-Json }
+}
+function Save-Result([string]$Id, [string]$Status, [string]$Detail, [string]$Source = 'automatic') {
+    $all = @(Read-Results)
+    Assert-VeilPackageUnrecorded $all @($Id)
+    $all += [pscustomobject]@{ id = $Id; status = $Status; source = $Source; detail = $Detail; at = (Get-Date).ToString('o') }
+    $next = $resultsFile + '.next'
+    if (Test-Path -LiteralPath $next) { throw 'Unresolved package evidence write. Preserve it for review.' }
+    ConvertTo-Json -InputObject @($all) -Depth 4 | Set-Content -LiteralPath $next -Encoding UTF8
+    if (Test-Path -LiteralPath $resultsFile) { [IO.File]::Replace($next, $resultsFile, $null) }
+    else { [IO.File]::Move($next, $resultsFile) }
     Write-Host ('{0,-8} {1}  {2}' -f $Status, $Id, $Detail)
 }
 function Get-State { Get-Content $stateFile -Raw | ConvertFrom-Json }
@@ -69,7 +77,9 @@ function Registration-Fingerprint {
 }
 
 if ($Stage -eq 'Sign') {
-    if (Test-Path $packages) { throw "$packages exists. Restore the VM snapshot first." }
+    if ((Test-Path $packages) -or (Test-Path $stateFile) -or (Test-Path $resultsFile) -or (Test-Path ($resultsFile + '.next'))) {
+        throw 'Existing package trial or evidence. Restore the VM snapshot first.'
+    }
     $commit = (Get-Content (Join-Path $Work 'MANIFEST.JSON') -Raw | ConvertFrom-Json).commit
     $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=VEIL VM disposable test signing' `
         -CertStoreLocation Cert:\LocalMachine\My -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 -NotAfter (Get-Date).AddDays(3)
@@ -125,6 +135,8 @@ if ($Stage -eq 'Sign') {
         Remove-Item $copy -Recurse -Force
     }
 
+    Assert-VeilPackageEvidence @(Read-Results) $script:VeilPackageSignChecks
+
     # Separate install volume: the operator chooses its passphrase (typed again by the installer).
     $images = Join-Path $Work 'images'
     $image = Join-Path $images 'install.vhdx'
@@ -159,13 +171,18 @@ if ($Stage -eq 'Sign') {
 }
 
 if ($Stage -eq 'Record') {
-    if ($Id -notmatch '^[a-z0-9-]{3,40}$' -or -not $Status) { throw 'Use -Id <lowercase-id> -Status PASS|FAIL|"NOT RUN" [-Detail <text>].' }
-    Save-Result $Id $Status $Detail
+    if ($Id -cnotin $script:VeilPackageManualChecks -or -not $Status) {
+        throw 'Record accepts only installed-unlock, installed-relock or installed-refuses.'
+    }
+    Assert-VeilPackageEvidence @(Read-Results) ($script:VeilPackageSignChecks + @('package-install'))
+    Save-Result $Id $Status $Detail 'operator'
     return
 }
 
 $state = Get-State
 if ($Stage -eq 'Install') {
+    Assert-VeilPackageEvidence @(Read-Results) $script:VeilPackageSignChecks
+    Assert-VeilPackageUnrecorded @(Read-Results) @('package-install')
     Write-Host 'The installer asks for the X: passphrase, shows a NEW recovery password (write it down outside the VM),'
     Write-Host 'then asks for that recovery password again. This is the B3 recovery drill.'
     & $maintenance -Install -Package (Package-Path $versions[0]) -SignerThumbprint $state.thumbprint -ImagePath $state.image `
@@ -183,10 +200,13 @@ if ($Stage -eq 'Install') {
 }
 
 if ($Stage -eq 'Update') {
+    Assert-VeilPackageEvidence @(Read-Results) ($script:VeilPackageSignChecks + $script:VeilPackageInstallChecks)
+    Assert-VeilPackageUnrecorded @(Read-Results) $script:VeilPackageUpdateChecks
     $before = Registration-Fingerprint
     $vhdx = (Get-FileHash $state.image -Algorithm SHA256).Hash
     $result = Invoke-Maintenance @('-Update', '-Package', (Package-Path $versions[1]), '-SignerThumbprint', $state.thumbprint)
     Save-Result 'package-update' ($(if ($result.code -eq 0 -and (Installed-Version) -eq $versions[1]) { 'PASS' } else { 'FAIL' })) "alpha.1 -> $(Installed-Version) (exit $($result.code))"
+    Assert-VeilPackageEvidence @(Read-Results) @('package-update')
     foreach ($case in @(@{ id = 'package-same-version'; v = $versions[1] }, @{ id = 'package-lower-version'; v = $versions[0] })) {
         $result = Invoke-Maintenance @('-Update', '-Package', (Package-Path $case.v), '-SignerThumbprint', $state.thumbprint)
         $ok = $result.code -ne 0 -and $result.text -match 'Downgrade, same version' -and (Installed-Version) -eq $versions[1] -and
@@ -194,6 +214,8 @@ if ($Stage -eq 'Update') {
         Save-Result $case.id ($(if ($ok) { 'PASS' } else { 'FAIL' })) "refused=$($result.code -ne 0), installed $(Installed-Version)"
     }
     Save-Result 'package-registration-kept' ($(if ((Registration-Fingerprint) -eq $before -and (Get-FileHash $state.image -Algorithm SHA256).Hash -eq $vhdx) { 'PASS' } else { 'FAIL' })) 'registration (except client pin), client.json and VHDX unchanged'
+
+    Assert-VeilPackageEvidence @(Read-Results) @('package-same-version', 'package-lower-version', 'package-registration-kept')
 
     # Interrupt the alpha.3 update: kill the maintenance process once its tree swap starts. Whether it died
     # before or after the durable commit marker decides the expected recovery; both must be observed.
@@ -206,24 +228,33 @@ if ($Stage -eq 'Update') {
         $child = Start-Process powershell.exe -PassThru -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
             "`"$maintenance`"", '-Update', '-Package', "`"$(Package-Path $versions[2])`"", '-SignerThumbprint', $state.thumbprint)
         $stopAt = (Get-Date).AddMinutes(3)
+        $interrupted = $false
         while (-not $child.HasExited -and (Get-Date) -lt $stopAt) {
-            if (($want -eq 'pre-commit' -and (Test-Path $previous)) -or ($want -eq 'post-commit' -and (Test-Path $committed))) { Stop-Process -Id $child.Id -Force; break }
+            if (($want -eq 'pre-commit' -and (Test-Path $previous)) -or ($want -eq 'post-commit' -and (Test-Path $committed))) { Stop-Process -Id $child.Id -Force; $interrupted = $true; break }
             Start-Sleep -Milliseconds 5
         }
-        $child.WaitForExit()
+        if (-not $child.HasExited -and -not $interrupted) {
+            Stop-Process -Id $child.Id -Force
+            if (-not $child.WaitForExit(15000)) { throw 'Timed-out test process did not exit.' }
+            throw 'Update test timed out. Preserve the journal; administrator recovery required. No interruption PASS recorded.'
+        }
+        if (-not $child.WaitForExit(15000)) { throw 'Test process exit not observed.' }
         if (-not (Test-Path (Join-Path $data 'update-transaction'))) {
             if ((Installed-Version) -eq $versions[2]) { Write-Warning "Attempt $attempt finished before it could be interrupted." }
             # A completed alpha.3 update leaves nothing newer to interrupt.
             if ((Installed-Version) -eq $versions[2]) { break } else { continue }
         }
+        if (-not $interrupted) { throw 'Transaction remained without a confirmed checkpoint interruption. Preserve evidence.' }
         $kind = if (Test-Path $committed) { 'post-commit' } else { 'pre-commit' }
         $recover = Invoke-Maintenance @('-RecoverInterruptedUpdate', '-SignerThumbprint', $state.thumbprint)
         $expected = if ($kind -eq 'pre-commit') { $from } else { $versions[2] }
         $service = (Get-Service Veil.VolumeBroker).Status
         $clean = -not (Test-Path (Join-Path $data 'update-transaction')) -and -not (Test-Path $previous)
         $ok = $recover.code -eq 0 -and (Installed-Version) -eq $expected -and $service -eq 'Running' -and $clean -and (Registration-Fingerprint) -eq $before
+        if ($seen.ContainsKey($kind)) { throw 'Duplicate interruption boundary; preserve evidence and restart from a fresh snapshot.' }
         Save-Result "package-interrupt-$kind" ($(if ($ok) { 'PASS' } else { 'FAIL' })) "recovered to $(Installed-Version) (expected $expected), service $service, journal cleared=$clean"
         $seen[$kind] = $true
+        Assert-VeilPackageEvidence @(Read-Results) @("package-interrupt-$kind")
     }
     foreach ($kind in 'pre-commit', 'post-commit') {
         if (-not $seen.ContainsKey($kind)) { Save-Result "package-interrupt-$kind" 'NOT RUN' 'interruption window not hit; rerun from a fresh snapshot' }
@@ -232,14 +263,21 @@ if ($Stage -eq 'Update') {
 }
 
 if ($Stage -eq 'Remove') {
+    Assert-VeilPackageUnrecorded @(Read-Results) @('package-remove')
     $broker = Get-Content (Join-Path $data 'broker.json') -Raw
     $result = Invoke-Maintenance @('-Remove', '-SignerThumbprint', $state.thumbprint)
     $ok = $result.code -eq 0 -and -not (Test-Path $bin) -and -not (Get-Service Veil.VolumeBroker -ErrorAction SilentlyContinue) -and
         (Get-Content (Join-Path $data 'broker.json') -Raw) -eq $broker -and (Test-Path (Join-Path $data 'client.json')) -and (Test-Path $state.image)
     Save-Result 'package-remove' ($(if ($ok) { 'PASS' } else { 'FAIL' })) 'service and binaries removed; registration, recovery protector ID and VHDX kept'
     $zip = Join-Path $Work 'PACKAGE-RESULTS.ZIP'
-    Compress-Archive -Path $resultsFile -DestinationPath $zip -Force
-    $failed = @(Get-Content $resultsFile -Raw | ConvertFrom-Json | Where-Object status -ne 'PASS')
-    if ($failed.Count) { Write-Warning "$($failed.Count) package check(s) are not PASS: $(($failed | ForEach-Object id) -join ', ')" }
+    $summary = Join-Path $Work 'package-summary.json'
+    $gaps = @(Get-VeilPackageEvidenceGaps @(Read-Results) $script:VeilPackageRequiredChecks)
+    $outcome = if ($gaps.Count) { 'INCOMPLETE' } else { 'PASS' }
+    [pscustomobject]@{ status = $outcome; required = $script:VeilPackageRequiredChecks; gaps = $gaps;
+        scope = 'Disposable VM package trial; manual checks are operator observations, not release approval' } |
+        ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $summary -Encoding UTF8
+    if (Test-Path -LiteralPath $zip) { throw 'Package evidence archive already exists.' }
+    Compress-Archive -Path @($resultsFile, $summary) -DestinationPath $zip
     Write-Host "Package results: $zip"
+    Assert-VeilPackageEvidence @(Read-Results) $script:VeilPackageRequiredChecks
 }

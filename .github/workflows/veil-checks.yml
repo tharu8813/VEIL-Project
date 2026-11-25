@@ -78,6 +78,10 @@ jobs:
         shell: pwsh
         run: node --test tests/install/broker-service-contract.test.mjs tests/install/package-maintenance-contract.test.mjs tests/install/package-version.test.mjs tests/install/package-manifest.test.mjs
 
+      - name: Check VM package evidence completeness
+        shell: powershell
+        run: .\tests\install\package-evidence.test.ps1
+
       - name: Test BitLocker recovery flow with a fake provider
         shell: powershell
         run: .\tests\install\bitlocker-recovery.test.ps1
