@@ -690,8 +690,12 @@ internal sealed class DownloadVault : IDisposable
 
     // Full-object operations may legitimately take much longer. In particular,
     // killing an export can leave plaintext staging in the selected external folder.
-    internal static bool BoundedCommand(string line) =>
-        line.Split('\t', 2)[0] is not ("export" or "verify" or "backup" or "restore" or "rotate-content");
+    internal static bool BoundedCommand(string line)
+    {
+        int delimiter = line.IndexOf('\t');
+        string command = delimiter < 0 ? line : line[..delimiter];
+        return command is not ("export" or "verify" or "backup" or "restore" or "rotate-content");
+    }
 
     private async Task<string> CommandLockedAsync(string line, ReadOnlyMemory<char> profilePassword = default, string? recoveryCode = null)
     {
