@@ -44,7 +44,11 @@ internal sealed class FakeBitLockerBackend(BrokerConfig config) : IBitLockerBack
             int count = Encoding.UTF8.GetBytes(secret, bytes);
             byte[] expected = Convert.FromHexString(fake.SecretSha256);
             bool match = CryptographicOperations.FixedTimeEquals(SHA256.HashData(bytes.AsSpan(0, count)), expected);
-            if (match) unlocked = true;
+            if (match)
+            {
+                unlocked = true;
+                if (fake.ThrowAfterUnlock) throw new InvalidOperationException("Synthetic lost unlock result.");
+            }
             return match;
         }
         finally { CryptographicOperations.ZeroMemory(bytes); }
