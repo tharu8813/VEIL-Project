@@ -531,7 +531,13 @@ internal sealed class DownloadVault : IDisposable
             {
                 var bytes = await ReadSmallLockedAsync(file.FullName);
                 if (bytes is null) continue;
-                try { loaded = JsonSerializer.Deserialize<List<VaultEntry>>(bytes, Json); } catch (JsonException) { }
+                try
+                {
+                    var candidate = JsonSerializer.Deserialize<List<VaultEntry>>(bytes, Json);
+                    if (ValidIndex(candidate)) loaded = candidate;
+                }
+                catch (JsonException) { }
+                finally { CryptographicOperations.ZeroMemory(bytes); }
                 if (loaded is not null) break;
             }
             var objects = new DirectoryInfo(Objects).GetFiles("*.veil")
@@ -546,8 +552,13 @@ internal sealed class DownloadVault : IDisposable
                 {
                     var meta = await ReadSmallLockedAsync(Path.Combine(Meta, id + ".veil"));
                     VaultEntry? entry = null;
-                    if (meta is not null) try { entry = JsonSerializer.Deserialize<VaultEntry>(meta, Json); } catch (JsonException) { }
-                    entries.Add(entry is not null && entry.Id == id ? entry
+                    if (meta is not null)
+                    {
+                        try { entry = JsonSerializer.Deserialize<VaultEntry>(meta, Json); }
+                        catch (JsonException) { }
+                        finally { CryptographicOperations.ZeroMemory(meta); }
+                    }
+                    entries.Add(ValidEntry(entry) && entry!.Id == id ? entry
                         : new VaultEntry(id, $"복구된 항목 {id[..8]}", new FileInfo(Path.Combine(Objects, id + ".veil")).Length, DateTimeOffset.Now, null, Recovered: true));
                 }
                 loaded = entries.OrderByDescending(e => e.SavedAt).ToList();
@@ -557,6 +568,16 @@ internal sealed class DownloadVault : IDisposable
         }
         finally { gate.Release(); Changed?.Invoke(); }
     }
+
+    // Authentication alone does not guarantee a usable index schema.
+    // In particular, a set comparison alone hides duplicate entries.
+    internal static bool ValidEntry(VaultEntry? entry) =>
+        entry is not null && Guid.TryParseExact(entry.Id, "N", out _) &&
+        !string.IsNullOrWhiteSpace(entry.Name) && entry.Bytes >= 0;
+
+    internal static bool ValidIndex(List<VaultEntry>? entries) =>
+        entries is not null && entries.All(ValidEntry) &&
+        entries.Select(e => e.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() == entries.Count;
 
     private async Task SaveIndexLockedAsync()
     {
