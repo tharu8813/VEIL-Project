@@ -96,6 +96,17 @@ foreach ($name in $cases.Keys) {
         $expectedNames = @('Broker/Veil.VolumeBroker.dll','Broker/Veil.VolumeBroker.exe','Desktop/Veil.Desktop.dll','Desktop/Veil.Desktop.exe','Desktop/veil-vault.exe','Desktop/runtimes/win-x64/native/WebView2Loader.dll' | Sort-Object)
         if (($names -join '|') -cne ($expectedNames -join '|')) { throw 'Incorrect relative manifest names.' }
         [void](Read-VeilPackage $manifestRoot $cert.Thumbprint)
+        if ($name -eq 'valid') {
+            $destination = Join-Path (Split-Path -Parent $root) 'copy-validation'
+            [void][IO.Directory]::CreateDirectory($destination)
+            Copy-VeilPackageFiles $manifestRoot $destination
+            [void](Read-VeilPackage $destination $cert.Thumbprint)
+            $refused = $false
+            try { Copy-VeilPackageFiles $manifestRoot $destination } catch {
+                $refused = $_.Exception.Message -match 'Expected empty non-redirected staging directory'
+            }
+            if (-not $refused) { throw 'Nonempty staging directory was not refused.' }
+        }
     } finally { if ($case.relative) { Pop-Location } }
     $message = $null
     try { & $case.change $root } catch { $message = $_.Exception.Message }

@@ -121,3 +121,11 @@ test('actual publication disk-full modes require a separately verified small vol
         assert.equal(item.lab, main.parent);
     }
 });
+
+test('package staging disk-full uses a separate verified small volume and primary evidence', () => {
+    assert.equal(makePlan(main.parent).find(item => item.id === 'package-staging-disk-full').args, undefined);
+    const item = makePlan(main.parent, small.parent).find(item => item.id === 'package-staging-disk-full');
+    assert.deepEqual(item.args, ['tests/vm/package-staging-disk-full.mjs', '--profile-parent', small.parent,
+        '--evidence-parent', main.parent]);
+    assert.equal(item.lab, main.parent);
+});

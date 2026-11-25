@@ -53,6 +53,22 @@ function Assert-VeilRelativeFile([string]$Name) {
     }
 }
 
+# Shared byte-copy operation. The production caller creates and owns restricted staging,
+# validates the signed inventory after copying, and removes failed staging.
+function Copy-VeilPackageFiles([string]$Source, [string]$Destination) {
+    $targetRoot = Get-Item -LiteralPath $Destination -Force
+    if (-not $targetRoot.PSIsContainer -or ($targetRoot.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        @(Get-ChildItem -LiteralPath $Destination -Force).Count -ne 0) { throw 'Expected empty non-redirected staging directory.' }
+    foreach ($record in @(Get-VeilTreeFiles $Source -WithRelativePath)) {
+        $relative = $record.Relative
+        if ($relative -notin @('manifest.json','manifest.p7s')) { Assert-VeilRelativeFile $relative }
+        $target = Join-Path $Destination ($relative.Replace('/','\'))
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $target))
+        # Copy only bytes into staging, not source ACLs.
+        [IO.File]::Copy($record.File.FullName,$target,$false)
+    }
+}
+
 function Get-VeilVersion([string]$Version) {
     # ADR-0010: SemVer MAJOR.MINOR.PATCH with an optional alpha.N, beta.N or rc.N prerelease (N 1-99).
     # Returns a four-part version that is both the Windows file version and the update order:

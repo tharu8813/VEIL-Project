@@ -169,14 +169,7 @@ function Copy-StagedPackage {
     if ($source -eq $bin -or $source.StartsWith($bin+'\',[StringComparison]::OrdinalIgnoreCase) -or
         $source -eq $stage -or $source -eq $previous -or $source -eq $data) { throw 'Invalid package source.' }
     New-VeilRestrictedDirectory $stage
-    foreach ($file in @(Get-VeilTreeFiles $source)) {
-        $relative=$file.FullName.Substring($source.Length+1).Replace('\','/')
-        if ($relative -notin @('manifest.json','manifest.p7s')) { Assert-VeilRelativeFile $relative }
-        $target=Join-Path $stage ($relative.Replace('/','\'))
-        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $target))
-        # File.Copy creates a new file under inherited restricted ACL; never copy source ACLs.
-        [IO.File]::Copy($file.FullName,$target,$false)
-    }
+    Copy-VeilPackageFiles $source $stage
     return Read-VeilPackage $stage $SignerThumbprint
 }
 
