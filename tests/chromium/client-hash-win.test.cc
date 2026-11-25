@@ -7,7 +7,14 @@ int wmain(int argc, wchar_t** argv) {
   if (argc != 3) return 1;
   const std::wstring root(argv[1]);
   const std::wstring hash_arg(argv[2]);
-  const std::string hash(hash_arg.begin(), hash_arg.end());
+  if (hash_arg.size() != 64) return 1;
+  std::string hash;
+  hash.reserve(hash_arg.size());
+  for (const wchar_t c : hash_arg) {
+    if (!((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') ||
+          (c >= L'A' && c <= L'F'))) return 1;
+    hash.push_back(static_cast<char>(c));
+  }
   const auto path = root + L"\\client-fixture.exe";
   const auto alias = root + L"\\alias.exe";
   std::string out = "unchanged";
