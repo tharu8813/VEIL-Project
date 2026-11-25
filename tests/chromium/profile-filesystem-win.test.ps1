@@ -18,6 +18,7 @@ try {
     [IO.File]::WriteAllText($file, 'synthetic fixture')
     Assert-Observation $target 'ordinary'
     Assert-Observation $nested 'ordinary'
+    Assert-Observation $nested 'retention'
     Assert-Observation (Join-Path $root 'missing') 'missing'
     Assert-Observation $file 'file'
     Assert-Observation ($target + '\..') 'syntax'
