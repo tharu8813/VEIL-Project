@@ -3,7 +3,7 @@
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 
-export function startProxy({ rejectConnectHosts = [] } = {}) {
+export function startProxy({ rejectConnectHosts = [], listenPort = 0 } = {}) {
     const seen = [], connected = [];
     const rejected = new Set(rejectConnectHosts.map(host => host.toLowerCase()));
     const proxy = createServer((request, response) => {
@@ -33,5 +33,8 @@ export function startProxy({ rejectConnectHosts = [] } = {}) {
         tunnel.on('error', () => socket.destroy());
         socket.on('error', () => tunnel.destroy());
     });
-    return new Promise(resolveProxy => proxy.listen(0, '127.0.0.1', () => resolveProxy({ proxy, seen, connected, port: proxy.address().port })));
+    return new Promise((resolveProxy, reject) => {
+        proxy.once('error', reject);
+        proxy.listen(listenPort, '127.0.0.1', () => resolveProxy({ proxy, seen, connected, port: proxy.address().port }));
+    });
 }

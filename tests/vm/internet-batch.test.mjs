@@ -103,3 +103,21 @@ test('downgrade warning alone is insufficient; require cancellation, native bar 
     assert.equal(judgeDowngrade(control, { ...page, url: 'https://neverssl.com/' }, target).status, 'OBSERVED');
     assert.equal(judgeDowngrade({ matched: false }, { ...page, url: target }, target).status, 'FAIL');
 });
+
+
+test('live proxy transition requires the same engine, exact origin traffic and no direct requests', async () => {
+    const { validateTransition } = await import('../phase5/proxy-transition.mjs');
+    const records = [
+        { phase: 'before', pid: 101, loaded: true, blocked: false, stored: true, entries: 1 },
+        { phase: 'blocked', pid: 101, loaded: false, blocked: true, stored: false, entries: 1, failureName: 'HttpRequestException' },
+        { phase: 'after', pid: 101, loaded: true, blocked: false, stored: true, entries: 2 },
+    ];
+    const routes = [{ page: 1, vault: 1 }, { page: 0, vault: 0 }, { page: 1, vault: 1 }];
+    assert.equal(validateTransition(records, 0, routes).status, 'PASS');
+    assert.throws(() => validateTransition(records, 1, routes));
+    assert.throws(() => validateTransition(records.slice(0, 2), 0, routes));
+    for (const change of [{ pid: 102 }, { loaded: true }, { blocked: false }, { stored: true }, { entries: 2 }, { failureName: null }])
+        assert.throws(() => validateTransition([records[0], { ...records[1], ...change }, records[2]], 0, routes));
+    assert.throws(() => validateTransition(records, 0, [routes[0], { page: 1, vault: 0 }, routes[2]]));
+    assert.throws(() => validateTransition(records, 0, [routes[0], routes[1], { page: 0, vault: 1 }]));
+});

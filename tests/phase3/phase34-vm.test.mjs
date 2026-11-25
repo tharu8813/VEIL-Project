@@ -57,6 +57,9 @@ test('loopback runners join the batch on the lab volume and stay NOT RUN without
     const guard = plan.find(item => item.id === 'network-guard');
     assert.deepEqual(guard.args, ['tests/phase5/network-guard.mjs']);
     assert.equal(guard.cwd, main.parent, 'evidence and engine profiles stay on the lab volume');
+    const transition = plan.find(item => item.id === 'proxy-transition');
+    assert.deepEqual(transition.args, ['tests/phase5/proxy-transition.mjs']);
+    assert.equal(transition.cwd, main.parent);
     for (const id of ['dns-protection', 'smartscreen']) {
         const item = plan.find(entry => entry.id === id);
         assert.equal(item.args, undefined);
