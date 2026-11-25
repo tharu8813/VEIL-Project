@@ -17,3 +17,11 @@ test('unknown network mode and ambiguous host cannot select a direct transport',
     assert.match(policy, /private sealed class FixedProxy\(Uri address\) : IWebProxy[\s\S]*?public Uri GetProxy\(Uri destination\) => address;\s*public bool IsBypassed\(Uri host\) => false;/);
     assert.doesNotMatch(policy, /new WebProxy\(/);
 });
+
+
+test('proxy TCP connections are restricted to the configured endpoint', () => {
+    assert.match(policy, /handler\.ConnectCallback = \(context, cancel\) => ConnectProxyAsync\(proxy, context\.DnsEndPoint, cancel\);/);
+    const connect = policy.slice(policy.indexOf('internal static async ValueTask<Stream> ConnectProxyAsync'), policy.indexOf('private sealed class FixedProxy'));
+    assert.match(connect, /if \(endpoint\.Port != proxy\.Port \|\|[\s\S]*?CanonicalProxyHost\(endpoint\.Host\)[\s\S]*?CanonicalProxyHost\(proxy\.IdnHost\)[\s\S]*?throw new HttpRequestException[\s\S]*?await socket\.ConnectAsync\(endpoint, cancel\);/);
+    assert.match(connect, /catch\s*\{\s*socket\.Dispose\(\);\s*throw;/);
+});
