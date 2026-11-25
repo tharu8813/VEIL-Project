@@ -88,3 +88,64 @@ try {
 } finally {
     Remove-Item -LiteralPath $lab -Recurse -Force
 }
+
+# Exercise the staging-only recovery function with a synthetic filesystem and
+# fake service, signature and ACL providers. No real services are mutated.
+$nodes = @($ast.FindAll({ param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Restore-StagingOnly'
+}, $true))
+Check ($nodes.Count -eq 1) 'unique staging-only recovery function'
+. ([scriptblock]::Create($nodes[0].Extent.Text))
+$lab = Join-Path ([IO.Path]::GetTempPath()) ('veil-stage-'+[guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($lab)
+try {
+    $bin = Join-Path $lab 'bin'
+    $stage = Join-Path $lab 'stage'
+    $journal = Join-Path $lab 'journal'
+    $previous = Join-Path $lab 'previous'
+    $failed = Join-Path $lab 'failed'
+    $config = Join-Path $lab 'broker.json'
+    $service = 'Veil.TestOnly'
+    $serviceCommand = 'synthetic'
+    $SignerThumbprint = 'synthetic'
+    [void][IO.Directory]::CreateDirectory($bin)
+    [void][IO.Directory]::CreateDirectory($stage)
+    $client = Join-Path $bin 'client.exe'
+    [IO.File]::WriteAllBytes($client,[byte[]](1,2,3))
+    $pin = (Get-FileHash -LiteralPath $client -Algorithm SHA256).Hash
+    $script:FakeService = [pscustomobject]@{ PathName=$serviceCommand; StartName='LocalSystem'; State='Running'; StartMode='Auto' }
+    $script:FakeSignatureValid = $true
+    $script:FakeDetached = $true
+    function Assert-RegisteredService {}
+    function Assert-ClosedAndDetached { if (-not $script:FakeDetached) { throw 'Synthetic attached volume.' } }
+    function Get-CimInstance($ClassName,$Filter) { return $script:FakeService }
+    function Read-VeilPackage($Root,$Thumbprint) { if (-not $script:FakeSignatureValid) { throw 'Synthetic signature failure.' } }
+    function Remove-RestrictedTree($Root) {
+        if ($Root -ne $stage) { throw 'Unexpected test deletion.' }
+        Remove-Item -LiteralPath $Root -Recurse -Force
+    }
+    @{ clientImages=@($client); clientSha256=$pin } | ConvertTo-Json | Set-Content -LiteralPath $config
+    $configHash = (Get-FileHash -LiteralPath $config).Hash
+    [void][IO.Directory]::CreateDirectory($previous)
+    Check (Refused { Restore-StagingOnly }) 'ambiguous previous tree refused'
+    Remove-Item -LiteralPath $previous
+    $script:FakeService.State = 'Stopped'
+    Check (Refused { Restore-StagingOnly }) 'inactive service refused'
+    $script:FakeService.State = 'Running'
+    $script:FakeDetached = $false
+    Check (Refused { Restore-StagingOnly }) 'attached volume refused'
+    $script:FakeDetached = $true
+    $script:FakeSignatureValid = $false
+    Check (Refused { Restore-StagingOnly }) 'invalid installed package refused'
+    $script:FakeSignatureValid = $true
+    [IO.File]::WriteAllBytes($client,[byte[]](4,5,6))
+    Check (Refused { Restore-StagingOnly }) 'mismatched client pin refused'
+    Check (Test-Path -LiteralPath $stage) 'all refusals preserve staging'
+    [IO.File]::WriteAllBytes($client,[byte[]](1,2,3))
+    Restore-StagingOnly
+    Check (-not (Test-Path -LiteralPath $stage)) 'isolated staging cleaned'
+    Check ((Get-FileHash -LiteralPath $client).Hash -eq $pin) 'installed client preserved'
+    Check ((Get-FileHash -LiteralPath $config).Hash -eq $configHash) 'registration preserved'
+} finally {
+    Remove-Item -LiteralPath $lab -Recurse -Force
+}
