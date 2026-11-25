@@ -8,13 +8,13 @@ internal static class AddressInputPolicy
         input.Any(char.IsControl) || input.Any(c => char.GetUnicodeCategory(c) == System.Globalization.UnicodeCategory.Format);
 
     private static bool WebAddress(Uri uri) =>
-        uri.IsAbsoluteUri && uri.Scheme is "http" or "https" && uri.Host.Length != 0 && uri.UserInfo.Length == 0;
+        uri.IsAbsoluteUri && (uri.Scheme is "http" or "https") && uri.Host.Length != 0 && uri.UserInfo.Length == 0;
 
     /// <summary>True means address-like input (including rejected addresses); false means ordinary search text.</summary>
     internal static bool TryResolve(string input, out Uri? result)
     {
         result = null;
-        if (HasUnsafeCharacters(input) || input.Contains('\\') || input.StartsWith("//")) return true;
+        if (HasUnsafeCharacters(input) || input.Contains('\\') || input.StartsWith('/')) return true;
         if (input.StartsWith("http:", StringComparison.OrdinalIgnoreCase) ||
             input.StartsWith("https:", StringComparison.OrdinalIgnoreCase))
         {
@@ -38,7 +38,7 @@ internal static class AddressInputPolicy
                     { Scheme = "http", Port = candidate.IsDefaultPort ? -1 : candidate.Port }.Uri : candidate;
                 return true;
             }
-            if (input.Contains(':') || input.StartsWith('/')) return true;
+            if (input.Contains(':')) return true;
         }
         int colon = input.IndexOf(':');
         // A scheme followed by a non-space is not a search, even if later text contains spaces.
