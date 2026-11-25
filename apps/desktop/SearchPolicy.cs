@@ -55,7 +55,8 @@ internal static class SearchPolicy
     {
         string query = input.Trim();
         if (data.LocalAddressSuggestions == false || query.Length is < 2 or > 256 ||
-            query.Any(char.IsControl) || TryExplicitSearch(query, data.SearchEngine, out _)) return [];
+            AddressInputPolicy.HasUnsafeCharacters(query) || TryExplicitSearch(query, data.SearchEngine, out _) ||
+            (AddressInputPolicy.TryResolve(query, out var address) && address is null)) return [];
         var words = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         if (words.Length > 12) return [];
         var best = new Dictionary<string, (AddressSuggestion Suggestion, int Rank, DateTimeOffset Visited)>(StringComparer.Ordinal);
