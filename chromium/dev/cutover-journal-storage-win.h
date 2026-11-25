@@ -9,12 +9,13 @@
 namespace veil::chromium_dev {
 enum class JournalStorageObservation {
   kRejected, kUnavailable, kUnsafe, kPending, kInvalidHistory, kConflict,
-  kEmpty, kHistoryOnly, kPublishedOnly,
+  kEmpty, kHistoryOnly, kPublishedOnly, kBusy,
 };
 namespace journal_storage_detail {
 inline constexpr std::array<std::wstring_view, 3> names{
     L"prepared.json", L"registration-replaced.json", L"activation-committed.json"};
 inline constexpr std::wstring_view pending = L"record.pending";
+inline constexpr std::wstring_view lock_name = L"maintenance.lock";
 inline bool FixtureRoot(std::wstring_view expected, std::wstring_view selected) {
   if (Evaluate(expected, selected, false, false) != PathDecision::kLexicalMatchOnly)
     return false;
@@ -33,6 +34,37 @@ inline bool FixtureRoot(std::wstring_view expected, std::wstring_view selected) 
 inline std::wstring Path(const std::wstring& root, std::wstring_view leaf) {
   return root + L"\\" + std::wstring(leaf);
 }
+// Lock file must be provisioned by the fixture owner. Never create, delete,
+// truncate or replace it. A no-sharing data handle is a cooperative lease.
+class OperationLease {
+ public:
+  OperationLease() = default;
+  OperationLease(const OperationLease&) = delete;
+  OperationLease& operator=(const OperationLease&) = delete;
+  ~OperationLease() { if (file_ != INVALID_HANDLE_VALUE) CloseHandle(file_); }
+  template <class Policy>
+  JournalStorageObservation Acquire(const std::wstring& root, HANDLE parent, Policy& policy) {
+    using R = JournalStorageObservation;
+    if (file_ != INVALID_HANDLE_VALUE) return R::kConflict;
+    if (ValidateDirectoryHandle(parent, root) != FilesystemObservation::kObservedOnly ||
+        !policy(parent, true)) return R::kUnsafe;
+    const auto path = Path(root, lock_name);
+    if (!SafeDedicatedPath(path)) return R::kRejected;
+    file_ = CreateFileW(path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (file_ == INVALID_HANDLE_VALUE)
+      return GetLastError() == ERROR_SHARING_VIOLATION ? R::kBusy : R::kUnavailable;
+    LARGE_INTEGER size{};
+    if (config_path_detail::ObserveFileShape(file_, path) !=
+        ConfigPathObservation::kObservedOnly || !GetFileSizeEx(file_, &size) ||
+        size.QuadPart != 0 || !policy(file_, false) ||
+        ValidateDirectoryHandle(parent, root) != FilesystemObservation::kObservedOnly ||
+        !policy(parent, true)) return R::kUnsafe;
+    return R::kHistoryOnly; // acquisition only; does not authenticate history
+  }
+ private:
+  HANDLE file_ = INVALID_HANDLE_VALUE;
+};
 inline int Slot(CutoverJournalState state) {
   switch (state) {
     case CutoverJournalState::kPrepared: return 0;
@@ -128,6 +160,9 @@ JournalStorageObservation ObserveSyntheticJournalHistoryWith(
       FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
   if (!parent.valid()) return R::kUnavailable;
+  OperationLease lease;
+  const auto acquired = lease.Acquire(root, parent.get(), policy);
+  if (acquired != R::kHistoryOnly) return acquired;
   return ReadHistory(root, parent.get(), output, policy);
 }
 template <class Policy>
@@ -150,6 +185,9 @@ JournalStorageObservation PublishSyntheticJournalRecordWith(
       FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
   if (!parent.valid()) return R::kUnavailable;
+  OperationLease lease;
+  const auto acquired = lease.Acquire(root, parent.get(), policy);
+  if (acquired != R::kHistoryOnly) return acquired;
   CutoverJournalRecord previous;
   const auto history = ReadHistory(root, parent.get(), &previous, policy);
   if (history != R::kEmpty && history != R::kHistoryOnly) return history;

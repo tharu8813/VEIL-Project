@@ -3,7 +3,8 @@
 #include <iostream>
 using namespace veil::chromium_dev;
 int wmain(int argc, wchar_t** argv) {
-  if (argc != 2) return 1;
+  if (argc != 3) return 1;
+  const std::wstring_view mode(argv[2]);
   const std::wstring root(argv[1]);
   using R = JournalStorageObservation;
   using J = CutoverJournalState;
@@ -18,6 +19,37 @@ int wmain(int argc, wchar_t** argv) {
   auto publish = [&](const CutoverJournalRecord& next) {
     return PublishSyntheticJournalRecordWith(root, root, next, policy);
   };
+  if (mode == L"busy") {
+    if (read() != R::kBusy || publish(record) != R::kBusy ||
+        out.transaction_id != "sentinel") return 12;
+    if (journal_storage_detail::Exists(root + L"\\record.pending") !=
+        journal_storage_detail::Presence::kAbsent) return 13;
+    std::cout << "PASS: another process holds maintenance lock; read and publication refused without mutation\n";
+    return 0;
+  }
+  if (mode != L"normal") return 14;
+  const auto lock = root + L"\\maintenance.lock";
+  const auto alias_lock = root + L"\\alias-lock";
+  if (!CreateHardLinkW(alias_lock.c_str(), lock.c_str(), nullptr)) return 15;
+  const auto linked_lock = read();
+  if (!DeleteFileW(alias_lock.c_str()) || linked_lock != R::kUnsafe ||
+      out.transaction_id != "sentinel") return 16;
+  if (!DeleteFileW(lock.c_str()) || read() != R::kUnavailable ||
+      publish(record) != R::kUnavailable || out.transaction_id != "sentinel") return 17;
+  {
+    config_path_detail::Handle recreated(CreateFileW(lock.c_str(), GENERIC_WRITE, 0,
+        nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!recreated.valid()) return 18;
+    DWORD written = 0;
+    if (!WriteFile(recreated.get(), "x", 1, &written, nullptr) || written != 1) return 19;
+  }
+  if (read() != R::kUnsafe || publish(record) != R::kUnsafe ||
+      !DeleteFileW(lock.c_str()) || out.transaction_id != "sentinel") return 20;
+  {
+    config_path_detail::Handle recreated(CreateFileW(lock.c_str(), GENERIC_WRITE, 0,
+        nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!recreated.valid()) return 21;
+  }
   if (ObserveSyntheticJournalHistory(root, root, &out) != R::kUnsafe ||
       PublishSyntheticJournalRecord(root, root, record) != R::kUnsafe ||
       out.transaction_id != "sentinel") return 2;
