@@ -26,6 +26,39 @@ int wmain(int argc, wchar_t** argv) {
     return 0;
   }
   if (mode != L"normal") return 3;
+  // The runner's ordinary temp ACL is not a trusted staging ACL.
+  // Check actual stream observations separately, without changing trust roots
+  // or requiring elevated ACL modifications on hosted CI.
+  {
+    config_path_detail::Handle file(CreateFileW(client.c_str(), GENERIC_READ,
+        FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!file.valid() || payload_object_detail::ObserveStreams(file.get(), false) !=
+        PayloadObjectObservation::kObservedOnly) return 14;
+  }
+  const auto stream = client + L":veil-fixture";
+  {
+    config_path_detail::Handle file(CreateFileW(stream.c_str(), GENERIC_WRITE, 0,
+        nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!file.valid()) return 15;
+    DWORD count = 0;
+    if (!WriteFile(file.get(), "x", 1, &count, nullptr) || count != 1) return 16;
+  }
+  {
+    config_path_detail::Handle file(CreateFileW(client.c_str(), GENERIC_READ,
+        FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!file.valid() || payload_object_detail::ObserveStreams(file.get(), false) !=
+        PayloadObjectObservation::kAlternateStream) return 17;
+  }
+  if (!DeleteFileW(stream.c_str())) return 18;
+  // Native ACL refusal (do not infer it from the CI account's identity).
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+      L"O:BAD:(A;;FA;;;WD)", SDDL_REVISION_1, &descriptor, nullptr)) return 19;
+  config_acl_detail::LocalAllocation owned(descriptor);
+  if (ObserveConfigDescriptor(descriptor) != ConfigAclObservation::kUntrustedWrite) return 20;
+  const auto strict = ObserveSyntheticPayloadTree(root, root, &out, true);
+  if (strict != Result::kObjectPolicyRejected || !unchanged()) return 21;
+  std::cout << "PASS: native alternate data stream detected, ordinary staging ACL refused; synthetic unsafe DACL refused; trusted staging positive NOT RUN\n";
   if (scan() != Result::kObservedOnly ||
       CompareSyntheticInventory(expected, out) != InventoryComparison::kMatchesOnly) return 4;
   out = sentinel;

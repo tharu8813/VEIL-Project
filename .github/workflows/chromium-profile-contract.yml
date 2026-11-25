@@ -20,6 +20,7 @@ on:
       - 'chromium/dev/manifest-inventory-contract.h'
       - 'chromium/dev/manifest-inventory-win.h'
       - 'chromium/dev/payload-tree-win.h'
+      - 'chromium/dev/payload-object-policy-win.h'
       - 'chromium/dev/package-observation-win.h'
       - 'tests/chromium/package-observation-win.test.cc'
       - 'tests/chromium/package-observation-win.test.ps1'
