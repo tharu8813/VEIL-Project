@@ -118,7 +118,9 @@ pub fn rotate(
                 return Err(invalid("Vault generation entry is not a regular file"));
             }
             let target = destination.join(name).join(format!("{id}.veil"));
-            if name != "objects" {
+            // Legacy versions could write index caches larger than read_small's budget.
+            // Preserve and authenticate them by streaming; metadata remains bounded.
+            if name == "meta" {
                 let bytes = keys.read_small(Purpose::Download, &path)?;
                 next.seal_new(Purpose::Download, &target, bytes.as_slice())?;
             } else {
@@ -336,6 +338,33 @@ mod tests {
         assert!(ready, "child never reached {phase}");
         killed.unwrap();
         assert!(!status.success());
+    }
+
+    #[test]
+    fn rotation_preserves_legacy_large_index_by_streaming() {
+        let lab = tempfile::tempdir().unwrap();
+        let root = lab.path();
+        for folder in ["objects", "meta", "index"] {
+            fs::create_dir(root.join(folder)).unwrap();
+        }
+        let original = vault_credentials::create(
+            root, SecretString::from(PASSWORD), SecretString::from(OLD_CODE),
+        ).unwrap();
+        let _lock = lock_session(root).unwrap();
+        let relative = "index/202611250102030123456.veil";
+        let payload = vec![0x41; crate::SMALL_OBJECT_LIMIT + 1];
+        original.seal_new(Purpose::Download, &root.join(relative), &payload[..]).unwrap();
+        assert!(original.read_small(Purpose::Download, &root.join(relative)).is_err());
+        let (active, next, _) = rotate(
+            root, root, &original, SecretString::from(PASSWORD), SecretString::from(NEW_CODE),
+        ).unwrap();
+        assert_eq!(self::active(root).unwrap(), active);
+        let mut restored = Vec::new();
+        next.read_object(Purpose::Download, &active.join(relative), |source| {
+            source.read_to_end(&mut restored)
+        }).unwrap();
+        assert_eq!(restored, payload);
+        assert!(original.verify(Purpose::Download, &active.join(relative)).is_err());
     }
 
     #[test]
