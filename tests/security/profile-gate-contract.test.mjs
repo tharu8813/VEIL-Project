@@ -25,3 +25,13 @@ test('protected verification requires the registered encrypted unlocked volume',
     assert.match(gate, /if \(requireProtected && !verified\)\s+throw new ProfileLocationException/);
     assert.match(startup, /requireProtected = true;[\s\S]*?ProfileGate\.Prepare\(root, volume, requireProtected\);[\s\S]*?new FileStream\(Path\.Combine\(root, "profile\.lock"\)/);
 });
+
+test('ambiguous backend unlock retains a crash watcher; relock confirms volume state', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    assert.match(broker, /try \{ authenticated = backend\.Unlock\(request\.SecretSpan\); \}\s*catch\s*\{[\s\S]*?Watch\(client\.ProcessId, ownerHandle\);\s*throw;/);
+    assert.match(broker, /var ownership = new object\(\);\s*unlockOwner = ownership;/);
+    assert.match(broker, /if \(!ReferenceEquals\(unlockOwner, ownership\)\) return;/);
+    const watch = broker.slice(broker.indexOf('private void Watch('));
+    assert.match(watch, /Unexpected volume during crash relock/);
+    assert.match(watch, /if \(result == LockResult\.Locked\)\s*\{\s*status = backend\.Status\(\);[\s\S]*?status\.Unlocked[\s\S]*?status\.VolumeGuid/);
+});
