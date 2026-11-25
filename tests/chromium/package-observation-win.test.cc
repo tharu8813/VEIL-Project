@@ -87,5 +87,31 @@ int wmain(int argc, wchar_t** argv) {
       calls != 1 || !unchanged() || !write(resource, "abc")) return 10;
   if (observe() != Result::kObservationsOnly || calls != 2 || out.files.size() != 2 ||
       out.client.version != "1.1.0-alpha.1" || !ValidClientHash(out.client.sha256)) return 11;
+  const auto expected_entry = out.client;
+  out = sentinel;
+  const auto client_dir = payload + L"\\Chromium";
+  const auto client_path = client_dir + L"\\client-fixture.exe";
+  const auto stream = client_path + L":veil-policy-fixture";
+  if (!write(stream, "x")) return 12;
+  std::string observed_hash = "old";
+  unsigned image_calls = 0;
+  auto image_observer = [&](HANDLE, const std::wstring&) {
+    ++image_calls;
+    return ClientSignatureObservation::kPolicyMatchOnly;
+  };
+  const auto object_result = ObserveSyntheticClientIntegrityWith(
+      client_dir, client_dir, expected_entry.sha256, &observed_hash, image_observer,
+      expected_entry.bytes, true);
+  if (!DeleteFileW(stream.c_str()) ||
+      object_result != ClientIntegrityObservation::kObjectPolicyRejected ||
+      image_calls || observed_hash != "old") return 13;
+  // Real CMS signature/pin, but ordinary staging must be rejected before image
+  // policy callbacks when strict object checks are selected.
+  if (ObserveSyntheticPackageWith(payload, payload, manifest, cms, pin, &out,
+      ObserveSyntheticManifestSignature, injected, true) != Result::kTreeRejected ||
+      calls != 2 || !unchanged()) return 14;
+  if (ObserveSyntheticPackageOfflinePolicy(payload, payload, manifest, cms, pin, &out) !=
+      Result::kManifestRejected || !unchanged()) return 15;
+  std::cout << "PASS: strict package tree rejects ordinary staging before client; strict client rejects ADS-bearing fixture before signature; trusted staging positive NOT RUN\n";
   std::cout << "PASS: native signed inventory and payload scan, missing/extra/tampered early refusal, unsigned refusal, persistent mutation rescan refusal, injected positive only; no package trust\n";
 }

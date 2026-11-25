@@ -16,7 +16,8 @@ template <class SignatureObserver, class PinnedObserver>
 PackageObservation ObserveSyntheticPackageWith(
     std::wstring_view expected_root, std::wstring_view selected_root,
     std::string_view manifest, std::string_view cms, std::string_view pin,
-    ManifestInventory* output, SignatureObserver signature, PinnedObserver signer) {
+    ManifestInventory* output, SignatureObserver signature, PinnedObserver signer,
+    bool strict_objects = false) {
   if (!output || !ValidClientHash(pin) ||
       Evaluate(expected_root, selected_root, false, false) != PathDecision::kLexicalMatchOnly)
     return PackageObservation::kRejected;
@@ -25,7 +26,7 @@ PackageObservation ObserveSyntheticPackageWith(
       SignedEntryObservation::kEntryOnly)
     return PackageObservation::kManifestRejected;
   std::vector<ManifestFileEntry> observed;
-  if (ObserveSyntheticPayloadTree(expected_root, selected_root, &observed) !=
+  if (ObserveSyntheticPayloadTree(expected_root, selected_root, &observed, strict_objects) !=
       PayloadTreeObservation::kObservedOnly)
     return PackageObservation::kTreeRejected;
   if (CompareSyntheticInventory(expected, observed) != InventoryComparison::kMatchesOnly)
@@ -38,13 +39,13 @@ PackageObservation ObserveSyntheticPackageWith(
   if (ObserveSyntheticClientIntegrityWith(directory, directory, expected.client.sha256,
       &digest, [&](HANDLE file, const std::wstring& path) {
         return signer(file, path, pin);
-      }, expected.client.bytes) != ClientIntegrityObservation::kObservationsOnly ||
+      }, expected.client.bytes, strict_objects) != ClientIntegrityObservation::kObservationsOnly ||
       !SameClientHash(digest, expected.client.sha256))
     return PackageObservation::kClientRejected;
   // Detect persistent differences across the client check. Not a snapshot,
   // transactional directory lock or proof against temporary replacements.
   observed.clear();
-  if (ObserveSyntheticPayloadTree(expected_root, selected_root, &observed) !=
+  if (ObserveSyntheticPayloadTree(expected_root, selected_root, &observed, strict_objects) !=
       PayloadTreeObservation::kObservedOnly ||
       CompareSyntheticInventory(expected, observed) != InventoryComparison::kMatchesOnly)
     return PackageObservation::kRescanRejected;
@@ -57,7 +58,8 @@ inline PackageObservation ObserveSyntheticPackageOfflinePolicy(
     std::string_view manifest, std::string_view cms, std::string_view pin,
     ManifestInventory* output) {
   return ObserveSyntheticPackageWith(expected_root, selected_root, manifest, cms,
-      pin, output, ObserveSyntheticManifestOfflinePolicy, ObserveOfflinePinnedClientHandle);
+      pin, output, ObserveSyntheticManifestOfflinePolicy, ObserveOfflinePinnedClientHandle,
+      true); // Strict object policy is mandatory for this experimental native entry.
 }
 }  // namespace veil::chromium_dev
 #endif
