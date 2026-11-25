@@ -5,11 +5,13 @@
 #include "cutover-journal-contract.h"
 #include "client-hash-win.h"
 #include "payload-object-policy-win.h"
+#include <memory>
+#include <mutex>
 
 namespace veil::chromium_dev {
 enum class JournalStorageObservation {
   kRejected, kUnavailable, kUnsafe, kPending, kInvalidHistory, kConflict,
-  kEmpty, kHistoryOnly, kPublishedOnly, kBusy,
+  kEmpty, kHistoryOnly, kPublishedOnly, kBusy, kLeaseOnly,
 };
 namespace journal_storage_detail {
 inline constexpr std::array<std::wstring_view, 3> names{
@@ -54,13 +56,17 @@ class OperationLease {
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (file_ == INVALID_HANDLE_VALUE)
       return GetLastError() == ERROR_SHARING_VIOLATION ? R::kBusy : R::kUnavailable;
+    return Recheck(root, parent, policy) ? R::kLeaseOnly : R::kUnsafe;
+  }
+  template <class Policy>
+  bool Recheck(const std::wstring& root, HANDLE parent, Policy& policy) const {
     LARGE_INTEGER size{};
-    if (config_path_detail::ObserveFileShape(file_, path) !=
-        ConfigPathObservation::kObservedOnly || !GetFileSizeEx(file_, &size) ||
-        size.QuadPart != 0 || !policy(file_, false) ||
-        ValidateDirectoryHandle(parent, root) != FilesystemObservation::kObservedOnly ||
-        !policy(parent, true)) return R::kUnsafe;
-    return R::kHistoryOnly; // acquisition only; does not authenticate history
+    return file_ != INVALID_HANDLE_VALUE &&
+        config_path_detail::ObserveFileShape(file_, Path(root, lock_name)) ==
+            ConfigPathObservation::kObservedOnly &&
+        GetFileSizeEx(file_, &size) && size.QuadPart == 0 && policy(file_, false) &&
+        ValidateDirectoryHandle(parent, root) == FilesystemObservation::kObservedOnly &&
+        policy(parent, true);
   }
  private:
   HANDLE file_ = INVALID_HANDLE_VALUE;
@@ -145,85 +151,113 @@ inline bool NativePolicy(HANDLE handle, bool directory) {
 }
 }  // namespace journal_storage_detail
 
+// Session owns the retained ancestors, checked directory and exclusive lock.
+// No raw handles escape. This is a fixture journal lease, not a product
+// maintenance/service lease. Do not reenter from policy callbacks.
+template <class Policy>
+class SyntheticJournalSession {
+ public:
+  using R = JournalStorageObservation;
+  SyntheticJournalSession(std::wstring_view expected, std::wstring_view selected, Policy policy)
+      : root_(selected), policy_(std::move(policy)) {
+    using namespace journal_storage_detail;
+    if (!FixtureRoot(expected, selected)) return;
+    if (retained_.Observe(expected, selected, false, false) !=
+        FilesystemObservation::kObservedOnly) { status_ = R::kUnsafe; return; }
+    parent_.reset(new config_path_detail::Handle(CreateFileW(root_.c_str(),
+        READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr)));
+    if (!parent_->valid()) { status_ = R::kUnavailable; return; }
+    status_ = lease_.Acquire(root_, parent_->get(), policy_);
+  }
+  SyntheticJournalSession(const SyntheticJournalSession&) = delete;
+  SyntheticJournalSession& operator=(const SyntheticJournalSession&) = delete;
+  R status() const noexcept { return status_; }
+  R Read(CutoverJournalRecord* output) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (!output) return R::kRejected;
+    if (status_ != R::kLeaseOnly) return status_;
+    if (!lease_.Recheck(root_, parent_->get(), policy_)) return R::kUnsafe;
+    CutoverJournalRecord candidate;
+    const auto result = journal_storage_detail::ReadHistory(root_, parent_->get(), &candidate, policy_);
+    if (!lease_.Recheck(root_, parent_->get(), policy_)) return R::kUnsafe;
+    if (result == R::kHistoryOnly) *output = std::move(candidate);
+    return result;
+  }
+  R Publish(const CutoverJournalRecord& next) {
+    using namespace journal_storage_detail;
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::string bytes;
+    if (EncodeSyntheticCutoverJournal(next, &bytes) != CutoverJournalResult::kRecordOnly)
+      return R::kRejected;
+    const int slot = Slot(next.state);
+    if (slot < 0) return R::kRejected;
+    if (status_ != R::kLeaseOnly) return status_;
+    if (!lease_.Recheck(root_, parent_->get(), policy_)) return R::kUnsafe;
+    CutoverJournalRecord previous;
+    const auto history = ReadHistory(root_, parent_->get(), &previous, policy_);
+    if (history != R::kEmpty && history != R::kHistoryOnly) return history;
+    if ((history == R::kEmpty && slot != 0) ||
+        (history == R::kHistoryOnly && !IsSyntheticCutoverJournalSuccessor(previous, next)))
+      return R::kConflict;
+    const auto temporary = Path(root_, pending);
+    const auto destination = Path(root_, names[static_cast<std::size_t>(slot)]);
+    // CREATE_NEW + no-overwrite handle rename. Leave failed pending artifacts
+    // for review; never delete or truncate a pre-existing record.
+    config_path_detail::Handle file(CreateFileW(temporary.c_str(),
+        GENERIC_READ | GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH, nullptr));
+    if (!file.valid()) return R::kConflict;
+    if (config_path_detail::ObserveFileShape(file.get(), temporary) !=
+        ConfigPathObservation::kObservedOnly || !policy_(file.get(), false) ||
+        !policy_(parent_->get(), true)) return R::kUnsafe;
+    DWORD written = 0;
+    const DWORD length = static_cast<DWORD>(bytes.size());
+    if (!WriteFile(file.get(), bytes.data(), length, &written, nullptr) ||
+        written != length || !FlushFileBuffers(file.get())) return R::kPending;
+    LARGE_INTEGER start{};
+    std::string reread;
+    if (!SetFilePointerEx(file.get(), start, nullptr, FILE_BEGIN) ||
+        config_path_detail::ReadBoundedFixture(file.get(), &reread) !=
+            ConfigPathObservation::kContentObservedOnly || reread != bytes ||
+        config_path_detail::ObserveFileShape(file.get(), temporary) !=
+            ConfigPathObservation::kObservedOnly || !policy_(file.get(), false) ||
+        ValidateDirectoryHandle(parent_->get(), root_) != FilesystemObservation::kObservedOnly ||
+        !policy_(parent_->get(), true)) return R::kPending;
+    if (!RenameNoReplace(file.get(), destination)) return R::kPending;
+    if (!FlushFileBuffers(file.get()) ||
+        config_path_detail::ObserveFileShape(file.get(), destination) !=
+            ConfigPathObservation::kObservedOnly || !policy_(file.get(), false) ||
+        !policy_(parent_->get(), true)) return R::kUnavailable; // publication ambiguous
+    if (!lease_.Recheck(root_, parent_->get(), policy_)) return R::kUnavailable;
+    return R::kPublishedOnly;
+  }
+ private:
+  std::wstring root_;
+  Policy policy_;
+  DirectoryHandleRetention retained_;
+  std::unique_ptr<config_path_detail::Handle> parent_;
+  journal_storage_detail::OperationLease lease_;
+  R status_ = R::kRejected;
+  std::mutex mutex_;
+};
+
 template <class Policy>
 JournalStorageObservation ObserveSyntheticJournalHistoryWith(
     std::wstring_view expected, std::wstring_view selected,
     CutoverJournalRecord* output, Policy policy) {
-  using namespace journal_storage_detail;
-  using R = JournalStorageObservation;
-  if (!output || !FixtureRoot(expected, selected)) return R::kRejected;
-  const std::wstring root(selected);
-  DirectoryHandleRetention retained;
-  if (retained.Observe(expected, selected, false, false) != FilesystemObservation::kObservedOnly)
-    return R::kUnsafe;
-  config_path_detail::Handle parent(CreateFileW(root.c_str(), READ_CONTROL | FILE_READ_ATTRIBUTES |
-      FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-  if (!parent.valid()) return R::kUnavailable;
-  OperationLease lease;
-  const auto acquired = lease.Acquire(root, parent.get(), policy);
-  if (acquired != R::kHistoryOnly) return acquired;
-  return ReadHistory(root, parent.get(), output, policy);
+  if (!output) return JournalStorageObservation::kRejected;
+  SyntheticJournalSession<Policy> session(expected, selected, std::move(policy));
+  return session.Read(output);
 }
 template <class Policy>
 JournalStorageObservation PublishSyntheticJournalRecordWith(
     std::wstring_view expected, std::wstring_view selected,
     const CutoverJournalRecord& next, Policy policy) {
-  using namespace journal_storage_detail;
-  using R = JournalStorageObservation;
-  if (!FixtureRoot(expected, selected)) return R::kRejected;
-  std::string bytes;
-  if (EncodeSyntheticCutoverJournal(next, &bytes) != CutoverJournalResult::kRecordOnly)
-    return R::kRejected;
-  const int slot = Slot(next.state);
-  if (slot < 0) return R::kRejected;
-  const std::wstring root(selected);
-  DirectoryHandleRetention retained;
-  if (retained.Observe(expected, selected, false, false) != FilesystemObservation::kObservedOnly)
-    return R::kUnsafe;
-  config_path_detail::Handle parent(CreateFileW(root.c_str(), READ_CONTROL | FILE_READ_ATTRIBUTES |
-      FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-  if (!parent.valid()) return R::kUnavailable;
-  OperationLease lease;
-  const auto acquired = lease.Acquire(root, parent.get(), policy);
-  if (acquired != R::kHistoryOnly) return acquired;
-  CutoverJournalRecord previous;
-  const auto history = ReadHistory(root, parent.get(), &previous, policy);
-  if (history != R::kEmpty && history != R::kHistoryOnly) return history;
-  if ((history == R::kEmpty && slot != 0) ||
-      (history == R::kHistoryOnly && !IsSyntheticCutoverJournalSuccessor(previous, next)))
-    return R::kConflict;
-  const auto temporary = Path(root, pending);
-  const auto destination = Path(root, names[static_cast<std::size_t>(slot)]);
-  // CREATE_NEW + no-overwrite handle rename. Leave failed pending artifacts
-  // for review; never delete or truncate a pre-existing record.
-  config_path_detail::Handle file(CreateFileW(temporary.c_str(),
-      GENERIC_READ | GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW,
-      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH, nullptr));
-  if (!file.valid()) return R::kConflict;
-  if (config_path_detail::ObserveFileShape(file.get(), temporary) !=
-      ConfigPathObservation::kObservedOnly || !policy(file.get(), false) ||
-      !policy(parent.get(), true)) return R::kUnsafe;
-  DWORD written = 0;
-  const DWORD length = static_cast<DWORD>(bytes.size());
-  if (!WriteFile(file.get(), bytes.data(), length, &written, nullptr) ||
-      written != length || !FlushFileBuffers(file.get())) return R::kPending;
-  LARGE_INTEGER start{};
-  std::string reread;
-  if (!SetFilePointerEx(file.get(), start, nullptr, FILE_BEGIN) ||
-      config_path_detail::ReadBoundedFixture(file.get(), &reread) !=
-          ConfigPathObservation::kContentObservedOnly || reread != bytes ||
-      config_path_detail::ObserveFileShape(file.get(), temporary) !=
-          ConfigPathObservation::kObservedOnly || !policy(file.get(), false) ||
-      ValidateDirectoryHandle(parent.get(), root) != FilesystemObservation::kObservedOnly ||
-      !policy(parent.get(), true)) return R::kPending;
-  if (!RenameNoReplace(file.get(), destination)) return R::kPending;
-  if (!FlushFileBuffers(file.get()) ||
-      config_path_detail::ObserveFileShape(file.get(), destination) !=
-          ConfigPathObservation::kObservedOnly || !policy(file.get(), false) ||
-      !policy(parent.get(), true)) return R::kUnavailable; // publication ambiguous
-  return R::kPublishedOnly;
+  if (!cutover_journal_detail::ValidRecord(next)) return JournalStorageObservation::kRejected;
+  SyntheticJournalSession<Policy> session(expected, selected, std::move(policy));
+  return session.Publish(next);
 }
 inline JournalStorageObservation ObserveSyntheticJournalHistory(
     std::wstring_view expected, std::wstring_view selected, CutoverJournalRecord* output) {
