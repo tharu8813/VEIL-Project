@@ -1,0 +1,7 @@
+# C1 upstream release-style build; not a signed VEIL distribution.
+target_cpu = "x64"
+is_debug = false
+is_component_build = false
+symbol_level = 1
+blink_symbol_level = 0
+v8_symbol_level = 0
