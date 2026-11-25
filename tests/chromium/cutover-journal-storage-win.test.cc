@@ -28,6 +28,48 @@ int wmain(int argc, wchar_t** argv) {
     std::cout << "PASS: another process holds maintenance lock; read and publication refused without mutation\n";
     return 0;
   }
+  const CutoverRecoveryEvidence evidence{true,true,true,true,true,true,true,true,true,true,true,true};
+  if (mode == L"restore") {
+    const auto registration_path = root + L"\\registration-fixture.json";
+    auto write_bytes = [&](std::string_view bytes) {
+      config_path_detail::Handle file(CreateFileW(registration_path.c_str(), GENERIC_WRITE, 0,
+          nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+      DWORD count = 0;
+      return file.valid() && WriteFile(file.get(), bytes.data(), static_cast<DWORD>(bytes.size()),
+          &count, nullptr) && count == static_cast<DWORD>(bytes.size());
+    };
+    SyntheticJournalSession<decltype(policy)> session(root, root, policy);
+    if (session.status() != R::kLeaseOnly || !write_bytes("abc") ||
+        session.CreateRegistrationBackup(record) != R::kBackupOnly ||
+        session.Publish(record) != R::kPublishedOnly ||
+        session.RestoreRegistrationFixture(evidence) != R::kLegacyBytesOnly ||
+        !write_bytes("hello")) return 31;
+    auto missing = evidence;
+    missing.activation_excluded = false;
+    if (session.RestoreRegistrationFixture(missing) != R::kRecoveryReview ||
+        session.VerifyRegistrationArtifacts() != R::kTargetBytesOnly ||
+        !write_bytes("abd") || session.RestoreRegistrationFixture(evidence) != R::kRecoveryReview ||
+        !write_bytes("hello")) return 32;
+    if (session.RestoreRegistrationFixture(evidence) != R::kRestoredOnly ||
+        session.Read(&out) != R::kRecoveryReview || out.transaction_id != "sentinel" ||
+        session.RestoreRegistrationFixture(evidence) != R::kRecoveryReview) return 33;
+    auto replaced = record;
+    replaced.state = J::kRegistrationReplaced;
+    if (session.Publish(replaced) != R::kRecoveryReview) return 34;
+    auto check = [&](std::wstring_view leaf, std::string_view expected) {
+      const auto path = journal_storage_detail::Path(root, leaf);
+      config_path_detail::Handle file(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+          nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+      std::string bytes, digest;
+      return file.valid() && journal_storage_detail::ReadRegistrationBytes(
+          file.get(), path, policy, &bytes, &digest) && bytes == expected;
+    };
+    if (!check(L"registration-fixture.json", "abc") ||
+        !check(L"registration-backup.json", "abc") ||
+        !check(L"restore-displaced.json", "hello")) return 35;
+    std::cout << "PASS: fixture restore preserves backup and displaced target, blocks future transitions; missing evidence and unknown bytes refused\n";
+    return 0;
+  }
   if (mode != L"normal") return 14;
   const auto lock = root + L"\\maintenance.lock";
   const auto alias_lock = root + L"\\alias-lock";
@@ -142,7 +184,9 @@ int wmain(int argc, wchar_t** argv) {
         session.Publish(committed) != R::kDigestMismatch ||
         !replace_bytes(backup, "abc") || session.Publish(committed) != R::kPublishedOnly ||
         session.Read(&out) != R::kHistoryOnly || out.state != J::kActivationCommitted ||
-        session.Publish(next) != R::kConflict) return 7;
+        session.Publish(next) != R::kConflict ||
+        session.RestoreRegistrationFixture(evidence) != R::kRecoveryReview ||
+        session.VerifyRegistrationArtifacts() != R::kTargetBytesOnly) return 7;
   }
   if (read() != R::kHistoryOnly || out.state != J::kActivationCommitted) return 26;
   std::cout << "PASS: all three journal stages require intact backup and correct registration bytes; missing, wrong stage and altered digest refused\n";
