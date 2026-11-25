@@ -50,13 +50,17 @@ internal static class DownloadFailurePolicy
     internal static string Describe(Exception error, DownloadPhase phase, bool open)
     {
         if (!open) return "금고 열기 실패";
+        bool storageFull = error is VaultStorageFullException ||
+            error is IOException io && (io.HResult & 0xffff) is 0x27 or 0x70;
+        // After the commit boundary, even access or session errors can leave a complete object.
+        if (phase == DownloadPhase.Publishing)
+            return storageFull ? "저장 공간 부족 · 보관 목록 확인 필요" :
+                error is UnauthorizedAccessException ? "금고 저장소 접근 권한 오류 · 보관 목록 확인 필요" :
+                "금고 저장 마무리 실패 · 보관 목록 확인 필요";
         if (error is DownloadRequestFailure failure) return failure.Message;
         if (error is UnauthorizedAccessException) return "금고 저장소 접근 권한 오류";
-        if (error is VaultStorageFullException ||
-            error is IOException io && (io.HResult & 0xffff) is 0x27 or 0x70)
-            return phase == DownloadPhase.Publishing ? "저장 공간 부족 · 보관 목록 확인 필요" : "저장 공간 부족";
+        if (storageFull) return "저장 공간 부족";
         if (error is OperationCanceledException) return "요청 시간 초과 또는 연결 중단";
-        if (phase == DownloadPhase.Publishing) return "금고 저장 마무리 실패 · 보관 목록 확인 필요";
         if (phase == DownloadPhase.Streaming) return "전송 중단 또는 암호화 저장 실패";
         if (error is System.Runtime.InteropServices.COMException) return "원래 브라우저 연결 사용 불가";
         if (error is HttpRequestException) return "네트워크 요청 실패";
