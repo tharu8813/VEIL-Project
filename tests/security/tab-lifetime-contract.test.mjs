@@ -70,3 +70,18 @@ test('management acceptance is bound to native page, navigation and focus epoch'
     assert.match(browser, /private void TabChanged[\s\S]*?managementFocusEpoch\+\+;/);
     assert.match(settings, /source\.NavigationEpoch != epoch \|\| managementFocusEpoch != focus/);
 });
+
+
+const library = await readFile('apps/desktop/LibraryWindow.cs', 'utf8');
+const toolbar = await readFile('apps/desktop/BrowserWindow.Toolbar.cs', 'utf8');
+test('bookmark and history edits both require the current live native manager', () => {
+    assert.match(browser, /bool CanEditLibrary\(\) => SettingsReady\(\) && IsActive &&\s*Active is \{ CancelManagement: not null \} active && active\.Url == internalUrl &&\s*CanUseTab\(active\.Item\) && ReferenceEquals\(editable \? bookmarkLibrary : historyLibrary, dialog\)/);
+    assert.match(browser, /data\.BookmarkFolders : null, CanEditLibrary, PublishLibrary/);
+    assert.match(library, /bool Commit\(Action change\)\s*\{\s*if \(canEdit\?\.Invoke\(\) != true\) return false;/);
+    assert.match(library, /void Open\(\)\s*\{\s*if \(canEdit\?\.Invoke\(\) != true/);
+});
+test('failed library save restores data and successful save publishes separately', () => {
+    assert.match(library, /var previous = entries\.ToArray\(\);[\s\S]*?change\(\);[\s\S]*?committed = \(folders is null \|\| BookmarkPolicy\.Valid\(folders, entries\)\) && save\(\);[\s\S]*?if \(!committed\)[\s\S]*?entries\.AddRange\(previous\);[\s\S]*?folders\.AddRange\(previousFolders\);[\s\S]*?return false;[\s\S]*?published\?\.Invoke\(\);/);
+    assert.match(library, /new HashSet<PageEntry>\(targets, ReferenceEqualityComparer\.Instance\);\s*Commit\(\(\) => entries\.RemoveAll\(confirmed\.Contains\)\);/);
+    assert.match(toolbar, /private void RefreshHistoryLibraries[\s\S]*?window\.historyLibrary is \{ \} library && !ReferenceEquals\(library, source\)/);
+});
