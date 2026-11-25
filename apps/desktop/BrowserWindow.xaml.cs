@@ -668,13 +668,26 @@ public partial class BrowserWindow : Window
     private async Task<bool> EnsureVaultOpenAsync(CancellationToken cancellation = default)
     {
         await session.VaultOpenGate.WaitAsync(cancellation);
+        bool wasUnlocked = session.Vault.Unlocked;
+        bool accepted = false;
         try
         {
             cancellation.ThrowIfCancellationRequested();
             if (closing || session.IsEnding || session.EngineLost) return false;
-            return await OpenVaultAsync(cancellation);
+            accepted = await OpenVaultAsync(cancellation) && !cancellation.IsCancellationRequested &&
+                !closing && !session.IsEnding && !session.EngineLost;
+            return accepted;
         }
-        finally { session.VaultOpenGate.Release(); }
+        finally
+        {
+            try
+            {
+                // An abandoned opening must not authorize the next queued download.
+                // Do not lock a vault which was already open before this request.
+                if (!accepted && !wasUnlocked && session.Vault.Unlocked) session.Vault.Lock();
+            }
+            finally { session.VaultOpenGate.Release(); }
+        }
     }
 
     private async Task<bool> OpenVaultAsync(CancellationToken cancellation)
@@ -690,7 +703,7 @@ public partial class BrowserWindow : Window
         if (!vault.Exists)
         {
             var setup = new VaultSetupDialog(this, "다운로드 금고 만들기", askPassphrase: true, issueCode: true, allowRestore: true);
-            if (setup.ShowDialog() != true || !CanContinue()) return false;
+            if (!setup.ShowForVaultOpen(cancellation) || !CanContinue()) return false;
             bool restoringBackup = setup.Backup is not null;
             Status.Text = restoringBackup ? "암호화 금고를 복원하는 중입니다." : "암호화 금고를 만드는 중입니다.";
             string? failure = setup.Backup is { } backup
@@ -705,7 +718,7 @@ public partial class BrowserWindow : Window
         for (int attempt = 0; attempt < 5 && CanContinue(); attempt++)
         {
             var unlock = new VaultUnlockDialog(this, error);
-            if (unlock.ShowDialog() != true || !CanContinue()) return false;
+            if (!unlock.ShowCancellable(cancellation) || !CanContinue()) return false;
             if (unlock.RecoveryCode is { } code)
             {
                 error = await vault.RecoverAsync(code);
@@ -716,7 +729,7 @@ public partial class BrowserWindow : Window
                     // A recovered vault must be relocked if shutdown/cancellation wins before credential reset.
                     if (!CanContinue()) return false;
                     var reset = new VaultSetupDialog(this, "복구 후 새 암호와 복구 코드", askPassphrase: true, issueCode: true);
-                    if (reset.ShowDialog() != true || !CanContinue()) return false;
+                    if (!reset.ShowForVaultOpen(cancellation) || !CanContinue()) return false;
                     resetSaved = await vault.CompleteRecoveryAsync(reset.Passphrase!, reset.RecoveryCode!);
                     if (resetSaved) return CanContinue();
                     error = "새 인증 정보를 모두 저장하지 못했습니다. 다시 잠금을 해제하세요.";

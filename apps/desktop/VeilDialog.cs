@@ -30,6 +30,21 @@ internal class VeilDialog : Window
         return shell;
     }
 
+    // Cancellation can arrive from a different thread while ShowDialog runs its nested dispatcher.
+    internal bool ShowCancellable(CancellationToken cancellation, Func<bool>? canDismiss = null)
+    {
+        if (cancellation.IsCancellationRequested) return false;
+        using var registration = cancellation.Register(() =>
+        {
+            if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (IsVisible && (canDismiss?.Invoke() ?? true)) Close();
+            }));
+        });
+        return !cancellation.IsCancellationRequested && ShowDialog() == true && !cancellation.IsCancellationRequested;
+    }
+
     protected void Complete(bool accepted)
     {
         if (pageCompletion is { } finish) finish(accepted);
