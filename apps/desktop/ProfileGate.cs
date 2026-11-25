@@ -89,6 +89,25 @@ internal static class ProfileGate
         return new ProfileLocation(final, volume, verified);
     }
 
+    /// <summary>Reject existing redirected files and directories before opening profile state.
+    /// This is a startup check, not protection against concurrent same-user path changes.</summary>
+    internal static void RejectRedirectedChildren(string directory)
+    {
+        var pending = new Stack<DirectoryInfo>();
+        pending.Push(new DirectoryInfo(directory));
+        while (pending.TryPop(out var parent))
+        {
+            if (parent.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                throw new ProfileLocationException("The profile contains a redirected directory.");
+            foreach (var entry in parent.EnumerateFileSystemInfos())
+            {
+                if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                    throw new ProfileLocationException("The profile contains a redirected file or directory.");
+                if (entry is DirectoryInfo child) pending.Push(child);
+            }
+        }
+    }
+
     private static string FinalPath(string path)
     {
         using var handle = CreateFileW(path, 0, FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero,

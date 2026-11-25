@@ -79,6 +79,7 @@ internal static class Program
             }
             string root = Path.GetFullPath(smoke ? args[1] : productProfile ?? Path.Combine(".veil-dev", "desktop"));
             ProfileGate.Prepare(root, volume, requireProtected);
+            ProfileGate.RejectRedirectedChildren(root);
             using var profileLock = new FileStream(Path.Combine(root, "profile.lock"), FileMode.OpenOrCreate,
                 FileAccess.ReadWrite, FileShare.None);
             using var vault = new DownloadVault(root, usesProfilePassword: requireProtected);
@@ -139,13 +140,19 @@ internal static class Program
         finally
         {
             ProtectedProfileSession.ClearPassword(profilePassword);
-            if (scratch is not null)
+            try
             {
-                try { ProfileScratch.Clear(scratch); }
-                catch (ProfileLocationException) { }
+                if (scratch is not null)
+                {
+                    try { ProfileScratch.Clear(scratch); }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+                }
             }
-            try { protectedSession?.Dispose(); }
-            finally { notifications?.Dispose(); }
+            finally
+            {
+                try { protectedSession?.Dispose(); }
+                finally { notifications?.Dispose(); }
+            }
         }
     }
 
@@ -182,6 +189,7 @@ internal static class Program
         ProfileGate.RejectElevated();
         string expected = Path.TrimEndingDirectorySeparator(Path.GetFullPath(profile));
         ProfileGate.Prepare(expected, volume, requireProtected);
+        ProfileGate.RejectRedirectedChildren(expected);
         // Reject this collision before the runtime can display a native error dialog.
         if (File.Exists(Path.Combine(expected, "EBWebView")))
             throw new IOException("The WebView2 profile directory is obstructed by a file.");

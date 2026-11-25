@@ -35,3 +35,14 @@ test('ambiguous backend unlock retains a crash watcher; relock confirms volume s
     assert.match(watch, /Unexpected volume during crash relock/);
     assert.match(watch, /if \(result == LockResult\.Locked\)\s*\{\s*status = backend\.Status\(\);[\s\S]*?status\.Unlocked[\s\S]*?status\.VolumeGuid/);
 });
+
+test('profile descendants are checked before profile lock and engine setup', () => {
+    const check = gate.slice(gate.indexOf('internal static void RejectRedirectedChildren('), gate.indexOf('private static string FinalPath('));
+    assert.match(check, /parent\.Attributes\.HasFlag\(FileAttributes\.ReparsePoint\)/);
+    assert.match(check, /foreach \(var entry in parent\.EnumerateFileSystemInfos\(\)\)[\s\S]*?entry\.Attributes\.HasFlag\(FileAttributes\.ReparsePoint\)[\s\S]*?throw new ProfileLocationException[\s\S]*?pending\.Push\(child\)/);
+    assert.match(startup, /ProfileGate\.Prepare\(root, volume, requireProtected\);\s*ProfileGate\.RejectRedirectedChildren\(root\);\s*using var profileLock/);
+    assert.match(startup, /ProfileGate\.Prepare\(expected, volume, requireProtected\);\s*ProfileGate\.RejectRedirectedChildren\(expected\);[\s\S]*?CoreWebView2Environment\.CreateAsync/);
+});
+test('scratch cleanup cannot bypass protected session disposal', () => {
+    assert.match(startup, /try\s*\{\s*if \(scratch is not null\)\s*\{\s*try \{ ProfileScratch\.Clear\(scratch\); \}\s*catch \(Exception error\) when \(error is IOException or UnauthorizedAccessException\) \{ \}\s*\}\s*\}\s*finally\s*\{\s*try \{ protectedSession\?\.Dispose\(\); \}\s*finally \{ notifications\?\.Dispose\(\); \}/);
+});

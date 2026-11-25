@@ -83,6 +83,14 @@ try {
         const parentTarget = join(profileRoot, 'junction-parent-target');
         await junction(join(profileRoot, 'junction-parent'), parentTarget);
         junctions.parent = await probe('junction-parent', join(profileRoot, 'junction-parent', 'child'), 'read');
+        const nestedProfile = join(profileRoot, 'nested-profile');
+        const nestedCache = join(nestedProfile, 'EBWebView', 'Cache');
+        await mkdir(nestedCache, { recursive: true });
+        const nestedTarget = join(profileRoot, 'nested-junction-target');
+        await junction(join(nestedCache, 'redirected'), nestedTarget);
+        junctions.nested = await probe('junction-nested', nestedProfile, 'read');
+        assert.deepEqual(await readdir(nestedTarget), [], 'redirected cache target was modified');
+        assert.deepEqual(await readdir(nestedCache), ['redirected'], 'blocked profile was modified');
         for (const result of Object.values(junctions)) {
             assert.equal(result.exitCode, 1);
             assert.match(result.error, /^ProfileLocationException: /);
