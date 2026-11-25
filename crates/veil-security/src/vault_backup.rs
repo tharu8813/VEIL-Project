@@ -270,6 +270,57 @@ mod record_tests {
     const ID: &str = "0123456789abcdef0123456789abcdef";
 
     #[test]
+    fn nonregular_restore_source_is_rejected_without_creating_destination() {
+        let lab = tempfile::tempdir().unwrap();
+        let destination = lab.path().join("restored");
+        let result = restore(lab.path(), &destination, SecretString::from("synthetic-password"),
+            SecretString::from("synthetic-code"));
+        assert_eq!(result.err().unwrap().kind(), io::ErrorKind::InvalidData);
+        assert!(!destination.exists());
+        assert_eq!(fs::read_dir(lab.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_input_and_backup_directory_are_rejected() {
+        use std::os::unix::fs::symlink;
+        let lab = tempfile::tempdir().unwrap();
+        let real = lab.path().join("source");
+        fs::write(&real, b"synthetic").unwrap();
+        let link = lab.path().join("link");
+        symlink(&real, &link).unwrap();
+        assert_eq!(open_regular_read(&link).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        let vault = lab.path().join("vault");
+        fs::create_dir(&vault).unwrap();
+        fs::create_dir(vault.join("meta")).unwrap();
+        let external = lab.path().join("external");
+        fs::create_dir(&external).unwrap();
+        symlink(&external, vault.join("objects")).unwrap();
+        let destination = lab.path().join("backup.veil");
+        let result = export(&Keyring::generate(), &vault, &destination, SecretString::from("synthetic-password"));
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert!(!destination.exists());
+        assert_eq!(fs::read(&real).unwrap(), b"synthetic");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restore_refuses_existing_source_writer_before_creating_destination() {
+        let lab = tempfile::tempdir().unwrap();
+        let source = lab.path().join("source.veil");
+        fs::write(&source, b"synthetic").unwrap();
+        let writer = OpenOptions::new().write(true).open(&source).unwrap();
+        let destination = lab.path().join("restored");
+        let result = restore(&source, &destination, SecretString::from("synthetic-password"),
+            SecretString::from("synthetic-code"));
+        assert_eq!(result.err().unwrap().raw_os_error(), Some(32));
+        assert!(!destination.exists());
+        drop(writer);
+        assert!(open_regular_read(&source).is_ok());
+        assert_eq!(fs::read_dir(lab.path()).unwrap().count(), 1);
+    }
+
+    #[test]
     fn backup_record_contains_exact_authenticated_ciphertext() {
         let lab = tempfile::tempdir().unwrap();
         let keys = Keyring::generate();
