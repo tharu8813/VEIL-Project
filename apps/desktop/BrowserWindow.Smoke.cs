@@ -685,6 +685,23 @@ public partial class BrowserWindow
                         vault.Entries.Count == 1 && ObjectIds().Length == 1 &&
                         Digest(originalPath) == originalHash && await vault.VerifyAsync(vault.Entries.Single()) == 1024,
                         "timeout preserves authenticated original and permits explicit reopening");
+                    vault.Lock();
+                    bool openingInterrupted = false;
+                    vault.SmokeBeforeIndexPublish = () =>
+                    {
+                        Check(!vault.Unlocked && vault.Entries.Count == 0,
+                            "vault not advertised as unlocked during index recovery");
+                        vault.Lock();
+                    };
+                    try { await vault.TryOpenFromDevelopmentEnvironmentAsync(); }
+                    catch (IOException) { openingInterrupted = true; }
+                    finally { vault.SmokeBeforeIndexPublish = null; }
+                    Check(openingInterrupted && !vault.Unlocked && vault.Entries.Count == 0,
+                        "lock during index recovery cannot publish stale entries or report successful open");
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() &&
+                        vault.Entries.Count == 1 && Digest(originalPath) == originalHash &&
+                        await vault.VerifyAsync(vault.Entries.Single()) == 1024,
+                        "explicit reopen restores original after interrupted index recovery");
                     async Task<string> Fault(string directory, string kind, string name)
                     {
                         var before = ObjectIds();
