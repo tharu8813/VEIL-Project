@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: MPL-2.0
 import importlib.util
 import pathlib
+import sys
 import unittest
 
 path = pathlib.Path(__file__).resolve().parents[2] / "scripts/chromium/generate-dev-identity-candidate.py"
+sys.path.insert(0, str(path.parent))
 spec = importlib.util.spec_from_file_location("candidate", path)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

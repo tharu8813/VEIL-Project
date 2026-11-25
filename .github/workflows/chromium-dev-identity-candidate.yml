@@ -6,6 +6,7 @@ on:
       - 'scripts/chromium/generate-dev-identity-candidate.py'
       - 'tests/chromium/dev-identity-candidate.test.py'
       - '.github/workflows/chromium-dev-identity-candidate.yml'
+      - 'scripts/chromium/pinned_gitiles.py'
       - 'chromium/candidate.json'
   workflow_dispatch:
 

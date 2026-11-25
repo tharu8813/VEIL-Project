@@ -6,6 +6,7 @@ on:
       - 'chromium/candidate.json'
       - 'chromium/patches/**'
       - 'scripts/chromium/**'
+      - 'tests/chromium/pinned-gitiles.test.py'
       - '.github/workflows/chromium-upstream.yml'
   workflow_dispatch:
 
@@ -41,6 +42,8 @@ jobs:
           printf 'depot_tools commit object matched: %s\n' "$sha"
           printf 'Identity check only. No checkout, hook, toolchain, build or sandbox validation.\n'
 
+      - name: Test bounded pinned blob fetch
+        run: python3 tests/chromium/pinned-gitiles.test.py
       - name: Validate first product name patch against pinned upstream blob
         shell: bash
         run: |

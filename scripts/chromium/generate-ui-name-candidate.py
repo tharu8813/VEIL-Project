@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 """Generate a review-only GRIT name patch from the exact upstream blob."""
 import argparse
-import base64
 import difflib
 import hashlib
 import json
@@ -9,7 +8,7 @@ import pathlib
 import re
 import subprocess
 import tempfile
-import urllib.request
+from pinned_gitiles import fetch_pinned_blob
 import xml.etree.ElementTree as ET
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -51,15 +50,8 @@ def main():
     pin = json.loads((ROOT / "chromium/candidate.json").read_text(encoding="utf-8"))
     if pin["revision"] != REV:
         raise ValueError("Review candidate generator for updated upstream revision")
-    url = "https://chromium.googlesource.com/chromium/src/+/" + REV + "/" + REL + "?format=TEXT"
-    with urllib.request.urlopen(url, timeout=45) as response:
-        encoded = response.read(8 * 1024 * 1024 + 1)
-    if len(encoded) > 8 * 1024 * 1024:
-        raise ValueError("Unexpected upstream response size")
-    original = base64.b64decode(encoded.strip(), validate=True)
-    blob = hashlib.sha1(b"blob " + str(len(original)).encode() + b"\0" + original).hexdigest()
-    if blob != BLOB:
-        raise ValueError("Pinned GRIT blob mismatch")
+    original = fetch_pinned_blob(REV, REL, BLOB, 8 * 1024 * 1024)
+    blob = BLOB
     modified = rewrite(original)
     patch = patch_bytes(original, modified)
     with tempfile.TemporaryDirectory(prefix="veil-ui-candidate-") as tmp:

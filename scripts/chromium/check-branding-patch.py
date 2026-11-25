@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: MPL-2.0
 """Verify one patch against the pinned upstream file, not the whole source tree."""
-import base64
 import hashlib
 import json
 import pathlib
 import subprocess
 import tempfile
-import urllib.request
+from pinned_gitiles import fetch_pinned_blob
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 REL = pathlib.Path("chrome/app/theme/chromium/BRANDING")
@@ -26,15 +25,8 @@ def main():
     patch = (ROOT / "chromium/patches" / PATCH_NAME).read_bytes()
     if hashlib.sha256(patch).hexdigest() != entries[0]["sha256"]:
         raise ValueError("Patch hash mismatch")
-    url = f"https://chromium.googlesource.com/chromium/src/+/{EXPECTED_REVISION}/{REL.as_posix()}?format=TEXT"
-    with urllib.request.urlopen(url, timeout=45) as response:
-        data = response.read(16385)
-    if len(data) > 16384:
-        raise ValueError("Unexpected upstream file size")
-    original = base64.b64decode(data.strip(), validate=True)
-    blob = hashlib.sha1(b"blob " + str(len(original)).encode() + b"\0" + original).hexdigest()
-    if blob != EXPECTED_BLOB:
-        raise ValueError("Upstream branding blob mismatch")
+    original = fetch_pinned_blob(EXPECTED_REVISION, REL.as_posix(), EXPECTED_BLOB, 16384)
+    blob = EXPECTED_BLOB
     expected = original
     for key in (b"PRODUCT_FULLNAME", b"PRODUCT_SHORTNAME"):
         old = key + b"=Chromium\n"
