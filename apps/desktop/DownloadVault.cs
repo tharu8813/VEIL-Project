@@ -45,6 +45,7 @@ internal sealed class DownloadVault : IDisposable
     private const int BodyIdleSeconds = 60;
     private const int PipeTimeoutSeconds = 30;
     private const int CommitTimeoutSeconds = 120;
+    private const int CommandTimeoutSeconds = 120;
     private readonly Dictionary<string, string> methods = new(StringComparer.Ordinal);
     private Process? serve;
     private bool lockRequested = true;
@@ -86,6 +87,8 @@ internal sealed class DownloadVault : IDisposable
     internal Func<string, Task>? SmokeBeforePublication;
     internal Func<Task>? SmokeAfterResponse;
     internal Action? SmokeAfterFrame;
+    internal Func<CancellationToken, Task>? SmokeBeforeBoundedReply;
+    internal int? SmokeCommandTimeoutSeconds;
 #endif
 
     // ── Opening ─────────────────────────────────────────────────────────────
@@ -695,12 +698,38 @@ internal sealed class DownloadVault : IDisposable
         finally { gate.Release(); }
     }
 
+    // Full-object operations may legitimately take much longer. In particular,
+    // killing an export can leave plaintext staging in the selected external folder.
+    internal static bool BoundedCommand(string line)
+    {
+        int delimiter = line.IndexOf('\t');
+        string command = delimiter < 0 ? line : line[..delimiter];
+        return command is not ("export" or "verify" or "backup" or "restore" or "rotate-content");
+    }
+
     private async Task<string> CommandLockedAsync(string line, ReadOnlyMemory<char> profilePassword = default, string? recoveryCode = null)
     {
-        if (profilePassword.IsEmpty) await WriteLineAsync(line);
-        else await WriteProfileCommandAsync(line, profilePassword, recoveryCode);
-        await PipeInput.FlushAsync();
-        return await ReadLineAsync();
+        async Task<string> Exchange(CancellationToken token)
+        {
+            if (profilePassword.IsEmpty) await WriteLineAsync(line, token);
+            else await WriteProfileCommandAsync(line, profilePassword, recoveryCode, token);
+            await PipeInput.FlushAsync(token);
+#if DEBUG
+            if (BoundedCommand(line) && SmokeBeforeBoundedReply is { } beforeReply) await beforeReply(token);
+#endif
+            return await ReadLineAsync(token);
+        }
+
+        if (!BoundedCommand(line)) return await Exchange(CancellationToken.None);
+        try
+        {
+            int seconds = CommandTimeoutSeconds;
+#if DEBUG
+            seconds = SmokeCommandTimeoutSeconds ?? seconds;
+#endif
+            return await CapturePipeAsync(Exchange, seconds);
+        }
+        catch { CloseBrokenPipe(); throw; }
     }
 
     private async Task SealBytesLockedAsync(string path, byte[] data)
@@ -751,8 +780,11 @@ internal sealed class DownloadVault : IDisposable
         var bytes = new byte[length];
         try
         {
-            await PipeOutput.ReadExactlyAsync(bytes);
-            return bytes;
+            return await CapturePipeAsync(async token =>
+            {
+                await PipeOutput.ReadExactlyAsync(bytes, token);
+                return bytes;
+            }, PipeTimeoutSeconds);
         }
         catch
         {
@@ -771,7 +803,7 @@ internal sealed class DownloadVault : IDisposable
         finally { CryptographicOperations.ZeroMemory(bytes); }
     }
 
-    private async Task WriteProfileCommandAsync(string command, ReadOnlyMemory<char> password, string? recoveryCode)
+    private async Task WriteProfileCommandAsync(string command, ReadOnlyMemory<char> password, string? recoveryCode, CancellationToken cancel)
     {
         byte[] utf8 = new byte[Encoding.UTF8.GetByteCount(password.Span)];
         string suffix = recoveryCode is null ? "\n" : $"\t{NormalizeCode(recoveryCode)}\n";
@@ -787,7 +819,7 @@ internal sealed class DownloadVault : IDisposable
                 packet[offset++] = "0123456789abcdef"u8[value & 15];
             }
             Encoding.UTF8.GetBytes(suffix, packet.AsSpan(offset));
-            await PipeInput.WriteAsync(packet);
+            await PipeInput.WriteAsync(packet, cancel);
         }
         finally
         {
