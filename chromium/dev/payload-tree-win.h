@@ -69,14 +69,14 @@ inline PayloadTreeObservation Walk(const std::wstring& path, const std::string& 
     return PayloadTreeObservation::kUnsafePath;
   // Keep the policy-checked directory handle live through enumeration.
   // Existing observation path does not require additional access rights.
-  config_path_detail::Handle directory(scan.strict_objects ? CreateFileW(path.c_str(),
+  config_path_detail::Handle policy_directory(scan.strict_objects ? CreateFileW(path.c_str(),
       READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
       FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr) : INVALID_HANDLE_VALUE);
   auto directory_policy = [&] {
-    return !scan.strict_objects || (directory.valid() &&
-        ValidateDirectoryHandle(directory.get(), path) == FilesystemObservation::kObservedOnly &&
-        ObservePayloadObjectPolicy(directory.get(), true) == PayloadObjectObservation::kObservedOnly);
+    return !scan.strict_objects || (policy_directory.valid() &&
+        ValidateDirectoryHandle(policy_directory.get(), path) == FilesystemObservation::kObservedOnly &&
+        ObservePayloadObjectPolicy(policy_directory.get(), true) == PayloadObjectObservation::kObservedOnly);
   };
   if (!directory_policy()) return PayloadTreeObservation::kObjectPolicyRejected;
   WIN32_FIND_DATAW data{};
