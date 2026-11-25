@@ -26,7 +26,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
 {
     private readonly SemaphoreSlim serial = new(1, 1);
     private int unlockFailures;
-    private int? unlockOwner;
+    private object? unlockOwner;
 
     internal async Task RunAsync(CancellationToken stop, Action? ready = null)
     {
@@ -199,7 +199,13 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     }
                     bool authenticated;
                     try { authenticated = backend.Unlock(request.SecretSpan); }
-                    catch { ownerHandle.Dispose(); throw; }
+                    catch
+                    {
+                        // The OS may have unlocked the volume before the backend lost its reply.
+                        // Transfer the process handle even on an ambiguous outcome.
+                        Watch(client.ProcessId, ownerHandle);
+                        throw;
+                    }
                     if (authenticated)
                     {
                         unlockFailures = 0;
@@ -228,7 +234,12 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     break;
                 case BrokerCommand.Lock:
                     code = LockCode(backend.Lock());
-                    if (code is null) status = backend.Status();
+                    if (code is null)
+                    {
+                        status = backend.Status();
+                        if (!Registered(status) || status.Unlocked) code = "LockRefused";
+                        else unlockOwner = null;
+                    }
                     break;
                 case BrokerCommand.Detach when status.Attached && status.Unlocked:
                     code = "MustBeLocked"; break;
@@ -259,7 +270,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     /// <summary>Locks the volume when the client that unlocked it exits without locking.</summary>
     private void Watch(int pid, SafeProcessHandle handle)
     {
-        unlockOwner = pid;
+        var ownership = new object();
+        unlockOwner = ownership;
         _ = Task.Run(async () =>
         {
             using (handle)
@@ -270,12 +282,27 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 await serial.WaitAsync();
                 try
                 {
-                    if (unlockOwner != pid) return;
+                    if (!ReferenceEquals(unlockOwner, ownership)) return;
                     var status = backend.Status();
-                    if (!status.Attached || !status.Unlocked) { unlockOwner = null; return; }
+                    if (!status.Attached) { unlockOwner = null; return; }
+                    if (!string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Unexpected volume during crash relock.");
+                    if (!status.Unlocked) { unlockOwner = null; return; }
                     var result = backend.Lock();
-                    log.Write("client-exit-lock", new { pid, attempt, result = LockCode(result) ?? "ok" });
-                    if (result == LockResult.Locked) { unlockOwner = null; return; }
+                    string? code = LockCode(result);
+                    if (result == LockResult.Locked)
+                    {
+                        status = backend.Status();
+                        if (!status.Attached || (!status.Unlocked &&
+                            string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            log.Write("client-exit-lock", new { pid, attempt, result = "ok" });
+                            unlockOwner = null;
+                            return;
+                        }
+                        code = "LockRefused";
+                    }
+                    log.Write("client-exit-lock", new { pid, attempt, result = code ?? "LockRefused" });
                 }
                 catch (Exception error) { log.Write("client-exit-lock", new { pid, attempt, result = "BackendFailure", type = error.GetType().Name }); }
                 finally { serial.Release(); }
