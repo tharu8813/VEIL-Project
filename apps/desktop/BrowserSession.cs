@@ -84,7 +84,8 @@ internal sealed class BrowserSession
         proxyTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
         proxyTimer.Tick += ProxyMonitorTick;
         proxyTimer.Start();
-        await RefreshProxyAsync();
+        try { await RefreshProxyAsync(); }
+        catch (Exception) { StopProxyMonitor(); }
     }
 
     private async void ProxyMonitorTick(object? sender, EventArgs args)
@@ -131,6 +132,7 @@ internal sealed class BrowserSession
 
     private void StopProxyMonitor()
     {
+        if (proxyMonitor is null) return;
         if (proxyTimer is { } timer)
         {
             timer.Stop();
