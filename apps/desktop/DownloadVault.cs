@@ -556,10 +556,20 @@ internal sealed class DownloadVault : IDisposable
         {
             if (!Unlocked || !Guid.TryParseExact(entry.Id, "N", out _) || !Entries.Contains(entry))
                 throw new IOException("The vault item is unavailable.");
-            File.Delete(ObjectPath(entry));
-            File.Delete(Path.Combine(Meta, entry.Id + ".veil"));
-            Entries = Entries.Where(e => e.Id != entry.Id).ToList();
-            await SaveIndexLockedAsync();
+            // Once deletion starts, any failure leaves the durable object set as the
+            // authority. Never continue serving a possibly stale in-memory index.
+            try
+            {
+                File.Delete(ObjectPath(entry));
+                Entries = Entries.Where(e => e.Id != entry.Id).ToList();
+                File.Delete(Path.Combine(Meta, entry.Id + ".veil"));
+                await SaveIndexLockedAsync();
+            }
+            catch
+            {
+                Lock();
+                throw;
+            }
         }
         finally { gate.Release(); Changed?.Invoke(); }
     }
