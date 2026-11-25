@@ -167,3 +167,41 @@ try { _ = await socksFailing.GetStringAsync(target, socksDeadline.Token); }
 catch (HttpRequestException) { socksRefused = true; }
 Check(socksRefused && !origin.Pending(), "SOCKS proxy outage allowed direct fallback");
 Console.WriteLine("PASS: proxy socket boundary and SOCKS5 remote hostname forwarding");
+
+
+// Exercise IPv6 loopback independently of the IPv4 proxy test; no external route is needed.
+if (Socket.OSSupportsIPv6)
+{
+    using var ipv6Deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+    using var ipv6Origin = new TcpListener(IPAddress.IPv6Loopback, 0);
+    using var ipv6Proxy = new TcpListener(IPAddress.IPv6Loopback, 0);
+    ipv6Origin.Start();
+    ipv6Proxy.Start();
+    int destinationPort = ((IPEndPoint)ipv6Origin.LocalEndpoint).Port;
+    int proxy6Port = ((IPEndPoint)ipv6Proxy.LocalEndpoint).Port;
+    var target6 = new Uri($"http://[::1]:{destinationPort}/synthetic-v6");
+    var settings6 = new NetworkSettings(NetworkMode.Proxy, "http", "::1", proxy6Port);
+    using var http6 = new HttpClient(NetworkPolicy.Handler(settings6));
+    var pending6 = http6.GetStringAsync(target6, ipv6Deadline.Token);
+    using (var peer = await ipv6Proxy.AcceptTcpClientAsync(ipv6Deadline.Token))
+    {
+        using var stream = peer.GetStream();
+        using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+        Check(await reader.ReadLineAsync(ipv6Deadline.Token) == $"GET {target6.AbsoluteUri} HTTP/1.1",
+            "IPv6 request did not use configured proxy");
+        while (await reader.ReadLineAsync(ipv6Deadline.Token) is { Length: > 0 }) { }
+        await stream.WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nipv6!"u8.ToArray(), ipv6Deadline.Token);
+    }
+    Check(await pending6 == "ipv6!" && !ipv6Origin.Pending(), "IPv6 proxy response or direct route mismatch");
+    ipv6Proxy.Stop();
+    using var failing6 = new HttpClient(NetworkPolicy.Handler(settings6));
+    bool refused6 = false;
+    try { _ = await failing6.GetStringAsync(target6, ipv6Deadline.Token); }
+    catch (HttpRequestException) { refused6 = true; }
+    Check(refused6 && !ipv6Origin.Pending(), "IPv6 proxy failure allowed direct fallback");
+    Console.WriteLine("PASS: IPv6 loopback proxy routing and outage refusal");
+}
+else
+{
+    Console.WriteLine("NOT RUN: IPv6 unavailable on this host");
+}

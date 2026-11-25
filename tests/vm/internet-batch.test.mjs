@@ -11,12 +11,14 @@ test('plan lists every Gate D item as NOT RUN and rejects unknown IDs', () => {
     assert.equal(plan(['site-compat']).find(item => item.id === 'dns-path').reason, 'Excluded by --only.');
 });
 
-test('ICE candidates are parsed and any UDP candidate fails proxy mode', () => {
+test('ICE candidates are parsed and any candidate fails proxy mode', () => {
     const host = 'candidate:1 1 udp 2122260223 192.168.1.5 54321 typ host generation 0';
     const srflx = 'candidate:2 1 udp 1686052607 203.0.113.9 54321 typ srflx raddr 192.168.1.5 rport 54321';
     const tcp = 'candidate:3 1 tcp 1518280447 192.168.1.5 9 typ host tcptype active';
     assert.deepEqual(candidate(srflx), { transport: 'udp', address: '203.0.113.9', type: 'srflx' });
-    assert.equal(judgeProxyCandidates([tcp]).status, 'PASS');
+    assert.equal(judgeProxyCandidates([tcp]).status, 'FAIL');
+    for (const address of ['2001:db8::1234', 'fe80::1', 'fd00::1', '::ffff:192.168.1.5', 'synthetic.local'])
+        assert.equal(judgeProxyCandidates([`candidate:4 1 tcp 1518280447 ${address} 9 typ host tcptype active`]).status, 'FAIL');
     assert.equal(judgeProxyCandidates([]).status, 'PASS');
     assert.equal(judgeProxyCandidates([tcp, host]).status, 'FAIL');
     assert.equal(judgeProxyCandidates([srflx]).status, 'FAIL');

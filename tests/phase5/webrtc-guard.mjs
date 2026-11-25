@@ -1,10 +1,10 @@
-// ADR-0006 proxy protection: WebRTC must not gather any UDP ICE candidate (no non-proxied UDP).
+// ADR-0006 proxy protection: WebRTC must not gather any ICE candidate (ADR-0010 D2).
 //
 //   node tests/phase5/webrtc-guard.mjs
 //
 // Loopback only (no STUN server, nothing leaves the machine). The fixture page /webrtc gathers candidates.
 //   control:  standard protection gathers at least one UDP host candidate (proves gathering works)
-//   proxy:    proxy protection gathers no UDP candidate, and the page itself came through the proxy
+//   proxy:    proxy protection gathers zero ICE candidates, and the page itself came through the proxy
 // Found 2026-11-24: the runtime ignores --force-webrtc-ip-handling-policy; only --webrtc-ip-handling-policy works.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
