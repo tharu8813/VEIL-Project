@@ -159,8 +159,7 @@ public partial class BrowserWindow
     private bool MoveToExistingWindow(TabItem item, BrowserWindow target, int? index = null)
     {
         if (!CanMoveTo(item, target)) return false;
-        DetachTab(item);
-        target.AttachTab(item, index ?? target.Tabs.Items.Count);
+        if (!TransferTabTo(item, target, index ?? target.Tabs.Items.Count)) return false;
         if (target.WindowState == WindowState.Minimized) target.WindowState = WindowState.Normal;
         target.Activate();
         return true;
@@ -363,7 +362,7 @@ public partial class BrowserWindow
     private BrowserWindow MoveTabToNewWindow(TabItem item, Point? at = null)
     {
         if (session.IsPrivate || !CanUseTab(item) || Tabs.Items.Count <= 1) return this;
-        DetachTab(item);
+        // The new window adopts the tab only after its engine is ready.
         return OpenWindow([], 0, cascade: true, adopt: item, at: at);
     }
 
@@ -382,7 +381,56 @@ public partial class BrowserWindow
         window.MoveToExistingWindow(item, target, index);
     }
 
-    /// <summary>Removes a tab without closing its page. An emptied extra window closes itself.</summary>
+#if DEBUG
+    private bool smokeFailTabTransfer;
+#endif
+    /// <summary>Move the live page before closing its old window or persisting the new layout.</summary>
+    private bool TransferTabTo(TabItem item, BrowserWindow target, int index, bool initializingTarget = false)
+    {
+        if (!CanUseTab(item) || session.IsPrivate || target == this || !ReferenceEquals(session, target.session) ||
+            target.closing || target.restoring && !initializingTarget) return false;
+        var tab = (BrowserTab)item.Tag;
+        int originalIndex = Tabs.Items.IndexOf(item);
+        var originalSelection = Tabs.SelectedItem;
+        session.TabTransferDepth++;
+        try
+        {
+            DetachTab(item);
+#if DEBUG
+            if (smokeFailTabTransfer) throw new InvalidOperationException("Synthetic adoption failure.");
+#endif
+            target.AttachTab(item, index);
+            if (Tabs.Items.Count == 0) Close();
+            else LayoutTabs();
+            return true;
+        }
+        catch (Exception error) when (RecoverableFailure.Is(error))
+        {
+            // Roll back a partial adoption while the original window is still alive.
+            if (!closing && !session.IsEnding && !session.EngineLost)
+            {
+                if (target.Tabs.Items.Contains(item)) target.Tabs.Items.Remove(item);
+                if (target.Pages.Children.Contains(tab.View)) target.Pages.Children.Remove(tab.View);
+                tab.Owner = this;
+                if (!Pages.Children.Contains(tab.View)) Pages.Children.Add(tab.View);
+                if (!Tabs.Items.Contains(item)) Tabs.Items.Insert(TabInsertionIndex(tab.Pinned, originalIndex), item);
+                if (originalSelection is not null && Tabs.Items.Contains(originalSelection)) Tabs.SelectedItem = originalSelection;
+                LayoutTabs(animate: false);
+                RefreshChrome();
+                target.LayoutTabs(animate: false);
+                target.RefreshChrome();
+            }
+            if (!closing) Status.Text = "탭을 이동하지 못했습니다.";
+            return false;
+        }
+        finally
+        {
+            session.TabTransferDepth--;
+            SaveSession();
+        }
+    }
+
+    /// <summary>Removes a tab without closing its page or saving an intermediate layout.</summary>
     private void DetachTab(TabItem item)
     {
         var tab = (BrowserTab)item.Tag;
@@ -390,11 +438,12 @@ public partial class BrowserWindow
         move.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
         move.X = 0;
         Panel.SetZIndex(item, 0);
+        tab.NavigationEpoch++;
+        tab.LastDownloadRequest = null;
+        if (retryDownload?.Tab == tab) retryDownload = null;
         ClearManagement(tab);
         Tabs.Items.Remove(item);
         Pages.Children.Remove(tab.View);
-        if (Tabs.Items.Count == 0) Close();
-        else { LayoutTabs(); SaveTabs(); }
     }
 
     /// <summary>Adopts a live tab from another window at <paramref name="index"/>.</summary>

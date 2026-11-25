@@ -19,3 +19,23 @@ test('popup handoff requires the original live opener and navigation epoch', () 
     assert.match(popup, /long epoch = opener\.NavigationEpoch;[\s\S]*?await OpenTab\([\s\S]*?if \(CanUseTab\(opener\.Item\) && opener\.NavigationEpoch == epoch && CanUseTab\(popup\.Item\)\)\s*args\.NewWindow = popup\.View\.CoreWebView2;/);
     assert.match(popup, /else if \(!closing && CanUseTab\(popup\.Item\)\)\s*await CloseTabAsync\(popup\.Item\);/);
 });
+
+
+const session = await readFile('apps/desktop/BrowserSession.cs', 'utf8');
+test('tab transfer keeps source alive until adoption and defers intermediate snapshots', () => {
+    const transfer = tabs.slice(tabs.indexOf('private bool TransferTabTo'), tabs.indexOf('private void AttachTab'));
+    assert.match(transfer, /session\.TabTransferDepth\+\+;[\s\S]*?DetachTab\(item\);[\s\S]*?target\.AttachTab\(item, index\);\s*if \(Tabs\.Items\.Count == 0\) Close\(\)/);
+    assert.match(transfer, /catch \(Exception error\) when \(RecoverableFailure\.Is\(error\)\)[\s\S]*?tab\.Owner = this;[\s\S]*?Pages\.Children\.Add\(tab\.View\)[\s\S]*?Tabs\.Items\.Insert\(TabInsertionIndex\(tab\.Pinned, originalIndex\), item\)/);
+    assert.match(transfer, /finally\s*\{\s*session\.TabTransferDepth--;\s*SaveSession\(\);/);
+    const detach = transfer.slice(transfer.indexOf('private void DetachTab'));
+    assert.doesNotMatch(detach, /\b(?:Close|SaveTabs|SaveSession)\(\)/);
+    assert.match(session, /if \(IsPrivate \|\| TabTransferDepth != 0\) return;/);
+});
+test('a new window initializes before it adopts the tab and saves the completed layout', () => {
+    const move = tabs.slice(tabs.indexOf('private BrowserWindow MoveTabToNewWindow'), tabs.indexOf('private static void DragWindowThenMerge'));
+    assert.doesNotMatch(move, /DetachTab\(/);
+    assert.match(move, /OpenWindow\(\[\], 0, cascade: true, adopt: item/);
+    assert.match(browser, /adoptionSource = \(adopt\?\.Tag as BrowserTab\)\?\.Owner;/);
+    assert.match(browser, /await session\.EngineHost\.InitializeAsync[\s\S]*?adoptionSource\.TransferTabTo\(adopted, this, 0, initializingTarget: true\)/);
+    assert.match(browser, /restoring = false;\s*if \(adopted is not null\) SaveSession\(\);/);
+});

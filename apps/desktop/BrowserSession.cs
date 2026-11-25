@@ -163,6 +163,7 @@ internal sealed class BrowserSession
     internal BrowserData Data { get; }
     internal Stack<ClosedTab> ClosedTabs { get; } = new();
     internal bool RestoringClosedTab { get; set; }
+    internal int TabTransferDepth { get; set; }
     internal void RememberClosedTab(ClosedTab tab)
     {
         if (IsPrivate || !BrowserWindow.IsWebUrl(tab.Url)) return;
@@ -187,7 +188,7 @@ internal sealed class BrowserSession
     /// <summary>Writes the open windows. Skipped while any window is still restoring its tabs.</summary>
     internal void Save()
     {
-        if (IsPrivate) return;
+        if (IsPrivate || TabTransferDepth != 0) return;
         var open = Windows.Where(window => !window.IsClosing).ToList();
         if (open.Count == 0 || open.Any(window => window.IsRestoring)) return;
         var (tabs, selected) = open[0].Snapshot();
