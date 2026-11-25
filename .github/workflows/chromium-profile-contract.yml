@@ -5,6 +5,8 @@ on:
       - 'chromium/dev/profile-path-contract.h'
       - 'chromium/dev/volume-evidence-contract.h'
       - 'chromium/dev/broker-status-wire.h'
+      - 'chromium/dev/broker-identity-win.h'
+      - 'tests/chromium/broker-identity-win.test.cc'
       - 'tests/chromium/broker-status-wire.test.cc'
       - 'chromium/dev/volume-observation-win.h'
       - 'tests/chromium/volume-observation-win.test.cc'
@@ -112,3 +114,17 @@ jobs:
           & cmd.exe /d /c $command
           if ($LASTEXITCODE -ne 0) { throw 'Volume observation compile failed.' }
           & .\tests\chromium\volume-observation-win.test.ps1 -Executable $exe
+      - name: Compile and test standalone broker identity observation
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-broker-identity.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-broker-identity.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\broker-identity-win.test.cc advapi32.lib' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Broker identity compile failed.' }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Broker identity observation failed.' }
