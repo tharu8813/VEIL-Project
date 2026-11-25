@@ -12,4 +12,4 @@ The development candidate is recorded in candidate.json; it is not an approved p
 Status: PR #115 canonical source/depot_tools identity checks PASS; compatibility, sync, hooks, build, runtime and sandbox are NOT RUN. PR #116 build plan tests PASS; PR #117 runtime plan tests PASS (actual Chromium NOT RUN). No full Chromium builds on the ordinary hosted CI. See ../docs/chromium-transition-roadmap.md.
 
 
-VEIL-specific patches are tracked separately in [patches/](patches/README.md). The initial series is empty; actual patch materialization and patched builds are not enabled.
+VEIL-specific patches are tracked separately in [patches/](patches/README.md). The first product-name metadata patch is present; actual patch materialization and patched builds are not enabled.
