@@ -53,3 +53,20 @@ test('local suggestions cannot survive programmatic address or tab context chang
     assert.match(search, /suggestionEpoch = tab\.NavigationEpoch;\s*suggestionInput = Address\.Text;/);
     assert.match(search, /CanUseTab\(tab\.Item\) && tab\.NavigationEpoch == suggestionEpoch &&\s*Address\.Text == suggestionInput/);
 });
+
+
+const management = await readFile('apps/desktop/BrowserWindow.Management.cs', 'utf8');
+const settings = await readFile('apps/desktop/BrowserWindow.Settings.cs', 'utf8');
+test('native management pages reuse pending editors across live windows', () => {
+    assert.match(management, /foreach \(var window in session\.Windows\.ToArray\(\)\)[\s\S]*?window\.FindManagementTab\(route\) is \{ CancelManagement: not null \} tab[\s\S]*?window\.Tabs\.SelectedItem = tab\.Item;[\s\S]*?window\.openingManagement\.Contains\(route\)/);
+    assert.match(management, /management && tab\.ManagementSurface is null && !tab\.Closing && !closingTabs\.Contains\(item\)/);
+});
+test('management acceptance is bound to native page, navigation and focus epoch', () => {
+    assert.match(management, /bool ContextValid\(\) => Active == tab && tab\.ManagementSurface == page &&\s*tab\.Url == route && tab\.NavigationEpoch == epoch && CanUseTab\(tab\.Item\) && SettingsReady\(\) && IsActive;/);
+    assert.match(management, /if \(completion\.Task\.IsCompleted \|\| !ContextValid\(\)\) return;\s*confirmedFocus = managementFocusEpoch;\s*completion\.TrySetResult\(accepted\);/);
+    assert.match(management, /accepted = accepted && ContextValid\(\) && confirmedFocus == managementFocusEpoch;/);
+    assert.doesNotMatch(management, /await CloseTabAsync\(tab\.Item\)/);
+    assert.match(browser, /Deactivated \+= \(_, _\) => managementFocusEpoch\+\+;/);
+    assert.match(browser, /private void TabChanged[\s\S]*?managementFocusEpoch\+\+;/);
+    assert.match(settings, /source\.NavigationEpoch != epoch \|\| managementFocusEpoch != focus/);
+});
