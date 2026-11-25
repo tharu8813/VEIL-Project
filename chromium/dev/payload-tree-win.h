@@ -4,10 +4,11 @@
 #define VEIL_CHROMIUM_DEV_PAYLOAD_TREE_WIN_H_
 #include "manifest-inventory-contract.h"
 #include "client-hash-win.h"
+#include "payload-object-policy-win.h"
 
 namespace veil::chromium_dev {
 enum class PayloadTreeObservation {
-  kRejected, kUnavailable, kUnsafePath, kLimit, kChanged, kHashRejected, kObservedOnly,
+  kRejected, kUnavailable, kUnsafePath, kLimit, kChanged, kHashRejected, kObservedOnly, kObjectPolicyRejected,
 };
 
 namespace payload_tree_detail {
@@ -23,6 +24,7 @@ class FindHandle {
   HANDLE value;
 };
 struct Scan {
+  bool strict_objects = false;
   std::size_t objects = 0;
   std::uint64_t bytes = 0;
   std::vector<ManifestFileEntry> files;
@@ -38,6 +40,8 @@ inline PayloadTreeObservation ReadFileEntry(const std::wstring& path,
   if (!file.valid()) return PayloadTreeObservation::kUnavailable;
   if (config_path_detail::ObserveFileShape(file.get(), path) !=
       ConfigPathObservation::kObservedOnly) return PayloadTreeObservation::kUnsafePath;
+  if (scan.strict_objects && ObservePayloadObjectPolicy(file.get(), false) !=
+      PayloadObjectObservation::kObservedOnly) return PayloadTreeObservation::kObjectPolicyRejected;
   BY_HANDLE_FILE_INFORMATION before{}, after{};
   if (!GetFileInformationByHandle(file.get(), &before)) return PayloadTreeObservation::kUnavailable;
   const auto size = (static_cast<std::uint64_t>(before.nFileSizeHigh) << 32) |
@@ -51,6 +55,8 @@ inline PayloadTreeObservation ReadFileEntry(const std::wstring& path,
       !client_hash_detail::SameFileInfo(before, after) ||
       config_path_detail::ObserveFileShape(file.get(), path) !=
           ConfigPathObservation::kObservedOnly) return PayloadTreeObservation::kChanged;
+  if (scan.strict_objects && ObservePayloadObjectPolicy(file.get(), false) !=
+      PayloadObjectObservation::kObservedOnly) return PayloadTreeObservation::kObjectPolicyRejected;
   scan.bytes += size;
   scan.files.push_back({relative, std::move(hash), size});
   return PayloadTreeObservation::kObservedOnly;
@@ -61,12 +67,25 @@ inline PayloadTreeObservation Walk(const std::wstring& path, const std::string& 
   DirectoryHandleRetention retained;
   if (retained.Observe(path, path, false, false) != FilesystemObservation::kObservedOnly)
     return PayloadTreeObservation::kUnsafePath;
+  // Keep the policy-checked directory handle live through enumeration.
+  // Existing observation path does not require additional access rights.
+  config_path_detail::Handle policy_directory(scan.strict_objects ? CreateFileW(path.c_str(),
+      READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr) : INVALID_HANDLE_VALUE);
+  auto directory_policy = [&] {
+    return !scan.strict_objects || (policy_directory.valid() &&
+        ValidateDirectoryHandle(policy_directory.get(), path) == FilesystemObservation::kObservedOnly &&
+        ObservePayloadObjectPolicy(policy_directory.get(), true) == PayloadObjectObservation::kObservedOnly);
+  };
+  if (!directory_policy()) return PayloadTreeObservation::kObjectPolicyRejected;
   WIN32_FIND_DATAW data{};
   FindHandle find(FindFirstFileW((path + L"\\*").c_str(), &data));
   if (find.value == INVALID_HANDLE_VALUE) {
     if (GetLastError() == ERROR_FILE_NOT_FOUND &&
         ObserveDirectoryComponent(path) == FilesystemObservation::kObservedOnly)
-      return PayloadTreeObservation::kObservedOnly;
+      return directory_policy() ? PayloadTreeObservation::kObservedOnly
+                                : PayloadTreeObservation::kObjectPolicyRejected;
     return PayloadTreeObservation::kUnavailable;
   }
   do {
@@ -95,22 +114,24 @@ inline PayloadTreeObservation Walk(const std::wstring& path, const std::string& 
   if (GetLastError() != ERROR_NO_MORE_FILES) return PayloadTreeObservation::kUnavailable;
   if (ObserveDirectoryComponent(path) != FilesystemObservation::kObservedOnly)
     return PayloadTreeObservation::kChanged;
+  if (!directory_policy()) return PayloadTreeObservation::kObjectPolicyRejected;
   return PayloadTreeObservation::kObservedOnly;
 }
 }  // namespace payload_tree_detail
 
 inline PayloadTreeObservation ObserveSyntheticPayloadTree(
     std::wstring_view expected_root, std::wstring_view selected_root,
-    std::vector<ManifestFileEntry>* output) {
+    std::vector<ManifestFileEntry>* output, bool strict_objects = false) {
   if (!output || Evaluate(expected_root, selected_root, false, false) !=
       PathDecision::kLexicalMatchOnly) return PayloadTreeObservation::kRejected;
   payload_tree_detail::Scan scan;
+  scan.strict_objects = strict_objects;
   const auto result = payload_tree_detail::Walk(std::wstring(selected_root), "", 0, scan);
   if (result != PayloadTreeObservation::kObservedOnly) return result;
   *output = std::move(scan.files);
   return PayloadTreeObservation::kObservedOnly;
-  // Not an atomic snapshot. Directory/file handles are released, no ACL or ADS
-  // verification, and empty directories do not appear in the file inventory.
+  // Not an atomic snapshot. Strict object checks are optional and do not prove
+  // higher ancestor ACLs. Empty directories do not appear in file inventory.
 }
 }  // namespace veil::chromium_dev
 #endif
