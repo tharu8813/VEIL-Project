@@ -29,6 +29,70 @@ int wmain(int argc, wchar_t** argv) {
     return 0;
   }
   const CutoverRecoveryEvidence evidence{true,true,true,true,true,true,true,true,true,true,true,true};
+  if (mode == L"inspect-crash") {
+    SyntheticJournalSession<decltype(policy)> session(root, root, policy);
+    auto next = record;
+    next.state = J::kRegistrationReplaced;
+    auto committed = next;
+    committed.state = J::kActivationCommitted;
+    if (session.status() != R::kLeaseOnly ||
+        session.Read(&out) != R::kRecoveryReview || out.transaction_id != "sentinel" ||
+        session.VerifyRegistrationArtifacts() != R::kRecoveryReview ||
+        session.CreateRegistrationBackup(record) != R::kRecoveryReview ||
+        session.Publish(next) != R::kRecoveryReview ||
+        session.Publish(committed) != R::kRecoveryReview ||
+        session.RestoreRegistrationFixture(evidence) != R::kRecoveryReview) return 36;
+    std::cout << "PASS: new process reacquires lock but all interrupted restore operations refuse\n";
+    return 0;
+  }
+  if (mode == L"crash-marker" || mode == L"crash-copy" ||
+      mode == L"crash-displaced" || mode == L"crash-restored") {
+    const auto registration_path = root + L"\\registration-fixture.json";
+    auto write_bytes = [&](std::string_view bytes) {
+      config_path_detail::Handle file(CreateFileW(registration_path.c_str(), GENERIC_WRITE, 0,
+          nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+      DWORD count = 0;
+      return file.valid() && WriteFile(file.get(), bytes.data(), static_cast<DWORD>(bytes.size()),
+          &count, nullptr) && count == static_cast<DWORD>(bytes.size()) &&
+          FlushFileBuffers(file.get());
+    };
+    bool armed = false, displaced_seen = false;
+    // Fault injection exists only in this fixture executable. No production
+    // crash hook; use real opened handle paths to identify exact boundaries.
+    auto crash_policy = [&](HANDLE file, bool directory) {
+      if (GetFileType(file) != FILE_TYPE_DISK) return false;
+      if (!armed || directory) return true;
+      std::array<wchar_t, 1024> path{};
+      const DWORD count = GetFinalPathNameByHandleW(file, path.data(),
+          static_cast<DWORD>(path.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+      if (!count || count >= static_cast<DWORD>(path.size())) return false;
+      const std::wstring_view full(path.data(), count);
+      const auto leaf = full.substr(full.rfind(L'\\') + 1);
+      LARGE_INTEGER size{};
+      if (!GetFileSizeEx(file, &size)) return false;
+      if (leaf == L"restore-displaced.json") displaced_seen = true;
+      const bool stop =
+          (mode == L"crash-marker" && leaf == L"restore-started.json" && size.QuadPart == 0) ||
+          (mode == L"crash-copy" && leaf == L"restore-copy.pending" && size.QuadPart == 3) ||
+          (mode == L"crash-displaced" && leaf == L"restore-displaced.json") ||
+          (mode == L"crash-restored" && displaced_seen && leaf == L"registration-fixture.json");
+      if (stop) {
+        // Self termination deliberately skips C++ unwinding and all fixture
+        // cleanup. Parent requires exact exit code and verifies disk layout.
+        TerminateProcess(GetCurrentProcess(), 77);
+        return false; // if termination unexpectedly fails, fail the test
+      }
+      return true;
+    };
+    SyntheticJournalSession<decltype(crash_policy)> session(root, root, crash_policy);
+    if (session.status() != R::kLeaseOnly || !write_bytes("abc") ||
+        session.CreateRegistrationBackup(record) != R::kBackupOnly ||
+        session.Publish(record) != R::kPublishedOnly || !write_bytes("hello") ||
+        session.VerifyRegistrationArtifacts() != R::kTargetBytesOnly) return 37;
+    armed = true;
+    (void)session.RestoreRegistrationFixture(evidence);
+    return 38; // reaching here means requested crash boundary was missed
+  }
   if (mode == L"restore") {
     const auto registration_path = root + L"\\registration-fixture.json";
     auto write_bytes = [&](std::string_view bytes) {
