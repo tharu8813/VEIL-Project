@@ -83,6 +83,7 @@ internal sealed class DownloadVault : IDisposable
 #if DEBUG
     // Instance-scoped test barrier; never injects an error or exists in Release.
     internal Func<string, Task>? SmokeBeforePublication;
+    internal Func<Task>? SmokeAfterResponse;
 #endif
 
     // ── Opening ─────────────────────────────────────────────────────────────
@@ -313,6 +314,9 @@ internal sealed class DownloadVault : IDisposable
             cancel.ThrowIfCancellationRequested();
             download.WaitForTransfer();
             using var response = await GetFollowingRedirectsAsync(uri, web, cancel, retry, retryReady, session);
+#if DEBUG
+            if (SmokeAfterResponse is { } afterResponse) await afterResponse();
+#endif
             RequireCaptureSession(session);
             using var body = await response.Content.ReadAsStreamAsync(cancel);
             return await SealCaptureAsync(body, response.Content.Headers.ContentLength, uri.Host, download, session);
