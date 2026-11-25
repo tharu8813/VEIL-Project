@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 """Generate a review-only GRIT name patch from the exact upstream blob."""
+import argparse
 import base64
 import difflib
 import hashlib
@@ -44,6 +45,9 @@ def patch_bytes(original, modified):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--verify-registered", action="store_true")
+    options = parser.parse_args()
     pin = json.loads((ROOT / "chromium/candidate.json").read_text(encoding="utf-8"))
     if pin["revision"] != REV:
         raise ValueError("Review candidate generator for updated upstream revision")
@@ -69,9 +73,17 @@ def main():
                            input=patch, check=True, timeout=20)
         if target.read_bytes() != modified:
             raise ValueError("Patch result mismatch")
-    print(json.dumps({"status": "REVIEW_CANDIDATE_ONLY", "revision": REV, "blob": blob,
+    if options.verify_registered:
+        series = json.loads((ROOT / "chromium/patches/series.json").read_text(encoding="utf-8"))
+        name = "0002-veil-ui-product-name.patch"
+        entries = [p for p in series["patches"] if p["file"] == name]
+        if (series["baseRevision"] != REV or len(entries) != 1
+                or entries[0]["sha256"] != hashlib.sha256(patch).hexdigest()
+                or (ROOT / "chromium/patches" / name).read_bytes() != patch):
+            raise ValueError("Registered patch differs from regenerated source patch")
+    print(json.dumps({"status": "REGISTERED_UI_FIXTURE_CHECKED_ONLY" if options.verify_registered else "REVIEW_CANDIDATE_ONLY", "revision": REV, "blob": blob,
                       "patchSha256": hashlib.sha256(patch).hexdigest(), "keys": KEYS,
-                      "registered": False, "gritCompile": "NOT RUN", "runtime": "NOT RUN",
+                      "registered": options.verify_registered, "gritCompile": "NOT RUN", "runtime": "NOT RUN",
                       "releaseApproved": False}))
     print("BEGIN REVIEW DIFF")
     print(patch.decode("utf-8"), end="")
