@@ -469,16 +469,19 @@ public partial class BrowserWindow
     private async Task<bool> AnimateTabClose(TabItem item)
     {
         if (!closingTabs.Add(item)) return false;
-        if (Motion.Enabled)
+        try
         {
-            var root = (FrameworkElement)item.Header;
-            root.BeginAnimation(WidthProperty, Motion.To(0, 200, Motion.Out));
-            item.BeginAnimation(OpacityProperty, Motion.To(0, 140));
-            LayoutTabs();
-            await Task.Delay(210);
+            if (Motion.Enabled)
+            {
+                var root = (FrameworkElement)item.Header;
+                root.BeginAnimation(WidthProperty, Motion.To(0, 200, Motion.Out));
+                item.BeginAnimation(OpacityProperty, Motion.To(0, 140));
+                LayoutTabs();
+                await Task.Delay(210);
+            }
+            return true;
         }
-        closingTabs.Remove(item);
-        return true;
+        finally { closingTabs.Remove(item); }
     }
 
     // ── Small acknowledgements ──────────────────────────────────────────────
