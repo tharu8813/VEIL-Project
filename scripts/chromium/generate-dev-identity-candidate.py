@@ -24,6 +24,8 @@ CHANGES = (
     (r"\.pdf_prog_id_prefix\s*=\s*L", "ChromiumPDF", "VEILDevPDF"),
     (r"\.browser_prog_id_description\s*=\s*L", "Chromium HTML Document", "VEIL Development HTML Document"),
     (r"\.pdf_prog_id_description\s*=\s*L", "Chromium PDF Document", "VEIL Development PDF Document"),
+    (r"\.direct_launch_url_scheme\s*=\s*", "chromium", "veil-chromium-dev"),
+    (r"\.active_setup_guid\s*=\s*L", "{7D2B3E1D-D096-4594-9D8F-A6667F12E0AC}", "{C0D85D7A-6F11-49E9-A4B1-2D8F6C11B7E3}"),
 )
 
 
@@ -70,7 +72,8 @@ def main():
                       "patchSha256": hashlib.sha256(patch).hexdigest(), "changedFields": len(CHANGES),
                       "registered": False, "defaultProfileRuntime": "NOT RUN",
                       "policyOverride": "NOT RUN", "comIdentity": "NOT RUN",
-                      "installer": "NOT RUN", "releaseApproved": False}))
+                      "installer": "NOT RUN", "protocolRuntime": "NOT RUN",
+                      "activeSetupRuntime": "NOT RUN", "releaseApproved": False}))
     print("BEGIN REVIEW DIFF")
     print(patch.decode(), end="")
     print("END REVIEW DIFF")
