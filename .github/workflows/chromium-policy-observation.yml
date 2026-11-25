@@ -1,0 +1,32 @@
+name: Chromium development policy observation
+on:
+  pull_request:
+    paths:
+      - 'chromium/dev/profile-policy-win.h'
+      - 'tests/chromium/profile-policy-win.test.cc'
+      - '.github/workflows/chromium-policy-observation.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  policy-observation:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile and exercise read-only policy observation
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-policy-observation.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-policy-observation.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\profile-policy-win.test.cc advapi32.lib' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone Windows compilation failed.' }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Policy observation test failed.' }
