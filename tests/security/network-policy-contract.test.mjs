@@ -13,5 +13,7 @@ test('unknown network mode and ambiguous host cannot select a direct transport',
     assert.match(policy, /Handler\(NetworkSettings settings\)\s*\{\s*RequireValid\(settings\);/);
     assert.match(policy, /ApplyDns\(string userDataFolder, NetworkSettings settings\)\s*\{\s*RequireValid\(settings\);/);
     assert.match(policy, /--proxy-server=\{proxy\.Scheme\}:\/\/\{CanonicalProxyHost\(settings\.ProxyHost\)\}:\{settings\.ProxyPort\}/);
-    assert.match(policy, /BypassProxyOnLocal = false, BypassList = \[\]/);
+    assert.match(policy, /new FixedProxy\(settings\.ProxyUri \?\? throw new InvalidOperationException\(settings\.Problem\)\)/);
+    assert.match(policy, /private sealed class FixedProxy\(Uri address\) : IWebProxy[\s\S]*?public Uri GetProxy\(Uri destination\) => address;\s*public bool IsBypassed\(Uri host\) => false;/);
+    assert.doesNotMatch(policy, /new WebProxy\(/);
 });
