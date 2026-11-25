@@ -1319,8 +1319,20 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             CanUseTab(active.Item) && ReferenceEquals(editable ? bookmarkLibrary : historyLibrary, dialog);
         void PublishLibrary()
         {
-            if (editable) RefreshBookmarkBars(dialog);
-            else RefreshHistoryLibraries(dialog);
+            try
+            {
+                if (editable) RefreshBookmarkBars(dialog);
+                else
+                {
+                    foreach (var window in session.Windows.ToArray())
+                        if (!window.closing) window.CloseAddressSuggestions();
+                    RefreshHistoryLibraries(dialog);
+                }
+            }
+            catch (Exception error) when (RecoverableFailure.Is(error))
+            {
+                if (!closing) Status.Text = "목록은 저장했지만 일부 화면을 갱신하지 못했습니다.";
+            }
         }
         dialog = new LibraryWindow(this, editable ? "북마크 관리" : "방문 기록", entries, editable, SaveLibrary,
             editable ? data.BookmarkFolders : null, CanEditLibrary, PublishLibrary);
