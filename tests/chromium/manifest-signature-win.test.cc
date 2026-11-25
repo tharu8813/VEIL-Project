@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-#include "../../chromium/dev/manifest-signature-win.h"
+#include "../../chromium/dev/manifest-entry-win.h"
 #include <fstream>
 #include <filesystem>
 #include <iostream>
@@ -57,5 +57,15 @@ int wmain(int argc, wchar_t** argv) {
           ManifestSignatureObservation::kRejected ||
       ObserveSyntheticManifestSignature(manifest, std::string(kManifestFixtureLimit + 1, 'x'), pin) !=
           ManifestSignatureObservation::kRejected) return 9;
+  ManifestClientEntry entry{"old", "old", "old", 999};
+  if (ObserveSyntheticSignedEntry(manifest, cms, wrong, &entry) !=
+      SignedEntryObservation::kSignatureRejected || entry.bytes != 999 ||
+      ObserveSyntheticSignedEntry(changed, cms, pin, &entry) !=
+      SignedEntryObservation::kSignatureRejected || entry.bytes != 999) return 10;
+  if (ObserveSyntheticSignedEntry(manifest, cms, pin, &entry) !=
+      SignedEntryObservation::kEntryOnly || entry.bytes != 123 ||
+      entry.sha256 != std::string(64, 'a') ||
+      entry.source_commit != std::string(40, 'b') || entry.version != "1.1.0-alpha.1") return 11;
+  std::cout << "PASS: signed manifest bytes bound to synthetic client entry; no package authority\n";
   std::cout << "PASS: detached CMS bytes and independent DER SHA-256 pin, wrong pin, altered content, multiple signers, attached/truncated CMS and bounds refusal; no chain or package approval\n";
 }

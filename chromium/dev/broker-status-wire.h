@@ -4,6 +4,7 @@
 #define VEIL_CHROMIUM_DEV_BROKER_STATUS_WIRE_H_
 #include "volume-evidence-contract.h"
 #include <array>
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -89,6 +90,27 @@ class Reader {
       value->push_back(c);
     }
     return false;
+  }
+  bool Unsigned(std::uint64_t* value) {
+    Space();
+    if (input_.empty() || input_.front() < '0' || input_.front() > '9') return false;
+    if (input_.front() == '0') {
+      input_.remove_prefix(1);
+      if (!input_.empty() && input_.front() >= '0' && input_.front() <= '9')
+        return false;
+      *value = 0;
+      return true;
+    }
+    std::uint64_t result = 0;
+    constexpr std::uint64_t limit = 0x7fffffffffffffffULL;
+    while (!input_.empty() && input_.front() >= '0' && input_.front() <= '9') {
+      const auto digit = static_cast<unsigned>(input_.front() - '0');
+      if (result > (limit - digit) / 10u) return false;
+      result = result * 10u + digit;
+      input_.remove_prefix(1);
+    }
+    *value = result;
+    return true;
   }
   bool End() { Space(); return input_.empty(); }
  private:
