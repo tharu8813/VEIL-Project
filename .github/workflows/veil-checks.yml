@@ -95,7 +95,7 @@ jobs:
 
       - name: Check download retry context contract
         shell: pwsh
-        run: node --test tests/security/download-retry-contract.test.mjs
+        run: node --test tests/security/download-retry-contract.test.mjs tests/security/network-policy-contract.test.mjs
 
       # Hosted runners may be elevated and do not provide an interactive desktop.
       # Running the WPF smoke suite or broker authorization test here would
