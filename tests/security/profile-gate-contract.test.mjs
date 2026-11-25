@@ -44,5 +44,20 @@ test('profile descendants are checked before profile lock and engine setup', () 
     assert.match(startup, /ProfileGate\.Prepare\(expected, volume, requireProtected\);\s*ProfileGate\.RejectRedirectedChildren\(expected\);[\s\S]*?CoreWebView2Environment\.CreateAsync/);
 });
 test('scratch cleanup cannot bypass protected session disposal', () => {
-    assert.match(startup, /try\s*\{\s*if \(scratch is not null\)\s*\{\s*try \{ ProfileScratch\.Clear\(scratch\); \}\s*catch \(Exception error\) when \(error is IOException or UnauthorizedAccessException\) \{ \}\s*\}\s*\}\s*finally\s*\{\s*try \{ protectedSession\?\.Dispose\(\); \}\s*finally \{ notifications\?\.Dispose\(\); \}/);
+    assert.match(startup, /try\s*\{\s*if \(scratch is not null\)\s*\{\s*try \{ ProfileScratch\.Clear\(scratch\); \}\s*catch \(Exception error\) when \(error is IOException or UnauthorizedAccessException\) \{ \}\s*\}\s*\}\s*finally\s*\{\s*try \{ protectedSession\?\.Dispose\(\); \}\s*finally\s*\{\s*try \{ notifications\?\.Dispose\(\); \}\s*finally \{ activation\?\.Dispose\(\); \}\s*\}/);
+});
+
+test('protected launch lease covers the entire session, including cleanup', async () => {
+    const activation = await readFile('apps/desktop/BrowserActivation.cs', 'utf8');
+    assert.match(activation, /Utf8\.GetBytes\(sid \+ ":" \+ process\.SessionId\)/);
+    assert.match(activation, /string userKey = Convert\.ToHexString\(SHA256\.HashData\(Utf8\.GetBytes\(sid\)\)\);/);
+    assert.match(activation, /new Mutex\(false, @"Global\\VEIL\.ProtectedLaunch\." \+ userKey\)/);
+    assert.match(activation, /mutex\.WaitOne\(0\)/);
+    const stop = activation.slice(activation.indexOf('internal void StopListening()'), activation.indexOf('public void Dispose()'));
+    assert.match(stop, /stop\.Cancel\(\)/);
+    assert.doesNotMatch(stop, /ReleaseMutex|mutex\.Dispose/);
+    assert.match(startup, /activation = !smoke && File\.Exists\(BrokerClientConfig\.ProductPath\) \? new BrowserActivation\(\) : null;[\s\S]*?if \(activation is \{ Primary: false \}\)[\s\S]*?return 1;[\s\S]*?ProtectedProfileSession\.TryOpen/);
+    assert.doesNotMatch(startup, /using var activation/);
+    const cleanup = startup.slice(startup.indexOf('activation?.StopListening();'));
+    assert.match(cleanup, /activation\?\.StopListening\(\);[\s\S]*?ProfileScratch\.Clear\(scratch\)[\s\S]*?protectedSession\?\.Dispose\(\)[\s\S]*?finally \{ activation\?\.Dispose\(\); \}/);
 });
