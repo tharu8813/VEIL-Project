@@ -154,9 +154,17 @@ internal static class NetworkPolicy
             AutomaticDecompression = DecompressionMethods.All,
             UseProxy = settings.Mode == NetworkMode.Proxy,
             Proxy = settings.Mode == NetworkMode.Proxy
-                ? new WebProxy(settings.ProxyUri ?? throw new InvalidOperationException(settings.Problem)) { BypassProxyOnLocal = false, BypassList = [] }
+                ? new FixedProxy(settings.ProxyUri ?? throw new InvalidOperationException(settings.Problem))
                 : null,
         };
+    }
+
+    // Do not delegate bypass decisions to platform proxy heuristics (including loopback).
+    private sealed class FixedProxy(Uri address) : IWebProxy
+    {
+        public ICredentials? Credentials { get => null; set { if (value is not null) throw new NotSupportedException("Proxy authentication is not supported."); } }
+        public Uri GetProxy(Uri destination) => address;
+        public bool IsBypassed(Uri host) => false;
     }
 
     /// <summary>Path check shown in the UI: can the proxy be reached at all? Blocking does not depend on it.</summary>
