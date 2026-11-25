@@ -41,6 +41,21 @@ int TestRetention(const std::wstring& path) {
   retained.Reset();
   if (!CanOpenForDelete(path, &error) || !CanOpenForDelete(parent, &error))
     return 10;
+  // A late open failure must release all earlier directory handles.
+  const auto missing = path + L"\\missing";
+  if (retained.Observe(missing, missing, false, false) != FilesystemObservation::kUnavailable)
+    return 11;
+  if (!CanOpenForDelete(path, &error) || !CanOpenForDelete(parent, &error))
+    return 12;
+  {
+    DirectoryHandleRetention scoped;
+    if (scoped.Observe(path, path, false, false) != FilesystemObservation::kObservedOnly)
+      return 13;
+    if (CanOpenForDelete(path, &error) || error != ERROR_SHARING_VIOLATION)
+      return 14;
+  }
+  if (!CanOpenForDelete(path, &error) || !CanOpenForDelete(parent, &error))
+    return 15;
   std::cout << "PASS: synthetic directory DELETE-access conflicts while handles retained, release verified\n";
   return 0;
 }

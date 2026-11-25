@@ -20,7 +20,7 @@ enum class FilesystemObservation {
 };
 
 inline FilesystemObservation ValidateDirectoryHandle(
-    HANDLE handle, const std::wstring& path) {
+    HANDLE handle, const std::wstring& path) noexcept {
   FILE_ATTRIBUTE_TAG_INFO info{};
   const BOOL attributes = GetFileInformationByHandleEx(
       handle, FileAttributeTagInfo, &info, sizeof(info));
@@ -39,8 +39,12 @@ inline FilesystemObservation ValidateDirectoryHandle(
       FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (count == 0 || count >= static_cast<DWORD>(buffer.size()))
     return FilesystemObservation::kUnavailable;
-  const std::wstring expected = L"\\\\?\\" + path;
-  if (std::wstring_view(buffer.data(), count) != std::wstring_view(expected))
+  // Compare without allocating while the caller owns an open raw HANDLE.
+  constexpr std::wstring_view prefix = L"\\\\?\\";
+  const std::wstring_view actual(buffer.data(), count);
+  if (actual.size() < prefix.size() ||
+      actual.substr(0, prefix.size()) != prefix ||
+      actual.substr(prefix.size()) != std::wstring_view(path))
     return FilesystemObservation::kUnexpectedFinalPath;
   return FilesystemObservation::kObservedOnly;
 }
