@@ -70,6 +70,10 @@ PR #114 CI [45622662168](https://github.com/tharu8813/VEIL-Project/actions/runs/
 
 PR #115 [원격 검증 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45623627714) 로그: canonical Chromium tag와 후보 SHA 일치(REMOTE_MATCH_ONLY), depot_tools commit object 2960e876ad78502c616e27e1a89b9e01ca77ca7e 일치. [기존 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45623627505): 합성 테스트 6/6 및 plan-only/override 차단 PASS. 실제 Windows 머신/호환성/DEPS 전체 검증/동기화/빌드/런타임/샌드박스는 NOT RUN. 새 Build-Upstream.ps1은 기본 plan-only, 명시적 hook 승인, pin/origin/작업 트리 확인, 별도 GN 출력, 로컬 로그/실행 파일 SHA 증거를 제공한다. plan 테스트는 신규 CI 전 NOT RUN. 출력 관측은 제품 출시/보안 승인이 아니다. C0 IN PROGRESS / C1 준비 유지.
 
+## C1 실행 및 격리 검증 준비 (2026-11-25)
+
+PR #116 [CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45625718544): Debug/Release plan-only 및 hook 승인 차단 PASS, 6/6 합성 태그/후보 테스트와 기존 .NET/Rust 검사 PASS. [원격 검증](https://github.com/tharu8813/VEIL-Project/actions/runs/45625718363) PASS. 실제 Chromium 실행을 위한 Test-UpstreamRuntime.ps1 및 [런타임/샌드박스 증거 절차](../chromium/runtime-evidence.md) 추가. 빌드 receipt 및 실행 파일 SHA 일치 확인, 독립 합성 프로필과 DOM/JS marker 관측을 구현했지만 실제 실행은 NOT RUN. 샌드박스 토큰/사이트 격리/네트워크/자식 정리는 별도 검증. C0 IN PROGRESS, C1 준비 유지; Gate A~E 변경 없음.
+
 ## C0 증거 및 다음 행동
 
 - [x] 전환 방향 문서화(이 PR에서 제안), 기존 보안 요구 유지.
