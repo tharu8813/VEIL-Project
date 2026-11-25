@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {validateSeries,checkSeries} from '../../scripts/chromium/patch-series.mjs';
+import {validateSeries,checkSeries,sameDirectory} from '../../scripts/chromium/patch-series.mjs';
 const origin='https://example.invalid/chromium.git';
 const sha=b=>createHash('sha256').update(b).digest('hex');
 function fixture(t){
@@ -28,13 +28,26 @@ test('ordered patches checked in isolation; original HEAD, index and working fil
 });
 test('conflict refuses and leaves original checkout unchanged',t=>{
   const f=fixture(t),a=f.make('0001-conflict','wrong','second');
-  assert.throws(()=>checkSeries(f.repo,f.revision,origin,validateSeries(f.manifest([a]),f.revision,f.dir)));
+  assert.throws(()=>checkSeries(f.repo,f.revision,origin,validateSeries(f.manifest([a]),f.revision,f.dir)),/git.*apply/i);
   assert.equal(f.git('status','--porcelain'),'');assert.equal(readFileSync(join(f.repo,'a.txt'),'utf8'),'first\n');
 });
 test('bad identity, dirty tracked source, hash, order and traversal rejected',t=>{
   const f=fixture(t),a=f.make('0001-first','first','second'),b=f.make('0002-second','second','third');
   for(const patches of [[{...a,sha256:'0'.repeat(64)}],[b,a],[a,a],[{...a,file:'../bad.patch'}]]) assert.throws(()=>validateSeries(f.manifest(patches),f.revision,f.dir));
   assert.throws(()=>validateSeries(f.manifest([]),'0'.repeat(40),f.dir));
-  assert.throws(()=>checkSeries(f.repo,f.revision,'wrong',[]));
-  writeFileSync(join(f.repo,'a.txt'),'dirty\n');assert.throws(()=>checkSeries(f.repo,f.revision,origin,[]));
+  assert.throws(()=>checkSeries(f.repo,f.revision,'wrong',[]),/Checkout identity mismatch/);
+  writeFileSync(join(f.repo,'a.txt'),'dirty\n');assert.throws(()=>checkSeries(f.repo,f.revision,origin,[]),/Tracked checkout is dirty/);
+});
+
+test('directory identity accepts equivalent path spelling but refuses nested or different roots',t=>{
+  const f=fixture(t);
+  assert.equal(sameDirectory(f.repo,f.git('rev-parse','--show-toplevel')),true);
+  assert.equal(sameDirectory(f.repo,f.dir),false);
+  const nested=join(f.repo,'nested');mkdirSync(nested);
+  assert.throws(()=>checkSeries(nested,f.revision,origin,[]),/Expected checkout root/);
+  if(process.platform==='win32'){
+    const alternate=f.repo.replaceAll('\\','/').replace(/^[A-Za-z]:/,m=>m[0]===m[0].toUpperCase()?m.toLowerCase():m.toUpperCase());
+    assert.equal(sameDirectory(f.repo,alternate),true);
+    assert.equal(checkSeries(alternate,f.revision,origin,[]).status,'SERIES_CHECKED_ONLY');
+  }
 });

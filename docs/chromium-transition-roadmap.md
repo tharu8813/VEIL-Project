@@ -78,6 +78,10 @@ PR #116 [CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45625718544)
 
 PR #117 [CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45626931436)에서 runtime plan 및 잘못된 receipt 경로 거부 PASS, [원격 검증](https://github.com/tharu8813/VEIL-Project/actions/runs/45626931321) PASS. 실제 브라우저 실행은 NOT RUN. 신규 [패치 시리즈](../chromium/patches/README.md)는 정확한 upstream SHA 및 개별 패치 SHA256에 연결하고 임시 Git index/object store에서 순차 적용·충돌을 검사한다. 기존 원본 checkout 및 빌드 경로 보존. 초기 series는 비어 있으며 합성 시험/실제 Chromium 적용/빌드/보안 검증은 아직 NOT RUN. C0 IN PROGRESS, C1 준비, C2 제품 구현 미착수 유지.
 
+## C2/C9 패치 검사 Windows 회귀 수정 (2026-11-25)
+
+PR #118 최초 [Windows CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45633289302)는 9개 중 8개 통과, 순차 적용 테스트의 Expected checkout root 오류로 실패. Git/Node 경로 표현의 문자열 비교 대신 실제 디렉터리 identity(dev/ino) 비교와 Git 환경 경로 정규화 적용. 잘못된 root/dirty/충돌의 오류 원인도 구분하도록 회귀 시험 강화. 수정 head Windows CI 결과는 아직 NOT RUN이며 기존 .NET 단계는 최초 실패로 skipped. 실제 Chromium 제품 패치, 소스 동기화, 컴파일, sandbox 미검증 상태 유지.
+
 ## C0 증거 및 다음 행동
 
 - [x] 전환 방향 문서화(이 PR에서 제안), 기존 보안 요구 유지.

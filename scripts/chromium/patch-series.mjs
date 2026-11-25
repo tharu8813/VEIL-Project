@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Check ordered patches against a pinned Git tree in a temporary index/object store.
 import {execFileSync} from 'node:child_process';
-import {readFileSync, lstatSync, realpathSync, mkdtempSync, mkdirSync, rmSync} from 'node:fs';
-import {resolve, join, isAbsolute, dirname} from 'node:path';
+import {readFileSync, lstatSync, statSync, realpathSync, mkdtempSync, mkdirSync, rmSync} from 'node:fs';
+import {resolve, join, isAbsolute} from 'node:path';
 import {tmpdir} from 'node:os';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
@@ -30,20 +30,30 @@ function cleanGitEnv() {
   const env=Object.fromEntries(Object.entries(process.env).filter(([k])=>!k.toUpperCase().startsWith('GIT_')));
   return {...env,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null',GIT_TERMINAL_PROMPT:'0',GIT_OPTIONAL_LOCKS:'0'};
 }
+// Git for Windows and Node can spell the same directory differently.
+// Compare actual filesystem identity instead of folding case (case-sensitive NTFS is possible).
+export function sameDirectory(a,b) {
+  const left=realpathSync(a),right=realpathSync(b);
+  const x=statSync(left,{bigint:true}),y=statSync(right,{bigint:true});
+  if(!x.isDirectory()||!y.isDirectory())return false;
+  if(left===right)return true;
+  return x.ino!==0n&&y.ino!==0n&&x.dev===y.dev&&x.ino===y.ino;
+}
 export function checkSeries(checkout, revision, origin, patches) {
   const cwd=realpathSync(checkout), env=cleanGitEnv();
   const git=(args, extra={},input)=>execFileSync('git',['--no-replace-objects','-C',cwd,...args],{env:{...env,...extra},input,encoding:'utf8',timeout:120000,maxBuffer:16*1024*1024,stdio:['pipe','pipe','pipe']}).trim();
-  if(realpathSync(git(['rev-parse','--show-toplevel']))!==cwd) throw Error('Expected checkout root');
+  if(!sameDirectory(git(['rev-parse','--show-toplevel']),cwd)) throw Error('Expected checkout root');
   if(git(['rev-parse','HEAD'])!==revision||git(['remote','get-url','origin'])!==origin) throw Error('Checkout identity mismatch');
   if(git(['status','--porcelain','--untracked-files=no'])) throw Error('Tracked checkout is dirty');
   const objectPath=git(['rev-parse','--git-path','objects']);
   const objects=realpathSync(isAbsolute(objectPath)?objectPath:resolve(cwd,objectPath));
   // Git's alternate path list has platform delimiters. Fail rather than misparse.
-  if(objects.includes(process.platform==='win32'?';':':') && !(process.platform==='win32'&&!objects.includes(';'))) throw Error('Unsupported object path');
+  if(objects.includes(process.platform==='win32'?';':':')||/[\r\n"]/u.test(objects)) throw Error('Unsupported object path');
   const temp=mkdtempSync(join(tmpdir(),'veil-patches-'));
   try {
     const isolatedObjects=join(temp,'objects');mkdirSync(isolatedObjects);
-    const isolated={GIT_INDEX_FILE:join(temp,'index'),GIT_OBJECT_DIRECTORY:isolatedObjects,GIT_ALTERNATE_OBJECT_DIRECTORIES:objects};
+    const gitPath=p=>process.platform==='win32'?p.replaceAll('\\','/'):p;
+    const isolated={GIT_INDEX_FILE:gitPath(join(temp,'index')),GIT_OBJECT_DIRECTORY:gitPath(isolatedObjects),GIT_ALTERNATE_OBJECT_DIRECTORIES:gitPath(objects)};
     git(['read-tree',revision],isolated);
     for(const p of patches){
       // stdin binds the exact bytes already hashed. No worktree write, no hooks, no three-way fallback.
