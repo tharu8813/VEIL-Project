@@ -42,7 +42,7 @@ internal sealed class NetworkSettingsDialog : VeilDialog
             Margin = new Thickness(0, 16, 0, 0),
             Children =
             {
-                new TextBlock { Text = "보안 DNS — 선택하면 이 DoH 서버로만 주소를 찾고, 실패해도 일반 DNS로 되돌아가지 않습니다.", TextWrapping = TextWrapping.Wrap, Foreground = Res("TextBrush"), Margin = new Thickness(0, 0, 0, 6) },
+                new TextBlock { Text = "엔진 보안 DNS — WebView2의 이름 해석에 적용됩니다. 표준 모드의 다운로드 금고 재요청은 별도 HTTP 클라이언트와 시스템 DNS를 사용합니다. 프록시 모드에서는 이름 해석 경로가 프록시 종류 및 설정에 따라 달라집니다.", TextWrapping = TextWrapping.Wrap, Foreground = Res("TextBrush"), Margin = new Thickness(0, 0, 0, 6) },
                 dns, dnsCustom,
             },
         };
