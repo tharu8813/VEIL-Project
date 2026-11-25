@@ -165,6 +165,18 @@ internal static class NetworkPolicy
         return new UriBuilder(uri) { Scheme = Uri.UriSchemeHttps, Port = uri.IsDefaultPort ? -1 : uri.Port }.Uri;
     }
 
+    // A background download cannot display a native HTTPS exception prompt.
+    // An existing host exception permits HTTP only initially or along same-host HTTP redirects.
+    internal static bool DownloadAddressAllowed(Uri uri, Uri? previous, IReadOnlySet<string>? httpAllowed)
+    {
+        if (!uri.IsAbsoluteUri || uri.UserInfo.Length != 0) return false;
+        if (uri.Scheme == Uri.UriSchemeHttps) return true;
+        if (uri.Scheme != Uri.UriSchemeHttp || previous?.Scheme == Uri.UriSchemeHttps) return false;
+        if (IsLocal(uri.Host)) return true;
+        return httpAllowed?.Contains(uri.IdnHost) == true &&
+            (previous is null || string.Equals(previous.IdnHost, uri.IdnHost, StringComparison.OrdinalIgnoreCase));
+    }
+
     internal static bool IsLocal(string host)
     {
         host = host.Trim('[', ']').TrimEnd('.').ToLowerInvariant();

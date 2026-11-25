@@ -205,3 +205,21 @@ else
 {
     Console.WriteLine("NOT RUN: IPv6 unavailable on this host");
 }
+
+
+// Vault re-fetches cannot silently downgrade HTTPS or widen a user's host exception.
+var approvedHttp = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "example.com", "other.example.com" };
+var publicHttp = new Uri("http://example.com/file");
+var publicHttps = new Uri("https://example.com/file");
+var localHttp = new Uri("http://127.0.0.1/file");
+Check(!NetworkPolicy.DownloadAddressAllowed(publicHttp, null, null), "public HTTP requires explicit exception");
+Check(NetworkPolicy.DownloadAddressAllowed(publicHttp, null, approvedHttp), "explicit HTTP exception ignored");
+Check(NetworkPolicy.DownloadAddressAllowed(publicHttp, new Uri("http://example.com/start"), approvedHttp), "same-host HTTP redirect refused");
+Check(!NetworkPolicy.DownloadAddressAllowed(new Uri("http://other.example.com/file"), publicHttp, approvedHttp), "HTTP exception widened on redirect");
+Check(!NetworkPolicy.DownloadAddressAllowed(publicHttp, publicHttps, approvedHttp), "public HTTPS downgrade accepted");
+Check(!NetworkPolicy.DownloadAddressAllowed(localHttp, publicHttps, approvedHttp), "HTTPS downgrade to local HTTP accepted");
+Check(NetworkPolicy.DownloadAddressAllowed(localHttp, null, null), "local HTTP fixture refused");
+Check(NetworkPolicy.DownloadAddressAllowed(publicHttps, publicHttp, null), "HTTP to HTTPS upgrade refused");
+Check(!NetworkPolicy.DownloadAddressAllowed(new Uri("https://user:secret@example.com/file"), null, null), "URL credentials accepted");
+Check(!NetworkPolicy.DownloadAddressAllowed(new Uri("file:///synthetic"), null, null), "non-HTTP address accepted");
+Console.WriteLine("PASS: vault HTTP exceptions and downgrade refusal");

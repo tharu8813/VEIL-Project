@@ -91,3 +91,12 @@ const failurePolicy = await readFile('apps/desktop/DownloadFailurePolicy.cs', 'u
 test('publishing error guidance precedes generic access and session error classification', () => {
     assert.match(failurePolicy, /if \(phase == DownloadPhase\.Publishing\)[\s\S]*?저장 공간 부족 · 보관 목록 확인 필요[\s\S]*?금고 저장소 접근 권한 오류 · 보관 목록 확인 필요[\s\S]*?금고 저장 마무리 실패 · 보관 목록 확인 필요";\s*if \(error is DownloadRequestFailure/);
 });
+
+
+test('download transport checks every address before cookies and restricts HTTP version', () => {
+    const request = vault.slice(vault.indexOf('private async Task<HttpResponseMessage> GetFollowingRedirectsAsync'));
+    assert.match(request, /Uri\? previousAddress = null;[\s\S]*?NetworkPolicy\.DownloadAddressAllowed\(uri, previousAddress, httpAllowed\)[\s\S]*?throw new DownloadRequestFailure\([^;]+false\);[\s\S]*?await RejectThreatAsync[\s\S]*?GetCookiesAsync[\s\S]*?http\.SendAsync/);
+    assert.match(request, /Version = HttpVersion\.Version11,\s*VersionPolicy = HttpVersionPolicy\.RequestVersionOrLower,/);
+    assert.match(request, /cookies\.Where\(c => uri\.Scheme == Uri\.UriSchemeHttps \|\| !c\.IsSecure\)/);
+    assert.match(request, /previousAddress = uri;\s*uri = location\.IsAbsoluteUri \? location : new Uri\(uri, location\);/);
+});
