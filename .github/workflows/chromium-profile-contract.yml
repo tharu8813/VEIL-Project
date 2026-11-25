@@ -12,6 +12,9 @@ on:
       - 'chromium/dev/client-migration-contract.h'
       - 'chromium/dev/client-hash-win.h'
       - 'chromium/dev/client-signature-win.h'
+      - 'chromium/dev/client-integrity-win.h'
+      - 'tests/chromium/client-integrity-win.test.cc'
+      - 'tests/chromium/client-integrity-win.test.ps1'
       - 'tests/chromium/client-signature-win.test.cc'
       - 'tests/chromium/client-signature-win.test.ps1'
       - 'tests/chromium/client-hash-win.test.cc'
@@ -317,3 +320,16 @@ jobs:
           & cmd.exe /d /c $command
           if ($LASTEXITCODE -ne 0) { throw 'Client signature compile failed.' }
           & .\tests\chromium\client-signature-win.test.ps1 -Executable $exe
+      - name: Compile and test combined synthetic executable integrity
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-client-integrity.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-client-integrity.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\client-integrity-win.test.cc wintrust.lib bcrypt.lib advapi32.lib' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Client integrity compile failed.' }
+          & .\tests\chromium\client-integrity-win.test.ps1 -Executable $exe
