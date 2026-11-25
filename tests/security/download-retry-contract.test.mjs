@@ -6,6 +6,13 @@ import { readFile } from 'node:fs/promises';
 const browser = await readFile('apps/desktop/BrowserWindow.xaml.cs', 'utf8');
 const toolbar = await readFile('apps/desktop/BrowserWindow.Toolbar.cs', 'utf8');
 const vault = await readFile('apps/desktop/DownloadVault.cs', 'utf8');
+test('partial deletion invalidates the in-memory index and preserves object-first ordering', () => {
+    const deletion = vault.slice(vault.indexOf('internal async Task DeleteAsync('), vault.indexOf('internal string ObjectPath('));
+    assert.match(deletion, /!Entries\.Contains\(entry\)\)\s*throw new IOException/);
+    assert.match(deletion, /try\s*\{\s*File\.Delete\(ObjectPath\(entry\)\);\s*Entries = Entries\.Where\(e => e\.Id != entry\.Id\)\.ToList\(\);\s*File\.Delete\(Path\.Combine\(Meta, entry\.Id \+ "\.veil"\)\);\s*await SaveIndexLockedAsync\(\);\s*\}\s*catch\s*\{\s*Lock\(\);\s*throw;\s*\}/);
+    assert.match(deletion, /finally \{ gate\.Release\(\); Changed\?\.Invoke\(\); \}/);
+});
+
 test('retry consumes its candidate and rechecks before capture', () => {
     assert.match(toolbar, /retryDownload = null;[\s\S]*?UserPrompts\.Confirm[\s\S]*?!CanRetry\(item\)[\s\S]*?CaptureAsync\(/);
     assert.match(browser, /retryReady: retry \? \(\) => candidate is not null && CanRetry\(candidate\) : null/);
