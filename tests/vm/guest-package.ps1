@@ -36,6 +36,7 @@ $guest = Get-VeilPhase34Guest
 if (-not $guest.virtualBox -or -not $guest.noDefaultRoute) { throw 'Use the offline VirtualBox test VM (no default route).' }
 . (Join-Path $src 'scripts\package-common.ps1')
 . (Join-Path $src 'tests\vm\package-evidence.ps1')
+. (Join-Path $src 'tests\vm\package-checkpoints.ps1')
 $maintenance = Join-Path $src 'scripts\package-maintenance.ps1'
 $packages = 'C:\VEIL-Packages'
 $stateFile = Join-Path $Work 'package-state.json'
@@ -238,47 +239,68 @@ if ($Stage -eq 'Update') {
 
     Assert-VeilPackageEvidence @(Read-Results) @('package-same-version', 'package-lower-version', 'package-registration-kept')
 
-    # Interrupt the alpha.3 update: kill the maintenance process once its tree swap starts. Whether it died
-    # before or after the durable commit marker decides the expected recovery; both must be observed.
+    # Test-only copies of the trusted source pause at exact transaction boundaries.
+    # Recovery always uses the original, unmodified maintenance script.
     $previous = Join-Path $programFiles 'VEIL.update-previous'
-    $committed = Join-Path $data 'update-transaction\committed'
-    $seen = @{}
-    for ($attempt = 1; $attempt -le 6 -and $seen.Count -lt 2; $attempt++) {
-        $want = if ($seen.ContainsKey('pre-commit')) { 'post-commit' } else { 'pre-commit' }
-        $from = Installed-Version
+    $staging = Join-Path $programFiles 'VEIL.package-staging'
+    $failed = Join-Path $programFiles 'VEIL.update-failed'
+    $journal = Join-Path $data 'update-transaction'
+    $committed = Join-Path $journal 'committed'
+    $backup = Join-Path $journal 'broker.previous.json'
+    $client = Join-Path $bin 'Desktop\Veil.Desktop.exe'
+    $source = [IO.File]::ReadAllText($maintenance)
+    $oldPin = (Get-FileHash -LiteralPath $client -Algorithm SHA256).Hash
+    $newPin = (Get-FileHash -LiteralPath (Join-Path (Package-Path $versions[2]) 'Desktop\Veil.Desktop.exe') -Algorithm SHA256).Hash
+    foreach ($kind in $script:VeilUpdateCheckpoints.Keys) {
+        if ((Installed-Version) -ne $versions[1]) { throw 'Unexpected starting package version.' }
+        foreach ($artifact in @($previous,$staging,$failed,$journal)) {
+            if (Test-Path -LiteralPath $artifact) { throw 'Unresolved maintenance state before test.' }
+        }
+        $testRoot = Join-Path $packages "checkpoint-$kind"
+        New-VeilRestrictedDirectory $testRoot
+        $signal = Join-Path $testRoot 'ready'
+        $instrumented = Join-Path $testRoot 'package-maintenance.ps1'
+        [IO.File]::Copy((Join-Path $src 'scripts\package-common.ps1'), (Join-Path $testRoot 'package-common.ps1'), $false)
+        [IO.File]::WriteAllText($instrumented, (New-VeilCheckpointSource $source $kind $signal), [Text.UTF8Encoding]::new($false))
+        Assert-VeilAdminPath $instrumented
+        Assert-VeilAdminPath (Join-Path $testRoot 'package-common.ps1')
         $child = Start-Process powershell.exe -PassThru -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-            "`"$maintenance`"", '-Update', '-Package', "`"$(Package-Path $versions[2])`"", '-SignerThumbprint', $state.thumbprint)
-        $stopAt = (Get-Date).AddMinutes(3)
+            ('"' + $instrumented + '"'), '-Update', '-Package', ('"' + (Package-Path $versions[2]) + '"'), '-SignerThumbprint', $state.thumbprint)
+        $stopAt = (Get-Date).AddMinutes(5)
         $interrupted = $false
-        while (-not $child.HasExited -and (Get-Date) -lt $stopAt) {
-            if (($want -eq 'pre-commit' -and (Test-Path $previous)) -or ($want -eq 'post-commit' -and (Test-Path $committed))) { Stop-Process -Id $child.Id -Force; $interrupted = $true; break }
-            Start-Sleep -Milliseconds 5
+        try {
+            while (-not $child.HasExited -and (Get-Date) -lt $stopAt) {
+                if ((Test-Path -LiteralPath $signal) -and
+                    ([IO.File]::ReadAllText($signal) -ceq $kind)) {
+                    Stop-Process -Id $child.Id -Force
+                    $interrupted = $true
+                    break
+                }
+                Start-Sleep -Milliseconds 100
+            }
+        } finally {
+            if (-not $child.HasExited) { Stop-Process -Id $child.Id -Force }
+            if (-not $child.WaitForExit(15000)) { throw 'Test process exit not observed.' }
         }
-        if (-not $child.HasExited -and -not $interrupted) {
-            Stop-Process -Id $child.Id -Force
-            if (-not $child.WaitForExit(15000)) { throw 'Timed-out test process did not exit.' }
-            throw 'Update test timed out. Preserve the journal; administrator recovery required. No interruption PASS recorded.'
-        }
-        if (-not $child.WaitForExit(15000)) { throw 'Test process exit not observed.' }
-        if (-not (Test-Path (Join-Path $data 'update-transaction'))) {
-            if ((Installed-Version) -eq $versions[2]) { Write-Warning "Attempt $attempt finished before it could be interrupted." }
-            # A completed alpha.3 update leaves nothing newer to interrupt.
-            if ((Installed-Version) -eq $versions[2]) { break } else { continue }
-        }
-        if (-not $interrupted) { throw 'Transaction remained without a confirmed checkpoint interruption. Preserve evidence.' }
-        $kind = if (Test-Path $committed) { 'post-commit' } else { 'pre-commit' }
+        if (-not $interrupted) { throw "Checkpoint $kind not reached. Preserve evidence; no interruption PASS recorded." }
+        if (-not (Test-Path -LiteralPath $backup)) { throw 'Durable registration backup missing.' }
+        $pin = (Get-Content -LiteralPath (Join-Path $data 'broker.json') -Raw | ConvertFrom-Json).clientSha256
+        Assert-VeilUpdateBoundary $kind (Test-Path -LiteralPath $previous) (Test-Path -LiteralPath $bin) `
+            (Test-Path -LiteralPath $staging) (Test-Path -LiteralPath $committed) $pin $oldPin $newPin
         $recover = Invoke-Maintenance @('-RecoverInterruptedUpdate', '-SignerThumbprint', $state.thumbprint)
-        $expected = if ($kind -eq 'pre-commit') { $from } else { $versions[2] }
-        $service = (Get-Service Veil.VolumeBroker).Status
-        $clean = -not (Test-Path (Join-Path $data 'update-transaction')) -and -not (Test-Path $previous)
-        $ok = $recover.code -eq 0 -and (Installed-Version) -eq $expected -and $service -eq 'Running' -and $clean -and (Registration-Fingerprint) -eq $before
-        if ($seen.ContainsKey($kind)) { throw 'Duplicate interruption boundary; preserve evidence and restart from a fresh snapshot.' }
-        Save-Result "package-interrupt-$kind" ($(if ($ok) { 'PASS' } else { 'FAIL' })) "recovered to $(Installed-Version) (expected $expected), service $service, journal cleared=$clean"
-        $seen[$kind] = $true
+        $expected = if ($kind -eq 'post-commit') { $versions[2] } else { $versions[1] }
+        $expectedPin = if ($kind -eq 'post-commit') { $newPin } else { $oldPin }
+        $installed = Read-VeilPackage $bin $state.thumbprint
+        $service = Get-CimInstance Win32_Service -Filter "Name='Veil.VolumeBroker'"
+        $clean = @(@($journal,$previous,$staging,$failed) | Where-Object { Test-Path -LiteralPath $_ }).Count -eq 0
+        $pin = (Get-Content -LiteralPath (Join-Path $data 'broker.json') -Raw | ConvertFrom-Json).clientSha256
+        $ok = $recover.code -eq 0 -and $installed.version -eq $expected -and $service.State -eq 'Running' -and
+            $service.StartMode -eq 'Auto' -and $clean -and $pin -eq $expectedPin -and
+            (Get-FileHash -LiteralPath $client -Algorithm SHA256).Hash -eq $expectedPin -and
+            (Registration-Fingerprint) -eq $before -and (Get-FileHash -LiteralPath $state.image -Algorithm SHA256).Hash -eq $vhdx -and
+            -not (Get-DiskImage -ImagePath $state.image).Attached
+        Save-Result "package-interrupt-$kind" ($(if ($ok) { 'PASS' } else { 'FAIL' })) "authenticated $($installed.version), expected $expected; service $($service.State); journal cleared=$clean; exact pin and VHDX checked"
         Assert-VeilPackageEvidence @(Read-Results) @("package-interrupt-$kind")
-    }
-    foreach ($kind in 'pre-commit', 'post-commit') {
-        if (-not $seen.ContainsKey($kind)) { Save-Result "package-interrupt-$kind" 'NOT RUN' 'interruption window not hit; rerun from a fresh snapshot' }
     }
     return
 }

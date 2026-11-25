@@ -195,6 +195,8 @@ node tests/phase5/proxy-transition.mjs --internet-vm --operator-transition netwo
 
 OPERATOR 안내 뒤 프록시가 중단된 동안 운영자가 지정된 동작을 수행하고 출력된 operator.done 파일을 만든다. 실제 절전/복귀 및 어댑터 변경은 자동 실행하지 않는다. 운영자 확인만으로 OS 이벤트를 입증하지 않으며, OS 이벤트 로그와 외부 패킷 증거가 별도로 필요하다. PASS 범위는 로컬 프록시 중단·재개에 한정하고, 운영자 전환은 OBSERVED, 외부 네트워크 및 OS 수준 차단은 NOT RUN으로 남긴다. 실제 Windows/VM 실행 NOT RUN.
 
-패키지 시험의 `PACKAGE-RESULTS.ZIP`에는 `package-results.json`과 필수 26개 항목의 누락/중복/출처/결과를 판정하는 `package-summary.json`을 함께 포함한다. `-Stage Record`는 `installed-unlock`, `installed-relock`, `installed-refuses`만 허용한다. 실패한 시험을 성공으로 다시 기록하지 말고 증거를 보존한 뒤 새 VM 스냅샷에서 재시험한다. 타임아웃이나 확인되지 않은 업데이트 중단은 복구 시험 PASS가 아니며 저널을 보존한다. 운영자 기록에는 비밀번호·복구 키·민감 정보를 포함하지 않는다. 실제 VM 실행 NOT RUN.
+패키지 시험의 `PACKAGE-RESULTS.ZIP`에는 `package-results.json`과 필수 29개 항목의 누락/중복/출처/결과를 판정하는 `package-summary.json`을 함께 포함한다. `-Stage Record`는 `installed-unlock`, `installed-relock`, `installed-refuses`만 허용한다. 실패한 시험을 성공으로 다시 기록하지 말고 증거를 보존한 뒤 새 VM 스냅샷에서 재시험한다. 타임아웃이나 확인되지 않은 업데이트 중단은 복구 시험 PASS가 아니며 저널을 보존한다. 운영자 기록에는 비밀번호·복구 키·민감 정보를 포함하지 않는다. 실제 VM 실행 NOT RUN.
 
-서명이 유효하더라도 잘못된 매니페스트를 거부하는 7개 음성 시험을 CI 및 VM 변조 시험에 포함한다(중복·위험 경로, 필수 파일 누락, Boolean·소수 길이, 해시, 프로필 포맷). VM 시험의 필수 증거는 26개이며 실제 VM NOT RUN.
+서명이 유효하더라도 잘못된 매니페스트를 거부하는 7개 음성 시험을 CI 및 VM 변조 시험에 포함한다(중복·위험 경로, 필수 파일 누락, Boolean·소수 길이, 해시, 프로필 포맷). VM 시험의 필수 증거는 29개이며 실제 VM NOT RUN.
+
+업데이트 중단 시험은 등록 백업, 이전 트리 이동, 신규 트리 게시, 핀 교체(커밋 전), 커밋 직후의 5개 경계로 확대한다. VM 전용 제한된 시험 복사본에서 정확한 신호를 얻고 해당 프로세스를 종료한 다음 변경하지 않은 운영 복구 명령을 실행한다. 실제 트리/커밋/핀 상태와 복구 후 서명·서비스·등록·분리 VHDX 해시를 확인한다. 기존 폴링 기반 추측은 사용하지 않는다. 필수 패키지 증거는 29개. 실제 VM NOT RUN.
