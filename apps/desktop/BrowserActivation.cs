@@ -27,7 +27,7 @@ internal static class ExternalAddress
         StringComparison.OrdinalIgnoreCase) && File.Exists(BrokerClientConfig.ProductPath);
 }
 
-/// <summary>One instance per user/logon session. No secrets, URL files, or elevated endpoint.</summary>
+/// <summary>One protected launch per user across logon sessions; forwarding stays session-local. No secrets, URL files, or elevated endpoint.</summary>
 internal sealed class BrowserActivation : IDisposable
 {
     private static readonly UTF8Encoding Utf8 = new(false, true);
@@ -44,7 +44,10 @@ internal sealed class BrowserActivation : IDisposable
         var sid = identity.User?.Value ?? throw new InvalidOperationException("No Windows user SID.");
         using var process = Process.GetCurrentProcess();
         name = "VEIL.Activation." + Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(sid + ":" + process.SessionId)));
-        mutex = new Mutex(false, @"Local\" + name);
+        // A protected volume is shared across logon sessions. Keep its launch lease user-wide.
+        // The pipe name above still includes the session ID, so links never cross sessions.
+        string userKey = Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(sid)));
+        mutex = new Mutex(false, @"Global\VEIL.ProtectedLaunch." + userKey);
         try { Primary = mutex.WaitOne(0); }
         catch (AbandonedMutexException) { Primary = true; }
     }
@@ -116,14 +119,28 @@ internal sealed class BrowserActivation : IDisposable
         }
     }
 
+    // Close the activation endpoint without releasing the launch lease. The lease
+    // must remain held until the protected session has completed its cleanup attempt.
+    internal void StopListening()
+    {
+        if (disposed) return;
+        stop.Cancel();
+        listening?.Dispose();
+    }
+
     public void Dispose()
     {
         if (disposed) return;
-        disposed = true;
-        stop.Cancel();
-        listening?.Dispose();
-        if (Primary) mutex.ReleaseMutex();
-        mutex.Dispose();
-        stop.Dispose();
+        try { StopListening(); }
+        finally
+        {
+            disposed = true;
+            try { if (Primary) mutex.ReleaseMutex(); }
+            finally
+            {
+                mutex.Dispose();
+                stop.Dispose();
+            }
+        }
     }
 }
