@@ -284,20 +284,38 @@ internal sealed class DownloadVault : IDisposable
         return null;
     }
 
+    // A queued or preflight request belongs to the exact helper process it started with.
+    // A later unlock must not silently authorize replay of the earlier download.
+    private Process CaptureSession()
+    {
+        var session = serve;
+        RequireCaptureSession(session);
+        return session!;
+    }
+
+    private void RequireCaptureSession(Process? session)
+    {
+        if (session is null || !ReferenceEquals(serve, session) || !Unlocked)
+            throw new DownloadRequestFailure("금고 세션 변경 · 다시 다운로드하세요.", false);
+    }
+
     /// <summary>Fetches the URL with the page's cookies and seals the body as a new vault item.</summary>
     internal async Task<VaultEntry> CaptureAsync(Uri uri, BrowserDownload download, CoreWebView2 web, bool retry = false,
         Func<bool>? retryReady = null)
     {
+        Process session = CaptureSession();
         CancellationToken cancel = download.Token;
         download.WaitForSlot();
         await captureSlot.WaitAsync(cancel);
         try
         {
-            if (!Unlocked) throw new InvalidOperationException("The vault is locked.");
+            RequireCaptureSession(session);
+            cancel.ThrowIfCancellationRequested();
             download.WaitForTransfer();
-            using var response = await GetFollowingRedirectsAsync(uri, web, cancel, retry, retryReady);
+            using var response = await GetFollowingRedirectsAsync(uri, web, cancel, retry, retryReady, session);
+            RequireCaptureSession(session);
             using var body = await response.Content.ReadAsStreamAsync(cancel);
-            return await SealCaptureAsync(body, response.Content.Headers.ContentLength, uri.Host, download);
+            return await SealCaptureAsync(body, response.Content.Headers.ContentLength, uri.Host, download, session);
         }
         finally { captureSlot.Release(); }
     }
@@ -306,26 +324,28 @@ internal sealed class DownloadVault : IDisposable
     {
         if (!InlineDownloadPolicy.Enabled || !InlineDownloadPolicy.SourceAllowed(source) || !Unlocked)
             throw new InvalidOperationException("Inline download unavailable.");
+        Process session = CaptureSession();
         download.WaitForSlot();
         await captureSlot.WaitAsync(download.Token);
         try
         {
-            if (!Unlocked) throw new InvalidOperationException("The vault is locked.");
+            RequireCaptureSession(session);
             download.WaitForTransfer();
             download.Token.ThrowIfCancellationRequested();
             await RejectThreatAsync(threats?.CheckAsync(source, TimeSpan.FromSeconds(2), download.Token));
+            RequireCaptureSession(session);
             byte[] bytes = InlineDownloadPolicy.Decode(raw);
             try
             {
                 using var body = new MemoryStream(bytes, writable: false);
-                return await SealCaptureAsync(body, bytes.Length, source.Host, download);
+                return await SealCaptureAsync(body, bytes.Length, source.Host, download, session);
             }
             finally { CryptographicOperations.ZeroMemory(bytes); }
         }
         finally { captureSlot.Release(); }
     }
 
-    private async Task<VaultEntry> SealCaptureAsync(Stream body, long? declared, string host, BrowserDownload download)
+    private async Task<VaultEntry> SealCaptureAsync(Stream body, long? declared, string host, BrowserDownload download, Process session)
     {
         CancellationToken cancel = download.Token;
         string id = Guid.NewGuid().ToString("N");
@@ -333,7 +353,7 @@ internal sealed class DownloadVault : IDisposable
         await gate.WaitAsync(cancel);
         try
         {
-            if (!Unlocked) throw new InvalidOperationException("The vault is locked.");
+            RequireCaptureSession(session);
             cancel.ThrowIfCancellationRequested();
             bool canAbort = false;
             var packet = new byte[FrameSize + sizeof(int)];
@@ -774,12 +794,14 @@ internal sealed class DownloadVault : IDisposable
     }
 
     private async Task<HttpResponseMessage> GetFollowingRedirectsAsync(Uri uri, CoreWebView2 web, CancellationToken cancel,
-        bool retry, Func<bool>? retryReady)
+        bool retry, Func<bool>? retryReady, Process session)
     {
         // Called after acquiring the capture slot, and again after asynchronous threat/cookie lookups.
         // A confirmed retry is not permission to replay a request from a changed or closed document.
         void RequireLiveRetry()
         {
+            RequireCaptureSession(session);
+            cancel.ThrowIfCancellationRequested();
             if (retry && (!DownloadFailurePolicy.SafeRetryAddress(uri) || retryReady?.Invoke() != true))
                 throw new DownloadRequestFailure("원래 다운로드 페이지 변경 · 다시 다운로드하세요.", false);
         }
