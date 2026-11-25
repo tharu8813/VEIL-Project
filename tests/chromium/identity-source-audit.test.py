@@ -13,6 +13,34 @@ audit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit)
 
 class AuditTests(unittest.TestCase):
+    def test_previously_observed_identity_blobs_are_required(self):
+        expected = {
+            "chrome/install_static/install_constants.h": "5791763ae4833c331c3e70a5d2768dfb580aeffb",
+            "chrome/install_static/install_modes.cc": "bdd057bf4a266f30a3d9d93eef1ebcc1853bcf83",
+            "chrome/install_static/policy_path_parser.cc": "2befa3a77fc70d92733c87abdede88fa30230319",
+            "chrome/installer/util/shell_util.cc": "3710cb78f57047096c2f2651739a089f060cd6f8",
+            "chrome/installer/util/install_util.cc": "c9b812b50eb9594318d0ab81b215d2f1730f9635",
+            "chrome/browser/chrome_browser_main_win.cc": "77844751fad6de3fec9e1103176e29a994d1b24c",
+        }
+        for path, blob in expected.items():
+            self.assertEqual(audit.FILES[path][0], blob)
+        self.assertEqual(sum(blob is not None for blob, _ in audit.FILES.values()), 14)
+
+    def test_discovery_paths_not_misrepresented_as_pinned(self):
+        for path in (
+            "chrome/install_static/user_data_dir.h",
+            "chrome/app/chrome_main_delegate.cc",
+            "chrome/browser/chrome_browser_main.cc",
+            "chrome/common/chrome_paths.cc",
+            "chrome/browser/policy/configuration_policy_handler_list_factory.cc",
+            "chrome/elevation_service/elevation_service_idl.idl",
+            "chrome/elevation_service/elevator.cc",
+            "chrome/installer/setup/install.cc",
+            "chrome/installer/setup/uninstall.cc",
+            "chrome/browser/notifications/notification_platform_bridge_win.cc",
+        ):
+            self.assertIsNone(audit.FILES[path][0])
+
     def test_exact_blob_and_lines(self):
         raw = b"first\nkProductPathName = VEIL\nthird\n"
         blob = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
