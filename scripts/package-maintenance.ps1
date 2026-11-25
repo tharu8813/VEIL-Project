@@ -260,10 +260,19 @@ try {
         throw
     }
     if ($Install) {
-        # The existing installer owns BitLocker recovery registration and service creation.
-        & (Join-Path $PSScriptRoot 'broker-service.ps1') -BrokerSource (Join-Path $stage 'Broker') -DesktopSource (Join-Path $stage 'Desktop') -ImagePath $ImagePath -ProfilePath $ProfilePath -VolumeGuid $VolumeGuid -ProtectorId $ProtectorId -RecoveryProtectorId $RecoveryProtectorId -UserSid $UserSid -SignerThumbprint $SignerThumbprint
-        foreach ($name in @('manifest.json','manifest.p7s')) { [IO.File]::Copy((Join-Path $stage $name),(Join-Path $bin $name),$false) }
-        [void](Read-VeilPackage $bin $SignerThumbprint)
+        # The broker installer authenticates the entire installed tree before creating
+        # or starting the service. Preserve partial registration for administrator review.
+        try {
+            & (Join-Path $PSScriptRoot 'broker-service.ps1') -PackageRoot $stage -BrokerSource (Join-Path $stage 'Broker') -DesktopSource (Join-Path $stage 'Desktop') -ImagePath $ImagePath -ProfilePath $ProfilePath -VolumeGuid $VolumeGuid -ProtectorId $ProtectorId -RecoveryProtectorId $RecoveryProtectorId -UserSid $UserSid -SignerThumbprint $SignerThumbprint
+            [void](Read-VeilPackage $bin $SignerThumbprint)
+        } catch {
+            $installError=$_
+            if (-not (Test-Path -LiteralPath $bin) -and -not (Test-Path -LiteralPath $data) -and
+                -not (Get-CimInstance Win32_Service -Filter "Name='$service'")) {
+                Remove-RestrictedTree $stage
+            }
+            throw $installError
+        }
         Remove-RestrictedTree $stage
         return
     }
