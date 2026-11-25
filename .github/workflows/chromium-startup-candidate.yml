@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'scripts/chromium/generate-existing-profile-candidate.py'
+      - 'scripts/chromium/review-startup-callers.py'
+      - 'tests/chromium/startup-callers.test.py'
       - 'tests/chromium/existing-profile-candidate.test.py'
       - 'scripts/chromium/pinned_gitiles.py'
       - 'chromium/candidate.json'
@@ -22,3 +24,7 @@ jobs:
         run: python3 tests/chromium/existing-profile-candidate.test.py
       - name: Verify pinned source and review-only diff
         run: python3 scripts/chromium/generate-existing-profile-candidate.py
+      - name: Test startup caller evidence collection
+        run: python3 tests/chromium/startup-callers.test.py
+      - name: Review pinned startup failure call sites
+        run: python3 scripts/chromium/review-startup-callers.py
