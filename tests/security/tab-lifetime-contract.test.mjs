@@ -85,3 +85,12 @@ test('failed library save restores data and successful save publishes separately
     assert.match(library, /new HashSet<PageEntry>\(targets, ReferenceEqualityComparer\.Instance\);\s*Commit\(\(\) => entries\.RemoveAll\(confirmed\.Contains\)\);/);
     assert.match(toolbar, /private void RefreshHistoryLibraries[\s\S]*?window\.historyLibrary is \{ \} library && !ReferenceEquals\(library, source\)/);
 });
+
+
+test('recent download popup caches only the newest eight stored entries and drops them on lock or close', () => {
+    assert.match(toolbar, /var entries = visible \? session\.Vault\.Entries : null;\s*if \(!ReferenceEquals\(popupEntrySource, entries\)\)/);
+    assert.match(toolbar, /popupStored = entries is null \? \[\] : entries\.OrderByDescending\(entry => entry\.SavedAt\)\s*\.Take\(8\)/);
+    assert.match(toolbar, /private void DownloadPopupClosed[\s\S]*?popupEntrySource = null;\s*popupStored = \[\];/);
+    assert.match(toolbar, /DownloadPopupEmpty\.Visibility = visible && rows\.Length == 0/);
+    assert.match(toolbar, /items\.Any\(item => item\.IsIndeterminate\)/);
+});
