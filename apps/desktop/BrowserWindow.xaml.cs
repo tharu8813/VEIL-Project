@@ -1085,6 +1085,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void AddressKeyDown(object sender, KeyEventArgs args)
     {
+        if (args.Handled || IsCompositionKey(args.Key)) return;
         Key key = args.Key == Key.System ? args.SystemKey : args.Key;
         if (key == Key.Escape)
         {
@@ -1101,6 +1102,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         }
         if (key != Key.Enter) return;
         args.Handled = true;
+        if (args.IsRepeat) return;
         SubmitAddress(Keyboard.Modifiers);
     }
 
@@ -1145,7 +1147,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             Status.Text = "웹 주소 또는 검색어를 입력하세요.";
             return;
         }
-        if (Active is not { } tab || closingTabs.Contains(tab.Item)) return;
+        if (Active is not { } tab || !CanUseTab(tab.Item)) return;
         ClearManagement(tab);
         tab.PendingHttp = null;
         tab.PendingThreat = null;
@@ -1397,25 +1399,45 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private async void FindKeyDown(object sender, KeyEventArgs args)
     {
-        if (args.Key == Key.Enter) await Find(Keyboard.Modifiers == ModifierKeys.Shift);
-        if (args.Key == Key.Escape) FindCloseClick(sender, args);
+        if (args.Handled || IsCompositionKey(args.Key)) return;
+        if (args.Key == Key.Enter)
+        {
+            args.Handled = true;
+            if (!args.IsRepeat) await Find(Keyboard.Modifiers == ModifierKeys.Shift);
+        }
+        else if (args.Key == Key.Escape)
+        {
+            args.Handled = true;
+            FindCloseClick(sender, args);
+        }
     }
 
     private async void FindPreviousClick(object sender, RoutedEventArgs args) => await Find(true);
     private async void FindNextClick(object sender, RoutedEventArgs args) => await Find(false);
-    private void FindCloseClick(object sender, RoutedEventArgs args) => ShowFindBar(false);
+    private void FindCloseClick(object sender, RoutedEventArgs args)
+    {
+        findRequestEpoch++;
+        ShowFindBar(false);
+    }
+
+    private long findRequestEpoch;
 
     private async Task Find(bool backwards)
     {
+        long request = ++findRequestEpoch;
         if (FindText.Text.Length == 0) { FindClick(this, new RoutedEventArgs()); return; }
-        if (Active is not { } tab) return;
-        string text = System.Text.Json.JsonSerializer.Serialize(FindText.Text);
+        if (Active is not { } tab || !CanUseTab(tab.Item) || !IsWebUrl(tab.Url)) return;
+        string query = FindText.Text;
+        long navigation = tab.NavigationEpoch, selection = permissionSelectionEpoch;
+        bool Current() => request == findRequestEpoch && IsActive && Active == tab && CanUseTab(tab.Item) &&
+            tab.NavigationEpoch == navigation && permissionSelectionEpoch == selection && FindText.Text == query;
+        string text = System.Text.Json.JsonSerializer.Serialize(query);
         string reverse = backwards ? "true" : "false";
         try
         {
             string result = await tab.View.ExecuteScriptAsync($"window.find({text}, false, {reverse}, true)");
-            Status.Text = result == "true" ? "일치하는 텍스트를 찾았습니다." : "일치하는 텍스트가 없습니다.";
+            if (Current()) Status.Text = result == "true" ? "일치하는 텍스트를 찾았습니다." : "일치하는 텍스트가 없습니다.";
         }
-        catch (Exception error) when (RecoverableFailure.Is(error)) { if (!closing) Status.Text = "페이지에서 검색할 수 없습니다."; }
+        catch (Exception error) when (RecoverableFailure.Is(error)) { if (Current()) Status.Text = "페이지에서 검색할 수 없습니다."; }
     }
 }
