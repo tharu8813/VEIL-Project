@@ -18,6 +18,12 @@ pub fn export(
     password: SecretString,
 ) -> io::Result<u64> {
     require_new_destination(destination)?;
+    for directory in [vault.to_path_buf(), vault.join("objects"), vault.join("meta")] {
+        let metadata = fs::symlink_metadata(directory)?;
+        if !metadata.is_dir() || redirected(&metadata) {
+            return Err(invalid("Vault backup directory is missing or redirected"));
+        }
+    }
     let parent = destination
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -47,8 +53,10 @@ pub fn export(
                 }
                 write_record(keys, data, OBJECT, id, &object)?;
                 let meta = vault.join("meta").join(format!("{id}.veil"));
-                if meta.try_exists()? {
-                    write_record(keys, data, META, id, &meta)?;
+                match fs::symlink_metadata(&meta) {
+                    Ok(_) => write_record(keys, data, META, id, &meta)?,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+                    Err(error) => return Err(error),
                 }
                 count += 1;
             }
@@ -66,7 +74,7 @@ pub fn restore(
     code: SecretString,
 ) -> io::Result<Keyring> {
     require_new_destination(vault)?;
-    let mut source = BufReader::new(File::open(source)?);
+    let mut source = BufReader::new(open_regular_read(source)?);
     let mut magic = [0; MAGIC.len()];
     source.read_exact(&mut magic)?;
     if &magic != MAGIC {
@@ -92,7 +100,7 @@ pub fn restore(
     for name in ["objects", "meta", "index"] {
         fs::create_dir(staging.path().join(name))?;
     }
-    keys.read_object_from(Purpose::Backup, source, |data| {
+    keys.read_object_from(Purpose::Backup, &mut source, |data| {
         read_records(&keys, staging.path(), data)
     })?;
     vault_credentials::write_new(staging.path(), &keys, &envelope, code)?;
@@ -102,6 +110,39 @@ pub fn restore(
     Ok(keys)
 }
 
+fn redirected(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+/// Refuse redirected/nonregular input and hold a read-only sharing lease on Windows.
+fn open_regular_read(path: &Path) -> io::Result<File> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() || redirected(&metadata) {
+        return Err(invalid("Vault backup input is not a regular file"));
+    }
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_SHARE_READ and FILE_FLAG_OPEN_REPARSE_POINT.
+        OpenOptions::new().read(true).share_mode(1).custom_flags(0x00200000).open(path)?
+    };
+    #[cfg(not(windows))]
+    let file = File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || redirected(&metadata) {
+        return Err(invalid("Vault backup input is not a regular file"));
+    }
+    Ok(file)
+}
+
 fn write_record(
     keys: &Keyring,
     output: &mut dyn Write,
@@ -109,22 +150,8 @@ fn write_record(
     id: &str,
     path: &Path,
 ) -> io::Result<()> {
-    if !fs::symlink_metadata(path)?.file_type().is_file() {
-        return Err(invalid("Vault backup entry is not a regular file"));
-    }
-    #[cfg(windows)]
-    let mut file = {
-        use std::os::windows::fs::OpenOptionsExt;
-        // FILE_SHARE_READ: prevent other write/delete handles while copying.
-        OpenOptions::new().read(true).share_mode(1).open(path)?
-    };
-    #[cfg(not(windows))]
-    let mut file = File::open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Err(invalid("Vault backup entry is not a regular file"));
-    }
-    let length = metadata.len();
+    let mut file = open_regular_read(path)?;
+    let length = file.metadata()?.len();
     if kind == META && length > crate::SMALL_OBJECT_LIMIT as u64 + ENVELOPE_LIMIT as u64 {
         return Err(invalid("Vault metadata exceeds size limit"));
     }
