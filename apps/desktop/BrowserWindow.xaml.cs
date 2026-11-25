@@ -989,20 +989,10 @@ public partial class BrowserWindow : Window
     internal static Uri? ResolveAddress(string input, string? searchEngine = null)
     {
         input = input.Trim();
-        if (input.Length == 0) return null;
+        if (input.Length == 0 || AddressInputPolicy.HasUnsafeCharacters(input)) return null;
         if (SearchPolicy.TryExplicitSearch(input, searchEngine, out var search)) return search;
         if (IsInternalUrl(input)) return new Uri(input);
-        if (Uri.TryCreate(input, UriKind.Absolute, out var absolute) && IsWebUrl(absolute)) return absolute;
-        if (input.Contains("://") || input.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) return null;
-        if (!input.Any(char.IsWhiteSpace))
-        {
-            string authority = input.Split('/', '?', '#')[0];
-            if ((authority.Contains('.') || authority.StartsWith('[') || authority == "localhost" ||
-                authority.StartsWith("localhost:", StringComparison.OrdinalIgnoreCase)) &&
-                Uri.TryCreate("https://" + input, UriKind.Absolute, out var candidate) && IsWebUrl(candidate))
-                return candidate.IsLoopback ? new UriBuilder(candidate) { Scheme = "http", Port = candidate.IsDefaultPort ? -1 : candidate.Port }.Uri : candidate;
-            if (input.Contains(':')) return null;
-        }
+        if (AddressInputPolicy.TryResolve(input, out var address)) return address;
         return SearchPolicy.Search(searchEngine, input);
     }
 
