@@ -673,7 +673,7 @@ public partial class BrowserWindow
                     vault.SmokeBeforeBoundedReply = token => Task.Delay(Timeout.Infinite, token);
                     bool timedOut = false;
                     try { await vault.LoadIndexAsync(); }
-                    catch (IOException error) when (error.Message == "Vault pipe timeout.") { timedOut = true; }
+                    catch (IOException timeoutError) when (timeoutError.Message == "Vault pipe timeout.") { timedOut = true; }
                     finally
                     {
                         vault.SmokeBeforeBoundedReply = null;
