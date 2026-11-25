@@ -4,6 +4,8 @@ on:
     paths:
       - 'chromium/candidate.json'
       - 'scripts/chromium/observe_build_requirements.py'
+      - 'scripts/chromium/observe_local_build_requirements.py'
+      - 'tests/chromium/local-build-requirements.test.py'
       - 'scripts/chromium/pinned_gitiles.py'
       - 'tests/chromium/build-requirements.test.py'
       - '.github/workflows/chromium-build-requirements.yml'
@@ -20,5 +22,7 @@ jobs:
           persist-credentials: false
       - name: Test bounded tree and blob binding
         run: python3 tests/chromium/build-requirements.test.py
+      - name: Test offline exact Git object observation
+        run: python3 tests/chromium/local-build-requirements.test.py
       - name: Observe pinned upstream files without executing them
         run: python3 scripts/chromium/observe_build_requirements.py
