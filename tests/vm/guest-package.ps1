@@ -99,6 +99,20 @@ if ($Stage -eq 'Sign') {
     }
     Save-Result 'package-sign' 'PASS' "3 packages signed (no timestamp: offline VM) by $($cert.Thumbprint)"
 
+    # Re-sign malformed synthetic manifests with the trusted disposable VM certificate.
+    function Edit-SignedTestManifest([string]$Root, [scriptblock]$Change) {
+        $path = Join-Path $Root 'manifest.json'
+        $manifest = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        & $Change $manifest
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($manifest | ConvertTo-Json -Depth 8))
+        [IO.File]::WriteAllBytes($path, $bytes)
+        $cms = [Security.Cryptography.Pkcs.SignedCms]::new([Security.Cryptography.Pkcs.ContentInfo]::new($bytes), $true)
+        $signer = [Security.Cryptography.Pkcs.CmsSigner]::new($cert)
+        $signer.DigestAlgorithm = [Security.Cryptography.Oid]::new('2.16.840.1.101.3.4.2.1')
+        $cms.ComputeSignature($signer)
+        [IO.File]::WriteAllBytes((Join-Path $Root 'manifest.p7s'), $cms.Encode())
+    }
+
     # E2 tamper matrix: each case is a restricted copy of alpha.1 with one change.
     $cases = [ordered]@{
         'valid'            = @{ change = {}; expect = $null }
@@ -107,6 +121,13 @@ if ($Stage -eq 'Sign') {
         'missing-file'     = @{ change = { param($r) Remove-Item (Join-Path $r 'Broker\Veil.VolumeBroker.dll') }; expect = 'missing' }
         'edited-manifest'  = @{ change = { param($r) $m = Join-Path $r 'manifest.json'; [IO.File]::WriteAllText($m, ([IO.File]::ReadAllText($m) -replace 'alpha\.1', 'alpha.9')) }; expect = 'hash|signature|Cryptographic' }
         'wrong-signer'     = @{ change = {}; thumbprint = ('0' * 40); expect = 'signer mismatch' }
+        'signed-duplicate-path' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.files = @($m.files) + @($m.files[0]) } }; expect = 'Invalid or duplicate manifest entry' }
+        'signed-unsafe-path' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.files[0].path = 'Desktop/../outside.dll' } }; expect = 'Unsafe package path' }
+        'signed-missing-required' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.files = @($m.files | Where-Object path -ne 'Desktop/veil-vault.exe') } }; expect = 'Required binary missing' }
+        'signed-boolean-length' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.files[0].bytes = $true } }; expect = 'Invalid or duplicate manifest entry' }
+        'signed-fractional-length' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.files[0].bytes = 0.5 } }; expect = 'Invalid or duplicate manifest entry' }
+        'signed-bad-hash' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.files[0].sha256 = 'not-a-hash' } }; expect = 'Invalid or duplicate manifest entry' }
+        'signed-profile-format' = @{ change = { param($r) Edit-SignedTestManifest $r { param($m) $m.profileFormat = 2 } }; expect = 'Unsupported package contract' }
         # An unsigned image with a correctly re-signed manifest: only the Authenticode check can catch it.
         'unsigned-binary'  = @{ change = {
             param($r)
