@@ -50,7 +50,7 @@ internal static class LoginFormPolicy
         if (!user.value.trim() || user.value.length > 512 || !pass.value || pass.value.length > 2048) return null;
         return { UserName: user.value, Password: pass.value };
         """);
-    internal static string Fill(SavedLogin login, string page) => Script(login.Origin, page, $"""
+    internal static string Fill(SavedLogin login, string page) => Script(login.Origin, page, $$"""
         if (pass.value || (user.value && user.value !== {{JsonSerializer.Serialize(login.UserName)}})) return null;
         const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
         set.call(user, {{JsonSerializer.Serialize(login.UserName)}});
