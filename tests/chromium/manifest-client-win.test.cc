@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-#include "../../chromium/dev/manifest-client-win.h"
+#include "../../chromium/dev/manifest-client-policy-win.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -73,5 +73,29 @@ int wmain(int argc, wchar_t** argv) {
       calls != 1 || !unchanged()) return 11;
   if (ObserveSyntheticManifestClientWith(root, root + L"\\other", manifest, cms, pin, &output, injected) !=
       ManifestClientObservation::kRejected || calls != 1 || !unchanged()) return 12;
+  // The genuine signed but untrusted CMS fixture cannot reach file inspection.
+  if (ObserveSyntheticManifestClientOfflinePolicy(root, root, manifest, cms, pin, &output) !=
+      ManifestClientObservation::kManifestRejected || !unchanged()) return 13;
+  if (ObserveSyntheticManifestClientWithPolicies(root, root, manifest, cms, pin, &output,
+      ObserveSyntheticOfflineSignedEntry, injected) !=
+      ManifestClientObservation::kManifestRejected || calls != 1 || !unchanged()) return 14;
+  unsigned entry_calls = 0;
+  auto fixture_entry = [&](std::string_view m, std::string_view s, std::string_view p,
+                           ManifestClientEntry* entry) {
+    ++entry_calls;
+    return ObserveSyntheticSignedEntry(m, s, p, entry);
+  };
+  // Inject only the weaker entry policy, not the native image policy.
+  if (ObserveSyntheticManifestClientWithPolicies(root, root, manifest, cms, pin, &output,
+      fixture_entry, ObserveOfflinePinnedClientHandle) !=
+      ManifestClientObservation::kSignatureRejected || entry_calls != 1 ||
+      !unchanged()) return 15;
+  if (ObserveSyntheticManifestClientWithPolicies(root, root, wrong_size, size_cms, pin, &output,
+      fixture_entry, injected) != ManifestClientObservation::kSizeMismatch ||
+      entry_calls != 2 || calls != 1 || !unchanged()) return 16;
+  if (ObserveSyntheticManifestClientWithPolicies(root, root, manifest, cms, pin, &output,
+      fixture_entry, injected) != ManifestClientObservation::kObservationsOnly ||
+      entry_calls != 3 || calls != 2 || !ValidClientHash(output.sha256)) return 17;
+  std::cout << "PASS: strict manifest policy refuses untrusted CMS before client checks, native unsigned client refused, injected ordering only; trusted chain positive NOT RUN\n";
   std::cout << "PASS: native signed manifest binds exact fixture size/hash and same pin; unsigned refused, injected positive only, no package approval\n";
 }
