@@ -16,14 +16,15 @@ internal sealed record NetworkSettings(NetworkMode Mode = NetworkMode.Standard, 
 
     /// <summary>Null when valid. A proxy setting that cannot be used must never degrade to direct.</summary>
     internal string? Problem =>
+        Mode is not (NetworkMode.Standard or NetworkMode.Proxy) ? "지원하지 않는 네트워크 보호 모드입니다." :
         DnsTemplate is not null && !NetworkPolicy.ValidDnsTemplate(DnsTemplate) ? "보안 DNS 주소는 https:// 로 시작하는 DoH 주소여야 합니다." :
         Mode == NetworkMode.Standard ? null :
         ProxyScheme is not ("http" or "socks5") ? "프록시 종류는 HTTP 또는 SOCKS5여야 합니다." :
-        string.IsNullOrWhiteSpace(ProxyHost) || ProxyHost.Any(c => char.IsWhiteSpace(c) || c is '/' or '@' or '?' or '#') ? "프록시 주소가 올바르지 않습니다." :
+        NetworkPolicy.CanonicalProxyHost(ProxyHost) is null ? "프록시 주소는 단일 호스트 이름 또는 IP 주소여야 합니다." :
         ProxyPort is < 1 or > 65535 ? "프록시 포트는 1~65535여야 합니다." : null;
 
     internal Uri? ProxyUri => Mode == NetworkMode.Proxy && Problem is null
-        ? new Uri($"{ProxyScheme}://{(ProxyHost!.Contains(':') && !ProxyHost.StartsWith('[') ? $"[{ProxyHost}]" : ProxyHost)}:{ProxyPort}")
+        ? new Uri($"{ProxyScheme}://{NetworkPolicy.CanonicalProxyHost(ProxyHost)}:{ProxyPort}")
         : null;
 
     internal string Describe() => (Mode == NetworkMode.Standard ? "표준 보호" : $"{NetworkPolicy.ProxyName} ({ProxyScheme}://{ProxyHost}:{ProxyPort})") +
@@ -35,6 +36,34 @@ internal static class NetworkPolicy
     /// <summary>ADR-0010: proxy protection ships as experimental; every surface that names it uses this label.</summary>
     internal const string ProxyName = "프록시 보호 (실험적)";
     internal const string ProxyCaveat = "실험적 기능이며 고강도 익명성 보호가 아닙니다. OS 수준 차단(방화벽), 절전 후 복귀, 외부 IPv6, VEIL 엔진 밖 프로그램의 연결은 검증되지 않았습니다.";
+
+    // Never pass a proxy list, credentials, URL syntax or command-line delimiters to Chromium.
+    // Both the browser and .NET handler consume a single canonical authority.
+    internal static string? CanonicalProxyHost(string? host)
+    {
+        if (string.IsNullOrEmpty(host) || host.Length > 253) return null;
+        if (host.Contains(':') || host.Contains('[') || host.Contains(']'))
+        {
+            string literal = host;
+            if (host.StartsWith('[') && host.EndsWith(']')) literal = host[1..^1];
+            if (literal.Any(c => !char.IsAsciiHexDigit(c) && c is not (':' or '.')) ||
+                !IPAddress.TryParse(literal, out var ipv6) || ipv6.AddressFamily != AddressFamily.InterNetworkV6)
+                return null;
+            return $"[{ipv6}]";
+        }
+        if (host.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '-'))) return null;
+        if (IPAddress.TryParse(host, out var ipv4))
+            return ipv4.AddressFamily == AddressFamily.InterNetwork ? ipv4.ToString() : null;
+        string dns = host.EndsWith('.') ? host[..^1] : host;
+        if (dns.Length == 0 || dns.Split('.').Any(label => label.Length is < 1 or > 63 ||
+            label.StartsWith('-') || label.EndsWith('-'))) return null;
+        return host.ToLowerInvariant();
+    }
+
+    private static void RequireValid(NetworkSettings settings)
+    {
+        if (settings.Problem is { } problem) throw new InvalidOperationException(problem);
+    }
 
     /// <summary>Well-known DNS-over-HTTPS resolvers offered in the settings dialog.</summary>
     internal static readonly (string Name, string Template)[] DnsProviders =
@@ -55,6 +84,7 @@ internal static class NetworkPolicy
     /// </summary>
     internal static void ApplyDns(string userDataFolder, NetworkSettings settings)
     {
+        RequireValid(settings);
         string directory = Path.Combine(userDataFolder, "EBWebView");
         string path = Path.Combine(directory, "Local State");
         JsonObject state;
@@ -82,9 +112,10 @@ internal static class NetworkPolicy
     /// WebRTC limited to proxied paths, QUIC off.</summary>
     internal static IEnumerable<string> BrowserArguments(NetworkSettings settings)
     {
+        RequireValid(settings);
         if (settings.Mode != NetworkMode.Proxy) yield break;
         var proxy = settings.ProxyUri ?? throw new InvalidOperationException(settings.Problem);
-        yield return $"--proxy-server={proxy.Scheme}://{proxy.Authority}";
+        yield return $"--proxy-server={proxy.Scheme}://{CanonicalProxyHost(settings.ProxyHost)}:{settings.ProxyPort}";
         yield return "--proxy-bypass-list=<-loopback>";
         yield return "--webrtc-ip-handling-policy=disable_non_proxied_udp";
         yield return "--disable-quic";
@@ -113,16 +144,20 @@ internal static class NetworkPolicy
 
     /// <summary>HTTP handler for VEIL's own requests (vault re-fetch). Standard: direct, no system proxy.
     /// Proxy mode: only the configured proxy, loopback included; never the system proxy, never direct.</summary>
-    internal static SocketsHttpHandler Handler(NetworkSettings settings) => new()
+    internal static SocketsHttpHandler Handler(NetworkSettings settings)
     {
-        UseCookies = false,
-        AllowAutoRedirect = false,
-        AutomaticDecompression = DecompressionMethods.All,
-        UseProxy = settings.Mode == NetworkMode.Proxy,
-        Proxy = settings.Mode == NetworkMode.Proxy
-            ? new WebProxy(settings.ProxyUri ?? throw new InvalidOperationException(settings.Problem)) { BypassProxyOnLocal = false, BypassList = [] }
-            : null,
-    };
+        RequireValid(settings);
+        return new SocketsHttpHandler
+        {
+            UseCookies = false,
+            AllowAutoRedirect = false,
+            AutomaticDecompression = DecompressionMethods.All,
+            UseProxy = settings.Mode == NetworkMode.Proxy,
+            Proxy = settings.Mode == NetworkMode.Proxy
+                ? new WebProxy(settings.ProxyUri ?? throw new InvalidOperationException(settings.Problem)) { BypassProxyOnLocal = false, BypassList = [] }
+                : null,
+        };
+    }
 
     /// <summary>Path check shown in the UI: can the proxy be reached at all? Blocking does not depend on it.</summary>
     internal static async Task<bool> ProxyReachableAsync(NetworkSettings settings, TimeSpan timeout)
