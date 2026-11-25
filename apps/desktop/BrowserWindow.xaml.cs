@@ -28,6 +28,8 @@ public partial class BrowserWindow : Window
         internal FrameworkElement? ManagementSurface { get; set; }
         internal Action? CancelManagement { get; set; }
         internal long NavigationEpoch { get; set; }
+        internal ulong? NavigationId { get; set; }
+        internal Uri? ExpectedUpgrade { get; set; }
         internal bool Closing { get; set; }
         internal (string Method, string Uri, long Epoch)? LastDownloadRequest { get; set; }
         internal bool LoginFormDetected { get; set; }
@@ -397,6 +399,13 @@ public partial class BrowserWindow : Window
     {
         if (!AcceptTabEvents(tab)) { args.Cancel = true; return; }
         tab.NavigationEpoch++;
+        if (tab.NavigationId != args.NavigationId)
+        {
+            if (tab.ExpectedUpgrade is not { } expected || !Uri.TryCreate(args.Uri, UriKind.Absolute, out var requested) || !expected.Equals(requested))
+                tab.UpgradedFrom = null;
+            tab.ExpectedUpgrade = null;
+            tab.NavigationId = args.NavigationId;
+        }
         tab.LastDownloadRequest = null;
         if (retryDownload?.Tab == tab) retryDownload = null;
         tab.LoginFormDetected = false;
@@ -450,10 +459,11 @@ public partial class BrowserWindow : Window
 
     private void OnNavigationCompleted(BrowserTab tab, CoreWebView2NavigationCompletedEventArgs args)
     {
-        if (!AcceptTabEvents(tab)) return;
+        if (!AcceptTabEvents(tab) || tab.NavigationId != args.NavigationId) return;
         SetTabLoading(tab, false);
+        if (args.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled) return;
         tab.LastNavigationError = args.IsSuccess ? null : args.WebErrorStatus;
-        if (tab.UpgradedFrom is { } plain && args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
+        if (tab.UpgradedFrom is { } plain && tab.ExpectedUpgrade is null)
         {
             tab.UpgradedFrom = null;
             if (!args.IsSuccess)
@@ -491,13 +501,15 @@ public partial class BrowserWindow : Window
         }
         if (closing || session.EngineLost) return;
         session.EngineLost = true;
-        try { session.MainSession.Save(); }
+        bool saved = false;
+        try { session.MainSession.Save(); saved = true; }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         session.IsEnding = true;
         foreach (var window in session.AllWindows.ToList())
             window.Status.Text = "브라우저 엔진이 종료되었습니다. VEIL을 다시 시작하세요.";
         if (smokeRun) return; // the smoke harness observes and closes on its own
-        MessageBox.Show(this, "브라우저 엔진이 예기치 않게 종료되었습니다. 열린 탭은 저장되었습니다. VEIL을 다시 시작하세요.",
+        MessageBox.Show(this, "브라우저 엔진이 예기치 않게 종료되었습니다. " +
+            (saved ? "세션 저장 작업을 요청했습니다. " : "열린 탭을 저장하지 못했습니다. ") + "VEIL을 다시 시작하세요.",
             "VEIL", MessageBoxButton.OK, MessageBoxImage.Warning);
         foreach (var window in session.AllWindows.ToList()) window.Close();
     }
@@ -1152,6 +1164,9 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         tab.PendingHttp = null;
         tab.PendingThreat = null;
         tab.UpgradedFrom = null;
+        tab.ExpectedUpgrade = null;
+        tab.NavigationEpoch++;
+        tab.NavigationId = null;
         SetAddressText(url.AbsoluteUri);
         if (IsInternalUrl(url.OriginalString))
         {
@@ -1262,6 +1277,9 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         tab.PendingHttp = null;
         tab.PendingThreat = null;
         tab.UpgradedFrom = null;
+        tab.ExpectedUpgrade = null;
+        tab.NavigationEpoch++;
+        tab.NavigationId = null;
         tab.Url = "about:blank";
         tab.EngineView.Navigate("about:blank");
         RefreshChrome();
