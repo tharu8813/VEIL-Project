@@ -166,13 +166,13 @@ internal sealed class DownloadVault : IDisposable
             lockRequested = false;
             Process opening = serve;
             string reply = await CommandLockedAsync(first, profilePassword, recoveryCode);
-            RequireTransportSession(opening);
             if (reply != "ok")
             {
                 Lock();
                 if (restoring) return "백업을 복원하지 못했습니다. 백업 암호와 파일을 확인하세요. 복원에는 새 금고 위치가 필요합니다.";
                 return first.StartsWith("create") ? "금고를 만들지 못했습니다." : "암호 또는 복구 코드가 맞지 않습니다.";
             }
+            RequireTransportSession(opening);
             string location = await CommandLockedAsync("location");
             if (!location.StartsWith("ok\t", StringComparison.Ordinal))
                 throw new IOException("The vault did not report its active storage.");
