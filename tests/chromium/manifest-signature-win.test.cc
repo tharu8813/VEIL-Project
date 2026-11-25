@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "../../chromium/dev/manifest-entry-win.h"
+#include "../../chromium/dev/manifest-inventory-win.h"
 #include "../../chromium/dev/manifest-chain-win.h"
 #include <fstream>
 #include <filesystem>
@@ -104,6 +105,19 @@ int wmain(int argc, wchar_t** argv) {
       ObserveSyntheticManifestOfflinePolicy(manifest, usage_cms, usage_pin) !=
       ManifestSignatureObservation::kCertificatePolicyRejected) return 16;
   std::cout << "PASS: native CMS signer without explicit EKU and untrusted code-signing root refused; revoked/offline/unknown status classification; trusted revocation positive NOT RUN\n";
+  ManifestInventory inventory;
+  if (ObserveSyntheticSignedInventoryWith(manifest, cms, pin, &inventory,
+      ObserveSyntheticManifestSignature) != SignedEntryObservation::kEntryOnly ||
+      inventory.files.size() != 1 ||
+      CompareSyntheticInventory(inventory, inventory.files) != InventoryComparison::kMatchesOnly)
+    return 17;
+  if (ObserveSyntheticOfflineInventory(manifest, cms, pin, &inventory) !=
+      SignedEntryObservation::kSignatureRejected ||
+      ObserveSyntheticSignedInventoryWith(changed, cms, pin, &inventory,
+      ObserveSyntheticManifestSignature) != SignedEntryObservation::kSignatureRejected ||
+      inventory.files.size() != 1 || inventory.client.bytes != 123)
+    return 18;
+  std::cout << "PASS: signed fixture inventory retained, strict untrusted policy and tampering refused; no filesystem scan\n";
   std::cout << "PASS: signed manifest bytes bound to synthetic client entry; no package authority\n";
   std::cout << "PASS: detached CMS bytes and independent DER SHA-256 pin, wrong pin, altered content, multiple signers, attached/truncated CMS and bounds refusal; no chain or package approval\n";
 }

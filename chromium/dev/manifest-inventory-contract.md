@@ -1,0 +1,7 @@
+# Synthetic full manifest inventory contract
+
+PR #162 exact head 23c599b65101dea75139cf69fc520429074b1ba5 [Windows CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45685773145) PASS native untrusted CMS and unsigned client refusal, injected order/positive only; merged da74bda71cde3a086ef55de86d609d2bb9559aa7.
+
+Shared strict parser now retains all path/length/SHA-256 entries, preserving existing selected-client API. Inventory comparison validates expected and observed sets independently, requires exact selected client and metadata consistency, rejects case-insensitive duplicate and file/ancestor collision, compares exact path spelling, bytes and case-insensitive hashes, detects missing/unexpected files, ignores ordering. Existing 4096-entry/4MiB limits and synthetic layout remain. Explicit offline CMS policy wrapper verifies signature/pin/chain before parsing; weaker observer injection only for synthetic tests. Linux comparison tests and existing Windows CMS fixtures extended. Exact-head CI NOT RUN at commit.
+
+Observed inventory is supplied data, not filesystem evidence. No recursive enumeration, same-handle hashing of every file, empty file hash proof, ACL/ADS/reparse/hardlink detection beyond lexical names, staging immutability, trusted chain positive, actual package format approval, real product access or runtime authorization. Next implement bounded native tree inventory and match it against signed snapshot. Existing WebView2/Rust/broker/installer and gates unchanged; actual Chromium build not run.

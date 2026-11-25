@@ -17,6 +17,9 @@ on:
       - 'chromium/dev/manifest-signature-win.h'
       - 'chromium/dev/manifest-chain-win.h'
       - 'chromium/dev/manifest-entry-contract.h'
+      - 'chromium/dev/manifest-inventory-contract.h'
+      - 'chromium/dev/manifest-inventory-win.h'
+      - 'tests/chromium/manifest-inventory-contract.test.cc'
       - 'chromium/dev/manifest-entry-win.h'
       - 'chromium/dev/manifest-client-win.h'
       - 'chromium/dev/manifest-client-policy-win.h'
@@ -93,6 +96,8 @@ jobs:
           "$RUNNER_TEMP/client-migration-contract"
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/manifest-entry-contract.test.cc -o "$RUNNER_TEMP/manifest-entry-contract"
           "$RUNNER_TEMP/manifest-entry-contract"
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/manifest-inventory-contract.test.cc -o "$RUNNER_TEMP/manifest-inventory-contract"
+          "$RUNNER_TEMP/manifest-inventory-contract"
   windows-filesystem-observation:
     runs-on: windows-latest
     timeout-minutes: 10
