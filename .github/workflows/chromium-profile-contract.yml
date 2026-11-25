@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'chromium/dev/profile-path-contract.h'
+      - 'chromium/dev/volume-evidence-contract.h'
+      - 'tests/chromium/volume-evidence-contract.test.cc'
       - 'chromium/dev/diagnostic-path-contract.h'
       - 'chromium/dev/diagnostic-observation-win.h'
       - 'tests/chromium/diagnostic-observation-win.test.cc'
@@ -33,6 +35,8 @@ jobs:
           "$RUNNER_TEMP/profile-contract"
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/diagnostic-path-contract.test.cc -o "$RUNNER_TEMP/diagnostic-contract"
           "$RUNNER_TEMP/diagnostic-contract"
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/volume-evidence-contract.test.cc -o "$RUNNER_TEMP/volume-evidence-contract"
+          "$RUNNER_TEMP/volume-evidence-contract"
   windows-filesystem-observation:
     runs-on: windows-latest
     timeout-minutes: 10
