@@ -233,15 +233,29 @@ var statusSettings = new NetworkSettings(NetworkMode.Proxy, "http", "127.0.0.1",
 Check(await NetworkPolicy.ProxyReachableAsync(statusSettings, TimeSpan.FromSeconds(3)), "TCP status did not detect live listener");
 statusListener.Stop();
 Check(!await NetworkPolicy.ProxyReachableAsync(statusSettings, TimeSpan.FromSeconds(3)), "TCP status did not detect stopped listener");
-statusListener.Start();
-statusSettings = statusSettings with { ProxyPort = ((IPEndPoint)statusListener.LocalEndpoint).Port };
-Check(await NetworkPolicy.ProxyReachableAsync(statusSettings, TimeSpan.FromSeconds(3)), "TCP status did not detect restarted listener");
+using var recoveredListener = new TcpListener(IPAddress.Loopback, statusSettings.ProxyPort);
+recoveredListener.Start();
+Check(await NetworkPolicy.ProxyReachableAsync(statusSettings, TimeSpan.FromSeconds(3)), "TCP status did not detect recovery at the same endpoint");
 using var stoppedProbe = new CancellationTokenSource();
 stoppedProbe.Cancel();
 Check(!await NetworkPolicy.ProxyReachableAsync(statusSettings, TimeSpan.FromSeconds(3), stoppedProbe.Token), "cancelled TCP probe succeeded");
 var statusTime = new DateTimeOffset(2026, 11, 25, 12, 34, 56, TimeSpan.Zero);
 Check(NetworkPolicy.ProxyStatusText(null, null).Contains("미확인"), "unmeasured status claimed a result");
-Check(NetworkPolicy.ProxyStatusText(true, statusTime).Contains("12:34:56") &&
-    NetworkPolicy.ProxyStatusText(true, statusTime).Contains("전체 보호 미검증"), "TCP result overclaims protection");
-Check(NetworkPolicy.ProxyStatusText(false, statusTime).Contains("TCP 연결 실패"), "failed status mislabeled");
+Check(NetworkPolicy.ProxyStatusText(true, statusTime, statusTime.AddSeconds(10)).Contains("12:34:56") &&
+    NetworkPolicy.ProxyStatusText(true, statusTime, statusTime.AddSeconds(10)).Contains("전체 보호 미검증"), "TCP result overclaims protection");
+Check(NetworkPolicy.ProxyStatusText(false, statusTime, statusTime).Contains("TCP 연결 실패"), "failed status mislabeled");
+Check(NetworkPolicy.ProxyStatusText(true, statusTime, statusTime.AddSeconds(31)).Contains("미확인"), "stale successful probe still advertised");
+Check(NetworkPolicy.ProxyStatusText(false, statusTime, statusTime.AddSeconds(31)).Contains("미확인"), "stale failure still advertised");
+Check(NetworkPolicy.ProxyStatusText(true, statusTime, statusTime.AddSeconds(-1)).Contains("미확인"), "clock rollback accepted old probe");
 Console.WriteLine("PASS: TCP status probe and honest status presentation");
+
+
+// Even if an invalid URI reaches the TCP guard, two invalid canonical names cannot compare equal.
+bool invalidProxyRefused = false;
+try
+{
+    using var invalidStream = await NetworkPolicy.ConnectProxyAsync(new Uri("relative", UriKind.Relative),
+        new DnsEndPoint("127.0.0.1", originPort), CancellationToken.None);
+}
+catch (HttpRequestException) { invalidProxyRefused = true; }
+Check(invalidProxyRefused && !origin.Pending(), "invalid proxy identity did not fail closed");

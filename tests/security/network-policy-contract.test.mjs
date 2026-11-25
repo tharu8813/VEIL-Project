@@ -22,7 +22,7 @@ test('unknown network mode and ambiguous host cannot select a direct transport',
 test('proxy TCP connections are restricted to the configured endpoint', () => {
     assert.match(policy, /handler\.ConnectCallback = \(context, cancel\) => ConnectProxyAsync\(proxy, context\.DnsEndPoint, cancel\);/);
     const connect = policy.slice(policy.indexOf('internal static async ValueTask<Stream> ConnectProxyAsync'), policy.indexOf('private sealed class FixedProxy'));
-    assert.match(connect, /if \(endpoint\.Port != proxy\.Port \|\|[\s\S]*?CanonicalProxyHost\(endpoint\.Host\)[\s\S]*?CanonicalProxyHost\(proxy\.IdnHost\)[\s\S]*?throw new HttpRequestException[\s\S]*?await socket\.ConnectAsync\(endpoint, cancel\);/);
+    assert.match(connect, /string\? expectedHost = proxy\.IsAbsoluteUri \? CanonicalProxyHost\(proxy\.IdnHost\) : null;[\s\S]*?if \(expectedHost is null \|\| endpoint\.Port != proxy\.Port \|\|[\s\S]*?CanonicalProxyHost\(endpoint\.Host\), expectedHost[\s\S]*?throw new HttpRequestException[\s\S]*?await socket\.ConnectAsync\(endpoint, cancel\);/);
     assert.match(connect, /catch\s*\{\s*socket\.Dispose\(\);\s*throw;/);
 });
 
@@ -57,4 +57,10 @@ test('duplicate SmartScreen setting uses safe default and empty view set remains
     assert.match(manager, /if \(seen\) damaged = true;\s*seen = true;/);
     assert.match(manager, /new SecuritySettings\(damaged \|\| smartScreen\)/);
     assert.match(manager, /State = current\.Count == 0 \? SmartScreenState\.Pending/);
+});
+
+
+test('old or future TCP probe timestamps cannot claim current protection', () => {
+    assert.match(policy, /TimeSpan age = \(now \?\? DateTimeOffset\.Now\) - checkedAt\.Value;/);
+    assert.match(policy, /age < TimeSpan\.Zero \|\| age > TimeSpan\.FromSeconds\(30\)/);
 });

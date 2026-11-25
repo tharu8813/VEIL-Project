@@ -217,8 +217,9 @@ internal static class NetworkPolicy
     // Only the configured proxy host itself may be resolved locally by this path.
     internal static async ValueTask<Stream> ConnectProxyAsync(Uri proxy, DnsEndPoint endpoint, CancellationToken cancel)
     {
-        if (endpoint.Port != proxy.Port ||
-            !string.Equals(CanonicalProxyHost(endpoint.Host), CanonicalProxyHost(proxy.IdnHost), StringComparison.OrdinalIgnoreCase))
+        string? expectedHost = proxy.IsAbsoluteUri ? CanonicalProxyHost(proxy.IdnHost) : null;
+        if (expectedHost is null || endpoint.Port != proxy.Port ||
+            !string.Equals(CanonicalProxyHost(endpoint.Host), expectedHost, StringComparison.OrdinalIgnoreCase))
             throw new HttpRequestException("A direct connection is forbidden in proxy mode.");
 
         var socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
@@ -243,9 +244,12 @@ internal static class NetworkPolicy
     }
 
     // A TCP handshake does not prove the proxy protocol or absence of traffic leaks.
-    internal static string ProxyStatusText(bool? reachable, DateTimeOffset? checkedAt)
+    internal static string ProxyStatusText(bool? reachable, DateTimeOffset? checkedAt, DateTimeOffset? now = null)
     {
         if (reachable is null || checkedAt is null) return "프록시 TCP 경로 미확인";
+        TimeSpan age = (now ?? DateTimeOffset.Now) - checkedAt.Value;
+        if (age < TimeSpan.Zero || age > TimeSpan.FromSeconds(30))
+            return "프록시 TCP 경로 미확인 (최근 검사 없음)";
         string time = checkedAt.Value.ToString("HH:mm:ss");
         return reachable.Value
             ? $"TCP 경로 확인됨 ({time}) · 전체 보호 미검증"
