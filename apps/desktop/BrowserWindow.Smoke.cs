@@ -91,9 +91,9 @@ public partial class BrowserWindow
                     LoginFormPolicy.Decode("http://example.test", """{"UserName":"synthetic","Password":"synthetic-pass"}""") is null &&
                     LoginFormPolicy.Decode("https://example.test", """{"UserName":"","Password":"synthetic-pass"}""") is null,
                     "login capture rejects invalid origin and empty username");
-                Check(LoginFormPolicy.Probe("https://example.test").Contains("return true;") &&
-                    !LoginFormPolicy.Probe("https://example.test").Contains("pass.value") &&
-                    !LoginFormPolicy.Fill(new SavedLogin("https://example.test", "synthetic", "synthetic-pass")).Contains(".submit("),
+                Check(LoginFormPolicy.Probe("https://example.test", "https://example.test/login").Contains("return true;") &&
+                    !LoginFormPolicy.Probe("https://example.test", "https://example.test/login").Contains("pass.value") &&
+                    !LoginFormPolicy.Fill(new SavedLogin("https://example.test", "synthetic", "synthetic-pass"), "https://example.test/login").Contains(".submit("),
                     "login probe reads no password and fill does not submit");
                 var savedAccount = new SavedLogin("https://example.test", "synthetic", "original");
                 var mergedAccounts = PasswordStore.MergeBackup([savedAccount],
