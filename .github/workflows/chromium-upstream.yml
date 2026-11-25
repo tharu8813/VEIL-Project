@@ -1,0 +1,41 @@
+name: Chromium upstream identity checks
+
+on:
+  pull_request:
+    paths:
+      - 'chromium/candidate.json'
+      - 'scripts/chromium/**'
+      - '.github/workflows/chromium-upstream.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  upstream-identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check canonical source tag and depot_tools commit object
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/chromium/verify-candidate.mjs --verify-remote
+          sha="$(node --input-type=module -e "import {readPin} from './scripts/chromium/verify-candidate.mjs'; console.log(readPin().depotToolsRevision)")"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          tmp="$(mktemp -d)"
+          trap 'rm -rf -- "$tmp"' EXIT
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          git -C "$tmp" init --bare
+          git -C "$tmp" -c fetch.fsckObjects=true fetch --depth=1 --no-tags https://chromium.googlesource.com/chromium/tools/depot_tools.git "$sha"
+          test "$(git -C "$tmp" rev-parse 'FETCH_HEAD^{commit}')" = "$sha"
+          git -C "$tmp" cat-file -e "$sha:gclient.bat"
+          git -C "$tmp" cat-file -e "$sha:autoninja.bat"
+          printf 'depot_tools commit object matched: %s\n' "$sha"
+          printf 'Identity check only. No checkout, hook, toolchain, build or sandbox validation.\n'

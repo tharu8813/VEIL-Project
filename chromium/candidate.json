@@ -7,5 +7,8 @@
   "tag": "refs/tags/158.0.8127.89",
   "evidence": "https://chromium.googlesource.com/codesearch/chromium/src/+/refs/tags/158.0.8127.89",
   "status": "MIRROR_OBSERVED_REMOTE_CHECK_REQUIRED",
-  "depotToolsRevision": null
+  "depotToolsRevision": "2960e876ad78502c616e27e1a89b9e01ca77ca7e",
+  "depotToolsUpstream": "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
+  "depotToolsEvidence": "https://chromium.googlesource.com/chromium/tools/depot_tools/+/refs/heads/main",
+  "depotToolsStatus": "OBSERVED_CANDIDATE_COMPATIBILITY_NOT_RUN"
 }
