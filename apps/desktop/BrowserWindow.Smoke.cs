@@ -276,10 +276,16 @@ public partial class BrowserWindow
                     Check(BrowserData.Load(statePath).Tabs.Contains("veil://settings"),
                         "selected native route persisted without WebView navigation");
                     var closingSettings = Active!;
+                    long beforeCloseEpoch = closingSettings.NavigationEpoch;
                     var settingsClose = CloseTabAsync(closingSettings.Item);
                     Check(closingSettings.CancelManagement is null && closingSettings.ManagementSurface is null,
                         "closing native manager cancels its action before animation completes");
+                    Check(closingSettings.Closing && closingSettings.NavigationEpoch > beforeCloseEpoch &&
+                        !AcceptTabEvents(closingSettings) && !CanUseTab(closingSettings.Item), "close invalidates tab before animation");
+                    await CloseTabAsync(closingSettings.Item);
                     await settingsClose;
+                    Check(!Tabs.Items.Contains(closingSettings.Item) && !AcceptTabEvents(closingSettings),
+                        "duplicate close leaves no live tab or accepted events");
                     await ReadyAt("/");
                     await WaitFor(() => !session.SettingsUiOpen && !session.PermissionUiOpen, "closing settings releases manager guards");
                     var selectedBeforeBackground = Active;
