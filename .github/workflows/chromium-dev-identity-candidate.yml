@@ -1,0 +1,26 @@
+name: Chromium development identity candidate
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/chromium/generate-dev-identity-candidate.py'
+      - 'tests/chromium/dev-identity-candidate.test.py'
+      - '.github/workflows/chromium-dev-identity-candidate.yml'
+      - 'chromium/candidate.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  review-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test development namespace rewrite
+        run: python3 tests/chromium/dev-identity-candidate.test.py
+      - name: Generate review-only identity candidate
+        run: python3 scripts/chromium/generate-dev-identity-candidate.py

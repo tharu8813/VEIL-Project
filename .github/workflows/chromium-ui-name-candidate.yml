@@ -7,6 +7,7 @@ on:
       - 'tests/chromium/ui-name-candidate.test.py'
       - '.github/workflows/chromium-ui-name-candidate.yml'
       - 'chromium/candidate.json'
+      - 'chromium/patches/**'
   workflow_dispatch:
 
 permissions:
@@ -22,5 +23,5 @@ jobs:
           persist-credentials: false
       - name: Test scoped rewrite
         run: python3 tests/chromium/ui-name-candidate.test.py
-      - name: Generate review-only patch against exact upstream source
-        run: python3 scripts/chromium/generate-ui-name-candidate.py
+      - name: Verify registered patch exactly matches upstream-derived candidate
+        run: python3 scripts/chromium/generate-ui-name-candidate.py --verify-registered
