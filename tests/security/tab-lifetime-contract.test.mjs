@@ -130,3 +130,18 @@ test('login fill uses double-dollar raw interpolation for JavaScript braces', ()
     assert.match(loginForm, /Script\(login\.Origin, page, \$\$"""/);
     assert.match(loginForm, /set\.call\(pass, \{\{JsonSerializer\.Serialize\(login\.Password\)\}\}\);/);
 });
+
+
+test('deferred keyboard commands preserve the original page and leave composition keys alone', () => {
+    assert.match(tabs, /IsCompositionKey\(Key key\) => key is Key\.ImeProcessed or Key\.DeadCharProcessed/);
+    assert.match(tabs, /if \(IsCompositionKey\(key\)\) return;/);
+    assert.match(tabs, /if \(!windowCommand && \(managementFocusEpoch != originalFocus \|\| Active != originalTab \|\|[\s\S]*?originalTab\.NavigationEpoch != originalEpoch\)\)\) return;/);
+    assert.match(tabs, /CloseTab\(originalTab\.Item\)/);
+    assert.match(browser, /private void AddressKeyDown[\s\S]*?if \(args\.Handled \|\| IsCompositionKey\(args\.Key\)\) return;[\s\S]*?if \(args\.IsRepeat\) return;\s*SubmitAddress/);
+});
+test('page find ignores old requests after tab, query or navigation changes', () => {
+    assert.match(browser, /long request = \+\+findRequestEpoch;/);
+    assert.match(browser, /bool Current\(\) => request == findRequestEpoch && IsActive && Active == tab && CanUseTab\(tab\.Item\) &&\s*tab\.NavigationEpoch == navigation && permissionSelectionEpoch == selection && FindText\.Text == query;/);
+    assert.match(browser, /if \(Current\(\)\) Status\.Text = result == "true" \? "일치하는 텍스트를 찾았습니다."/);
+    assert.match(browser, /private void FindCloseClick[\s\S]*?findRequestEpoch\+\+;\s*ShowFindBar\(false\);/);
+});
