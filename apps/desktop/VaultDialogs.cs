@@ -17,6 +17,14 @@ internal sealed class VaultSetupDialog : VeilDialog
     internal string? RecoveryCode { get; private set; }
     internal VaultBackupSource? Backup { get; private set; }
     private readonly Action exerciseWizard;
+    private bool nestedPrompt;
+    private CancellationToken openCancellation;
+
+    internal bool ShowForVaultOpen(CancellationToken cancellation)
+    {
+        openCancellation = cancellation;
+        return ShowCancellable(cancellation, () => !nestedPrompt);
+    }
 #if DEBUG
     internal static Func<string, (bool Accept, string? Passphrase)>? SmokeMaintenanceInput;
     internal static Action<string>? SmokeMaintenanceCode;
@@ -75,15 +83,26 @@ internal sealed class VaultSetupDialog : VeilDialog
                     Title = "금고 백업 선택", Filter = "VEIL 금고 백업 (*.veil-backup)|*.veil-backup",
                     AddToRecent = false,
                 };
-                if (source.ShowDialog(this) != true) return;
-                var restore = new VaultSetupDialog(this, "금고 백업 복원", askPassphrase: true, issueCode: true,
-                    passwordPrompt: "백업을 만들 때 정한 암호를 입력하고 새 금고 복구 코드를 보관하세요.");
-                if (restore.ShowDialog() != true) return;
-                Backup = new VaultBackupSource(source.FileName, restore.Passphrase!, restore.RecoveryCode!);
-                DialogResult = true;
+                nestedPrompt = true;
+                try
+                {
+                    if (openCancellation.IsCancellationRequested || source.ShowDialog(this) != true ||
+                        openCancellation.IsCancellationRequested) return;
+                    var restore = new VaultSetupDialog(this, "금고 백업 복원", askPassphrase: true, issueCode: true,
+                        passwordPrompt: "백업을 만들 때 정한 암호를 입력하고 새 금고 복구 코드를 보관하세요.");
+                    if (!restore.ShowForVaultOpen(openCancellation) || openCancellation.IsCancellationRequested) return;
+                    Backup = new VaultBackupSource(source.FileName, restore.Passphrase!, restore.RecoveryCode!);
+                    DialogResult = true;
+                }
+                finally
+                {
+                    nestedPrompt = false;
+                    if (openCancellation.IsCancellationRequested && IsVisible) Close();
+                }
             });
         next = AddFooterButton("다음", () =>
         {
+            if (openCancellation.IsCancellationRequested) { Close(); return; }
             if (askPassphrase && index == 0)
             {
                 if (first.Password.Length < 8) { error.Text = "8자 이상 입력하세요."; return; }
@@ -241,16 +260,33 @@ internal sealed class VaultUnlockDialog : VeilDialog
             code.Visibility = recover ? Visibility.Visible : Visibility.Collapsed;
             password.Visibility = recover ? Visibility.Collapsed : Visibility.Visible;
             toggle.Content = recover ? "암호로 열기" : "암호를 잊었습니다 — 복구 코드로 열기";
+            password.Clear();
+            code.Clear();
+            message.Text = "";
+            if (recover) code.Focus(); else password.Focus();
         };
         SetBody(new StackPanel { Children = { password, code, toggle, message } });
         AddFooterButton("취소", () => DialogResult = false);
         AddFooterButton("열기", () =>
         {
-            if (code.Visibility == Visibility.Visible) RecoveryCode = code.Text;
-            else Passphrase = password.Password;
-            if (string.IsNullOrEmpty(Passphrase) && string.IsNullOrWhiteSpace(RecoveryCode)) return;
+            if (code.Visibility == Visibility.Visible)
+            {
+                string normalized = DownloadVault.NormalizeCode(code.Text);
+                if (string.IsNullOrEmpty(normalized)) { message.Text = "복구 코드를 입력하세요."; return; }
+                RecoveryCode = normalized;
+                Passphrase = null;
+            }
+            else
+            {
+                if (string.IsNullOrEmpty(password.Password)) { message.Text = "암호를 입력하세요."; return; }
+                if (password.Password.IndexOfAny(['\t', '\r', '\n']) >= 0)
+                { message.Text = "탭이나 줄바꿈은 쓸 수 없습니다."; return; }
+                Passphrase = password.Password;
+                RecoveryCode = null;
+            }
             DialogResult = true;
         }, primary: true);
         Loaded += (_, _) => password.Focus();
+        Closed += (_, _) => { password.Clear(); code.Clear(); };
     }
 }
