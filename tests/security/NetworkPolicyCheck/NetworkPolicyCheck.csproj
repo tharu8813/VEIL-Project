@@ -11,5 +11,6 @@
     <Compile Include="../../../apps/desktop/AddressInputPolicy.cs" Link="AddressInputPolicy.cs" />
     <Compile Include="../../../apps/desktop/BrowserDownload.cs" Link="BrowserDownload.cs" />
     <Compile Include="../../../apps/desktop/DownloadFailurePolicy.cs" Link="DownloadFailurePolicy.cs" />
+    <Compile Include="../../../apps/desktop/SiteDataPolicy.cs" Link="SiteDataPolicy.cs" />
   </ItemGroup>
 </Project>
