@@ -46,12 +46,15 @@ public partial class BrowserWindow
             session.SettingsUiOpen = false;
             session.PermissionUiOpen = false;
         }
-        if (!SettingsReady() || destination is null) return;
-        // Close the hub tab before opening an existing manager. The original browser tab is reselected,
-        // so site-scoped actions still use the original HTTPS context. No web message or URI can invoke this.
+        if (!SettingsReady() || destination is null || Active is not { } source || !CanUseTab(source.Item)) return;
+        long epoch = source.NavigationEpoch, focus = managementFocusEpoch;
+        // The original browser tab is reselected if it still exists. The queued command must not
+        // operate on another site or window if the user switches context before it runs.
         _ = Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (!SettingsReady() || session.SettingsUiOpen || session.PasswordUiOpen || session.PermissionUiOpen) return;
+            if (!SettingsReady() || !IsActive || Active != source || !CanUseTab(source.Item) ||
+                source.NavigationEpoch != epoch || managementFocusEpoch != focus ||
+                session.SettingsUiOpen || session.PasswordUiOpen || session.PermissionUiOpen) return;
             var click = new RoutedEventArgs();
             switch (destination)
             {

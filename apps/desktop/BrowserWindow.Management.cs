@@ -7,21 +7,32 @@ namespace Veil.Desktop;
 public partial class BrowserWindow
 {
     private readonly HashSet<string> openingManagement = new(StringComparer.Ordinal);
+    private long managementFocusEpoch;
 
     internal static bool IsManagementUrl(string? url) => url is
         "veil://settings" or "veil://bookmarks" or "veil://history" or "veil://passwords" or "veil://vault" or "veil://downloads" or
         "veil://settings/network" or "veil://settings/security" or "veil://settings/search" or "veil://settings/site-data" or "veil://settings/permissions" or "veil://tabs";
 
     private BrowserTab? FindManagementTab(string route) => Tabs.Items.OfType<TabItem>()
-        .Select(item => (BrowserTab)item.Tag).FirstOrDefault(tab => tab.Url == route && !closingTabs.Contains(tab.Item));
+        .Select(item => (BrowserTab)item.Tag).FirstOrDefault(tab => tab.Url == route && CanUseTab(tab.Item));
 
     private bool FocusManagementPage(string route)
     {
         if (!SettingsReady()) return false;
-        if (FindManagementTab(route) is not { CancelManagement: not null } tab)
-            return openingManagement.Contains(route);
-        Tabs.SelectedItem = tab.Item;
-        return true;
+        // A pending native editor belongs to one window; focus it rather than opening another.
+        foreach (var window in session.Windows.ToArray())
+        {
+            if (!window.SettingsReady()) continue;
+            if (window.FindManagementTab(route) is { CancelManagement: not null } tab)
+            {
+                window.Tabs.SelectedItem = tab.Item;
+                if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
+                if (window != this) window.Activate();
+                return true;
+            }
+            if (window.openingManagement.Contains(route)) return true;
+        }
+        return false;
     }
 
     private void OpenManagementRoute(string route)
@@ -50,7 +61,7 @@ public partial class BrowserWindow
         // Download overview is native and needs no unlock or automatic privileged operation.
         if (tab.Url == "veil://downloads" && !session.IsPrivate)
             return new DownloadOverview(this, session, () => SettingsReady() && Active == tab &&
-                tab.Owner == this && tab.Url == "veil://downloads" && !closingTabs.Contains(tab.Item),
+                tab.Url == "veil://downloads" && CanUseTab(tab.Item),
                 ClearDownloadIssues);
         // Session restoration never repeats an authenticated action.
         var open = new Button
@@ -60,7 +71,7 @@ public partial class BrowserWindow
         };
         open.Click += (_, _) =>
         {
-            if (Active == tab && tab.Owner == this && !closingTabs.Contains(tab.Item))
+            if (Active == tab && CanUseTab(tab.Item))
                 OpenManagementRoute(tab.Url);
         };
         var panel = new StackPanel { Margin = new Thickness(32), MaxWidth = 900 };
@@ -90,7 +101,7 @@ public partial class BrowserWindow
             var tab = (BrowserTab)item.Tag;
             bool selected = item == Tabs.SelectedItem;
             bool management = IsManagementUrl(tab.Url);
-            if (management && tab.ManagementSurface is null && !closingTabs.Contains(item))
+            if (management && tab.ManagementSurface is null && !tab.Closing && !closingTabs.Contains(item))
             {
                 tab.ManagementSurface = ManagementLanding(tab);
                 Pages.Children.Add(tab.ManagementSurface);
@@ -114,15 +125,18 @@ public partial class BrowserWindow
             reserved = openingManagement.Add(route);
             if (!reserved) return false;
             tab = FindManagementTab(route) ?? await OpenTab(route);
-            if (tab is null || !SettingsReady() || tab.Owner != this || tab.Url != route ||
-                !Tabs.Items.Contains(tab.Item) || closingTabs.Contains(tab.Item)) return false;
+            if (tab is null || !SettingsReady() || tab.Url != route || !CanUseTab(tab.Item)) return false;
             ClearManagement(tab);
             var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            long epoch = tab.NavigationEpoch;
+            bool ContextValid() => Active == tab && tab.ManagementSurface == page &&
+                tab.Url == route && tab.NavigationEpoch == epoch && CanUseTab(tab.Item) && SettingsReady() && IsActive;
+            long confirmedFocus = -1;
             page = dialog.TakePage(accepted =>
             {
-                if (Active == tab && tab.Owner == this && tab.Url == route &&
-                    !closingTabs.Contains(tab.Item) && SettingsReady() && IsActive)
-                    completion.TrySetResult(accepted);
+                if (completion.Task.IsCompleted || !ContextValid()) return;
+                confirmedFocus = managementFocusEpoch;
+                completion.TrySetResult(accepted);
             });
             tab.ManagementSurface = page;
             tab.CancelManagement = () => completion.TrySetResult(false);
@@ -131,21 +145,23 @@ public partial class BrowserWindow
             RefreshChrome();
             bool accepted = await completion.Task;
             // Cancel if the page was detached or left between the native click and its continuation.
-            accepted = accepted && tab.ManagementSurface == page && Active == tab &&
-                tab.Owner == this && tab.Url == route && !closingTabs.Contains(tab.Item) && IsActive && SettingsReady();
+            accepted = accepted && ContextValid() && confirmedFocus == managementFocusEpoch;
             if (tab.ManagementSurface == page)
             {
                 ClearManagement(tab);
                 if (SettingsReady() && Active == tab && Tabs.Items.Contains(tab.Item))
                 {
-                    if (previous is not null && previous != tab && previous.Owner == this &&
-                        Tabs.Items.Contains(previous.Item) && !closingTabs.Contains(previous.Item))
+                    if (previous is not null && previous != tab && CanUseTab(previous.Item))
+                    {
                         Tabs.SelectedItem = previous.Item;
-                    await CloseTabAsync(tab.Item);
+                        // The user's confirmed action must not wait for a visual close animation.
+                        CloseTab(tab.Item);
+                    }
+                    else RefreshChrome(); // Keep a harmless landing when no previous live tab exists.
                 }
                 else if (SettingsReady()) RefreshChrome();
             }
-            return accepted && SettingsReady();
+            return accepted && SettingsReady() && IsActive;
         }
         finally
         {
