@@ -35,7 +35,7 @@ jobs:
       - name: Chromium C0 diagnostics (hosted runner only)
         shell: powershell
         run: |
-          node --test tests/chromium/resolve-tag.test.mjs tests/chromium/verify-candidate.test.mjs tests/chromium/patch-series.test.mjs
+          node --test tests/chromium/resolve-tag.test.mjs tests/chromium/verify-candidate.test.mjs tests/chromium/patch-series.test.mjs tests/chromium/materialize-patches.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\tests\chromium\sync-plan.test.ps1
           .\tests\chromium\build-plan.test.ps1

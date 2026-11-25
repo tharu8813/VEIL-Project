@@ -117,3 +117,7 @@ PR #123 initial [audit CI](https://github.com/tharu8813/VEIL-Project/actions/run
 ## C2 개발 식별자 후보 보완 (2026-11-26)
 
 PR #123 수정 [CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45640276794) 7/7 PASS, 14/15 원본 관측 및 필수 8개 blob 일치, 선택 경로 404 1개. 기존/원격 CI PASS 및 main 89855c4d4976bed50f78fff7ef02e973921f61f5. Windows 개발 식별자 후보 7개 → 9개(직접 실행 scheme veil-chromium-dev, Active Setup GUID {C0D85D7A-6F11-49E9-A4B1-2D8F6C11B7E3})로 보완. 원본 COM 클래스/인터페이스 및 old IID 목록은 유지하며 새 값의 실제 OS 충돌/정책/등록 검증은 NOT RUN. 후보 CI 및 검토 전 series 등록 금지, 현재 실제 패치 2개 유지. C1 build/runtime/sandbox 및 Gate A~E 변경 없음.
+
+## C2 source-only patch materialization (2026-11-26)
+
+PR #124 [identity candidate CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45641176747) and [legacy CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45641177214) PASS, main merge 2b725787dc662828ebc3f1046143eba5c4d7b288. Nine-field candidate SHA256 fe034409cb5c7b83428afc12494d031983ee5e01a449af63c116e5a3502754de; COM and isolation remain unverified, candidate unregistered. New explicit source-only materializer checks registered series in two independent clean Git checkouts; default plan writes no target files, --execute applies only to separate target and checks staged tree. Synthetic CI pending. Actual full Chromium checkout/materialization/dependency sync/build/runtime/sandbox NOT RUN; legacy and security gates unchanged.

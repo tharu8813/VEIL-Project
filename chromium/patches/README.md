@@ -15,3 +15,11 @@ Do not run a patched browser yet. Localized strings, icons, Windows install iden
 ## Second UI product-name patch
 
 PR #121 [CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45638116741) generated and applied the exact GRIT fixture diff (blob dea90cda0be32f0d6c94ce7950a00970aded6299, patch SHA256 91d3c60a1ad8dd2379aa3fd15935807ce217f049782b9b73fdc6f03253f2718d). Register 0002-veil-ui-product-name.patch verbatim from that evidence. CI now requires exact byte equality with regenerated patch and its manifest digest. Only the two non-translatable names change. Actual GRIT compilation and UI rendering are NOT RUN; localized text containing Chromium is not globally replaced.
+
+## Source-only materialization (development, NOT RUN against Chromium)
+
+Use two independently acquired clean pinned Git checkouts in separate directories, both with the canonical origin and no untracked files, no shared Git metadata or object alternates. This intentionally targets source-only copies before dependency sync; a gclient workspace containing untracked dependencies may be refused. Do not point it at an existing personal browser profile, legacy VEIL repository, or dependency-populated build tree. Both copies must be trusted, dedicated, and non-elevated. Avoid junctions and links; no claim of protection against hostile Git configuration or concurrent filesystem changes.
+
+`node scripts/chromium/materialize-patches.mjs D:\\veil-upstream\\src D:\\veil-patched\\src` checks both pinned trees and returns a source-only plan. Append `--execute` explicitly to stage/apply the registered patches on the second checkout only. A matching final tree is source observation, not compilation or profile isolation. No commit, hooks, build, install, launch or automatic recovery; if interrupted preserve the destination and inspect it. The existing upstream build runner must still refuse this modified tree. A separate patched build runner and dependency verification remain future work.
+
+Only 0001 and 0002 are registered; nine-field Windows identity candidate remains unregistered. No patched browser may be launched yet. Synthetic tests cover plan, actual target-only patch writes, conflict rejection and root/dirty checks; actual Chromium materialization NOT RUN.
