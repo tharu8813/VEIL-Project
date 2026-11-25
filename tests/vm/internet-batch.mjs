@@ -31,7 +31,7 @@ export const STUN = 'stun:stun.l.google.com:19302';
 export const PLAN = [
     ['dns-path', 'Plain DNS (port 53) carries the system-DNS name but never the secure-DNS name (pktmon capture).'],
     ['webrtc-standard', 'ICE candidates in standard protection (recorded: host/srflx, IPv6).'],
-    ['webrtc-proxy', 'Proxy protection: no UDP ICE candidate at all (disable_non_proxied_udp); page reached via the proxy.'],
+    ['webrtc-proxy', 'Proxy protection: zero ICE candidates (ADR-0010 D2); page reached via the proxy.'],
     ['smartscreen-demo', 'Microsoft SmartScreen demo phishing page with SmartScreen on vs off.'],
     ['site-compat', 'Real sites load under HTTPS-first and strict tracking prevention; an HTTP-only site shows the warning page.'],
     ['ipv6-reachability', 'Whether the engine reaches an IPv6-only site (recorded).'],
@@ -67,13 +67,12 @@ export function candidate(line) {
     return { transport, address: parts[4], type: parts[7] };
 }
 
-/** webrtc-proxy rule: no UDP candidates (host, srflx or relay) may be gathered. */
+/** ADR-0010 D2: zero candidates, including TCP and mDNS candidates. */
 export function judgeProxyCandidates(lines) {
     if (!Array.isArray(lines)) return { status: 'FAIL', detail: 'no candidate list' };
     const parsed = lines.map(candidate);
     if (parsed.some(c => !c.transport)) return { status: 'FAIL', detail: 'invalid ICE candidate or gathering error' };
-    const udp = parsed.filter(c => c.transport === 'udp');
-    return udp.length ? { status: 'FAIL', detail: `${udp.length} UDP candidate(s): ${udp.map(c => c.type).join(',')}` } : { status: 'PASS', detail: `${lines.length} candidate(s), none UDP` };
+    return parsed.length ? { status: 'FAIL', detail: `${parsed.length} ICE candidate(s): ${parsed.map(c => c.transport + '/' + c.type).join(',')}` } : { status: 'PASS', detail: '0 ICE candidates' };
 }
 
 // Require actual successful HTTPS navigation and an explicit measured transport.
