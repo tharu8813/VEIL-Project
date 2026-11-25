@@ -58,9 +58,25 @@ int wmain(int argc, wchar_t** argv) {
     return 3;
   auto next = record;
   next.state = J::kRegistrationReplaced;
-  if (publish(next) != R::kConflict || publish(record) != R::kPublishedOnly ||
-      read() != R::kHistoryOnly || out.state != J::kPrepared ||
-      out.transaction_id != record.transaction_id || publish(record) != R::kConflict) return 4;
+  if (publish(next) != R::kConflict) return 4;
+  {
+    SyntheticJournalSession<decltype(policy)> session(root, root, policy);
+    if (session.status() != R::kLeaseOnly ||
+        session.Read(&out) != R::kEmpty || out.transaction_id != "sentinel" ||
+        session.Publish(record) != R::kPublishedOnly ||
+        session.Read(&out) != R::kHistoryOnly || out.state != J::kPrepared ||
+        out.transaction_id != record.transaction_id ||
+        session.Publish(record) != R::kConflict) return 22;
+    // Competing API calls must fail even between session operations.
+    if (read() != R::kBusy || publish(next) != R::kBusy ||
+        out.state != J::kPrepared) return 23;
+    SyntheticJournalSession<decltype(policy)> competitor(root, root, policy);
+    if (competitor.status() != R::kBusy || competitor.Read(&out) != R::kBusy ||
+        competitor.Publish(next) != R::kBusy) return 24;
+    std::cout << "PASS: retained journal session excludes competing calls between stages\n";
+  }
+  if (read() != R::kHistoryOnly || out.state != J::kPrepared ||
+      publish(record) != R::kConflict) return 25;
   const auto pending = root + L"\\record.pending";
   auto write = [](const std::wstring& path, std::string_view bytes) {
     config_path_detail::Handle file(CreateFileW(path.c_str(), GENERIC_WRITE, 0,
@@ -73,12 +89,20 @@ int wmain(int argc, wchar_t** argv) {
       publish(next) != R::kPending || !DeleteFileW(pending.c_str())) return 5;
   auto changed = next;
   changed.transaction_id[0] = 'f';
-  if (publish(changed) != R::kConflict || publish(next) != R::kPublishedOnly ||
-      read() != R::kHistoryOnly || out.state != J::kRegistrationReplaced) return 6;
-  auto committed = next;
-  committed.state = J::kActivationCommitted;
-  if (publish(committed) != R::kPublishedOnly || read() != R::kHistoryOnly ||
-      out.state != J::kActivationCommitted || publish(next) != R::kConflict) return 7;
+  {
+    SyntheticJournalSession<decltype(policy)> session(root, root, policy);
+    if (session.status() != R::kLeaseOnly || session.Publish(changed) != R::kConflict ||
+        session.Publish(next) != R::kPublishedOnly ||
+        session.Read(&out) != R::kHistoryOnly || out.state != J::kRegistrationReplaced)
+      return 6;
+    auto committed = next;
+    committed.state = J::kActivationCommitted;
+    if (read() != R::kBusy || publish(committed) != R::kBusy ||
+        session.Publish(committed) != R::kPublishedOnly ||
+        session.Read(&out) != R::kHistoryOnly || out.state != J::kActivationCommitted ||
+        session.Publish(next) != R::kConflict) return 7;
+  }
+  if (read() != R::kHistoryOnly || out.state != J::kActivationCommitted) return 26;
   const auto first = root + L"\\prepared.json";
   const auto second = root + L"\\registration-replaced.json";
   const auto alias = root + L"\\alias.json";
