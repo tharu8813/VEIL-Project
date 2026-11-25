@@ -1309,6 +1309,37 @@ public partial class BrowserWindow
                         new NetworkSettings(NetworkMode.Proxy, "socks5", "", 9050).Problem is not null &&
                         new NetworkSettings(NetworkMode.Proxy, "http", "127.0.0.1", 70000).Problem is not null &&
                         new NetworkSettings(NetworkMode.Proxy, "socks5", "127.0.0.1", 9050).Problem is null, "proxy settings validated");
+                    foreach (string invalidHost in new[] { "proxy.example:80", "proxy.example;direct://",
+                        "proxy.example,direct", "proxy.example\\direct", "proxy.example@host",
+                        "proxy.example%20", "proxy.example=direct", "proxy.example\"", "[::1]:80",
+                        "fe80::1%3", "bad..example", "-proxy.example", "proxy-.example" })
+                    {
+                        var invalidProxy = new NetworkSettings(NetworkMode.Proxy, "http", invalidHost, 8080);
+                        Check(invalidProxy.Problem is not null && invalidProxy.ProxyUri is null,
+                            "ambiguous proxy host rejected");
+                    }
+                    foreach (var invalidNetwork in new[] {
+                        new NetworkSettings((NetworkMode)99),
+                        new NetworkSettings(NetworkMode.Proxy, "http", "proxy.example:80", 8080),
+                        new NetworkSettings(DnsTemplate: "http://resolver.example/dns-query") })
+                    {
+                        bool engineRefused = false, handlerRefused = false;
+                        try { _ = NetworkPolicy.BrowserArguments(invalidNetwork).ToArray(); }
+                        catch (InvalidOperationException) { engineRefused = true; }
+                        try { using var refused = NetworkPolicy.Handler(invalidNetwork); }
+                        catch (InvalidOperationException) { handlerRefused = true; }
+                        Check(engineRefused && handlerRefused, "invalid network choice rejected by engine and vault");
+                    }
+                    foreach (string host in new[] { "::1", "[::1]", "127.0.0.1", "proxy.example", "xn--bcher-kva.example" })
+                    {
+                        var validProxy = new NetworkSettings(NetworkMode.Proxy, "http", host, 80);
+                        using var handler = NetworkPolicy.Handler(validProxy);
+                        Check(validProxy.Problem is null && handler.UseProxy &&
+                            handler.Proxy?.IsBypassed(new Uri("http://localhost/")) == false &&
+                            NetworkPolicy.BrowserArguments(validProxy).First() ==
+                            $"--proxy-server=http://{NetworkPolicy.CanonicalProxyHost(host)}:80",
+                            "single canonical proxy with explicit port and no local bypass");
+                    }
                     Check(!NetworkPolicy.BrowserArguments(NetworkSettings.Standard).Any(), "standard mode adds no engine switches");
                     var proxyArgs = NetworkPolicy.BrowserArguments(new NetworkSettings(NetworkMode.Proxy, "socks5", "127.0.0.1", 9050)).ToList();
                     Check(proxyArgs.SequenceEqual(new[] { "--proxy-server=socks5://127.0.0.1:9050", "--proxy-bypass-list=<-loopback>",
