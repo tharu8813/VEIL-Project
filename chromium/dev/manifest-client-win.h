@@ -10,17 +10,17 @@ enum class ManifestClientObservation {
   kHashMismatch, kSignatureRejected, kObservationsOnly,
 };
 
-template <class PinnedObserver>
-ManifestClientObservation ObserveSyntheticManifestClientWith(
+template <class EntryObserver, class PinnedObserver>
+ManifestClientObservation ObserveSyntheticManifestClientWithPolicies(
     std::wstring_view expected_root, std::wstring_view selected_root,
     std::string_view manifest, std::string_view cms, std::string_view pin,
-    ManifestClientEntry* output, PinnedObserver signer) {
+    ManifestClientEntry* output, EntryObserver observe_entry, PinnedObserver signer) {
   if (!output || !ValidClientHash(pin) ||
       Evaluate(expected_root, selected_root, false, false) !=
           PathDecision::kLexicalMatchOnly)
     return ManifestClientObservation::kRejected;
   ManifestClientEntry entry;
-  if (ObserveSyntheticSignedEntry(manifest, cms, pin, &entry) !=
+  if (observe_entry(manifest, cms, pin, &entry) !=
       SignedEntryObservation::kEntryOnly)
     return ManifestClientObservation::kManifestRejected;
   // Bind the exact fixed relative entry to a fixed subdirectory. No caller
@@ -48,6 +48,15 @@ ManifestClientObservation ObserveSyntheticManifestClientWith(
     return ManifestClientObservation::kClientRejected;
   *output = std::move(entry);
   return ManifestClientObservation::kObservationsOnly;
+}
+
+template <class PinnedObserver>
+ManifestClientObservation ObserveSyntheticManifestClientWith(
+    std::wstring_view expected_root, std::wstring_view selected_root,
+    std::string_view manifest, std::string_view cms, std::string_view pin,
+    ManifestClientEntry* output, PinnedObserver signer) {
+  return ObserveSyntheticManifestClientWithPolicies(expected_root, selected_root,
+      manifest, cms, pin, output, ObserveSyntheticSignedEntry, signer);
 }
 
 inline ManifestClientObservation ObserveSyntheticManifestClient(

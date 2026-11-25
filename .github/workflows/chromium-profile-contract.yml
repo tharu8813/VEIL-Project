@@ -19,6 +19,7 @@ on:
       - 'chromium/dev/manifest-entry-contract.h'
       - 'chromium/dev/manifest-entry-win.h'
       - 'chromium/dev/manifest-client-win.h'
+      - 'chromium/dev/manifest-client-policy-win.h'
       - 'tests/chromium/manifest-client-win.test.cc'
       - 'tests/chromium/manifest-client-win.test.ps1'
       - 'tests/chromium/manifest-entry-contract.test.cc'

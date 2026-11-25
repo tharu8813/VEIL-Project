@@ -9,24 +9,30 @@ namespace veil::chromium_dev {
 namespace client_signer_detail {
 // Extract only the primary signer from the successful verification state,
 // not an arbitrary embedded certificate or a timestamp countersigner.
-inline bool ReadSignerDigest(HANDLE state, std::array<BYTE, 32>& digest) noexcept {
-  if (!state) return false;
+inline PCCERT_CONTEXT ReadPrimarySigner(HANDLE state) noexcept {
+  if (!state) return nullptr;
   const auto* provider = WTHelperProvDataFromStateData(state);
-  if (!provider || provider->csSigners != 1) return false;
+  if (!provider || provider->csSigners != 1) return nullptr;
   auto* signer = WTHelperGetProvSignerFromChain(
       const_cast<CRYPT_PROVIDER_DATA*>(provider), 0, FALSE, 0);
   if (!signer || !signer->csCertChain || !signer->pasCertChain ||
-      signer->dwError != ERROR_SUCCESS) return false;
+      signer->dwError != ERROR_SUCCESS) return nullptr;
   const auto* cert = signer->pasCertChain[0].pCert;
   if (!cert || !cert->pbCertEncoded || !cert->cbCertEncoded ||
-      cert->cbCertEncoded > 1024u * 1024u) return false;
+      cert->cbCertEncoded > 1024u * 1024u) return nullptr;
+  return cert;
+}
+inline bool ReadCertificateDigest(PCCERT_CONTEXT cert, std::array<BYTE, 32>& digest) noexcept {
+  if (!cert) return false;
   DWORD length = static_cast<DWORD>(digest.size());
   return CryptHashCertificate2(BCRYPT_SHA256_ALGORITHM, 0, nullptr,
       cert->pbCertEncoded, cert->cbCertEncoded, digest.data(), &length) &&
       length == static_cast<DWORD>(digest.size());
 }
-inline ClientSignatureObservation ObservePinnedHandle(
-    HANDLE file, const std::wstring& path, std::string_view expected_pin) {
+template <class CertificateObserver>
+ClientSignatureObservation ObservePinnedHandleWith(
+    HANDLE file, const std::wstring& path, std::string_view expected_pin,
+    CertificateObserver observe_certificate) {
   if (!ValidClientHash(expected_pin)) return ClientSignatureObservation::kRejected;
   WINTRUST_FILE_INFO info{};
   info.cbStruct = sizeof(info);
@@ -43,13 +49,8 @@ inline ClientSignatureObservation ObservePinnedHandle(
   GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
   const LONG status = WinVerifyTrust(nullptr, &action, &data);
   std::array<BYTE, 32> digest{};
-  const bool extracted = status == ERROR_SUCCESS &&
-      ReadSignerDigest(data.hWVTStateData, digest);
-  data.dwStateAction = WTD_STATEACTION_CLOSE;
-  const LONG closed = WinVerifyTrust(nullptr, &action, &data);
-  if (status != ERROR_SUCCESS) return ClientSignatureObservation::kNotTrusted;
-  if (!extracted || closed != ERROR_SUCCESS)
-    return ClientSignatureObservation::kUnavailable;
+  const auto cert = status == ERROR_SUCCESS ? ReadPrimarySigner(data.hWVTStateData) : nullptr;
+  const bool extracted = ReadCertificateDigest(cert, digest);
   constexpr char hex[] = "0123456789abcdef";
   std::array<char, 64> pin{};
   std::size_t i = 0;
@@ -57,9 +58,29 @@ inline ClientSignatureObservation ObservePinnedHandle(
     pin[i++] = hex[byte >> 4];
     pin[i++] = hex[byte & 15];
   }
-  return SameClientHash(std::string_view(pin.data(), pin.size()), expected_pin)
-      ? ClientSignatureObservation::kPolicyMatchOnly
-      : ClientSignatureObservation::kNotTrusted;
+  const bool matched = extracted &&
+      SameClientHash(std::string_view(pin.data(), pin.size()), expected_pin);
+  // Keep provider state alive during the policy check, including exceptions.
+  bool policy_match = false;
+  try {
+    policy_match = matched && observe_certificate(cert);
+  } catch (...) {
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust(nullptr, &action, &data);
+    throw;
+  }
+  data.dwStateAction = WTD_STATEACTION_CLOSE;
+  const LONG closed = WinVerifyTrust(nullptr, &action, &data);
+  if (status != ERROR_SUCCESS) return ClientSignatureObservation::kNotTrusted;
+  if (!extracted || closed != ERROR_SUCCESS)
+    return ClientSignatureObservation::kUnavailable;
+  return policy_match ? ClientSignatureObservation::kPolicyMatchOnly
+                      : ClientSignatureObservation::kNotTrusted;
+}
+inline ClientSignatureObservation ObservePinnedHandle(
+    HANDLE file, const std::wstring& path, std::string_view expected_pin) {
+  return ObservePinnedHandleWith(file, path, expected_pin,
+      [](PCCERT_CONTEXT) { return true; });
 }
 }  // namespace client_signer_detail
 
