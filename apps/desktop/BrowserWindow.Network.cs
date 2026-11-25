@@ -87,16 +87,14 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
     }
 
     /// <summary>Selected vs applied vs verified/blocked, as required by the network guard design.</summary>
-    private void UpdateNetworkIndicator()
+    internal void UpdateNetworkIndicator()
     {
         var network = session.Network;
         string saved = (data.Network ?? NetworkSettings.Standard) == network ? "" : " · 변경 사항은 다시 시작하면 적용";
-        string dns = (network.DnsTemplate is null ? "" : " · 보안 DNS") + SecuritySuffix();
+        string dns = (network.DnsTemplate is null ? "" : " · 엔진 보안 DNS 설정") + SecuritySuffix();
         NetworkIndicator.Text = network.Mode == NetworkMode.Standard
             ? $"표준 보호 · HTTPS 우선 · 추적 방지 엄격{dns}{saved}"
-            : session.ProxyReachable == true
-                ? $"{NetworkPolicy.ProxyName} · 경로 확인됨 ({network.ProxyScheme}){dns}{saved}"
-                : $"{NetworkPolicy.ProxyName} · 차단됨: 프록시에 연결할 수 없음 (직접 연결하지 않음){dns}{saved}";
+            : $"{NetworkPolicy.ProxyName} · {NetworkPolicy.ProxyStatusText(session.ProxyReachable, session.ProxyCheckedAt)}{dns}{saved}";
     }
 
     private async void NetworkClick(object sender, RoutedEventArgs args)
