@@ -74,12 +74,17 @@ int wmain(int argc, wchar_t** argv) {
     SyntheticJournalSession<decltype(policy)> session(root, root, policy);
     if (session.status() != R::kLeaseOnly ||
         session.Read(&out) != R::kEmpty || out.transaction_id != "sentinel" ||
-        session.VerifyRegistrationArtifacts() != R::kEmpty) return 28;
+        session.VerifyRegistrationArtifacts() != R::kEmpty ||
+        session.Publish(record) != R::kUnavailable) return 28;
     auto wrong_backup = record;
     wrong_backup.backup_sha256[0] = 'f';
     if (session.CreateRegistrationBackup(wrong_backup) != R::kDigestMismatch ||
         session.CreateRegistrationBackup(record) != R::kBackupOnly ||
         session.CreateRegistrationBackup(record) != R::kConflict ||
+        !replace_bytes(registration, "hello") || session.Publish(record) != R::kConflict ||
+        !replace_bytes(registration, "abc") || !replace_bytes(backup, "abd") ||
+        session.Publish(record) != R::kDigestMismatch ||
+        !replace_bytes(backup, "abc") ||
         session.Publish(record) != R::kPublishedOnly ||
         session.Read(&out) != R::kHistoryOnly || out.state != J::kPrepared ||
         out.transaction_id != record.transaction_id ||
@@ -122,17 +127,25 @@ int wmain(int argc, wchar_t** argv) {
   {
     SyntheticJournalSession<decltype(policy)> session(root, root, policy);
     if (session.status() != R::kLeaseOnly || session.Publish(changed) != R::kConflict ||
-        session.Publish(next) != R::kPublishedOnly ||
+        session.Publish(next) != R::kConflict ||
+        !replace_bytes(registration, "abd") || session.Publish(next) != R::kDigestMismatch ||
+        !replace_bytes(registration, "hello") || !replace_bytes(backup, "abd") ||
+        session.Publish(next) != R::kDigestMismatch ||
+        !replace_bytes(backup, "abc") || session.Publish(next) != R::kPublishedOnly ||
         session.Read(&out) != R::kHistoryOnly || out.state != J::kRegistrationReplaced)
       return 6;
     auto committed = next;
     committed.state = J::kActivationCommitted;
     if (read() != R::kBusy || publish(committed) != R::kBusy ||
-        session.Publish(committed) != R::kPublishedOnly ||
+        !replace_bytes(registration, "abc") || session.Publish(committed) != R::kConflict ||
+        !replace_bytes(registration, "hello") || !replace_bytes(backup, "abd") ||
+        session.Publish(committed) != R::kDigestMismatch ||
+        !replace_bytes(backup, "abc") || session.Publish(committed) != R::kPublishedOnly ||
         session.Read(&out) != R::kHistoryOnly || out.state != J::kActivationCommitted ||
         session.Publish(next) != R::kConflict) return 7;
   }
   if (read() != R::kHistoryOnly || out.state != J::kActivationCommitted) return 26;
+  std::cout << "PASS: all three journal stages require intact backup and correct registration bytes; missing, wrong stage and altered digest refused\n";
   const auto first = root + L"\\prepared.json";
   const auto second = root + L"\\registration-replaced.json";
   const auto alias = root + L"\\alias.json";

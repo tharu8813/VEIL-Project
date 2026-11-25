@@ -178,6 +178,22 @@ bool ReadRegistrationBytes(HANDLE file, const std::wstring& path, Policy& policy
   *digest = std::move(hash);
   return true;
 }
+// Keep both checked file handles alive through journal publication. A
+// mismatch is not permission to repair either file.
+template <class Policy>
+JournalStorageObservation ClassifyRegistrationHandles(
+    HANDLE original, const std::wstring& source, HANDLE backup,
+    const std::wstring& target, const CutoverJournalRecord& record, Policy& policy) {
+  using R = JournalStorageObservation;
+  std::string bytes, digest, saved, saved_hash;
+  if (!ReadRegistrationBytes(original, source, policy, &bytes, &digest) ||
+      !ReadRegistrationBytes(backup, target, policy, &saved, &saved_hash))
+    return R::kUnsafe;
+  if (!SameClientHash(saved_hash, record.backup_sha256)) return R::kDigestMismatch;
+  if (SameClientHash(digest, record.backup_sha256) && bytes == saved) return R::kLegacyBytesOnly;
+  if (SameClientHash(digest, record.target_registration_sha256)) return R::kTargetBytesOnly;
+  return R::kDigestMismatch;
+}
 inline bool NativePolicy(HANDLE handle, bool directory) {
   return ObservePayloadObjectPolicy(handle, directory) == PayloadObjectObservation::kObservedOnly;
 }
@@ -286,14 +302,9 @@ class SyntheticJournalSession {
         FILE_SHARE_READ, nullptr, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
     if (!original.valid() || !backup.valid()) return R::kUnavailable;
-    std::string bytes, digest, saved, saved_hash;
-    if (!ReadRegistrationBytes(original.get(), source, policy_, &bytes, &digest) ||
-        !ReadRegistrationBytes(backup.get(), target, policy_, &saved, &saved_hash) ||
-        !lease_.Recheck(root_, parent_->get(), policy_)) return R::kUnsafe;
-    if (!SameClientHash(saved_hash, record.backup_sha256)) return R::kDigestMismatch;
-    if (SameClientHash(digest, record.backup_sha256) && bytes == saved) return R::kLegacyBytesOnly;
-    if (SameClientHash(digest, record.target_registration_sha256)) return R::kTargetBytesOnly;
-    return R::kDigestMismatch;
+    const auto observed = ClassifyRegistrationHandles(original.get(), source, backup.get(),
+        target, record, policy_);
+    return lease_.Recheck(root_, parent_->get(), policy_) ? observed : R::kUnsafe;
   }
   R Publish(const CutoverJournalRecord& next) {
     using namespace journal_storage_detail;
@@ -311,6 +322,29 @@ class SyntheticJournalSession {
     if ((history == R::kEmpty && slot != 0) ||
         (history == R::kHistoryOnly && !IsSyntheticCutoverJournalSuccessor(previous, next)))
       return R::kConflict;
+    // Every new journal stage must correspond to the actual registration
+    // bytes and an intact legacy backup. No public weaker publish path.
+    const auto source = Path(root_, registration_name);
+    const auto saved = Path(root_, backup_name);
+    if (!SafeDedicatedPath(source) || !SafeDedicatedPath(saved)) return R::kRejected;
+    config_path_detail::Handle original(CreateFileW(source.c_str(), GENERIC_READ,
+        FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    config_path_detail::Handle backup(CreateFileW(saved.c_str(), GENERIC_READ,
+        FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (!original.valid() || !backup.valid()) return R::kUnavailable;
+    const auto required = slot == 0 ? R::kLegacyBytesOnly : R::kTargetBytesOnly;
+    auto artifacts = [&] {
+      const auto state = ClassifyRegistrationHandles(original.get(), source, backup.get(),
+          saved, next, policy_);
+      if (!lease_.Recheck(root_, parent_->get(), policy_)) return R::kUnsafe;
+      if (state == R::kLegacyBytesOnly || state == R::kTargetBytesOnly)
+        return state == required ? state : R::kConflict;
+      return state;
+    };
+    const auto initial = artifacts();
+    if (initial != required) return initial;
     const auto temporary = Path(root_, pending);
     const auto destination = Path(root_, names[static_cast<std::size_t>(slot)]);
     // CREATE_NEW + no-overwrite handle rename. Leave failed pending artifacts
@@ -335,12 +369,13 @@ class SyntheticJournalSession {
             ConfigPathObservation::kObservedOnly || !policy_(file.get(), false) ||
         ValidateDirectoryHandle(parent_->get(), root_) != FilesystemObservation::kObservedOnly ||
         !policy_(parent_->get(), true)) return R::kPending;
+    if (artifacts() != required) return R::kPending;
     if (!RenameNoReplace(file.get(), destination)) return R::kPending;
     if (!FlushFileBuffers(file.get()) ||
         config_path_detail::ObserveFileShape(file.get(), destination) !=
             ConfigPathObservation::kObservedOnly || !policy_(file.get(), false) ||
         !policy_(parent_->get(), true)) return R::kUnavailable; // publication ambiguous
-    if (!lease_.Recheck(root_, parent_->get(), policy_)) return R::kUnavailable;
+    if (artifacts() != required) return R::kUnavailable; // publication ambiguous
     return R::kPublishedOnly;
   }
  private:
