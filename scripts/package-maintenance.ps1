@@ -137,8 +137,23 @@ function Set-BrokerHash([string]$Hash) {
     $registered.clientSha256=$Hash
     $new=Join-Path $journal 'broker.next.json'
     Write-Durable $new ([Text.UTF8Encoding]::new($false).GetBytes(($registered | ConvertTo-Json -Depth 12)))
-    [IO.File]::Replace($new,$config,$null)
+    [IO.File]::Replace($new,$config,[NullString]::Value)
     Assert-VeilAdminPath $config
+}
+function Restore-VeilRegistration([string]$BackupPath,[string]$ConfigPath,[string]$RestorePath) {
+    Assert-VeilAdminPath $BackupPath
+    Assert-VeilAdminPath $ConfigPath
+    # If file replacement never happened (or recovery already restored it),
+    # avoid an unnecessary write, particularly when disk space is exhausted.
+    if ((Get-FileHash -LiteralPath $BackupPath -Algorithm SHA256).Hash -eq
+        (Get-FileHash -LiteralPath $ConfigPath -Algorithm SHA256).Hash) { return }
+    if (Test-Path -LiteralPath $RestorePath) {
+        Assert-VeilAdminPath $RestorePath
+        Remove-Item -LiteralPath $RestorePath -Force
+    }
+    Write-Durable $RestorePath ([IO.File]::ReadAllBytes($BackupPath))
+    [IO.File]::Replace($RestorePath,$ConfigPath,[NullString]::Value)
+    Assert-VeilAdminPath $ConfigPath
 }
 function Restore-PreActivation {
     if (Test-Path -LiteralPath $committed) { throw 'Activation may have occurred. Automatic downgrade is forbidden.' }
@@ -164,10 +179,7 @@ function Restore-PreActivation {
         # Authenticate the actual old tree against the durable registration backup before restoring it.
         [void](Read-VeilPackage $bin $SignerThumbprint)
         if ($registered.clientSha256 -ne (Get-FileHash -LiteralPath $client -Algorithm SHA256).Hash) { throw 'Rollback binary and registration do not match.' }
-        $restore=Join-Path $journal 'broker.restore.json'
-        if (Test-Path -LiteralPath $restore) { Assert-VeilAdminPath $restore; Remove-Item -LiteralPath $restore -Force }
-        Write-Durable $restore ([IO.File]::ReadAllBytes($backup))
-        [IO.File]::Replace($restore,$config,$null)
+        Restore-VeilRegistration $backup $config (Join-Path $journal 'broker.restore.json')
     } elseif ((Test-Path -LiteralPath $previous) -or (Test-Path -LiteralPath $failed)) {
         throw 'Recovery metadata missing.'
     }
@@ -187,6 +199,7 @@ function Copy-StagedPackage {
     if ($source -eq $bin -or $source.StartsWith($bin+'\',[StringComparison]::OrdinalIgnoreCase) -or
         $source -eq $stage -or $source -eq $previous -or $source -eq $data) { throw 'Invalid package source.' }
     New-VeilRestrictedDirectory $stage
+    $script:ownsStage=$true
     Copy-VeilPackageFiles $source $stage
     return Read-VeilPackage $stage $SignerThumbprint
 }
@@ -195,6 +208,7 @@ function Copy-StagedPackage {
 # broker installer concurrently. Abandoned mutex is recovered only through the journal.
 $mutex=[Threading.Mutex]::new($false,'Global\VEIL.PackageMaintenance')
 $held=$false
+$script:ownsStage=$false
 try {
     try { $held=$mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $held=$true }
     if (-not $held) { throw 'Another maintenance operation is running.' }
@@ -256,7 +270,7 @@ try {
         [void](Assert-VeilInternalVersion $manifest.version)
     }
     catch {
-        if (Test-Path -LiteralPath $stage) { Remove-RestrictedTree $stage }
+        if ($script:ownsStage -and (Test-Path -LiteralPath $stage)) { Remove-RestrictedTree $stage }
         throw
     }
     if ($Install) {
@@ -313,7 +327,7 @@ try {
     try {
         # Version/registration rejection before a transaction leaves no maintenance artifacts.
         # A partial initial installation is preserved for explicit administrator review.
-        if ($held -and $Update -and -not (Test-Path -LiteralPath $journal) -and
+        if ($held -and $Update -and $script:ownsStage -and -not (Test-Path -LiteralPath $journal) -and
             -not (Test-Path -LiteralPath $previous) -and -not (Test-Path -LiteralPath $failed) -and
             (Test-Path -LiteralPath $stage)) { Remove-RestrictedTree $stage }
     } finally {
