@@ -1,0 +1,22 @@
+name: Chromium development profile contract
+on:
+  pull_request:
+    paths:
+      - 'chromium/dev/profile-path-contract.h'
+      - 'tests/chromium/profile-path-contract.test.cc'
+      - '.github/workflows/chromium-profile-contract.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lexical-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile and test standalone C++17 contract
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/profile-path-contract.test.cc -o "$RUNNER_TEMP/profile-contract"
+          "$RUNNER_TEMP/profile-contract"
