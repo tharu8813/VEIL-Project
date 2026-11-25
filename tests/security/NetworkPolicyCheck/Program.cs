@@ -46,3 +46,64 @@ catch (HttpRequestException) { refused = true; }
 Check(refused, "unavailable proxy did not fail");
 Check(!origin.Pending(), "direct fallback reached origin");
 Console.WriteLine("PASS: fixed HTTP proxy routes loopback and refuses fallback");
+
+
+foreach (string template in new[] {
+    "https://resolver.example/dns-query", "https://resolver.example/dns-query{?dns}",
+    "https://127.0.0.1:8443/dns-query", "https://[::1]:8443/dns-query",
+    "https://resolver.example/dns-query?profile=synthetic" })
+    Check(NetworkPolicy.ValidDnsTemplate(template), "valid DoH endpoint refused");
+foreach (string template in new[] {
+    "", "http://resolver.example/dns-query", "https://user:pass@resolver.example/dns-query",
+    "https://resolver.example/dns-query#fragment", "https://resolver.example/dns-query{?dns}extra",
+    "https://resolver.example/dns-query{?dns}{?dns}", "https://resolver.example/{other}",
+    "https://resolver.example/dns-query?x=1{?dns}", "https://resolver.example\\dns-query",
+    "https://resolver.example/dns-query\n", "https://resolver.example:0/dns-query",
+    "https://resolver.example:65536/dns-query", "https://one.example https://two.example" })
+    Check(!NetworkPolicy.ValidDnsTemplate(template), "invalid DoH endpoint accepted");
+
+string lab = Path.Combine(Path.GetTempPath(), "veil-dns-policy-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(lab);
+try
+{
+    string engine = Path.Combine(lab, "EBWebView");
+    Directory.CreateDirectory(engine);
+    string state = Path.Combine(engine, "Local State");
+    string stale = state + ".veil-new";
+    File.WriteAllText(stale, "unowned");
+    File.WriteAllText(state, "{\"unrelated\":{\"value\":17},\"dns_over_https\":{\"mode\":\"automatic\"}}");
+    var secure = new NetworkSettings(DnsTemplate: "https://resolver.example/dns-query{?dns}");
+    NetworkPolicy.ApplyDns(lab, secure);
+    var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(state))!;
+    Check(json["unrelated"]!["value"]!.GetValue<int>() == 17, "unrelated engine state changed");
+    Check(json["dns_over_https"]!["mode"]!.GetValue<string>() == "secure" &&
+        json["dns_over_https"]!["templates"]!.GetValue<string>() == secure.DnsTemplate, "secure DNS state mismatch");
+    string original = File.ReadAllText(state);
+    if (OperatingSystem.IsWindows())
+    {
+        using (File.Open(state, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            bool blocked = false;
+            try { NetworkPolicy.ApplyDns(lab, NetworkSettings.Standard); }
+            catch (IOException) { blocked = true; }
+            catch (UnauthorizedAccessException) { blocked = true; }
+            Check(blocked, "locked engine state was replaced");
+        }
+        Check(File.ReadAllText(state) == original, "failed replacement changed engine state");
+    }
+    Check(!Directory.EnumerateFiles(engine, "Local State.veil-new-*").Any(), "owned staging not cleaned");
+    NetworkPolicy.ApplyDns(lab, NetworkSettings.Standard);
+    json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(state))!;
+    Check(json["dns_over_https"] is null && json["unrelated"]!["value"]!.GetValue<int>() == 17, "system DNS reset lost unrelated settings");
+    Check(File.ReadAllText(stale) == "unowned", "unowned staging was overwritten");
+    File.WriteAllText(state, "{broken");
+    foreach (var mode in new[] { secure, NetworkSettings.Standard })
+    {
+        bool refusedState = false;
+        try { NetworkPolicy.ApplyDns(lab, mode); }
+        catch (IOException) { refusedState = true; }
+        Check(refusedState && File.ReadAllText(state) == "{broken", "malformed Local State was ignored or overwritten");
+    }
+}
+finally { Directory.Delete(lab, recursive: true); }
+Console.WriteLine("PASS: DoH template validation and engine state publication");

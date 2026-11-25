@@ -28,7 +28,7 @@ internal sealed record NetworkSettings(NetworkMode Mode = NetworkMode.Standard, 
         : null;
 
     internal string Describe() => (Mode == NetworkMode.Standard ? "표준 보호" : $"{NetworkPolicy.ProxyName} ({ProxyScheme}://{ProxyHost}:{ProxyPort})") +
-        (DnsTemplate is null ? "" : " · 보안 DNS");
+        (DnsTemplate is null ? "" : " · 엔진 보안 DNS 설정");
 }
 
 internal static class NetworkPolicy
@@ -73,9 +73,21 @@ internal static class NetworkPolicy
         ("Google", "https://dns.google/dns-query"),
     ];
 
-    internal static bool ValidDnsTemplate(string template) =>
-        Uri.TryCreate(template.Replace("{?dns}", ""), UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps &&
-        uri.UserInfo.Length == 0 && !template.Any(char.IsWhiteSpace);
+    // Support a single HTTPS endpoint (POST), or the explicit RFC 8484 GET suffix.
+    internal static bool ValidDnsTemplate(string template)
+    {
+        if (string.IsNullOrEmpty(template) || template.Length > 2048 ||
+            !template.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            template.Any(c => char.IsWhiteSpace(c) || char.IsControl(c) || c is '\\' or '#'))
+            return false;
+        bool get = template.EndsWith("{?dns}", StringComparison.Ordinal);
+        string endpoint = get ? template[..^6] : template;
+        if (endpoint.Contains('{') || endpoint.Contains('}')) return false;
+        return Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) &&
+            uri.Scheme == Uri.UriSchemeHttps && uri.Host.Length > 0 &&
+            uri.UserInfo.Length == 0 && uri.Port is >= 1 and <= 65535 &&
+            (!get || !endpoint.Contains('?'));
+    }
 
     /// <summary>
     /// Secure DNS (ADR-0006 DNS step): writes the engine's secure-DNS preferences into its Local State before
@@ -88,24 +100,48 @@ internal static class NetworkPolicy
         string directory = Path.Combine(userDataFolder, "EBWebView");
         string path = Path.Combine(directory, "Local State");
         JsonObject state;
-        try
-        {
-            state = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? throw new IOException("Local State is not a JSON object.") : [];
-        }
-        catch (System.Text.Json.JsonException error) when (settings.DnsTemplate is null)
-        {
-            _ = error; // nothing to remove from an unreadable file; the engine handles its own state
-            return;
-        }
-        catch (System.Text.Json.JsonException error) { throw new IOException("Cannot apply secure DNS to the engine state.", error); }
+        try { state = ReadDnsState(path); }
+        catch (FileNotFoundException) { state = []; }
+        catch (DirectoryNotFoundException) { state = []; }
         if (settings.DnsTemplate is { } template)
             state["dns_over_https"] = new JsonObject { ["mode"] = "secure", ["templates"] = template };
         else if (!state.Remove("dns_over_https"))
             return;
+
         Directory.CreateDirectory(directory);
-        string staging = path + ".veil-new";
-        File.WriteAllText(staging, state.ToJsonString());
-        File.Move(staging, path, overwrite: true);
+        string staging = path + ".veil-new-" + Guid.NewGuid().ToString("N");
+        bool owned = false;
+        try
+        {
+            using (var stream = new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                owned = true;
+                System.Text.Json.JsonSerializer.Serialize(stream, state);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(staging, path, overwrite: true);
+            owned = false;
+            // Refuse to start if the persisted settings do not match the intended state.
+            if (!JsonNode.DeepEquals(ReadDnsState(path), state))
+                throw new IOException("Secure DNS state did not persist as requested.");
+        }
+        finally
+        {
+            if (owned)
+                try { File.Delete(staging); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    private static JsonObject ReadDnsState(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            return JsonNode.Parse(stream) as JsonObject ?? throw new IOException("Local State is not a JSON object.");
+        }
+        catch (System.Text.Json.JsonException error)
+        { throw new IOException("Cannot apply secure DNS to the engine state.", error); }
     }
 
     /// <summary>Engine switches for the mode. Proxy mode: fixed proxy without DIRECT fallback (loopback included),
