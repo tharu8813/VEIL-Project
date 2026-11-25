@@ -255,7 +255,7 @@ internal static class NetworkPolicy
     /// <summary>Path check shown in the UI: can the proxy be reached at all? Blocking does not depend on it.</summary>
     internal static async Task<bool> ProxyReachableAsync(NetworkSettings settings, TimeSpan timeout, CancellationToken cancellation = default)
     {
-        if (settings.ProxyUri is not { } proxy) return false;
+        if (cancellation.IsCancellationRequested || settings.ProxyUri is not { } proxy) return false;
         using var client = new TcpClient();
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         cancel.CancelAfter(timeout);
