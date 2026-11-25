@@ -100,3 +100,22 @@ test('download transport checks every address before cookies and restricts HTTP 
     assert.match(request, /cookies\.Where\(c => uri\.Scheme == Uri\.UriSchemeHttps \|\| !c\.IsSecure\)/);
     assert.match(request, /previousAddress = uri;\s*uri = location\.IsAbsoluteUri \? location : new Uri\(uri, location\);/);
 });
+
+
+const dialogs = await readFile('apps/desktop/VaultDialogs.cs', 'utf8');
+const dialogShell = await readFile('apps/desktop/VeilDialog.cs', 'utf8');
+test('abandoned vault opening is relocked before the shared gate is released', () => {
+    const opening = browser.slice(browser.indexOf('private async Task<bool> EnsureVaultOpenAsync'), browser.indexOf('private async void VaultClick'));
+    assert.match(opening, /await session\.VaultOpenGate\.WaitAsync\(cancellation\);\s*bool wasUnlocked = session\.Vault\.Unlocked;/);
+    assert.match(opening, /accepted = await OpenVaultAsync\(cancellation\) && !cancellation\.IsCancellationRequested/);
+    assert.match(opening, /if \(!accepted && !wasUnlocked && session\.Vault\.Unlocked\) session\.Vault\.Lock\(\);\s*\}\s*finally \{ session\.VaultOpenGate\.Release\(\); \}/);
+    assert.match(opening, /!setup\.ShowForVaultOpen\(cancellation\)/);
+    assert.match(opening, /!unlock\.ShowCancellable\(cancellation\)/);
+    assert.match(opening, /!reset\.ShowForVaultOpen\(cancellation\)/);
+});
+test('modal cancellation runs on dispatcher and nested restore cannot accept after cancellation', () => {
+    assert.match(dialogShell, /cancellation\.Register\(\(\) =>[\s\S]*?Dispatcher\.BeginInvoke[\s\S]*?if \(IsVisible && \(canDismiss\?\.Invoke\(\) \?\? true\)\) Close\(\);/);
+    assert.match(dialogShell, /return !cancellation\.IsCancellationRequested && ShowDialog\(\) == true && !cancellation\.IsCancellationRequested;/);
+    assert.match(dialogs, /nestedPrompt = true;[\s\S]*?!restore\.ShowForVaultOpen\(openCancellation\) \|\| openCancellation\.IsCancellationRequested[\s\S]*?finally\s*\{\s*nestedPrompt = false;\s*if \(openCancellation\.IsCancellationRequested && IsVisible\) Close\(\);/);
+    assert.match(dialogs, /Closed \+= \(_, _\) => \{ password\.Clear\(\); code\.Clear\(\); \};/);
+});
