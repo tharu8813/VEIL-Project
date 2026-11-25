@@ -6,7 +6,7 @@ pub use age::secrecy::SecretString;
 use age::{Decryptor, Encryptor, scrypt, x25519};
 use std::cell::Cell;
 use std::fs::File;
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use zeroize::Zeroizing;
 
@@ -88,14 +88,30 @@ impl Keyring {
     /// whole object authenticated. Normal errors clean staging; abrupt termination can leave plaintext
     /// staging in the selected directory. The destination must not exist.
     pub fn export_new(&self, purpose: Purpose, object: &Path, destination: &Path) -> io::Result<u64> {
-        let mut total = 0;
-        self.read_object(purpose, object, |plaintext| {
+        require_new_export_destination(destination)?;
+        // Authenticate before opening a plaintext staging file. Keep the same
+        // handle for the second, independently authenticated streaming pass.
+        #[cfg(windows)]
+        let mut source = {
+            use std::os::windows::fs::OpenOptionsExt;
+            // FILE_SHARE_READ only: refuse other writers and deletion while exporting.
+            std::fs::OpenOptions::new().read(true).share_mode(1).open(object)?
+        };
+        #[cfg(not(windows))]
+        let mut source = File::open(object)?;
+        let verified = self.read_object_from(purpose, &mut source, |plaintext| {
+            transfer(plaintext, &mut io::sink())
+        })?;
+        source.seek(SeekFrom::Start(0))?;
+        self.read_object_from(purpose, &mut source, |plaintext| {
             publish_new_plain(destination, |staging| {
-                total = transfer(plaintext, staging)?;
+                if transfer(plaintext, staging)? != verified {
+                    return Err(invalid("Vault object changed during export"));
+                }
                 Ok(())
             })
         })?;
-        Ok(total)
+        Ok(verified)
     }
 
     /// Reads a complete, authenticated envelope before returning usable keys.
@@ -319,16 +335,19 @@ fn publish_replace(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>)
     Ok(())
 }
 
-/// Like `publish_new`, but for exported plaintext: the staging name does not claim to be ciphertext.
-fn publish_new_plain(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
-    // Refuse known collisions before creating any plaintext staging. Keep the
-    // atomic no-clobber publish below for destinations created concurrently.
+fn require_new_export_destination(path: &Path) -> io::Result<()> {
     // symlink_metadata also detects a dangling symbolic link.
     match std::fs::symlink_metadata(path) {
-        Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Export destination exists")),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+        Ok(_) => Err(io::Error::new(io::ErrorKind::AlreadyExists, "Export destination exists")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
+}
+
+/// Like `publish_new`, but for exported plaintext: the staging name does not claim to be ciphertext.
+fn publish_new_plain(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
+    // Repeat the collision check after authentication and keep atomic no-clobber publication.
+    require_new_export_destination(path)?;
     let parent = path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
