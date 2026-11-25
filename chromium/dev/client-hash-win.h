@@ -40,12 +40,14 @@ inline bool SameFileInfo(const BY_HANDLE_FILE_INFORMATION& a,
       CompareFileTime(&a.ftLastWriteTime, &b.ftLastWriteTime) == 0;
 }
 
-inline ClientHashObservation HashFixtureHandle(HANDLE file, std::string* digest) {
+inline ClientHashObservation HashFixtureHandle(HANDLE file, std::string* digest,
+                                               bool allow_empty = false) {
   LARGE_INTEGER size{};
   BY_HANDLE_FILE_INFORMATION before{}, after{};
   if (!GetFileSizeEx(file, &size) || !GetFileInformationByHandle(file, &before))
     return ClientHashObservation::kReadFailed;
-  if (size.QuadPart <= 0 || size.QuadPart > kMaxFixtureBytes)
+  if (size.QuadPart < 0 || (!allow_empty && size.QuadPart == 0) ||
+      size.QuadPart > kMaxFixtureBytes)
     return ClientHashObservation::kSizeRejected;
   LARGE_INTEGER start{};
   if (!SetFilePointerEx(file, start, nullptr, FILE_BEGIN))
