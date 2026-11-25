@@ -94,7 +94,7 @@ class Reader {
  private:
   void Space() {
     while (!input_.empty() && (input_.front() == ' ' || input_.front() == '\t' ||
-                               input_.front() == '\r'))
+                               input_.front() == '\r' || input_.front() == '\n'))
       input_.remove_prefix(1);
   }
   std::string_view input_;
