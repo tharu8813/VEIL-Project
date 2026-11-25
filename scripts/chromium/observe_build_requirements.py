@@ -11,7 +11,9 @@ import urllib.request
 from pinned_gitiles import BASE, fetch_pinned_blob, MAX_ATTEMPTS, TRANSIENT_HTTP
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-PATHS = ("docs/windows_build_instructions.md", "build/vs_toolchain.py", "DEPS")
+PATHS = ("docs/windows_build_instructions.md", "build/vs_toolchain.py",
+         "build/toolchain/win/setup_toolchain.py", "DEPS")
+TREE_PATHS = ("", "docs", "build", "build/toolchain", "build/toolchain/win")
 HEX = re.compile(r"[0-9a-f]{40}")
 PATTERNS = re.compile(
     r"visual studio|windows sdk|[0-9]{2,} ?(?:GB|GiB)|"
@@ -43,7 +45,7 @@ def verify_tree_identity(tree_id, entries):
 
 
 def read_tree(revision, directory, *, opener=None, sleeper=None):
-    if not HEX.fullmatch(revision) or directory not in ("", "docs", "build"):
+    if not HEX.fullmatch(revision) or directory not in TREE_PATHS:
         raise ValueError("Unexpected revision or tree path")
     url = BASE + revision + "/" + directory + "?format=JSON"
     opener = opener or urllib.request.urlopen
@@ -88,10 +90,13 @@ def read_tree(revision, directory, *, opener=None, sleeper=None):
 def observe(revision, *, tree_reader=read_tree, blob_reader=fetch_pinned_blob):
     root_id, root = tree_reader(revision, "")
     trees = {"": root}
-    for directory in ("docs", "build"):
-        parent = root[directory]
+    for directory in TREE_PATHS[1:]:
+        parent_dir, _, name = directory.rpartition("/")
+        parent = trees[parent_dir][name]
+        if parent["type"] != "tree" or parent["mode"] != 0o40000:
+            raise ValueError("Expected directory tree")
         observed_id, entries = tree_reader(revision, directory)
-        if parent["type"] != "tree" or parent["id"] != observed_id:
+        if parent["id"] != observed_id:
             raise ValueError("Child tree identity mismatch")
         trees[directory] = entries
     files = []

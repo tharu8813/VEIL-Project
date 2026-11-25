@@ -68,18 +68,20 @@ class RequirementsTest(unittest.TestCase):
 
     def test_observation_binds_tree_and_blob(self):
         def entry(kind, digest):
-            return {"type": kind, "id": digest * 40, "mode": 33188}
+            return {"type": kind, "id": digest * 40, "mode": 16384 if kind == "tree" else 33188}
         trees = {
             "": ("a"*40, {"docs": entry("tree","b"), "build": entry("tree","c"), "DEPS": entry("blob","d")}),
             "docs": ("b"*40, {"windows_build_instructions.md": entry("blob","e")}),
-            "build": ("c"*40, {"vs_toolchain.py": entry("blob","f")}),
+            "build": ("c"*40, {"vs_toolchain.py": entry("blob","f"), "toolchain": entry("tree","7")}),
+            "build/toolchain": ("7"*40, {"win": entry("tree","8")}),
+            "build/toolchain/win": ("8"*40, {"setup_toolchain.py": entry("blob","9")}),
         }
         calls = []
         def blob(rev, path, digest, limit):
             calls.append((path, digest))
             return b"Windows SDK fixture\n"
         result = observe("1"*40, tree_reader=lambda rev, path: trees[path], blob_reader=blob)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertEqual(calls[0][1], "e"*40)
         self.assertEqual(result["status"], "PINNED_SOURCE_OBSERVED_ONLY")
         self.assertFalse(result["requirementsReviewed"])
@@ -87,7 +89,7 @@ class RequirementsTest(unittest.TestCase):
         trees["docs"] = ("c"*40, trees["docs"][1])
         with self.assertRaises(ValueError):
             observe("1"*40, tree_reader=lambda rev, path: trees[path], blob_reader=blob)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
 
 
 if __name__ == "__main__":

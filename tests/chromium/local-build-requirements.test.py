@@ -17,7 +17,8 @@ class LocalRequirementsTests(unittest.TestCase):
         self.root = pathlib.Path(self.temp.name)
         self.git("init", "--object-format=sha1", "-q")
         self.files = {"DEPS": b"pre_deps_hooks = []\n", "docs/windows_build_instructions.md": b"Windows SDK fixture\n",
-                      "build/vs_toolchain.py": b"raise RuntimeError('must never execute')\n# Visual Studio fixture\n"}
+                      "build/vs_toolchain.py": b"raise RuntimeError('must never execute')\n# Visual Studio fixture\n",
+                      "build/toolchain/win/setup_toolchain.py": b"# SDK_VERSION fixture\n"}
         for path, data in self.files.items():
             dest = self.root / path
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -44,6 +45,12 @@ class LocalRequirementsTests(unittest.TestCase):
         self.assertFalse(report["requirementsReviewed"])
         self.assertEqual({f["path"]: f["sha256"] for f in report["files"]},
                          {p: hashlib.sha256(b).hexdigest() for p, b in self.files.items()})
+
+    def test_missing_nested_toolchain_file_refused(self):
+        self.git("rm", "build/toolchain/win/setup_toolchain.py")
+        changed = self.commit()
+        with self.assertRaises(KeyError):
+            observe_local(self.root, changed)
 
     def test_missing_commit_and_wrong_type_refused(self):
         with self.assertRaises(subprocess.CalledProcessError):

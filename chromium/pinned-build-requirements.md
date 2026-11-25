@@ -55,3 +55,8 @@ Source references:
 - https://github.com/chromium/chromium/blob/1de57fa19722fa6d6841d4f596c394d015580656/build/toolchain/win/setup_toolchain.py
 
 Prior head 72ffcb80f96812843f6605c45215bc951641df73: four checks failed after retries, no CI bypass. This documentation-only update records actual source evidence; no code, candidate pin, policy, hook execution, production configuration, or release gate change. Prior local fixture suite 11/11 is historical, not a new exact-head run. Actual Windows readiness, dependency compatibility, canonical source CI, upstream build and sandbox remain NOT RUN / not established. C0 IN PROGRESS; C1 preparation only.
+
+
+## Include the nested Windows setup toolchain source (2026-11-26)
+
+Exact head c003ce440cd72a0e0373bf81422a82a486fc9524: all four checks failed; all four job log requests returned 404 BlobNotFound and no step details were available. Root cause is not established; do not bypass CI. Copilot review unavailable, no inline threads. Source review found the fourth mirror-observed file, build/toolchain/win/setup_toolchain.py, absent from the executable observation scope. Expand both canonical and local read-only observers to five parent-linked trees and four source files, requiring ordinary directory modes and matching nested tree identities. Extend fixtures for missing nested file and valid-but-substituted nested tree refusal. Actual canonical CI, new regression tests, dedicated Windows machine, dependency graph, build/runtime/sandbox NOT RUN at commit. No production code, pin or release gate change.

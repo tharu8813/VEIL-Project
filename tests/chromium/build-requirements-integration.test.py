@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts/chromium"))
-from observe_build_requirements import observe, read_tree, PATHS
+from observe_build_requirements import observe, read_tree, PATHS, TREE_PATHS
 from observe_local_build_requirements import observe_local
 from pinned_gitiles import BASE, fetch_pinned_blob
 
@@ -73,7 +73,7 @@ class BuildRequirementsIntegration(unittest.TestCase):
                 tree = self.tree_json(path)
                 if tamper == "tree" and path == "docs":
                     tree["entries"][0]["id"] = "a" * 40
-                if tamper == "child" and path == "build":
+                if (tamper == "child" and path == "build") or (tamper == "nested" and path == "build/toolchain/win"):
                     tree = {"id": hashlib.sha1(b"tree 0\0").hexdigest(), "entries": []}
                 data = b")]}'\n" + json.dumps(tree).encode()
             elif fmt == "TEXT":
@@ -93,7 +93,7 @@ class BuildRequirementsIntegration(unittest.TestCase):
     def test_remote_and_local_observations_agree(self):
         remote, calls = self.simulate()
         local = observe_local(self.root, self.revision)
-        self.assertEqual(calls, [("", "JSON"), ("docs", "JSON"), ("build", "JSON")] +
+        self.assertEqual(calls, [(p, "JSON") for p in TREE_PATHS] +
                          [(p, "TEXT") for p in PATHS])
         for key in remote:
             self.assertEqual(remote[key], local[key], key)
@@ -111,6 +111,10 @@ class BuildRequirementsIntegration(unittest.TestCase):
     def test_valid_but_wrong_child_tree_refused(self):
         with self.assertRaisesRegex(ValueError, "Child tree identity mismatch"):
             self.simulate("child")
+
+    def test_valid_but_wrong_nested_tree_refused(self):
+        with self.assertRaisesRegex(ValueError, "Child tree identity mismatch"):
+            self.simulate("nested")
 
     def test_modified_blob_refused(self):
         with self.assertRaisesRegex(ValueError, "Pinned upstream blob mismatch"):

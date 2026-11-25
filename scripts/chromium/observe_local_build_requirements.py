@@ -8,7 +8,7 @@ import pathlib
 import re
 import subprocess
 
-from observe_build_requirements import HEX, ROOT, observe
+from observe_build_requirements import HEX, ROOT, TREE_PATHS, observe
 
 
 class LocalObjects:
@@ -69,14 +69,15 @@ class LocalObjects:
         return entries
 
     def read_tree(self, revision, directory):
-        if revision != self.revision or directory not in ("", "docs", "build"):
+        if revision != self.revision or directory not in TREE_PATHS:
             raise ValueError("Unexpected local tree request")
         oid = self.root
         if directory:
-            entry = self.tree(oid)[directory]
-            if entry["type"] != "tree":
-                raise ValueError("Expected directory tree")
-            oid = entry["id"]
+            for name in directory.split("/"):
+                entry = self.tree(oid)[name]
+                if entry["type"] != "tree" or entry["mode"] != 0o40000:
+                    raise ValueError("Expected directory tree")
+                oid = entry["id"]
         return oid, self.tree(oid)
 
     def read_blob(self, revision, path, expected, limit):
