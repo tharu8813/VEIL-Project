@@ -107,14 +107,45 @@ export function judgeWebRtc(control, proxied, { viaProxy, directRequests }) {
 
 /** dns-path rule from the raw capture bytes (DNS labels are plain ASCII in port-53 packets). */
 export function judgeCapture(bytes, { systemName, dohName }) {
-    const has = label => bytes.includes(Buffer.from(label, 'ascii'));
-    const control = has(systemName.split('.')[0]);
-    const leaked = has(dohName.split('.')[0]);
-    const bootstrap = ['cloudflare-dns', 'dns.quad9', 'dns.google'].filter(name => has(name));
+    // Match the full uncompressed wire-format name, case-insensitively; ETL is not
+    // a decoded packet stream, so this is evidence for the named probes only.
+    const lower = Buffer.from(bytes);
+    for (let i = 0; i < lower.length; i++) if (lower[i] >= 65 && lower[i] <= 90) lower[i] += 32;
+    const has = name => {
+        const labels = name.toLowerCase().split('.');
+        if (labels.some(label => !/^[a-z0-9-]{1,63}$/.test(label))) throw new Error('Invalid DNS probe name');
+        return lower.includes(Buffer.concat([...labels.map(label => Buffer.concat([
+            Buffer.from([label.length]), Buffer.from(label, 'ascii'),
+        ])), Buffer.from([0])]));
+    };
+    if (systemName.toLowerCase() === dohName.toLowerCase()) throw new Error('DNS control and protected name must differ');
+    const control = has(systemName);
+    const leaked = has(dohName);
+    const bootstrap = ['cloudflare-dns.com', 'dns.quad9.net', 'dns.google'].filter(has);
+    if (leaked) return { status: 'FAIL', detail: 'secure-DNS name seen in plain DNS', bootstrap };
     if (!control) return { status: 'FAIL', detail: 'control name not captured: the capture is not trustworthy', bootstrap };
-    return leaked
-        ? { status: 'FAIL', detail: 'secure-DNS name seen in plain DNS', bootstrap }
-        : { status: 'PASS', detail: 'control seen in plain DNS; secure-DNS name absent', bootstrap };
+    return { status: 'PASS', detail: 'control seen in plain DNS; secure-DNS name absent', bootstrap };
+}
+
+export function judgeProxyDohRoute(site, target, connected, seen, dohName) {
+    if (!measuredProtocol(site, target) || !connected.includes('CONNECT ' + new URL(target).hostname + ':443'))
+        return { status: 'FAIL', detail: 'successful HTTPS site and established proxy tunnel required' };
+    if (!seen.includes('CONNECT ' + dohName + ':443'))
+        return { status: 'FAIL', detail: 'synthetic name did not reach the proxy' };
+    // A provider tunnel alone cannot prove a particular encrypted DNS query was made.
+    // Keep absence of provider evidence inconclusive, even if port-53 capture is clean.
+    const providerConnected = connected.includes('CONNECT cloudflare-dns.com:443');
+    return { status: 'PENDING-CAPTURE', providerConnected,
+        detail: providerConnected ? 'site and provider tunnels established; query contents not observed'
+            : 'site tunnel established; DoH provider tunnel not observed' };
+}
+
+export function judgeProxyDohCapture(bytes, systemName, evidence) {
+    const capture = judgeCapture(bytes, { systemName, dohName: evidence.names.dohName });
+    if (capture.status !== 'PASS') return capture;
+    if (evidence.providerConnected !== true) return { ...capture, status: 'OBSERVED',
+        detail: 'no named plain DNS leak observed, but provider tunnel not established' };
+    return { ...capture, detail: capture.detail + '; provider tunnel observed (encrypted query contents not verified)' };
 }
 
 async function main() {
@@ -128,22 +159,25 @@ async function main() {
         const summary = JSON.parse(await readFile(summaryPath, 'utf8'));
         const test = summary.tests.find(t => t.id === 'dns-path');
         const bootstrapTest = summary.tests.find(t => t.id === 'public-doh-bootstrap');
-        if (!test?.names) throw new Error('dns-path did not run.');
+        if (test?.status !== 'PENDING-CAPTURE' || !test.names) throw new Error('dns-path has no pending capture evidence.');
         const bytes = await readFile(values['analyze-capture']);
         const verdict = judgeCapture(bytes, test.names);
         Object.assign(test, verdict);
         // proxy-doh reuses the same capture and the same control name (the capture must be trustworthy).
         const proxyDoh = summary.tests.find(t => t.id === 'proxy-doh');
         if (proxyDoh?.status === 'PENDING-CAPTURE') {
-            const result = judgeCapture(bytes, { systemName: test.names.systemName, dohName: proxyDoh.names.dohName });
+            const result = judgeProxyDohCapture(bytes, test.names.systemName, proxyDoh);
             Object.assign(proxyDoh, { status: result.status, detail: `${proxyDoh.detail}; capture: ${result.detail}` });
         }
         Object.assign(bootstrapTest, { status: 'OBSERVED', detail: `provider names in plain DNS: ${verdict.bootstrap.join(', ') || 'none'}` });
         await writeFile(summaryPath + '.next', JSON.stringify(summary, null, 2));
         await rename(summaryPath + '.next', summaryPath);
         for (const t of summary.tests) console.log(`${t.status.padEnd(8)} ${t.id}${t.detail ? ' · ' + t.detail : ''}`);
+        if (summary.tests.some(t => t.status === 'FAIL')) process.exitCode = 1;
         return;
     }
+    if (values.run && values.only.includes('proxy-doh') && !values.only.includes('dns-path'))
+        throw new Error('proxy-doh requires --only dns-path in the same capture');
     const tests = plan(values.only);
     if (!values.run) { console.log(JSON.stringify({ mode: 'PLAN', tests }, null, 2)); return; }
     if (!values['internet-vm']) throw new Error('Use --run --internet-vm only inside the isolated internet test VM.');
@@ -238,17 +272,17 @@ async function main() {
             return { status: 'OBSERVED', detail: `error ${page.navError}, title ${page.title}` };
         });
         await guard('proxy-doh', async () => {
-            const { proxy, seen, port } = await startProxy();
+            const dohName = 'veil-' + randomBytes(5).toString('hex') + '.example.com';
+            // The loopback proxy must not resolve our negative probe with Windows DNS.
+            const { proxy, seen, connected, port } = await startProxy({ rejectConnectHosts: [dohName] });
             try {
-                const dohName = `veil-${randomBytes(5).toString('hex')}.example.com`;
                 const network = { Mode: 1, ProxyScheme: 'http', ProxyHost: '127.0.0.1', ProxyPort: port, DnsTemplate: 'https://cloudflare-dns.com/dns-query' };
-                const page = await visit('proxy-doh', `https://${dohName}/`, { network });
-                const site = await visit('proxy-doh-site', SITES[0], { network });
-                const viaProxy = seen.some(target => target.startsWith(`CONNECT ${new URL(SITES[0]).hostname}:`));
-                if (!viaProxy) return { status: 'FAIL', detail: 'real site did not go through the proxy' };
-                // The synthetic name does not exist; what matters is that it was never sent as plain DNS.
-                return { status: 'PENDING-CAPTURE', names: { dohName }, proxied: seen.slice(0, 20),
-                    detail: `synthetic name ${page.navError}; ${SITES[0]} ${site.navError} via proxy; DoH host via proxy ${seen.some(t => t.startsWith('CONNECT cloudflare-dns.com:'))}` };
+                const page = await visit('proxy-doh', 'https://' + dohName + '/', { network });
+                const site = await visit('proxy-doh-site', SITES[0], { network,
+                    evalExpr: 'performance.getEntriesByType("navigation")[0]?.nextHopProtocol || null' });
+                const route = judgeProxyDohRoute(site, SITES[0], connected, seen, dohName);
+                return { ...route, names: { dohName }, proxied: seen.slice(0, 20),
+                    detail: route.detail + '; synthetic navigation: ' + page.navError };
             } finally { proxy.close(); }
         });
         await guard('quic-proxy', async () => {
