@@ -109,9 +109,27 @@ function Start-Broker {
     } finally { $controller.Dispose() }
 }
 function Write-Durable([string]$Path,[byte[]]$Bytes) {
-    $stream=[IO.FileStream]::new($Path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
-    try { $stream.Write($Bytes,0,$Bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+    # Publish only fully written, flushed and ACL-checked files. A failed write or
+    # abrupt process exit must not leave a partial backup or a false commit marker.
+    $temporary=$Path+'.pending-'+[guid]::NewGuid().ToString('N')
+    $created=$false
+    try {
+        $stream=[IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        $created=$true
+        try { $stream.Write($Bytes,0,$Bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+        Assert-VeilAdminPath $temporary
+        # Same-directory, no-overwrite publication. Never replace a prior journal record.
+        [IO.File]::Move($temporary,$Path)
+    } finally {
+        if ($created -and [IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+    }
+}
+function Assert-CommitMarker([string]$Path) {
     Assert-VeilAdminPath $Path
+    $bytes=[IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -ne 1 -or $bytes[0] -ne 1) {
+        throw 'Invalid commit marker. Activation is ambiguous; administrator review required.'
+    }
 }
 function Set-BrokerHash([string]$Hash) {
     $registered=Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
@@ -184,6 +202,7 @@ try {
         Assert-RegisteredService
         if (-not (Test-Path -LiteralPath $journal)) { throw 'No interrupted transaction.' }
         if (Test-Path -LiteralPath $committed) {
+            Assert-CommitMarker $committed
             # Never restore older binaries after activation may have occurred. Verify the committed
             # package and client pin, finish activating it, then remove only maintenance artifacts.
             Assert-ClosedAndDetached
@@ -256,7 +275,14 @@ try {
     $current=Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
     if ($current.clientSha256 -ne (Get-FileHash -LiteralPath $client -Algorithm SHA256).Hash) { throw 'Installed client pin mismatch.' }
     New-VeilRestrictedDirectory $journal
-    Write-Durable $backup ([IO.File]::ReadAllBytes($config))
+    try {
+        Write-Durable $backup ([IO.File]::ReadAllBytes($config))
+    } catch {
+        # No service or installed-tree mutation has begun. If the backup did not
+        # publish, remove only the owned journal; the outer finally cleans staging.
+        if (-not (Test-Path -LiteralPath $backup)) { Remove-RestrictedTree $journal }
+        throw
+    }
     try {
         Disable-Broker
         Assert-ClosedAndDetached
