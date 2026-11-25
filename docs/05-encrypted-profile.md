@@ -198,3 +198,7 @@ WebView2 엔진의 CustomDestinations 기록은 Chromium 플래그나 APPDATA �
     powershell -NoProfile -ExecutionPolicy Bypass -File tests/security/jump-list-policy-vm.ps1 -RestoreOnly -RecoveryJson C:\VEIL-Batch\src\.veil-dev\jumplist-policy-<실험ID>\restore.json
 
 **한계:** 같은 로그인 세션에서 정책을 바꾸기 때문에 셸 로그오프나 Explorer 재시작을 요구하는 정책의 효과는 이 실험만으로 판단할 수 없다. NOT_OBSERVED는 보안 PASS가 아니고 Windows 업데이트·실제 설치형 Release·URL 누출 방지 증거도 아니다. 후보 실측은 **NOT RUN**, SEC-004 및 Gate A는 계속 미통과다.
+
+### 프로필 디렉터리 생성 전 보호 상태 확인 (2026-11-25)
+
+보호 프로필 경로가 아직 존재하지 않을 때 가장 가까운 기존 상위 디렉터리의 경로·볼륨 GUID·등록된 BitLocker 완전 암호화·보호 켜짐·잠금 해제·보호기 존재를 생성 전에 검사한다. 기존 상위 경로가 없거나 보호가 확인되지 않으면 디렉터리를 만들지 않는다. 생성 직후 대상 경로를 다시 검증한다. 개발 모드는 기존 비보호 개발 정책을 유지한다. CI 정적 계약 검사로 검증 순서와 보호 조건을 확인하며 실제 Windows 보호 볼륨 및 경로 변경 경쟁 조건 시험은 NOT RUN이다. 동일 사용자 공격에 대한 완전한 경로 고정 또는 보안 게이트 통과를 주장하지 않는다.
