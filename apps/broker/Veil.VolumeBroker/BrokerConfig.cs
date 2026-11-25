@@ -76,4 +76,5 @@ internal sealed record FakeBackendConfig
     public string? ReportedVolumeGuid { get; init; }
     public bool ReportedProtectorPresent { get; init; } = true;
     public bool ReportedProtectionOnAfterUnlock { get; init; } = true;
+    public bool ThrowAfterUnlock { get; init; }
 }
