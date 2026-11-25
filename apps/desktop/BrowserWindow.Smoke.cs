@@ -114,6 +114,14 @@ public partial class BrowserWindow
                 catch (InvalidOperationException) { refusedView = true; }
                 Check(refusedView, "engine refuses view before verified initialization");
                 var previewEntry = new VaultEntry(Guid.NewGuid().ToString("N"), "synthetic.txt", 12, DateTimeOffset.Now, "example.test");
+                Check(DownloadVault.ValidIndex([]) && DownloadVault.ValidIndex([previewEntry]) &&
+                    !DownloadVault.ValidIndex(null) && !DownloadVault.ValidIndex([null!]) &&
+                    !DownloadVault.ValidIndex([previewEntry, previewEntry]) &&
+                    !DownloadVault.ValidIndex([previewEntry, previewEntry with { Id = previewEntry.Id.ToUpperInvariant() }]) &&
+                    !DownloadVault.ValidIndex([previewEntry with { Id = "../invalid" }]) &&
+                    !DownloadVault.ValidIndex([previewEntry with { Name = null! }]) &&
+                    !DownloadVault.ValidIndex([previewEntry with { Bytes = -1 }]),
+                    "vault index schema rejects duplicate or invalid authenticated records");
                 Check(VaultPresentation.CanPreview(previewEntry) &&
                     !VaultPresentation.CanPreview(previewEntry with { Name = "synthetic.html" }) &&
                     !VaultPresentation.CanPreview(previewEntry with { Bytes = VaultPresentation.PreviewLimit + 1 }) &&
