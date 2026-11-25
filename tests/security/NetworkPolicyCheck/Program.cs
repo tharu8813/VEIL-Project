@@ -259,3 +259,24 @@ try
 }
 catch (HttpRequestException) { invalidProxyRefused = true; }
 Check(invalidProxyRefused && !origin.Pending(), "invalid proxy identity did not fail closed");
+
+
+// Address-like mistakes are rejected rather than sent to the default search provider.
+foreach (string rejected in new[] {
+    "https://user:secret@example.test/", "user@example.test", "example.test:invalid",
+    "http:/example.test", "https://", "https://example.test/a b", "file:///C:/private",
+    @"C:\private notes\file.txt", "/home/user/private notes", "//example.test",
+    "mailto:user@example.test notes", "https://example.test/\nsecret", "example.test\u202E",
+})
+    Check(AddressInputPolicy.TryResolve(rejected, out var address) && address is null, $"address was not rejected: {rejected}");
+foreach (var (input, expected) in new[] {
+    ("example.test", "https://example.test/"),
+    ("https://example.test/a?b=1", "https://example.test/a?b=1"),
+    ("LOCALHOST:8765", "http://localhost:8765/"),
+    ("127.0.0.1:8765", "http://127.0.0.1:8765/"),
+    ("[::1]:8765", "http://[::1]:8765/"),
+})
+    Check(AddressInputPolicy.TryResolve(input, out var address) && address?.AbsoluteUri == expected, $"valid address changed: {input}");
+foreach (string query in new[] { "한글 브라우저", "reference guide", "why: test", "example.test guide", "browser" })
+    Check(!AddressInputPolicy.TryResolve(query, out _), $"ordinary search refused: {query}");
+Console.WriteLine("PASS: address routing and rejected URL isolation");
