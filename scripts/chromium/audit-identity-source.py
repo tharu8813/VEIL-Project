@@ -7,10 +7,13 @@ import pathlib
 import re
 import urllib.error
 import urllib.request
+import time
 import concurrent.futures
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 MAX_BYTES = 8 * 1024 * 1024
+MAX_ATTEMPTS = 3
+TRANSIENT_HTTP = {408, 429, 500, 502, 503, 504}
 BASE = "https://chromium.googlesource.com/chromium/src/+/"
 FILES = {
     "chrome/install_static/install_modes.h": ("d2a8f592a71cca272e8d86c547803bf34a49921a", r"kCompanyPathName|kProductPathName|kSafeBrowsingName|kInstallModes|chromium_install_modes"),
@@ -42,19 +45,43 @@ def inspect_blob(path, raw, expected, pattern):
             "matchCount": len(matches), "matches": matches[:60],
             "matchesTruncated": len(matches) > 60}
 
-def fetch_one(revision, path, expected, pattern):
-    try:
-        with urllib.request.urlopen(BASE + revision + "/" + path + "?format=TEXT", timeout=25) as response:
-            if not response.geturl().startswith("https://chromium.googlesource.com/"):
-                raise ValueError("Unexpected redirect")
-            encoded = response.read(MAX_BYTES + 1)
-        if len(encoded) > MAX_BYTES:
-            raise ValueError("Source response too large")
-        return inspect_blob(path, base64.b64decode(encoded.strip(), validate=True), expected, pattern)
-    except (OSError, ValueError) as error:
-        # Missing optional locations are explicit unknowns, never presumed safe.
+def fetch_one(revision, path, expected, pattern, *, opener=None, sleeper=None):
+    opener = opener or urllib.request.urlopen
+    sleeper = sleeper or time.sleep
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            with opener(BASE + revision + "/" + path + "?format=TEXT", timeout=12) as response:
+                if not response.geturl().startswith("https://chromium.googlesource.com/"):
+                    raise ValueError("Unexpected redirect")
+                encoded = response.read(MAX_BYTES + 1)
+            if len(encoded) > MAX_BYTES:
+                raise ValueError("Source response too large")
+            row = inspect_blob(path, base64.b64decode(encoded.strip(), validate=True), expected, pattern)
+            row["attempts"] = attempt
+            return row
+        except urllib.error.HTTPError as error:
+            retryable = error.code in TRANSIENT_HTTP
+            failure = error
+            error.close()
+        except (TimeoutError, ConnectionError) as error:
+            retryable = True
+            failure = error
+        except urllib.error.URLError as error:
+            # Do not retry certificate or other permanent transport failures.
+            retryable = isinstance(error.reason, (TimeoutError, ConnectionError))
+            failure = error
+        except (OSError, ValueError) as error:
+            retryable = False
+            failure = error
+        if retryable and attempt < MAX_ATTEMPTS:
+            sleeper(2 ** (attempt - 1))
+            continue
+        # Required evidence still fails closed after retries; unknown paths remain unknown.
         return {"path": path, "status": "NOT_OBSERVED", "required": expected is not None,
-                "error": type(error).__name__, "detail": str(error)[:200]}
+                "error": type(failure).__name__, "detail": str(failure)[:200],
+                "attempts": attempt, "transient": retryable}
+    raise AssertionError("Unreachable retry state")
+
 
 def main():
     pin = json.loads((ROOT / "chromium/candidate.json").read_text(encoding="utf-8"))

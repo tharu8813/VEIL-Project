@@ -111,3 +111,5 @@ PR #121 [UI 후보 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45
 ## C2 개발 식별자 충돌 조사 (2026-11-25)
 
 PR #122 UI 등록 검사 및 7개 Windows 식별자 후보 원본 적용 시험 PASS, main 병합 64023d7e4fb5f40140733661d9eb542e12032d8b. 원본 diff에서 direct_launch_url_scheme 및 Active Setup GUID가 여전히 Chromium과 공유됨을 확인. 후보를 series에 등록하지 않고 COM/설치/정책/레지스트리/프로필 소비 지점의 읽기 전용 조사를 확대. 기존 원본 8개 blob 고정 강화, 추가 경로 누락 명시. 신규 조사 CI 및 실제 격리 NOT RUN. C0/C1 실제 Windows 빌드 미검증, 기존 보안 게이트 유지.
+
+PR #123 initial [audit CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45639952727) FAIL: 8/15 source observed; 6 HTTP 503 including 3 required blobs, optional 404 one. Exact header confirms additional toast/elevator/tracing CLSID and IID fields, not a complete class/IDL mapping. Bounded transient retry added, required hash/missing-source failure remains fail-closed, four regression tests added. Corrected head CI pending; identity patch 0003 remains unregistered and all actual browser verification gates unchanged.
