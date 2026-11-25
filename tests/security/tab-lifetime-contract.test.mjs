@@ -124,3 +124,9 @@ test('login form probe, read and fill are bound to exact original URL in the scr
     assert.match(passwordUi, /bool Current\(\) => tab\.Url == page && PermissionContextMatches\(tab, login\.Origin, epoch, selectionEpoch\);\s*if \(!Current\(\)\) return;\s*string result = await tab\.View\.CoreWebView2\.ExecuteScriptAsync\(LoginFormPolicy\.Fill\(login, page\)\);\s*if \(Current\(\)\)/);
     assert.doesNotMatch(loginForm, /\.submit\(|\.requestSubmit\(/);
 });
+
+
+test('login fill uses double-dollar raw interpolation for JavaScript braces', () => {
+    assert.match(loginForm, /Script\(login\.Origin, page, \$\$"""/);
+    assert.match(loginForm, /set\.call\(pass, \{\{JsonSerializer\.Serialize\(login\.Password\)\}\}\);/);
+});
