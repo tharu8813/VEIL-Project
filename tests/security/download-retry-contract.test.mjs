@@ -81,3 +81,13 @@ test('oversized index caches are never published or allowed to prune older gener
     const save = vault.slice(vault.indexOf('private async Task SaveIndexLockedAsync('), vault.indexOf('// ── Protocol'));
     assert.match(save, /if \(bytes\.Length > limit\)\s*\{\s*CryptographicOperations\.ZeroMemory\(bytes\);\s*return;\s*\}[\s\S]*?await SealBytesLockedAsync\(Path\.Combine\(Index, name\), bytes\);[\s\S]*?foreach/);
 });
+
+test('committed body is preserved and session invalidated after publication failure', () => {
+    const capture = vault.slice(vault.indexOf('private async Task<VaultEntry> SealCaptureAsync('), vault.indexOf('private async Task<T> CapturePipeAsync<T>('));
+    assert.match(capture, /if \(reply != \$"ok\\t\{total\}"\) throw SealFailure\(reply\);\s*try\s*\{[\s\S]*?return entry;\s*\}\s*catch\s*\{[\s\S]*?if \(ReferenceEquals\(serve, session\)\) Lock\(\);\s*throw;\s*\}/);
+    assert.doesNotMatch(capture, /File\.Delete\(/);
+});
+const failurePolicy = await readFile('apps/desktop/DownloadFailurePolicy.cs', 'utf8');
+test('publishing error guidance precedes generic access and session error classification', () => {
+    assert.match(failurePolicy, /if \(phase == DownloadPhase\.Publishing\)[\s\S]*?저장 공간 부족 · 보관 목록 확인 필요[\s\S]*?금고 저장소 접근 권한 오류 · 보관 목록 확인 필요[\s\S]*?금고 저장 마무리 실패 · 보관 목록 확인 필요";\s*if \(error is DownloadRequestFailure/);
+});
