@@ -376,6 +376,42 @@ mod export_publication_tests {
     use super::*;
 
     #[test]
+    fn corrupt_object_is_rejected_before_staging_even_with_missing_destination_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.veil");
+        let keys = Keyring::generate();
+        let payload = vec![0x5a; BUFFER_SIZE * 3];
+        keys.seal_new(Purpose::Download, &source, &payload[..]).unwrap();
+        let destination = dir.path().join("valid.bin");
+        assert_eq!(keys.export_new(Purpose::Download, &source, &destination).unwrap(), payload.len() as u64);
+        assert_eq!(std::fs::read(&destination).unwrap(), payload);
+        let mut ciphertext = std::fs::read(&source).unwrap();
+        *ciphertext.last_mut().unwrap() ^= 1;
+        std::fs::write(&source, ciphertext).unwrap();
+        let expected = keys.verify(Purpose::Download, &source).unwrap_err().kind();
+        let missing_parent = dir.path().join("absent").join("export.bin");
+        let actual = keys.export_new(Purpose::Download, &source, &missing_parent).unwrap_err().kind();
+        assert_eq!(actual, expected);
+        assert_ne!(actual, io::ErrorKind::NotFound);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn export_refuses_source_with_an_existing_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.veil");
+        let keys = Keyring::generate();
+        keys.seal_new(Purpose::Download, &source, &b"synthetic"[..]).unwrap();
+        let writer = std::fs::OpenOptions::new().write(true).open(&source).unwrap();
+        let destination = dir.path().join("export.bin");
+        assert!(keys.export_new(Purpose::Download, &source, &destination).is_err());
+        assert!(!destination.exists());
+        drop(writer);
+        assert_eq!(keys.export_new(Purpose::Download, &source, &destination).unwrap(), 9);
+    }
+
+    #[test]
     fn known_collision_does_not_start_plaintext_staging() {
         let dir = tempfile::tempdir().unwrap();
         let destination = dir.path().join("existing.bin");
