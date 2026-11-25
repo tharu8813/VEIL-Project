@@ -25,3 +25,18 @@ test('proxy TCP connections are restricted to the configured endpoint', () => {
     assert.match(connect, /if \(endpoint\.Port != proxy\.Port \|\|[\s\S]*?CanonicalProxyHost\(endpoint\.Host\)[\s\S]*?CanonicalProxyHost\(proxy\.IdnHost\)[\s\S]*?throw new HttpRequestException[\s\S]*?await socket\.ConnectAsync\(endpoint, cancel\);/);
     assert.match(connect, /catch\s*\{\s*socket\.Dispose\(\);\s*throw;/);
 });
+
+
+const sessionSource = await readFile('apps/desktop/BrowserSession.cs', 'utf8');
+const browserSource = await readFile('apps/desktop/BrowserWindow.xaml.cs', 'utf8');
+test('one shared proxy monitor checks periodically and drops cancelled or superseded results', () => {
+    assert.match(sessionSource, /internal bool\? ProxyReachable => MainSession\.proxyReachable;/);
+    assert.match(sessionSource, /StartProxyMonitorAsync\(\) => MainSession\.StartMainProxyMonitorAsync\(\)/);
+    assert.match(sessionSource, /proxyMonitor is not null \|\| IsEnding \|\| EngineLost\) return;/);
+    assert.match(sessionSource, /new DispatcherTimer \{ Interval = TimeSpan\.FromSeconds\(15\) \}/);
+    assert.match(sessionSource, /proxyChecking \|\| IsEnding \|\| EngineLost\) return;/);
+    assert.match(sessionSource, /await NetworkPolicy\.ProxyReachableAsync\(Network, TimeSpan\.FromSeconds\(3\), monitor\.Token\);\s*if \(!ReferenceEquals\(proxyMonitor, monitor\) \|\| IsEnding \|\| EngineLost\) return;/);
+    assert.match(sessionSource, /proxyMonitor = null;\s*monitor\?\.Cancel\(\);\s*monitor\?\.Dispose\(\);/);
+    assert.match(browserSource, /session\.ReleasePrivate\(\);\s*session\.StopProxyMonitorIfIdle\(\);/);
+    assert.match(policy, /전체 보호 미검증/);
+});
