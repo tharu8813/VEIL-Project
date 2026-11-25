@@ -37,16 +37,38 @@ public partial class BrowserWindow
         if (args.IsRedirected && tab.UpgradedFrom?.IdnHost == uri.IdnHost)
         {
             tab.UpgradedFrom = null;
-            Dispatcher.BeginInvoke(() => ShowHttpsWarning(tab, uri, "HTTPS 주소가 다시 HTTP로 전환했습니다."));
+            QueueNavigationAction(tab, () => ShowHttpsWarning(tab, uri, "HTTPS 주소가 다시 HTTP로 전환했습니다."));
             return true;
         }
         tab.UpgradedFrom = uri;
-        Dispatcher.BeginInvoke(() => tab.View.CoreWebView2.Navigate(secure.AbsoluteUri));
+        tab.ExpectedUpgrade = secure;
+        QueueNavigationAction(tab, () => tab.View.CoreWebView2.Navigate(secure.AbsoluteUri));
         return true;
+    }
+
+    private void QueueNavigationAction(BrowserTab tab, Action action)
+    {
+        long epoch = tab.NavigationEpoch;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (!CanUseTab(tab.Item) || tab.NavigationEpoch != epoch) return;
+            try { action(); }
+            catch (Exception error) when (RecoverableFailure.Is(error))
+            {
+                tab.ExpectedUpgrade = null;
+                tab.UpgradedFrom = null;
+                SetTabLoading(tab, false);
+                if (Active == tab) Status.Text = "보호 탐색을 완료하지 못했습니다. 주소를 다시 입력하세요.";
+            }
+        });
     }
 
     private void ShowHttpsWarning(BrowserTab tab, Uri plain, string reason)
     {
+        if (!CanUseTab(tab.Item)) return;
+        tab.ExpectedUpgrade = null;
+        tab.UpgradedFrom = null;
+        tab.PendingThreat = null;
         tab.PendingHttp = plain;
         tab.Url = HttpsWarningUrl;
         tab.Title = InternalTitle(HttpsWarningUrl);
@@ -78,7 +100,9 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
 
     private void AllowHttpClick(object sender, RoutedEventArgs args)
     {
-        if (Active is not { Url: HttpsWarningUrl, PendingHttp: { } plain } tab) return;
+        if (Active is not { Url: HttpsWarningUrl, PendingHttp: { } plain } tab || !CanUseTab(tab.Item)) return;
+        tab.NavigationEpoch++;
+        tab.NavigationId = null;
         session.HttpAllowed.Add(plain.IdnHost);
         tab.Url = plain.AbsoluteUri;
         tab.PendingHttp = null;
