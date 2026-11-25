@@ -35,6 +35,7 @@ internal static class Program
 
         bool smoke = args is ["--smoke", _, _, _, _];
         if (!smoke && args.Length != 0 && external is null) return 2;
+        BrowserActivation? activation = null;
         ProtectedProfileSession? protectedSession = null;
         ProtectedSessionNotifications? notifications = null;
         BrowserWindow? window = null;
@@ -43,7 +44,7 @@ internal static class Program
         try
         {
             ProfileGate.RejectElevated();
-            using var activation = !smoke && ExternalAddress.Installed ? new BrowserActivation() : null;
+            activation = !smoke && File.Exists(BrokerClientConfig.ProductPath) ? new BrowserActivation() : null;
             if (activation is { Primary: false })
             {
                 if (activation.Forward(external)) return 0;
@@ -142,16 +143,27 @@ internal static class Program
             ProtectedProfileSession.ClearPassword(profilePassword);
             try
             {
-                if (scratch is not null)
-                {
-                    try { ProfileScratch.Clear(scratch); }
-                    catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
-                }
+                activation?.StopListening();
             }
             finally
             {
-                try { protectedSession?.Dispose(); }
-                finally { notifications?.Dispose(); }
+                try
+                {
+                    if (scratch is not null)
+                    {
+                        try { ProfileScratch.Clear(scratch); }
+                        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+                    }
+                }
+                finally
+                {
+                    try { protectedSession?.Dispose(); }
+                    finally
+                    {
+                        try { notifications?.Dispose(); }
+                        finally { activation?.Dispose(); }
+                    }
+                }
             }
         }
     }
