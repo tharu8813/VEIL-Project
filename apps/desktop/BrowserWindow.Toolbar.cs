@@ -12,6 +12,8 @@ public partial class BrowserWindow
     private readonly DispatcherTimer downloadRingTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
     private double ringAngle;
     private string[] popupRows = [];
+    private List<VaultEntry>? popupEntrySource;
+    private (DateTimeOffset At, string Text)[] popupStored = [];
     private sealed record RetryDownload(BrowserTab Tab, Uri Address, string Name, long Epoch, string Source, DateTimeOffset Expires);
     private RetryDownload? retryDownload;
 
@@ -46,7 +48,7 @@ public partial class BrowserWindow
     {
         var items = downloads.ToArray();
         if (items.Length == 0) return (false, 0);
-        if (items.Any(item => item.TotalBytes is not > 0)) return (true, 0);
+        if (items.Any(item => item.IsIndeterminate)) return (true, 0);
         double total = items.Sum(item => (double)item.TotalBytes!.Value);
         double bytes = items.Sum(item => (double)Math.Clamp(item.Bytes, 0, item.TotalBytes!.Value));
         return (false, Math.Clamp(bytes / total, 0, 1));
@@ -76,8 +78,9 @@ public partial class BrowserWindow
             bool indeterminate = progress.Indeterminate || progress.Fraction >= 1;
             ringAngle = indeterminate && Motion.Enabled ? (ringAngle + 30) % 360 : 0;
             DownloadRingArc.Data = MakeDownloadArc(ringAngle, indeterminate ? 0.24 : Math.Max(0.015, progress.Fraction));
-            string label = progress.Indeterminate ? "다운로드 진행 중" :
-                progress.Fraction >= 1 ? "금고 저장 마무리 중" : $"다운로드 {progress.Fraction:P0}";
+            string label = session.ActiveDownloads.All(item => item.IsCancelling) ? "다운로드 취소 중" :
+                session.ActiveDownloads.All(item => item.Phase == DownloadPhase.Publishing) ? "금고 저장 마무리 중" :
+                progress.Indeterminate ? "다운로드 준비·수신·저장 중" : $"다운로드 {Math.Min(99, (int)(progress.Fraction * 100))}%";
             DownloadButton.ToolTip = label + $" · {session.ActiveDownloads.Count}건";
             System.Windows.Automation.AutomationProperties.SetName(DownloadButton, label);
         }
@@ -123,6 +126,8 @@ public partial class BrowserWindow
     private void DownloadPopupClosed(object? sender, EventArgs args)
     {
         popupRows = [];
+        popupEntrySource = null;
+        popupStored = [];
         RecentDownloadsList.ItemsSource = null;
         if (!closing) UpdateDownloadToolbar();
     }
@@ -146,10 +151,15 @@ public partial class BrowserWindow
     private void RefreshRecentDownloads()
     {
         bool visible = session.VaultOpenGate.CurrentCount > 0 && session.Vault.Unlocked;
-        var stored = visible ? session.Vault.Entries.Select(entry =>
-            (At: entry.SavedAt, Text: $"{entry.Name} · 금고 보관 · {VaultPresentation.Size(entry.Bytes)}"))
-            : Enumerable.Empty<(DateTimeOffset At, string Text)>();
-        var rows = stored.Concat(session.RecentDownloadIssues.Select(issue =>
+        var entries = visible ? session.Vault.Entries : null;
+        if (!ReferenceEquals(popupEntrySource, entries))
+        {
+            popupEntrySource = entries;
+            popupStored = entries is null ? [] : entries.OrderByDescending(entry => entry.SavedAt)
+                .Take(8).Select(entry => (At: entry.SavedAt,
+                    Text: $"{entry.Name} · 금고 보관 · {VaultPresentation.Size(entry.Bytes)}")).ToArray();
+        }
+        var rows = popupStored.Concat(session.RecentDownloadIssues.Select(issue =>
             (At: issue.At, Text: $"{issue.Name} · {issue.Outcome}" + (issue.Detail is null ? "" : $": {issue.Detail}"))))
             .OrderByDescending(item => item.At)
             .Take(8).Select(item => item.Text).ToArray();
@@ -158,7 +168,7 @@ public partial class BrowserWindow
             popupRows = rows;
             RecentDownloadsList.ItemsSource = rows;
         }
-        DownloadPopupEmpty.Visibility = rows.Length == 0 && session.ActiveDownloads.Count == 0
+        DownloadPopupEmpty.Visibility = visible && rows.Length == 0 && session.ActiveDownloads.Count == 0
             ? Visibility.Visible : Visibility.Collapsed;
         DownloadPopupLocked.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
     }
