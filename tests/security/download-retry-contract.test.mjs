@@ -49,3 +49,12 @@ test('vault lock never injects a text command into binary frames and verifies he
     assert.match(vault, /await SaveIndexLockedAsync\(\);\s*RequireCaptureSession\(session\);\s*return entry;/);
     assert.doesNotMatch(vault, /private void WriteQuit\(/);
 });
+
+test('bounded vault commands and plaintext responses have deadlines without force-timing bulk exports', () => {
+    assert.match(vault, /return command is not \("export" or "verify" or "backup" or "restore" or "rotate-content"\);/);
+    assert.match(vault, /private const int CommandTimeoutSeconds = 120;/);
+    const command = vault.slice(vault.indexOf('private async Task<string> CommandLockedAsync('), vault.indexOf('private async Task SealBytesLockedAsync('));
+    assert.match(command, /await WriteLineAsync\(line, token\);[\s\S]*?await WriteProfileCommandAsync\(line, profilePassword, recoveryCode, token\);[\s\S]*?await PipeInput\.FlushAsync\(token\);[\s\S]*?return await ReadLineAsync\(token\);/);
+    assert.match(command, /if \(!BoundedCommand\(line\)\) return await Exchange\(CancellationToken\.None\);[\s\S]*?return await CapturePipeAsync\(Exchange, seconds\);[\s\S]*?catch \{ CloseBrokenPipe\(\); throw; \}/);
+    assert.match(vault, /await PipeOutput\.ReadExactlyAsync\(bytes, token\);[\s\S]*?\}, PipeTimeoutSeconds\);[\s\S]*?CryptographicOperations\.ZeroMemory\(bytes\);[\s\S]*?CloseBrokenPipe\(\);/);
+});

@@ -667,6 +667,24 @@ public partial class BrowserWindow
                         Digest(originalPath) == originalHash && await vault.VerifyAsync(vault.Entries.Single()) == 1024 &&
                         !Directory.GetFiles(vault.Directory, ".veil-encrypted-*", SearchOption.AllDirectories).Any(),
                         "interrupted frame leaves original intact and staging is cleaned after reopen");
+                    // Exercise the deadline with the real helper, without consuming its
+                    // bounded read reply. The test barrier itself is cancellable.
+                    vault.SmokeCommandTimeoutSeconds = 1;
+                    vault.SmokeBeforeBoundedReply = token => Task.Delay(Timeout.Infinite, token);
+                    bool timedOut = false;
+                    try { await vault.LoadIndexAsync(); }
+                    catch (IOException timeoutError) when (timeoutError.Message == "Vault pipe timeout.") { timedOut = true; }
+                    finally
+                    {
+                        vault.SmokeBeforeBoundedReply = null;
+                        vault.SmokeCommandTimeoutSeconds = null;
+                    }
+                    Check(timedOut && !vault.Unlocked && vault.Entries.Count == 0,
+                        "bounded command timeout closes helper session");
+                    Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() &&
+                        vault.Entries.Count == 1 && ObjectIds().Length == 1 &&
+                        Digest(originalPath) == originalHash && await vault.VerifyAsync(vault.Entries.Single()) == 1024,
+                        "timeout preserves authenticated original and permits explicit reopening");
                     async Task<string> Fault(string directory, string kind, string name)
                     {
                         var before = ObjectIds();
