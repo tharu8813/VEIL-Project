@@ -85,7 +85,8 @@ impl Keyring {
     }
 
     /// Decrypts an object to a new plaintext file. The file appears at `destination` only after the
-    /// whole object authenticated; on any failure nothing is left behind. The destination must not exist.
+    /// whole object authenticated. Normal errors clean staging; abrupt termination can leave plaintext
+    /// staging in the selected directory. The destination must not exist.
     pub fn export_new(&self, purpose: Purpose, object: &Path, destination: &Path) -> io::Result<u64> {
         let mut total = 0;
         self.read_object(purpose, object, |plaintext| {
@@ -320,6 +321,14 @@ fn publish_replace(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>)
 
 /// Like `publish_new`, but for exported plaintext: the staging name does not claim to be ciphertext.
 fn publish_new_plain(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
+    // Refuse known collisions before creating any plaintext staging. Keep the
+    // atomic no-clobber publish below for destinations created concurrently.
+    // symlink_metadata also detects a dangling symbolic link.
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Export destination exists")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
     let parent = path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -341,4 +350,47 @@ fn invalid(message: &'static str) -> io::Error {
 
 fn decryption_error(_: age::DecryptError) -> io::Error {
     invalid("Cannot authenticate or decode age data")
+}
+
+#[cfg(test)]
+mod export_publication_tests {
+    use super::*;
+
+    #[test]
+    fn known_collision_does_not_start_plaintext_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("existing.bin");
+        std::fs::write(&destination, b"original").unwrap();
+        let error = publish_new_plain(&destination, |_| panic!("plaintext writer must not run")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        let error = publish_new_plain(dir.path(), |_| panic!("directory collision must not start writing")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn concurrent_collision_preserves_destination_and_removes_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("race.bin");
+        let error = publish_new_plain(&destination, |staging| {
+            staging.write_all(b"synthetic plaintext")?;
+            std::fs::write(&destination, b"concurrent file")
+        }).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"concurrent file");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn normal_write_failure_removes_plaintext_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("failed.bin");
+        let error = publish_new_plain(&destination, |staging| {
+            staging.write_all(b"synthetic plaintext")?;
+            Err(invalid("synthetic late authentication failure"))
+        }).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
 }
