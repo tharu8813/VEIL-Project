@@ -12,6 +12,9 @@ on:
       - 'chromium/dev/client-migration-contract.h'
       - 'chromium/dev/cutover-recovery-contract.h'
       - 'chromium/dev/cutover-journal-contract.h'
+      - 'chromium/dev/cutover-journal-storage-win.h'
+      - 'tests/chromium/cutover-journal-storage-win.test.cc'
+      - 'tests/chromium/cutover-journal-storage-win.test.ps1'
       - 'tests/chromium/cutover-journal-contract.test.cc'
       - 'tests/chromium/cutover-recovery-contract.test.cc'
       - 'chromium/dev/client-hash-win.h'
@@ -434,3 +437,16 @@ jobs:
           & cmd.exe /d /c $command
           if ($LASTEXITCODE -ne 0) { throw 'Package observation compile failed.' }
           & .\tests\chromium\package-observation-win.test.ps1 -Executable $exe
+      - name: Compile and test native synthetic journal storage
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC toolchain not observed.' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $exe = Join-Path $env:RUNNER_TEMP 'veil-cutover-journal-storage.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'veil-cutover-journal-storage.obj'
+          $command = 'call "{0}" && cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:"{1}" /Fo:"{2}" tests\chromium\cutover-journal-storage-win.test.cc bcrypt.lib advapi32.lib' -f $setup,$exe,$obj
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Journal storage compile failed.' }
+          & .\tests\chromium\cutover-journal-storage-win.test.ps1 -Executable $exe
