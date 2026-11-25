@@ -3,18 +3,20 @@
 #ifndef VEIL_CHROMIUM_DEV_CLIENT_INTEGRITY_WIN_H_
 #define VEIL_CHROMIUM_DEV_CLIENT_INTEGRITY_WIN_H_
 #include "client-signature-win.h"
+#include "payload-object-policy-win.h"
 
 namespace veil::chromium_dev {
 enum class ClientIntegrityObservation {
   kRejected, kUnavailable, kUnsafePath, kHashRejected, kHashMismatch,
-  kSignatureRejected, kChanged, kObservationsOnly, kSizeMismatch,
+  kSignatureRejected, kChanged, kObservationsOnly, kSizeMismatch, kObjectPolicyRejected,
 };
 
 template <class SignatureObserver>
 ClientIntegrityObservation ObserveSyntheticClientIntegrityWith(
     std::wstring_view expected_root, std::wstring_view selected_root,
     std::string_view expected_hash, std::string* observed,
-    SignatureObserver signature, std::uint64_t expected_bytes = 0) {
+    SignatureObserver signature, std::uint64_t expected_bytes = 0,
+    bool strict_objects = false) {
   if (!observed || !ValidClientHash(expected_hash) ||
       Evaluate(expected_root, selected_root, false, false) !=
           PathDecision::kLexicalMatchOnly) return ClientIntegrityObservation::kRejected;
@@ -29,6 +31,11 @@ ClientIntegrityObservation ObserveSyntheticClientIntegrityWith(
   if (!file.valid()) return ClientIntegrityObservation::kUnavailable;
   if (config_path_detail::ObserveFileShape(file.get(), path) !=
       ConfigPathObservation::kObservedOnly) return ClientIntegrityObservation::kUnsafePath;
+  auto object_policy = [&] {
+    return !strict_objects || ObservePayloadObjectPolicy(file.get(), false) ==
+        PayloadObjectObservation::kObservedOnly;
+  };
+  if (!object_policy()) return ClientIntegrityObservation::kObjectPolicyRejected;
   BY_HANDLE_FILE_INFORMATION before{}, after{};
   if (!GetFileInformationByHandle(file.get(), &before))
     return ClientIntegrityObservation::kUnavailable;
@@ -47,6 +54,7 @@ ClientIntegrityObservation ObserveSyntheticClientIntegrityWith(
       ClientHashObservation::kMatchesOnly) return ClientIntegrityObservation::kHashRejected;
   if (!unchanged()) return ClientIntegrityObservation::kChanged;
   if (!SameClientHash(first, expected_hash)) return ClientIntegrityObservation::kHashMismatch;
+  if (!object_policy()) return ClientIntegrityObservation::kObjectPolicyRejected;
   LARGE_INTEGER start{};
   if (!SetFilePointerEx(file.get(), start, nullptr, FILE_BEGIN))
     return ClientIntegrityObservation::kUnavailable;
@@ -57,6 +65,7 @@ ClientIntegrityObservation ObserveSyntheticClientIntegrityWith(
   if (client_hash_detail::HashFixtureHandle(file.get(), &second) !=
       ClientHashObservation::kMatchesOnly || !unchanged() ||
       !SameClientHash(first, second)) return ClientIntegrityObservation::kChanged;
+  if (!object_policy()) return ClientIntegrityObservation::kObjectPolicyRejected;
   *observed = std::move(second);
   return ClientIntegrityObservation::kObservationsOnly;
   // Handles release; no signer pin, package trust, process binding or authorization.
