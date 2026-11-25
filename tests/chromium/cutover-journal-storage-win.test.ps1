@@ -4,7 +4,14 @@ $ErrorActionPreference = 'Stop'
 $root = Join-Path $env:RUNNER_TEMP ('veil-cutover-journal-fixture-' + [Guid]::NewGuid().ToString('N'))
 if (Test-Path -LiteralPath $root) { throw 'Fixture already exists.' }
 $null = New-Item -ItemType Directory -Path $root
+$restoreRoot = Join-Path $env:RUNNER_TEMP ('veil-cutover-journal-fixture-' + [Guid]::NewGuid().ToString('N'))
 try {
+    if (Test-Path -LiteralPath $restoreRoot) { throw 'Restore fixture already exists.' }
+    $null = New-Item -ItemType Directory -Path $restoreRoot
+    $ownsRestore = $true
+    [IO.File]::WriteAllBytes((Join-Path $restoreRoot 'maintenance.lock'),[byte[]]@())
+    & $Executable $restoreRoot restore
+    if ($LASTEXITCODE -ne 0) { throw "Journal restore fixture failed: $LASTEXITCODE" }
     $lock = Join-Path $root 'maintenance.lock'
     [IO.File]::WriteAllBytes($lock,[byte[]]@())
     # PowerShell owns the exclusive handle while a separate native process
@@ -22,4 +29,11 @@ try {
         if (Test-Path -LiteralPath $file) { [IO.File]::Delete($file) }
     }
     [IO.Directory]::Delete($root)
+    if ($ownsRestore) {
+        foreach ($name in @('maintenance.lock','prepared.json','registration-fixture.json','registration-backup.json','restore-started.json','restore-copy.pending','restore-displaced.json','backup.pending','record.pending')) {
+            $file = Join-Path $restoreRoot $name
+            if (Test-Path -LiteralPath $file) { [IO.File]::Delete($file) }
+        }
+        [IO.Directory]::Delete($restoreRoot)
+    }
 }

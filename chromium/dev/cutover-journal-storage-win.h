@@ -11,7 +11,7 @@
 namespace veil::chromium_dev {
 enum class JournalStorageObservation {
   kRejected, kUnavailable, kUnsafe, kPending, kInvalidHistory, kConflict,
-  kEmpty, kHistoryOnly, kPublishedOnly, kBusy, kLeaseOnly, kBackupOnly, kLegacyBytesOnly, kTargetBytesOnly, kDigestMismatch,
+  kEmpty, kHistoryOnly, kPublishedOnly, kBusy, kLeaseOnly, kBackupOnly, kLegacyBytesOnly, kTargetBytesOnly, kDigestMismatch, kRecoveryReview, kRestoredOnly,
 };
 namespace journal_storage_detail {
 inline constexpr std::array<std::wstring_view, 3> names{
@@ -21,6 +21,9 @@ inline constexpr std::wstring_view lock_name = L"maintenance.lock";
 inline constexpr std::wstring_view registration_name = L"registration-fixture.json";
 inline constexpr std::wstring_view backup_name = L"registration-backup.json";
 inline constexpr std::wstring_view backup_pending = L"backup.pending";
+inline constexpr std::wstring_view restore_marker = L"restore-started.json";
+inline constexpr std::wstring_view restore_pending = L"restore-copy.pending";
+inline constexpr std::wstring_view displaced_name = L"restore-displaced.json";
 inline bool FixtureRoot(std::wstring_view expected, std::wstring_view selected) {
   if (Evaluate(expected, selected, false, false) != PathDecision::kLexicalMatchOnly)
     return false;
@@ -87,12 +90,18 @@ inline Presence Exists(const std::wstring& path) {
   if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) return Presence::kPresent;
   return GetLastError() == ERROR_FILE_NOT_FOUND ? Presence::kAbsent : Presence::kUnavailable;
 }
+inline bool RestoreArtifactsAbsent(const std::wstring& root) {
+  return Exists(Path(root, restore_marker)) == Presence::kAbsent &&
+      Exists(Path(root, restore_pending)) == Presence::kAbsent &&
+      Exists(Path(root, displaced_name)) == Presence::kAbsent;
+}
 template <class Policy>
 JournalStorageObservation ReadHistory(const std::wstring& root, HANDLE parent,
     CutoverJournalRecord* output, Policy& policy) {
   using R = JournalStorageObservation;
   if (ValidateDirectoryHandle(parent, root) != FilesystemObservation::kObservedOnly ||
       !policy(parent, true)) return R::kUnsafe;
+  if (!RestoreArtifactsAbsent(root)) return R::kRecoveryReview;
   const auto pending_state = Exists(Path(root, pending));
   if (pending_state == Presence::kPresent) return R::kPending;
   if (pending_state != Presence::kAbsent) return R::kUnavailable;
@@ -136,6 +145,7 @@ JournalStorageObservation ReadHistory(const std::wstring& root, HANDLE parent,
       !policy(parent, true)) return R::kUnsafe;
   if (Exists(Path(root, pending)) != Presence::kAbsent ||
       Exists(Path(root, backup_pending)) != Presence::kAbsent) return R::kPending;
+  if (!RestoreArtifactsAbsent(root)) return R::kRecoveryReview;
   if (!found) return R::kEmpty;
   *output = std::move(last);
   return R::kHistoryOnly;
@@ -305,6 +315,86 @@ class SyntheticJournalSession {
     const auto observed = ClassifyRegistrationHandles(original.get(), source, backup.get(),
         target, record, policy_);
     return lease_.Recheck(root_, parent_->get(), policy_) ? observed : R::kUnsafe;
+  }
+  // Fixture only. Evidence is supplied by a test, never inferred from missing
+  // markers or the lock. Retain a permanent recovery barrier and displaced
+  // bytes; no automatic resume, cleanup, or production rollback.
+  R RestoreRegistrationFixture(const CutoverRecoveryEvidence& evidence) {
+    using namespace journal_storage_detail;
+    using J = CutoverJournalState;
+    using D = CutoverRecoveryDecision;
+    using S = CutoverRegistrationState;
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (status_ != R::kLeaseOnly) return status_;
+    if (!lease_.Recheck(root_, parent_->get(), policy_)) return R::kUnsafe;
+    CutoverJournalRecord record;
+    const auto history = ReadHistory(root_, parent_->get(), &record, policy_);
+    if (history != R::kHistoryOnly) return history;
+    if (record.state != J::kPrepared && record.state != J::kRegistrationReplaced)
+      return R::kRecoveryReview;
+    const auto source = Path(root_, registration_name);
+    const auto saved = Path(root_, backup_name);
+    const auto marker_path = Path(root_, restore_marker);
+    const auto temp = Path(root_, restore_pending);
+    const auto displaced = Path(root_, displaced_name);
+    if (!SafeDedicatedPath(source) || !SafeDedicatedPath(saved) ||
+        !SafeDedicatedPath(marker_path) || !SafeDedicatedPath(temp) ||
+        !SafeDedicatedPath(displaced)) return R::kRejected;
+    config_path_detail::Handle original(CreateFileW(source.c_str(), GENERIC_READ | DELETE,
+        0, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    config_path_detail::Handle backup(CreateFileW(saved.c_str(), GENERIC_READ,
+        FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (!original.valid() || !backup.valid()) return R::kUnavailable;
+    const auto observed = ClassifyRegistrationHandles(original.get(), source, backup.get(),
+        saved, record, policy_);
+    const auto registration = observed == R::kLegacyBytesOnly ? S::kLegacy :
+        observed == R::kTargetBytesOnly ? S::kTarget : S::kUnknown;
+    const auto decision = DecideCutoverRecovery(record.state, registration, evidence);
+    if (decision == D::kVerifyLegacyCleanupCandidate) return R::kLegacyBytesOnly;
+    if (decision != D::kRestoreLegacyCandidate) return R::kRecoveryReview;
+    std::string marker_bytes, saved_bytes, saved_hash;
+    if (EncodeSyntheticCutoverJournal(record, &marker_bytes) != CutoverJournalResult::kRecordOnly ||
+        !ReadRegistrationBytes(backup.get(), saved, policy_, &saved_bytes, &saved_hash) ||
+        !SameClientHash(saved_hash, record.backup_sha256) ||
+        !lease_.Recheck(root_, parent_->get(), policy_) || !RestoreArtifactsAbsent(root_))
+      return R::kRecoveryReview;
+    auto write_checked = [&](HANDLE file, const std::wstring& path, const std::string& content) {
+      if (config_path_detail::ObserveFileShape(file, path) != ConfigPathObservation::kObservedOnly ||
+          !policy_(file, false)) return false;
+      DWORD written = 0;
+      const auto length = static_cast<DWORD>(content.size());
+      if (!WriteFile(file, content.data(), length, &written, nullptr) ||
+          written != length || !FlushFileBuffers(file)) return false;
+      std::string reread, digest;
+      return ReadRegistrationBytes(file, path, policy_, &reread, &digest) && reread == content;
+    };
+    // Once created, even an incomplete marker blocks ordinary journal APIs.
+    config_path_detail::Handle marker(CreateFileW(marker_path.c_str(), GENERIC_READ | GENERIC_WRITE,
+        0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
+        FILE_FLAG_WRITE_THROUGH, nullptr));
+    if (!marker.valid()) return R::kRecoveryReview;
+    if (!write_checked(marker.get(), marker_path, marker_bytes)) return R::kRecoveryReview;
+    config_path_detail::Handle copy(CreateFileW(temp.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE,
+        0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
+        FILE_FLAG_WRITE_THROUGH, nullptr));
+    if (!copy.valid() || !write_checked(copy.get(), temp, saved_bytes) ||
+        ClassifyRegistrationHandles(original.get(), source, backup.get(), saved, record, policy_) !=
+            R::kTargetBytesOnly || !lease_.Recheck(root_, parent_->get(), policy_))
+      return R::kRecoveryReview;
+    // Two no-overwrite renames, NOT an atomic replacement. A crash between
+    // them can leave registration absent; preserve marker and both artifacts.
+    if (!RenameNoReplace(original.get(), displaced) ||
+        config_path_detail::ObserveFileShape(original.get(), displaced) !=
+            ConfigPathObservation::kObservedOnly || !policy_(original.get(), false) ||
+        !lease_.Recheck(root_, parent_->get(), policy_) ||
+        !RenameNoReplace(copy.get(), source) || !FlushFileBuffers(copy.get()))
+      return R::kRecoveryReview;
+    if (ClassifyRegistrationHandles(copy.get(), source, backup.get(), saved, record, policy_) !=
+        R::kLegacyBytesOnly || !lease_.Recheck(root_, parent_->get(), policy_))
+      return R::kRecoveryReview;
+    return R::kRestoredOnly;
   }
   R Publish(const CutoverJournalRecord& next) {
     using namespace journal_storage_detail;
