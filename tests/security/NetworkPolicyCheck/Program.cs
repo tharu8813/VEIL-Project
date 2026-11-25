@@ -280,3 +280,33 @@ foreach (var (input, expected) in new[] {
 foreach (string query in new[] { "한글 브라우저", "reference guide", "why: test", "example.test guide", "browser" })
     Check(!AddressInputPolicy.TryResolve(query, out _), $"ordinary search refused: {query}");
 Console.WriteLine("PASS: address routing and rejected URL isolation");
+
+
+using var progressDownload = new BrowserDownload("synthetic");
+int updates = 0;
+progressDownload.PropertyChanged += (_, _) => updates++;
+Check(progressDownload.IsIndeterminate, "queued transfer must be indeterminate");
+progressDownload.WaitForTransfer();
+progressDownload.Report(50, 100);
+Check(!progressDownload.IsIndeterminate && progressDownload.Percent == 50, "known body progress incorrect");
+int beforeComplete = updates;
+progressDownload.Report(100, 100);
+Check(progressDownload.IsIndeterminate && updates > beforeComplete && progressDownload.StatusText.Contains("수신 완료"),
+    "body completion did not immediately switch to authentication state");
+progressDownload.Finish();
+Check(progressDownload.IsIndeterminate && !progressDownload.CanCancel && progressDownload.Phase == DownloadPhase.Publishing,
+    "publishing should not advertise complete file or allow cancellation");
+progressDownload.Report(10, 100);
+Check(progressDownload.Bytes == 100 && progressDownload.Phase == DownloadPhase.Publishing, "late progress changed publication state");
+using var cancelledDownload = new BrowserDownload("synthetic-cancel");
+cancelledDownload.Report(1, 10);
+cancelledDownload.Cancel();
+cancelledDownload.Report(9, 10);
+cancelledDownload.WaitForVault();
+Check(cancelledDownload.IsCancelling && cancelledDownload.Bytes == 1 && cancelledDownload.StatusText == "취소하는 중" &&
+    cancelledDownload.IsIndeterminate, "late report changed cancellation state");
+bool cancelledFinish = false;
+try { cancelledDownload.Finish(); }
+catch (OperationCanceledException) { cancelledFinish = true; }
+Check(cancelledFinish, "cancelled transfer crossed publication boundary");
+Console.WriteLine("PASS: download progress, authentication, publication and cancellation states");
