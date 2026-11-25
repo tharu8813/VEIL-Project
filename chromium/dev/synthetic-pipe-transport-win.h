@@ -3,13 +3,14 @@
 #ifndef VEIL_CHROMIUM_DEV_SYNTHETIC_PIPE_TRANSPORT_WIN_H_
 #define VEIL_CHROMIUM_DEV_SYNTHETIC_PIPE_TRANSPORT_WIN_H_
 #include "broker-status-wire.h"
+#include "broker-identity-win.h"
 #include <windows.h>
 #include <string>
 
 namespace veil::chromium_dev {
 enum class SyntheticPipeResult {
   kRejected, kUnavailable, kTimeout, kCancelled, kIoFailure,
-  kMalformed, kRefused, kSnapshotOnly,
+  kMalformed, kRefused, kIdentityRejected, kSnapshotOnly,
 };
 
 namespace synthetic_pipe_detail {
@@ -70,9 +71,11 @@ inline SyntheticPipeResult Transfer(HANDLE pipe, bool writing, void* data,
 }
 }  // namespace synthetic_pipe_detail
 
-inline SyntheticPipeResult QuerySyntheticPipeStatus(
+// Injected observer is for fixtures only. It cannot expand the allowed namespace.
+template <class IdentityObserver>
+SyntheticPipeResult QuerySyntheticPipeStatusWith(
     std::wstring_view suffix, std::string_view volume_id, DWORD timeout_ms,
-    HANDLE cancel, BrokerStatusSnapshot* output) {
+    HANDLE cancel, BrokerStatusSnapshot* output, IdentityObserver identity) {
   using namespace synthetic_pipe_detail;
   if (!output || suffix.empty() || suffix.size() > 64 ||
       timeout_ms == 0 || timeout_ms > 8000)
@@ -95,6 +98,10 @@ inline SyntheticPipeResult QuerySyntheticPipeStatus(
   ULONG pid = 0;
   if (!GetNamedPipeServerProcessId(pipe.get(), &pid) || pid != GetCurrentProcessId())
     return SyntheticPipeResult::kRejected;
+  if (identity(pipe.get()) != BrokerIdentityObservation::kObservedOnly)
+    return SyntheticPipeResult::kIdentityRejected;
+  state = CheckWait(end, cancel);
+  if (state != SyntheticPipeResult::kSnapshotOnly) return state;
   DWORD mode = PIPE_READMODE_BYTE;
   if (!SetNamedPipeHandleState(pipe.get(), &mode, nullptr, nullptr))
     return SyntheticPipeResult::kIoFailure;
@@ -119,11 +126,30 @@ inline SyntheticPipeResult QuerySyntheticPipeStatus(
       if (decoded == BrokerStatusResult::kRefused) return SyntheticPipeResult::kRefused;
       state = CheckWait(end, cancel);
       if (state != SyntheticPipeResult::kSnapshotOnly) return state;
+      // Recheck the very same open pipe before publishing a successful reply.
+      if (!GetNamedPipeServerProcessId(pipe.get(), &pid) ||
+          pid != GetCurrentProcessId() ||
+          identity(pipe.get()) != BrokerIdentityObservation::kObservedOnly)
+        return SyntheticPipeResult::kIdentityRejected;
+      state = CheckWait(end, cancel);
+      if (state != SyntheticPipeResult::kSnapshotOnly) return state;
       *output = snapshot;
       return SyntheticPipeResult::kSnapshotOnly;
     }
   }
   return SyntheticPipeResult::kMalformed;
+}
+inline SyntheticPipeResult QuerySyntheticPipeStatus(
+    std::wstring_view suffix, std::string_view volume_id, DWORD timeout_ms,
+    HANDLE cancel, BrokerStatusSnapshot* output) {
+  return QuerySyntheticPipeStatusWith(suffix, volume_id, timeout_ms, cancel,
+      output, [](HANDLE pipe) {
+        ULONG pid = 0;
+        if (!GetNamedPipeServerProcessId(pipe, &pid))
+          return BrokerIdentityObservation::kUnavailable;
+        return pid == GetCurrentProcessId() ? BrokerIdentityObservation::kObservedOnly
+                                            : BrokerIdentityObservation::kMismatch;
+      });
 }
 }  // namespace veil::chromium_dev
 #endif
