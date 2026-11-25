@@ -4,6 +4,8 @@ on:
     paths:
       - 'chromium/dev/profile-path-contract.h'
       - 'chromium/dev/volume-evidence-contract.h'
+      - 'chromium/dev/broker-status-wire.h'
+      - 'tests/chromium/broker-status-wire.test.cc'
       - 'chromium/dev/volume-observation-win.h'
       - 'tests/chromium/volume-observation-win.test.cc'
       - 'tests/chromium/volume-observation-win.test.ps1'
@@ -40,6 +42,8 @@ jobs:
           "$RUNNER_TEMP/diagnostic-contract"
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/volume-evidence-contract.test.cc -o "$RUNNER_TEMP/volume-evidence-contract"
           "$RUNNER_TEMP/volume-evidence-contract"
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/broker-status-wire.test.cc -o "$RUNNER_TEMP/broker-status-wire"
+          "$RUNNER_TEMP/broker-status-wire"
   windows-filesystem-observation:
     runs-on: windows-latest
     timeout-minutes: 10
