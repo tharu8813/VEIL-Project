@@ -14,7 +14,12 @@ function fixture(t){
   const git=(cwd,...args)=>execFileSync('git',['-C',cwd,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
   git(upstream,'init');git(upstream,'config','user.name','Fixture');git(upstream,'config','user.email','fixture@example.invalid');git(upstream,'config','core.autocrlf','false');
   writeFileSync(join(upstream,'a.txt'),'first\n');git(upstream,'add','a.txt');git(upstream,'commit','-m','base');git(upstream,'remote','add','origin',origin);
-  git(dir,'clone','--no-hardlinks',upstream,target);git(target,'remote','set-url','origin',origin);git(target,'config','core.autocrlf','false');
+  // Configure before the initial checkout; changing autocrlf afterwards leaves CRLF bytes on disk.
+  git(dir,'clone','--no-hardlinks','--config','core.autocrlf=false',upstream,target);git(target,'remote','set-url','origin',origin);
+  assert.equal(readFileSync(join(upstream,'a.txt'),'utf8'),'first\n');
+  assert.equal(readFileSync(join(target,'a.txt'),'utf8'),'first\n');
+  assert.equal(git(upstream,'status','--porcelain'),'');
+  assert.equal(git(target,'status','--porcelain'),'');
   const revision=git(upstream,'rev-parse','HEAD');
   const make=(n,old,next)=>{const bytes=Buffer.from('diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-'+old+'\n+'+next+'\n');return {file:n+'.patch',sha256:createHash('sha256').update(bytes).digest('hex'),bytes};};
   return {dir,upstream,target,revision,origin,git,make,patches:[make('0001','first','second'),make('0002','second','third')]};
@@ -41,8 +46,18 @@ test('same checkout, nested checkout, dirty target and wrong origin refused',t=>
 });
 test('conflicting series is refused before mutation',t=>{
   const f=fixture(t);const index=readFileSync(join(f.target,'.git','index'));
-  assert.throws(()=>materialize({...f,patches:[f.patches[0],f.make('0002','wrong','third')],execute:true}));
+  assert.throws(()=>materialize({...f,patches:[f.patches[0],f.make('0002','wrong','third')],execute:true}),/git.*apply/i);
   assert.deepEqual(readFileSync(join(f.target,'.git','index')),index);
   assert.equal(readFileSync(join(f.target,'a.txt'),'utf8'),'first\n');
   assert.equal(f.git(f.target,'status','--porcelain'),'');
+});
+
+test('unexpected CRLF bytes are refused without rewriting target or source',t=>{
+  const f=fixture(t);
+  writeFileSync(join(f.target,'a.txt'),'first\r\n');
+  const before=readFileSync(join(f.target,'a.txt')),index=readFileSync(join(f.target,'.git','index'));
+  assert.throws(()=>materialize({...f,execute:true}),/must be clean/);
+  assert.deepEqual(readFileSync(join(f.target,'a.txt')),before);
+  assert.deepEqual(readFileSync(join(f.target,'.git','index')),index);
+  assert.equal(readFileSync(join(f.upstream,'a.txt'),'utf8'),'first\n');
 });
