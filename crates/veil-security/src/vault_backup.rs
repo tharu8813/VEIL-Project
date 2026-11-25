@@ -235,3 +235,79 @@ fn require_new_destination(path: &Path) -> io::Result<()> {
         )),
     }
 }
+
+#[cfg(test)]
+mod record_tests {
+    use super::*;
+
+    const ID: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn backup_record_contains_exact_authenticated_ciphertext() {
+        let lab = tempfile::tempdir().unwrap();
+        let keys = Keyring::generate();
+        let path = lab.path().join("source.veil");
+        let payload = vec![0x62; crate::BUFFER_SIZE * 3];
+        keys.seal_new(Purpose::Download, &path, &payload[..]).unwrap();
+        let ciphertext = fs::read(&path).unwrap();
+        let mut record = Vec::new();
+        write_record(&keys, &mut record, OBJECT, ID, &path).unwrap();
+        assert_eq!(record[0], OBJECT);
+        assert_eq!(&record[1..33], ID.as_bytes());
+        assert_eq!(u64::from_le_bytes(record[33..41].try_into().unwrap()), ciphertext.len() as u64);
+        assert_eq!(&record[41..], ciphertext.as_slice());
+        record.push(0);
+        let restored = lab.path().join("restored");
+        fs::create_dir(&restored).unwrap();
+        fs::create_dir(restored.join("objects")).unwrap();
+        fs::create_dir(restored.join("meta")).unwrap();
+        read_records(&keys, &restored, &mut record.as_slice()).unwrap();
+        let object = restored.join("objects").join(format!("{ID}.veil"));
+        assert_eq!(fs::read(&object).unwrap(), ciphertext);
+        assert_eq!(keys.verify(Purpose::Download, &object).unwrap(), payload.len() as u64);
+    }
+
+    #[test]
+    fn corrupt_record_never_publishes_backup_staging() {
+        let lab = tempfile::tempdir().unwrap();
+        let keys = Keyring::generate();
+        let path = lab.path().join("source.veil");
+        let payload = vec![0x62; crate::BUFFER_SIZE * 3];
+        keys.seal_new(Purpose::Download, &path, &payload[..]).unwrap();
+        let mut ciphertext = fs::read(&path).unwrap();
+        *ciphertext.last_mut().unwrap() ^= 1;
+        fs::write(&path, &ciphertext).unwrap();
+        let destination = lab.path().join("backup.veil");
+        assert!(publish_new(&destination, |file| write_record(&keys, file, OBJECT, ID, &path)).is_err());
+        assert!(!destination.exists());
+        assert_eq!(fs::read(&path).unwrap(), ciphertext);
+        assert_eq!(fs::read_dir(lab.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn oversized_metadata_cannot_be_backed_up() {
+        let lab = tempfile::tempdir().unwrap();
+        let keys = Keyring::generate();
+        let path = lab.path().join("meta.veil");
+        let payload = vec![0x62; crate::SMALL_OBJECT_LIMIT + 1];
+        keys.seal_new(Purpose::Download, &path, &payload[..]).unwrap();
+        let mut record = Vec::new();
+        assert!(write_record(&keys, &mut record, META, ID, &path).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn backup_refuses_an_existing_source_writer() {
+        let lab = tempfile::tempdir().unwrap();
+        let keys = Keyring::generate();
+        let path = lab.path().join("source.veil");
+        keys.seal_new(Purpose::Download, &path, &b"synthetic"[..]).unwrap();
+        let writer = OpenOptions::new().write(true).open(&path).unwrap();
+        let mut record = Vec::new();
+        assert!(write_record(&keys, &mut record, OBJECT, ID, &path).is_err());
+        assert!(record.is_empty());
+        drop(writer);
+        write_record(&keys, &mut record, OBJECT, ID, &path).unwrap();
+        assert!(!record.is_empty());
+    }
+}
