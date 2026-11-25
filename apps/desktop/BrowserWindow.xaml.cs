@@ -28,6 +28,7 @@ public partial class BrowserWindow : Window
         internal FrameworkElement? ManagementSurface { get; set; }
         internal Action? CancelManagement { get; set; }
         internal long NavigationEpoch { get; set; }
+        internal bool Closing { get; set; }
         internal (string Method, string Uri, long Epoch)? LastDownloadRequest { get; set; }
         internal bool LoginFormDetected { get; set; }
         /// <summary>HTTPS-first: the plain-HTTP address this tab is currently trying as HTTPS.</summary>
@@ -100,6 +101,7 @@ public partial class BrowserWindow : Window
         if (last || session.IsEnding)
             foreach (var download in session.ActiveDownloads.ToArray()) download.Cancel();
         closing = true;
+        foreach (var item in Tabs.Items.OfType<TabItem>()) ((BrowserTab)item.Tag).Closing = true;
         DownloadPopup.IsOpen = false;
         downloadRingTimer.Stop();
         retryDownload = null;
@@ -375,8 +377,12 @@ public partial class BrowserWindow : Window
 
     // ── Engine events, always handled by the tab's current window ───────────
 
+    private bool AcceptTabEvents(BrowserTab tab) => !closing && !tab.Closing && !session.IsEnding && !session.EngineLost &&
+        ReferenceEquals(tab.Owner, this);
+
     private void OnNavigationStarting(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
     {
+        if (!AcceptTabEvents(tab)) { args.Cancel = true; return; }
         tab.NavigationEpoch++;
         tab.LastDownloadRequest = null;
         if (retryDownload?.Tab == tab) retryDownload = null;
@@ -404,7 +410,7 @@ public partial class BrowserWindow : Window
 
     private void OnSourceChanged(BrowserTab tab)
     {
-        if (IsInternalUrl(tab.Url)) return;
+        if (!AcceptTabEvents(tab) || IsInternalUrl(tab.Url)) return;
         tab.Url = tab.View.CoreWebView2.Source;
         UpdateTabToolTip(tab);
         if (Active == tab) RefreshChrome();
@@ -412,6 +418,7 @@ public partial class BrowserWindow : Window
 
     private void OnTitleChanged(BrowserTab tab)
     {
+        if (!AcceptTabEvents(tab)) return;
         var web = tab.View.CoreWebView2;
         if (IsInternalUrl(tab.Url))
         {
@@ -430,7 +437,7 @@ public partial class BrowserWindow : Window
 
     private void OnNavigationCompleted(BrowserTab tab, CoreWebView2NavigationCompletedEventArgs args)
     {
-        if (closing) return;
+        if (!AcceptTabEvents(tab)) return;
         SetTabLoading(tab, false);
         tab.LastNavigationError = args.IsSuccess ? null : args.WebErrorStatus;
         if (tab.UpgradedFrom is { } plain && args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
@@ -483,6 +490,7 @@ public partial class BrowserWindow : Window
     /// by VEIL straight into the encrypted vault; everything else is blocked (no plaintext fallback).</summary>
     private void OnDownloadStarting(BrowserTab tab, CoreWebView2DownloadStartingEventArgs args)
     {
+        if (!AcceptTabEvents(tab)) { args.Cancel = true; args.Handled = true; return; }
         if (session.IsPrivate)
         {
             args.Cancel = true;
@@ -806,12 +814,16 @@ public partial class BrowserWindow : Window
         using var deferral = args.GetDeferral();
         args.Handled = true;
         if (!CanUseTab(opener.Item) || (args.Uri != "about:blank" && !IsWebUrl(args.Uri))) return;
+        long epoch = opener.NavigationEpoch;
         try
         {
             // Like other browsers, tabs opened from a page appear right after their opener.
             var popup = await OpenTab(null, args.IsUserInitiated, Tabs.Items.IndexOf(opener.Item) + 1);
-            if (popup is not null && !closing)
+            if (popup is null) return;
+            if (CanUseTab(opener.Item) && opener.NavigationEpoch == epoch && CanUseTab(popup.Item))
                 args.NewWindow = popup.View.CoreWebView2;
+            else if (!closing && CanUseTab(popup.Item))
+                await CloseTabAsync(popup.Item);
         }
         catch (Exception error) when (RecoverableFailure.Is(error)) { if (!closing) Status.Text = "새 창 요청을 열지 못했습니다."; }
     }
@@ -852,12 +864,14 @@ public partial class BrowserWindow : Window
     {
         if (closing || session.IsEnding || closingTabs.Contains(item) || !Tabs.Items.Contains(item)) return;
         var tab = (BrowserTab)item.Tag;
-        if (protectPinned && tab.Pinned) return;
+        if (tab.Closing || protectPinned && tab.Pinned) return;
         if (session.IsPrivate && Tabs.Items.Count == 1) { Close(); return; }
-        // Cancel pending native actions before yielding to the close animation.
+        // Invalidate page events and pending native actions before yielding to the close animation.
+        tab.Closing = true;
+        tab.NavigationEpoch++;
+        if (retryDownload?.Tab == tab) retryDownload = null;
         ClearManagement(tab);
         if (!await AnimateTabClose(item) || closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
-        if (retryDownload?.Tab == tab) retryDownload = null;
         session.RememberClosedTab(new ClosedTab(tab.Url, tab.Pinned));
         ClearManagement(tab);
         Tabs.Items.Remove(item);
