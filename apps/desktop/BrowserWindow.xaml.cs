@@ -93,6 +93,7 @@ public partial class BrowserWindow : Window
         Loaded += Start;
         Closing += OnClosing;
         PreviewKeyDown += BrowserKeyDown;
+        Deactivated += (_, _) => managementFocusEpoch++;
     }
 
     private void OnClosing(object? sender, CancelEventArgs args)
@@ -910,6 +911,7 @@ public partial class BrowserWindow : Window
     private void TabChanged(object sender, SelectionChangedEventArgs args)
     {
         if (!IsLoaded || args.OriginalSource != Tabs || closing) return;
+        managementFocusEpoch++;
         CloseAddressSuggestions();
         foreach (var tab in Tabs.Items.OfType<TabItem>().Select(item => (BrowserTab)item.Tag).ToArray())
             if (tab != Active && tab.Url == "veil://passwords" && tab.CancelManagement is not null) ClearManagement(tab);
