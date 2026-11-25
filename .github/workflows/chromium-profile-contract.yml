@@ -15,6 +15,7 @@ on:
       - 'chromium/dev/client-integrity-win.h'
       - 'chromium/dev/client-signer-win.h'
       - 'chromium/dev/manifest-signature-win.h'
+      - 'chromium/dev/manifest-chain-win.h'
       - 'chromium/dev/manifest-entry-contract.h'
       - 'chromium/dev/manifest-entry-win.h'
       - 'chromium/dev/manifest-client-win.h'

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "../../chromium/dev/manifest-entry-win.h"
+#include "../../chromium/dev/manifest-chain-win.h"
 #include <fstream>
 #include <filesystem>
 #include <iostream>
@@ -66,6 +67,43 @@ int wmain(int argc, wchar_t** argv) {
       SignedEntryObservation::kEntryOnly || entry.bytes != 123 ||
       entry.sha256 != std::string(64, 'a') ||
       entry.source_commit != std::string(40, 'b') || entry.version != "1.1.0-alpha.1") return 11;
+  using ChainResult = CertificateChainObservation;
+  using manifest_chain_detail::ClassifyErrors;
+  if (ClassifyErrors(0) != ChainResult::kPolicyMatchOnly ||
+      ClassifyErrors(CERT_TRUST_IS_REVOKED | CERT_TRUST_IS_OFFLINE_REVOCATION) != ChainResult::kRevoked ||
+      ClassifyErrors(CERT_TRUST_REVOCATION_STATUS_UNKNOWN) != ChainResult::kRevocationUnknown ||
+      ClassifyErrors(CERT_TRUST_IS_OFFLINE_REVOCATION) != ChainResult::kRevocationUnknown ||
+      ClassifyErrors(CERT_TRUST_IS_NOT_TIME_VALID) != ChainResult::kChainRejected ||
+      ClassifyErrors(CERT_TRUST_IS_UNTRUSTED_ROOT) != ChainResult::kChainRejected ||
+      ClassifyErrors(CERT_TRUST_IS_NOT_VALID_FOR_USAGE) != ChainResult::kChainRejected ||
+      ObserveOfflineCodeSigningChain(nullptr) != ChainResult::kUnavailable) return 12;
+  unsigned calls = 0;
+  auto no_usage = [&](PCCERT_CONTEXT cert) {
+    ++calls;
+    return ObserveOfflineCodeSigningChain(cert) == ChainResult::kWrongUsage;
+  };
+  if (ObserveSyntheticManifestSignatureWith(manifest, cms, wrong, no_usage) !=
+      ManifestSignatureObservation::kSignerMismatch || calls != 0 ||
+      ObserveSyntheticManifestSignatureWith(changed, cms, pin, no_usage) ==
+      ManifestSignatureObservation::kSignatureAndPinOnly || calls != 0 ||
+      ObserveSyntheticManifestSignatureWith(manifest, cms, pin, no_usage) !=
+      ManifestSignatureObservation::kSignatureAndPinOnly || calls != 1) return 13;
+  if (ObserveSyntheticManifestOfflinePolicy(manifest, cms, pin) !=
+      ManifestSignatureObservation::kCertificatePolicyRejected) return 14;
+  // Explicit code-signing certificate still cannot trust its own root.
+  std::string usage_cms, usage_pin;
+  if (!ReadFixture(root / L"usage-fixture.p7s", &usage_cms) ||
+      !ReadFixture(root / L"usage-pin.txt", &usage_pin)) return 15;
+  auto check_untrusted = [](PCCERT_CONTEXT cert) {
+    const auto result = ObserveOfflineCodeSigningChain(cert);
+    return manifest_chain_detail::ExplicitCodeSigningUsage(cert) &&
+        (result == ChainResult::kChainRejected || result == ChainResult::kRevocationUnknown);
+  };
+  if (ObserveSyntheticManifestSignatureWith(manifest, usage_cms, usage_pin, check_untrusted) !=
+      ManifestSignatureObservation::kSignatureAndPinOnly ||
+      ObserveSyntheticManifestOfflinePolicy(manifest, usage_cms, usage_pin) !=
+      ManifestSignatureObservation::kCertificatePolicyRejected) return 16;
+  std::cout << "PASS: native CMS signer without explicit EKU and untrusted code-signing root refused; revoked/offline/unknown status classification; trusted revocation positive NOT RUN\n";
   std::cout << "PASS: signed manifest bytes bound to synthetic client entry; no package authority\n";
   std::cout << "PASS: detached CMS bytes and independent DER SHA-256 pin, wrong pin, altered content, multiple signers, attached/truncated CMS and bounds refusal; no chain or package approval\n";
 }
