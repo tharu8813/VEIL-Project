@@ -21,7 +21,7 @@ internal sealed class LibraryWindow : VeilDialog
     }
 
     internal LibraryWindow(Window owner, string title, List<PageEntry> entries, bool editable, Func<bool> save,
-        List<BookmarkFolder>? folders = null, Func<bool>? canEdit = null)
+        List<BookmarkFolder>? folders = null, Func<bool>? canEdit = null, Action? published = null)
         : base(owner, title, editable ? "" : "", 760, 540)
     {
         string rowGlyph = editable ? "" : "";
@@ -180,20 +180,29 @@ internal sealed class LibraryWindow : VeilDialog
 
         void Open()
         {
-            if (Selected() is not { } entry || !entries.Contains(entry)) return;
+            if (canEdit?.Invoke() != true || Selected() is not { } entry || !entries.Contains(entry)) return;
             SelectedUrl = entry.Url;
             Complete(true);
         }
 
         bool Commit(Action change)
         {
-            if (canEdit is not null && !canEdit()) return false;
+            if (canEdit?.Invoke() != true) return false;
             // The list is shared by all windows. Do not report success if the protected state
             // could not be saved; restore the in-memory list before showing the error.
             var previous = entries.ToArray();
             var previousFolders = folders?.ToArray();
-            change();
-            if ((folders is not null && !BookmarkPolicy.Valid(folders, entries)) || !save())
+            bool committed;
+            try
+            {
+                change();
+                committed = (folders is null || BookmarkPolicy.Valid(folders, entries)) && save();
+            }
+            catch (Exception error) when (RecoverableFailure.Is(error))
+            {
+                committed = false;
+            }
+            if (!committed)
             {
                 entries.Clear();
                 entries.AddRange(previous);
@@ -206,6 +215,8 @@ internal sealed class LibraryWindow : VeilDialog
                 UserPrompts.Notice(PromptOwner, "변경사항을 저장하지 못했습니다. 기존 목록을 유지합니다.", title);
                 return false;
             }
+            // The durable save has succeeded. A rendering failure must not roll it back in memory.
+            published?.Invoke();
             Refresh();
             return true;
         }
@@ -317,7 +328,7 @@ internal sealed class LibraryWindow : VeilDialog
 
         void ClearRange()
         {
-            if (editable) return;
+            if (editable || canEdit?.Invoke() != true) return;
             var cutoff = Cutoff();
             var targets = entries.Where(entry => InRange(entry, cutoff)).ToArray();
             if (targets.Length == 0) return;
@@ -326,10 +337,9 @@ internal sealed class LibraryWindow : VeilDialog
                 $"{scope}의 VEIL 방문 기록 {targets.Length}개를 삭제할까요?\n검색어와 관계없이 이 기간의 항목을 삭제합니다. 쿠키, 사이트 데이터 및 엔진 기록은 지우지 않습니다.",
                 "방문 기록 삭제"))
                 return;
-            Commit(() =>
-            {
-                foreach (var entry in targets) entries.Remove(entry);
-            });
+            // Delete only the exact visits the user confirmed, not equal newly added records.
+            var confirmed = new HashSet<PageEntry>(targets, ReferenceEqualityComparer.Instance);
+            Commit(() => entries.RemoveAll(confirmed.Contains));
         }
 
         AddFooterButton("선택 항목 삭제", Remove);
