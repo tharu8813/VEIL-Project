@@ -61,3 +61,11 @@ test('protected launch lease covers the entire session, including cleanup', asyn
     const cleanup = startup.slice(startup.indexOf('activation?.StopListening();'));
     assert.match(cleanup, /activation\?\.StopListening\(\);[\s\S]*?ProfileScratch\.Clear\(scratch\)[\s\S]*?protectedSession\?\.Dispose\(\)[\s\S]*?finally \{ activation\?\.Dispose\(\); \}/);
 });
+
+test('runtime protection attestation requires explicitly disabled automatic unlock', async () => {
+    const backend = await readFile('apps/broker/Veil.VolumeBroker/Backends.cs', 'utf8');
+    assert.match(backend, /\$autoUnlockDisabled = \$false\s*try \{[\s\S]*?Invoke-CimMethod -MethodName IsAutoUnlockEnabled[\s\S]*?\$automatic\.ReturnValue -eq 0[\s\S]*?\$automatic\.IsAutoUnlockEnabled -is \[bool\] -and -not \$automatic\.IsAutoUnlockEnabled[\s\S]*?catch \{ \$autoUnlockDisabled = \$false \}/);
+    assert.match(backend, /autoUnlockDisabled = \$autoUnlockDisabled/);
+    assert.match(backend, /root\.TryGetProperty\("autoUnlockDisabled", out var automatic\) &&\s*automatic\.ValueKind == JsonValueKind\.True/);
+    assert.match(backend, /Number\("protection"\) == 1 && autoUnlockDisabled, Number\("lock"\) == 0/);
+});
