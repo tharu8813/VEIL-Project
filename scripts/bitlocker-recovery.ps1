@@ -34,7 +34,8 @@ function Assert-VeilUnlockedProtection($Volume) {
     $protection = Invoke-VeilBitLocker $Volume GetProtectionStatus
     $automatic = Invoke-VeilBitLocker $Volume IsAutoUnlockEnabled
     if ($locked.LockStatus -ne 0 -or $conversion.ConversionStatus -ne 1 -or
-        $protection.ProtectionStatus -ne 1 -or $automatic.IsAutoUnlockEnabled -ne $false) {
+        $protection.ProtectionStatus -ne 1 -or
+        $automatic.IsAutoUnlockEnabled -isnot [bool] -or $automatic.IsAutoUnlockEnabled) {
         throw 'The volume must be unlocked, fully encrypted, protected and without automatic unlock.'
     }
 }
