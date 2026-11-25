@@ -1285,6 +1285,17 @@ public partial class BrowserWindow
                     // Gate D internet-VM checks: open VEIL_TEST_URL as typed (HTTPS-first applies) and report the
                     // outcome; optionally wait for VEIL_TEST_EVAL to return a non-null value.
                     string target = Environment.GetEnvironmentVariable("VEIL_TEST_URL") ?? throw new ArgumentException("VEIL_TEST_URL");
+#if DEBUG
+                    string? expectedRedirect = Environment.GetEnvironmentVariable("VEIL_TEST_DOWNGRADE_TARGET");
+                    if (!string.IsNullOrEmpty(expectedRedirect))
+                    {
+                        smokeExpectedHttpRedirect = new Uri(expectedRedirect);
+                        Check(smokeExpectedHttpRedirect.Scheme == "http" && !NetworkPolicy.IsLocal(smokeExpectedHttpRedirect.Host) &&
+                            session.HttpAllowed.Count == 0, "fresh public HTTP downgrade probe");
+                        smokeRedirectTab = Active;
+                        smokeCancelledHttpRedirects = 0;
+                    }
+#endif
                     Active!.LastNavigationError = null;
                     NavigateAddress(target);
                     await Task.Delay(800);
@@ -1304,6 +1315,17 @@ public partial class BrowserWindow
                     checks.Add($"visit: title={title}");
                     checks.Add($"visit: eval={evaluated}");
                     checks.Add($"visit: smartscreen={SecurityManager.Read(Active.View.CoreWebView2)}");
+#if DEBUG
+                    if (smokeExpectedHttpRedirect is not null)
+                    {
+                        checks.Add($"visit: cancelledHttpRedirects={smokeCancelledHttpRedirects}");
+                        checks.Add($"visit: pendingHttp={Active.PendingHttp?.AbsoluteUri ?? ""}");
+                        checks.Add($"visit: nativeHttpBar={HttpsBar.Visibility == Visibility.Visible}");
+                        checks.Add($"visit: httpExceptions={session.HttpAllowed.Count}");
+                        smokeRedirectTab = null;
+                        smokeExpectedHttpRedirect = null;
+                    }
+#endif
                 }
                 else if (stage == "dns-probe")
                 {

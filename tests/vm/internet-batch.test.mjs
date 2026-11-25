@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { candidate, judgeCapture, judgeProxyCandidates, judgeWebRtc, judgeQuic, judgeProxyDohRoute, judgeProxyDohCapture, plan } from './internet-batch.mjs';
+import { candidate, judgeCapture, judgeProxyCandidates, judgeWebRtc, judgeQuic, judgeProxyDohRoute, judgeProxyDohCapture, matchesDowngradeControl, judgeDowngrade, plan } from './internet-batch.mjs';
 
 test('plan lists every Gate D item as NOT RUN and rejects unknown IDs', () => {
     const items = plan();
@@ -76,4 +76,30 @@ test('QUIC requires a real HTTP/3 control, successful proxy load, route and meas
         { ...page('h2'), url: 'https://other.test/' }])
         assert.equal(judgeQuic(page('h3'), bad, target, true).status, 'FAIL');
     assert.equal(judgeQuic(page('h3'), page('h2'), target, false).status, 'FAIL');
+});
+
+
+test('downgrade control must be an actual HTTPS redirect to the exact HTTP target', () => {
+    const source = 'https://httpbin.org/redirect', target = 'http://neverssl.com/';
+    assert.equal(matchesDowngradeControl(302, target, source, target), true);
+    assert.equal(matchesDowngradeControl(308, target, source, target), true);
+    for (const [status, location, from] of [[200, target, source], [302, null, source],
+        [302, 'https://neverssl.com/', source], [302, 'http://other.test/', source],
+        [302, target, 'http://httpbin.org/redirect'], [302, 'not a URL', source]])
+        assert.equal(matchesDowngradeControl(status, location, from, target), false);
+});
+
+test('downgrade warning alone is insufficient; require cancellation, native bar and no exception', () => {
+    const target = 'http://neverssl.com/';
+    const control = { matched: true };
+    const page = { error: null, url: 'veil://https-warning', pendingHttp: target, cancelledHttpRedirects: '1',
+        nativeHttpBar: 'True', httpExceptions: '0' };
+    assert.equal(judgeDowngrade(control, page, target).status, 'PASS');
+    assert.equal(judgeDowngrade({ matched: false }, page, target).status, 'OBSERVED');
+    for (const change of [{ cancelledHttpRedirects: '0' }, { cancelledHttpRedirects: undefined },
+        { pendingHttp: 'http://other.test/' }, { nativeHttpBar: 'False' }, { httpExceptions: '1' },
+        { httpExceptions: undefined }, { error: 'failed' }, { url: target }])
+        assert.equal(judgeDowngrade(control, { ...page, ...change }, target).status, 'FAIL');
+    assert.equal(judgeDowngrade(control, { ...page, url: 'https://neverssl.com/' }, target).status, 'OBSERVED');
+    assert.equal(judgeDowngrade({ matched: false }, { ...page, url: target }, target).status, 'FAIL');
 });

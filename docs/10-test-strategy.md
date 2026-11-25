@@ -114,7 +114,7 @@ ADR-0004 정책 4에 따라 인터넷에 연결된 **별도의 격리 시험 VM*
 | `ipv6-reachability` | 기록만. IPv6 전용 사이트에 도달하는지. |
 | `proxy-doh` | 프록시 보호 + Cloudflare DoH. 실제 HTTPS 사이트 탐색 성공, 사이트와 DoH 제공자의 실제 연결된 CONNECT 터널, 합성 이름의 프록시 도달 및 같은 캡처에서 평문 DNS 이름 부재가 필요하다. 시험 프록시는 합성 이름을 직접 조회하지 않고 거부한다. 제공자 터널 미관찰은 OBSERVED, 평문 누출 또는 대조군 누락은 FAIL. 제공자 터널만으로 암호화된 개별 DNS 질의 내용은 입증하지 않는다. `--only` 사용 시 `dns-path`도 함께 지정한다. |
 | `quic-proxy` | 같은 프로필로 두 번 연 페이지의 `nextHopProtocol`. 표준 대조군의 성공한 HTTPS 탐색에서 h3 계열을 관찰하고, 프록시의 성공한 동일 출처 HTTPS 탐색에서 실제 CONNECT 기록 및 h2/http/1.1 측정이 있을 때만 PASS. 프록시 h3 또는 측정·경로 증거 누락은 FAIL, 대조군 h3 미관찰은 OBSERVED. |
-| `https-downgrade-redirect` | HTTPS에서 HTTP로 리다이렉트하는 페이지(httpbin)가 HTTPS 경고 페이지로 끝나면 PASS, HTTP 페이지가 그대로 열리면 FAIL, 리다이렉트 서비스 문제면 OBSERVED. |
+| `https-downgrade-redirect` | HTTPS 제어 요청에서 리다이렉트를 따라가지 않고 상태 코드와 정확한 HTTP Location을 확인한다. 브라우저에서 같은 HTTP 리다이렉트의 실제 취소, 정확한 경고 대상, 네이티브 허용 막대 표시 및 HTTP 허용 예외 0개를 관찰해야 PASS. HTTP 탐색 도달 또는 경고 증거 누락은 FAIL. 서비스 변화나 안전한 HTTPS 업그레이드 등으로 기대 경고 미관찰 시 OBSERVED. 취소 이벤트는 전체 패킷 수준 평문 누출 부재를 증명하지 않는다. |
 | 수동(NOT RUN) | 절전·네트워크 전환, Windows "Microsoft Edge용 SmartScreen" 끄기에 따른 재정의(게스트 설정 변경 필요). |
 
 인터넷 VM 준비 전에 호스트에서 확인할 수 있는 부분은 루프백 시험으로 대신한다. `node tests/phase5/webrtc-guard.mjs`는 STUN 없이 프록시 모드의 UDP 후보 0개를 확인한다.
