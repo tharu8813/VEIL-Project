@@ -405,6 +405,20 @@ public partial class BrowserWindow
                             "bookmark bar restored across windows");
                         SaveSession();
                         Check(BrowserData.Load(statePath).Windows is [{ Tabs.Count: 1 }], "second window persisted");
+#if DEBUG
+                        other.smokeFailTabTransfer = true;
+                        try
+                        {
+                            Check(!other.MoveToExistingWindow(moving.Item, this, 0) &&
+                                moving.Owner == other && other.Tabs.Items.Contains(moving.Item) &&
+                                !Tabs.Items.Contains(moving.Item) && session.Windows.Contains(other),
+                                "failed transfer restores original window and tab");
+                            Check(await moving.View.ExecuteScriptAsync("window.veilMarker") == "42" &&
+                                BrowserData.Load(statePath).Windows is [{ Tabs.Count: 1 }],
+                                "failed transfer preserves live page and saved layout");
+                        }
+                        finally { other.smokeFailTabTransfer = false; }
+#endif
                         Check(other.CanMoveTo(moving.Item, this) && other.MoveToExistingWindow(moving.Item, this, 0),
                             "move existing tab to another regular window");
                         await WaitFor(() => !session.Windows.Contains(other) && Tabs.Items.IndexOf(moving.Item) == 0 &&
@@ -426,8 +440,7 @@ public partial class BrowserWindow
                         await WaitFor(() => session.Windows.Count == windowCount + 1 && Tabs.Items.Count == count - 1 &&
                             session.Windows[^1].Tabs.Items.Contains(torn) && !session.Windows[^1].IsRestoring, "tab torn off into a new window");
                         var tornWindow = session.Windows[^1];
-                        tornWindow.DetachTab(torn);
-                        AttachTab(torn, Tabs.Items.Count);
+                        Check(tornWindow.MoveToExistingWindow(torn, this, Tabs.Items.Count), "move torn-off tab back");
                         await WaitFor(() => session.Windows.Count == windowCount && Tabs.Items.Count == count, "torn-off tab dropped back");
                     }
                     if (stage == "crash")
