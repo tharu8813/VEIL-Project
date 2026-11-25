@@ -870,21 +870,30 @@ public partial class BrowserWindow : Window
         tab.Closing = true;
         tab.NavigationEpoch++;
         if (retryDownload?.Tab == tab) retryDownload = null;
-        ClearManagement(tab);
-        if (!await AnimateTabClose(item) || closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
-        session.RememberClosedTab(new ClosedTab(tab.Url, tab.Pinned));
-        ClearManagement(tab);
-        Tabs.Items.Remove(item);
-        Pages.Children.Remove(tab.View);
-        tab.EngineView.Dispose();
-        LayoutTabs();
-        if (Tabs.Items.Count == 0)
+        try
         {
-            // The last tab of an extra window closes the window, as in other browsers.
-            if (session.Windows.Count(window => !window.closing) > 1) { Close(); return; }
-            await OpenTab("about:blank");
+            ClearManagement(tab);
+            if (!await AnimateTabClose(item) || closing || session.IsEnding || !Tabs.Items.Contains(item)) return;
+            session.RememberClosedTab(new ClosedTab(tab.Url, tab.Pinned));
+            ClearManagement(tab);
+            Tabs.Items.Remove(item);
+            Pages.Children.Remove(tab.View);
+            tab.EngineView.Dispose();
+            LayoutTabs();
+            if (Tabs.Items.Count == 0)
+            {
+                // The last tab of an extra window closes the window, as in other browsers.
+                if (session.Windows.Count(window => !window.closing) > 1) { Close(); return; }
+                await OpenTab("about:blank");
+            }
+            SaveTabs();
         }
-        SaveTabs();
+        finally
+        {
+            // A failed close must not leave an attached tab permanently unusable.
+            if (!closing && !session.IsEnding && Tabs.Items.Contains(item))
+                tab.Closing = false;
+        }
     }
 
     private void TabChanged(object sender, SelectionChangedEventArgs args)
