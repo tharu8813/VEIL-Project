@@ -761,6 +761,27 @@ public partial class BrowserWindow
                     Check(vault.Entries.Select(entry => entry.Id).Distinct().Count() == 4 &&
                         ObjectIds().Length == 4 && !Directory.GetFiles(vault.Directory, ".veil-encrypted-*", SearchOption.AllDirectories).Any(),
                         "exact encrypted inventory, no duplicate or staging remnants");
+                    var cacheBefore = Directory.GetFiles(index, "*.veil").ToDictionary(path => Path.GetFileName(path)!, Digest);
+                    vault.SmokeIndexCacheLimit = 1;
+                    try
+                    {
+                        var beyondCache = await Capture("small", "index-cache-limit.bin");
+                        Check(beyondCache.Outcome == DownloadVault.Stored && vault.Entries.Count == 5 &&
+                            vault.Unlocked && cacheBefore.Count == Directory.GetFiles(index, "*.veil").Length &&
+                            cacheBefore.All(pair => Digest(Path.Combine(index, pair.Key)) == pair.Value),
+                            "oversized index cache is skipped without discarding completed download");
+                        vault.Lock();
+                        Check(await vault.TryOpenFromDevelopmentEnvironmentAsync() && vault.Entries.Count == 5 &&
+                            cacheBefore.Count == Directory.GetFiles(index, "*.veil").Length &&
+                            cacheBefore.All(pair => Digest(Path.Combine(index, pair.Key)) == pair.Value),
+                            "reopen rebuilds oversized list without rewriting old index");
+                        var cachedItem = vault.Entries.Single(e => e.Name == "index-cache-limit.bin");
+                        Check(await vault.VerifyAsync(cachedItem) == 1024 && Digest(originalPath) == originalHash,
+                            "uncached item and original remain authenticated");
+                        await vault.DeleteAsync(cachedItem);
+                        Check(vault.Entries.Count == 4 && ObjectIds().Length == 4, "uncached item can be deleted");
+                    }
+                    finally { vault.SmokeIndexCacheLimit = null; }
                     // Deletion is tested with an extra disposable object. Keep the
                     // four original publication-test objects and evidence intact.
                     var extra = await Capture("small", "deletion-failure.bin");

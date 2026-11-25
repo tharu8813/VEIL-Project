@@ -74,3 +74,10 @@ test('vault open stays unavailable until index recovery completes in the same ga
     const save = vault.slice(vault.indexOf('private async Task SaveIndexLockedAsync('), vault.indexOf('// ── Protocol'));
     assert.match(save, /await SealBytesLockedAsync\([^;]+;\s*RequireTransportSession\(session\);\s*foreach/);
 });
+
+test('oversized index caches are never published or allowed to prune older generations', () => {
+    assert.match(vault, /private const int SmallObjectLimit = 1024 \* 1024;/);
+    assert.match(vault, /ReadBoundedLockedAsync\(path, "read", SmallObjectLimit\)/);
+    const save = vault.slice(vault.indexOf('private async Task SaveIndexLockedAsync('), vault.indexOf('// ── Protocol'));
+    assert.match(save, /if \(bytes\.Length > limit\)\s*\{\s*CryptographicOperations\.ZeroMemory\(bytes\);\s*return;\s*\}[\s\S]*?await SealBytesLockedAsync\(Path\.Combine\(Index, name\), bytes\);[\s\S]*?foreach/);
+});
