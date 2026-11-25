@@ -1,0 +1,5 @@
+# Pinned build requirements observation
+
+PR #177 exact head 1df39032a6c1ec95c1d13714753fb5d9e7cd1ca9: all three checks PASS; main merge 1afadca392130ee729bc498d45e990ddeb97cd87. Hosted Windows reported 73 GiB free, below 100 GiB preflight minimum. Dedicated Windows machine remains unobserved.
+
+Direct canonical file retrieval was unavailable in this development session; GitHub mirror queries returned HTTP 429. Do not guess exact pinned VS/SDK versions from main. New independent read-only CI observes exact candidate revision's root and docs/build tree identities, ordinary blobs for Windows build instructions, vs_toolchain.py and DEPS, validates actual bytes using existing bounded Gitiles blob check, records SHA256 and bounded line samples. Does not execute upstream code, evaluate DEPS, sync or compile. Tree IDs are observed from canonical TLS endpoint rather than independently pinned/recomputed root tree. Source samples require manual review; no approval or requirement compatibility inferred. Exact-head CI NOT RUN at commit. C0 IN PROGRESS / C1 preparation only. Existing WebView2, Rust, broker, installer and release gates unchanged.
