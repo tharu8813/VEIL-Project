@@ -2,9 +2,15 @@
 #include "../../chromium/dev/profile-path-contract.h"
 #include <cassert>
 #include <iostream>
+#include <string>
+#include <initializer_list>
 using veil::chromium_dev::Evaluate;
 using veil::chromium_dev::PathDecision;
 using veil::chromium_dev::SafeDedicatedPath;
+static_assert(SafeDedicatedPath(L"D:\\dev\\synthetic"));
+static_assert(!SafeDedicatedPath(L"D:\\dev\\..\\synthetic"));
+static_assert(!SafeDedicatedPath(L"D:\\NUL.txt"));
+static_assert(Evaluate(L"D:\\dev", L"D:\\dev", false, false) == PathDecision::kLexicalMatchOnly);
 int main() {
   constexpr auto root = L"D:\\veil-dev\\Synthetic_Profile";
   assert(Evaluate(root, root, false, false) == PathDecision::kLexicalMatchOnly);
@@ -23,5 +29,17 @@ int main() {
     assert(Evaluate(bad, bad, false, false) == PathDecision::kRejectedUnsafeSyntax);
   }
   assert(SafeDedicatedPath(L"D:\\veil.dev\\safe-123"));
+  const std::wstring max_path = L"D:\\" + std::wstring(256, L'a');
+  assert(max_path.size() == 259 && SafeDedicatedPath(max_path));
+  assert(!SafeDedicatedPath(max_path + L'a'));
+  const wchar_t with_nul[] = L"D:\\dev\0hidden";
+  assert(!SafeDedicatedPath(std::wstring_view(with_nul, sizeof(with_nul) / sizeof(wchar_t) - 1)));
+  for (auto prefix : {L"COM", L"LPT"}) {
+    for (wchar_t digit = L'0'; digit <= L'9'; ++digit) {
+      auto device = std::wstring(L"D:\\") + prefix + digit + L".txt";
+      assert(!SafeDedicatedPath(device));
+    }
+  }
+  assert(Evaluate(root, root, true, true) == PathDecision::kRejectedPolicyOverride);
   std::cout << "PASS: lexical contract only; filesystem, policy discovery, integration, runtime NOT RUN\n";
 }
