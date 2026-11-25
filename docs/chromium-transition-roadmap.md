@@ -86,6 +86,10 @@ PR #118 최초 [Windows CI](https://github.com/tharu8813/VEIL-Project/actions/ru
 
 PR #118 수정 head [Windows/Rust CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45635676966) 10/10 PASS, [원격 검증](https://github.com/tharu8813/VEIL-Project/actions/runs/45635676757) PASS, main 병합 28d252a106e558960235c03815952df83b65f9d3. 고정 Chromium SHA의 chrome/app/theme/chromium/BRANDING (blob f8363d5b294fe210ebfdd18374e95b54d6ff5c17)을 확인하여 0001-veil-product-name.patch 작성: PRODUCT_FULLNAME/SHORTNAME만 VEIL로 변경, upstream 저작권/installer/OS 식별자 보존. 별도 원격 단일 blob 적용 시험을 추가하며 결과는 신규 CI 전 NOT RUN. 실제 전체 series 적용, 빌드, UI 및 보안 검증 NOT RUN. C0 IN PROGRESS / C1 준비 유지, C2 선행 패치만 존재하며 독립 브라우저 완료 아님. 프로필/설치 격리 이전 patched 제품 실행 금지.
 
+## C2 UI 이름 및 Windows 식별자 조사 (2026-11-25)
+
+PR #119 제품명 메타데이터 원본 blob fixture [CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45636839542) PASS, 기존 CI PASS 및 main 병합. PR #120 [원본 조사 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45637262859)에서 8/8 파일 관측, 누락 없음, main 병합. [식별자 조사](../chromium/identity-source-survey.md)에 실제 파일/line/blob 및 분리 위험 기록. GRIT 두 비번역 제품명만 변경하는 리뷰용 후보 생성 CI 추가; 후보 생성/검토 전 패치 등록 금지. 실제 Windows identity/프로필/번역/아이콘/빌드/샌드박스 NOT RUN, 기존 보안 상태 유지.
+
 ## C0 증거 및 다음 행동
 
 - [x] 전환 방향 문서화(이 PR에서 제안), 기존 보안 요구 유지.

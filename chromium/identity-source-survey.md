@@ -21,3 +21,15 @@ Several upstream API calls were rate limited (429); chromium_install_modes.cc wa
 - Require dedicated synthetic-data profile, normal user, no real credentials. Run two independently identified products simultaneously and collect file/process evidence. No claim of protected storage or release approval until the actual security gates are met.
 
 This audit is not an isolation implementation, and an observed line or successful CI does not prove runtime behavior.
+
+## Canonical audit result and next candidate (2026-11-25)
+
+PR #120 [source audit CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45637262859) observed all eight files with no missing paths. PR #119 metadata fixture and both legacy Windows/Rust jobs passed. Both PRs merged. Observations:
+
+- chromium_install_modes.h (a6d969df56d13d94eaa968934f909d6fd23b5f2f): product path line 24, Safe Browsing name line 27, empty Google Update app GUID lines 55–56, application names and HTML/PDF ProgIDs lines 57–65. Further COM GUID/registry/installer review required before changes. Do not change Safe Browsing identifier by assumption.
+- user_data_dir.cc (6b231841bf68c1abd8087bb1c0ea70f3ef3c9ece): default User Data at line 102; command-line and policy inputs at lines 63–70 and 113–120. Merely changing the default path cannot guarantee isolation.
+- chrome_paths_win.cc (9ab342785936f8e9c8f64ac5088dedcf276058ce) lines 42–53: default path uses install subdirectory.
+- process_singleton_win.cc (7671e78815ae39310f4916abbdb4c5a06a65fc08) lines 451–481: startup mutex and per-user-data-directory window lookup. Separate identity requires actual concurrent-run checks.
+- chromium_strings.grd: product name IDs at lines 288–299 are non-translatable, with separate Chrome for Testing branch. Korean XTB contains 576 matching lines, not 576 confirmed product names; do not globally substitute.
+
+A read-only CI candidate generator now retrieves and verifies the exact GRIT blob, replaces only the two plain Chromium names, preserves Chrome for Testing and other messages, and applies the generated diff to a temporary fixture. The resulting diff and hash are printed for review. It is NOT registered in the patch series until reviewed; actual GRIT compilation, translated messages, profile isolation, and runtime remain NOT RUN. Public GitHub file requests were again rate limited, and canonical Gitiles was not accessible from the chat web tool, so full-file evidence is deferred to this CI.
