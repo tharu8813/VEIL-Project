@@ -31,12 +31,16 @@ public partial class BrowserWindow
         }
         if (result.Verdict != ThreatVerdict.Malicious) return false;
         args.Cancel = true;
-        Dispatcher.BeginInvoke(() => ShowThreatWarning(tab, uri, result.Reason));
+        QueueNavigationAction(tab, () => ShowThreatWarning(tab, uri, result.Reason));
         return true;
     }
 
     private void ShowThreatWarning(BrowserTab tab, Uri blocked, string reason)
     {
+        if (!CanUseTab(tab.Item)) return;
+        tab.ExpectedUpgrade = null;
+        tab.UpgradedFrom = null;
+        tab.PendingHttp = null;
         tab.PendingThreat = blocked;
         tab.Url = ThreatWarningUrl;
         tab.Title = InternalTitle(ThreatWarningUrl);
@@ -69,7 +73,9 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
 
     private void ProceedThreatClick(object sender, RoutedEventArgs args)
     {
-        if (Active is not { Url: ThreatWarningUrl, PendingThreat: { } blocked } tab) return;
+        if (Active is not { Url: ThreatWarningUrl, PendingThreat: { } blocked } tab || !CanUseTab(tab.Item)) return;
+        tab.NavigationEpoch++;
+        tab.NavigationId = null;
         session.ThreatAllowed.Add(blocked.IdnHost);
         tab.Url = blocked.AbsoluteUri;
         tab.PendingThreat = null;
