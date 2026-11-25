@@ -30,7 +30,7 @@ function runGit(cwd,args,input,maxBuffer=16*1024*1024){
     env:envForGit(),input,encoding:'utf8',timeout:120000,maxBuffer,stdio:['pipe','pipe','pipe']
   }).trim();
 }
-function checkRoot(root,revision,origin){
+function checkRoot(root,revision,origin,patched=false){
   if(!sameDirectory(root,runGit(root,['rev-parse','--show-toplevel'])))throw Error('Expected Git checkout root');
   if(runGit(root,['rev-parse','HEAD'])!==revision||runGit(root,['remote','get-url','origin'])!==origin)throw Error('Checkout identity mismatch');
   // Git status can hide changes when index entries are marked assume-unchanged
@@ -41,7 +41,11 @@ function checkRoot(root,revision,origin){
     if(entry && (/^[a-z] /u.test(entry)||entry.startsWith('S ')))
       throw Error('Assume-unchanged or skip-worktree index entry refused');
   }
-  if(runGit(root,['status','--porcelain','--untracked-files=all','--ignore-submodules=none']))throw Error('Checkout must be clean, including untracked files');
+  if(!patched && runGit(root,['status','--porcelain','--untracked-files=all','--ignore-submodules=none']))throw Error('Checkout must be clean, including untracked files');
+  if(patched){
+    if(runGit(root,['diff','--name-only','--ignore-submodules=none']))throw Error('Unstaged changes detected');
+    if(runGit(root,['ls-files','--others','--exclude-standard','-z']))throw Error('Untracked files detected');
+  }
   // Require independent ordinary .git directories, not a worktree or submodule.
   const gitDir=ordinaryDirectory(join(root,'.git'));
   const common=runGit(root,['rev-parse','--git-common-dir']);
@@ -50,6 +54,25 @@ function checkRoot(root,revision,origin){
   try { lstatSync(resolve(root,alternates)); throw Error('Object alternates refused'); }
   catch(e){if(e.code!=='ENOENT')throw e;}
   return gitDir;
+}
+
+// Recompute expected tree from clean source; never trust a saved receipt alone.
+export function verifyMaterialized({upstream,target,revision,origin,patches}){
+  if(!patches.length)throw Error('No registered patches');
+  const source=ordinaryDirectory(upstream),dest=ordinaryDirectory(target);
+  if(within(source,dest)||within(dest,source)||sameDirectory(source,dest))throw Error('Dedicated separate checkout required');
+  const a=checkRoot(source,revision,origin),b=checkRoot(dest,revision,origin,true);
+  if(sameDirectory(a,b))throw Error('Shared Git metadata refused');
+  const expectedTree=checkSeries(source,revision,origin,patches).tree;
+  // Compare staged entries against the expected patch tree without invoking a build.
+  // write-tree can update Git metadata; this is not a bytewise read-only index operation.
+  const destinationIndexTree=runGit(dest,['write-tree']);
+  if(destinationIndexTree!==expectedTree)throw Error('Materialized tree mismatch');
+  checkRoot(dest,revision,origin,true);
+  checkRoot(source,revision,origin);
+  return {status:'PATCHED_TREE_RECHECKED_ONLY',baseRevision:revision,expectedTree,destinationIndexTree,
+    patches:patches.map(({file,sha256})=>({file,sha256})),build:'NOT RUN',runtime:'NOT RUN',
+    sandbox:'NOT RUN',dependencyGraph:'NOT VERIFIED',releaseApproved:false};
 }
 
 export function materialize({upstream,target,revision,origin,patches,execute=false}){
@@ -86,10 +109,11 @@ export function materialize({upstream,target,revision,origin,patches,execute=fal
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   try{
     const args=process.argv.slice(2);
-    if((args.length!==2&&args.length!==3)||(args.length===3&&args[2]!=='--execute'))throw Error('Usage: node materialize-patches.mjs <clean upstream checkout> <separate clean target checkout> [--execute]');
+    if((args.length!==2&&args.length!==3)||(args.length===3&&!['--execute','--verify-materialized'].includes(args[2])))throw Error('Usage: node materialize-patches.mjs <clean upstream checkout> <separate clean target checkout> [--execute|--verify-materialized]');
     const pin=readPin(),dir=fileURLToPath(new URL('../../chromium/patches/',import.meta.url));
     const manifest=JSON.parse(readFileSync(join(dir,'series.json'),'utf8'));
     const patches=validateSeries(manifest,pin.revision,dir);
-    console.log(JSON.stringify(materialize({upstream:args[0],target:args[1],revision:pin.revision,origin:pin.upstream,patches,execute:args.length===3}),null,2));
+    const options={upstream:args[0],target:args[1],revision:pin.revision,origin:pin.upstream,patches};
+    console.log(JSON.stringify(args[2]==='--verify-materialized'?verifyMaterialized(options):materialize({...options,execute:args[2]==='--execute'}),null,2));
   }catch(e){console.error(e.message);process.exitCode=1;}
 }
