@@ -39,3 +39,17 @@ test('a new window initializes before it adopts the tab and saves the completed 
     assert.match(browser, /await session\.EngineHost\.InitializeAsync[\s\S]*?adoptionSource\.TransferTabTo\(adopted, this, 0, initializingTarget: true\)/);
     assert.match(browser, /restoring = false;\s*if \(adopted is not null\) SaveSession\(\);/);
 });
+
+
+const search = await readFile('apps/desktop/BrowserWindow.Search.cs', 'utf8');
+const searchPolicy = await readFile('apps/desktop/SearchPolicy.cs', 'utf8');
+test('address bar resolves explicit searches and rejected addresses before implicit search', () => {
+    const resolve = browser.slice(browser.indexOf('internal static Uri? ResolveAddress'), browser.indexOf('private string BuildInternalPage'));
+    assert.match(resolve, /AddressInputPolicy\.HasUnsafeCharacters\(input\)[\s\S]*?TryExplicitSearch\(input, searchEngine, out var search\)[\s\S]*?AddressInputPolicy\.TryResolve\(input, out var address\)\) return address;\s*return SearchPolicy\.Search/);
+    assert.match(searchPolicy, /AddressInputPolicy\.TryResolve\(query, out var address\) && address is null/);
+});
+test('local suggestions cannot survive programmatic address or tab context changes', () => {
+    assert.match(search, /private void SetAddressText\(string text\)\s*\{\s*CloseAddressSuggestions\(\);/);
+    assert.match(search, /suggestionEpoch = tab\.NavigationEpoch;\s*suggestionInput = Address\.Text;/);
+    assert.match(search, /CanUseTab\(tab\.Item\) && tab\.NavigationEpoch == suggestionEpoch &&\s*Address\.Text == suggestionInput/);
+});

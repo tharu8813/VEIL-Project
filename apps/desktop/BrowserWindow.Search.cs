@@ -9,6 +9,8 @@ public partial class BrowserWindow
 {
     private bool suppressAddressSuggestions;
     private BrowserTab? suggestionTab;
+    private long suggestionEpoch;
+    private string? suggestionInput;
 
     private void InitializeAddressSuggestions()
     {
@@ -31,6 +33,7 @@ public partial class BrowserWindow
 
     private void SetAddressText(string text)
     {
+        CloseAddressSuggestions();
         suppressAddressSuggestions = true;
         try { Address.Text = text; }
         finally { suppressAddressSuggestions = false; }
@@ -40,7 +43,7 @@ public partial class BrowserWindow
     {
         if (suppressAddressSuggestions) return;
         if (closing || restoring || session.IsEnding || session.EngineLost || !IsActive ||
-            !Address.IsKeyboardFocusWithin || Active is not { } tab || closingTabs.Contains(tab.Item))
+            !Address.IsKeyboardFocusWithin || Active is not { } tab || !CanUseTab(tab.Item))
         {
             CloseAddressSuggestions();
             return;
@@ -52,6 +55,8 @@ public partial class BrowserWindow
             return;
         }
         suggestionTab = tab;
+        suggestionEpoch = tab.NavigationEpoch;
+        suggestionInput = Address.Text;
         AddressSuggestionsList.ItemsSource = matches;
         AddressSuggestionsList.SelectedIndex = -1; // never auto-select or overwrite typed text
         AddressSuggestionsPopup.IsOpen = true;
@@ -62,6 +67,7 @@ public partial class BrowserWindow
         AddressSuggestionsPopup.IsOpen = false;
         AddressSuggestionsList.ItemsSource = null;
         suggestionTab = null;
+        suggestionInput = null;
     }
 
     private void MoveAddressSuggestion(int direction)
@@ -80,7 +86,8 @@ public partial class BrowserWindow
     {
         var tab = suggestionTab;
         bool valid = !closing && !restoring && !session.IsEnding && !session.EngineLost && IsActive &&
-            tab is not null && tab == Active && tab.Owner == this && !closingTabs.Contains(tab.Item) && data.LocalAddressSuggestions != false &&
+            tab is not null && tab == Active && CanUseTab(tab.Item) && tab.NavigationEpoch == suggestionEpoch &&
+            Address.Text == suggestionInput && data.LocalAddressSuggestions != false &&
             SearchPolicy.Suggest(data, Address.Text).Any(item => item.Url == selected.Url);
         CloseAddressSuggestions();
         if (!valid || tab is null || !IsWebUrl(selected.Url)) return;

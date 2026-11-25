@@ -214,6 +214,12 @@ public partial class BrowserWindow
                     !SiteDataPolicy.SameCookieDomain("sub.example.test", "example.test"),
                     "cookie storage domains never use suffix matching");
                 Check(ResolveAddress("127.0.0.1:8765")?.AbsoluteUri == "http://127.0.0.1:8765/", "fixture address");
+                Check(ResolveAddress("user@example.test") is null &&
+                    ResolveAddress("example.test:invalid") is null &&
+                    ResolveAddress(@"C:\private notes\file.txt") is null &&
+                    ResolveAddress("? user@example.test", "google")?.Host == "www.google.com",
+                    "invalid address is not an implicit search; explicit search remains available");
+
                 Check(ResolveAddress("file:///C:/secret") is null &&
                     ResolveAddress("https://username@example.test") is null, "address scheme and credentials rejected");
                 foreach (var field in new[] { Address, FindText })
