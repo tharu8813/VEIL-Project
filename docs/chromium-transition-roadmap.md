@@ -62,6 +62,10 @@ C1 이후 C3의 일반 UI 개발과 C4~C7의 보안 개발은 병행 가능하�
 
 PR #113 CI [45621410099](https://github.com/tharu8813/VEIL-Project/actions/runs/45621410099): 합성 태그 테스트 3/3 PASS. PR merge-test checkout 2410a59ef1d70e39f9fb159aaf703c6fad10af29에서 추적 범위 182개, 키워드 일치 105개, 읽기 실패 0. WebView2 43파일/226줄, 보호 프로필 34/138, 금고 34/147, 네트워크 34/606, 브로커 27/81 (중복 포함, 의존성 그래프 아님). 호스팅 AMD64/NTFS, 여유 109.9 GiB, gclient/gn/autoninja 미발견. 사용자 빌드 머신 증거 아님. 실제 Chromium 코드 검색 미러에서 158.0.8127.89 commit 1de57fa19722fa6d6841d4f596c394d015580656 관측. canonical remote 교차검증 및 depot_tools pin 미완료. [C1 준비 런북](../chromium/README.md)과 read-only 기본 source sync 도구, GN 후보 설정 추가. C0 IN PROGRESS / C1 준비만, 실제 checkout/build/보안 검증 NOT RUN.
 
+## C1 업스트림 교차검증 준비 (2026-11-25)
+
+PR #114 CI [45622662168](https://github.com/tharu8813/VEIL-Project/actions/runs/45622662168): 후보/태그 합성 테스트 6/6 PASS, 기존 빌드 및 Rust/보안 검사 PASS. 호스팅 Windows 여유 73 GiB 관측으로 전체 빌드는 일반 CI에서 실행하지 않는다. 공식 depot_tools Gitiles에서 2960e876ad78502c616e27e1a89b9e01ca77ca7e (2026-11-23) 후보 관측. candidate.json에 고정 후보를 추가하며 임의 override 거부. 공식 canonical Git tag 교차검증과 depot_tools commit object 확인은 별도 읽기 전용 CI에서 실행하도록 준비했다(결과 NOT RUN). Sync 기본 계획 출력/불일치 거부 시험을 Windows CI에 추가한다. sync에서 pre-DEPS hooks도 명시적으로 차단한다. 실제 사용자 Windows 환경, 소스 sync, toolchain 호환성, build, sandbox NOT RUN. C0 IN PROGRESS / C1 준비 유지.
+
 ## C0 증거 및 다음 행동
 
 - [x] 전환 방향 문서화(이 PR에서 제안), 기존 보안 요구 유지.

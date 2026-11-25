@@ -3,11 +3,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$Workspace,
-    [Parameter(Mandatory=$true)][string]$DepotToolsRevision,
+    [string]$DepotToolsRevision,
     [switch]$Execute
 )
 $ErrorActionPreference = 'Stop'
-if ($DepotToolsRevision -cnotmatch '^[a-f0-9]{40}$') { throw 'Supply a reviewed depot_tools commit SHA (40 lowercase hex characters).' }
 $root = [IO.Path]::GetFullPath($Workspace)
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 if ($root -notmatch '^[A-Za-z]:\\[A-Za-z0-9_.\\-]+$' -or $root -match '\s' -or $root.TrimEnd('\') -eq [IO.Path]::GetPathRoot($root).TrimEnd('\')) { throw 'Use a dedicated absolute local drive path without spaces.' }
@@ -17,7 +16,9 @@ $pinScript = Join-Path $PSScriptRoot 'verify-candidate.mjs'
 $pinJson = & node $pinScript
 if ($LASTEXITCODE -ne 0) { throw 'Candidate validation failed.' }
 $pin = $pinJson | ConvertFrom-Json
-$depotUrl = 'https://chromium.googlesource.com/chromium/tools/depot_tools.git'
+if ($PSBoundParameters.ContainsKey('DepotToolsRevision') -and $DepotToolsRevision -cne $pin.depotToolsRevision) { throw 'depot_tools revision does not match candidate manifest.' }
+$DepotToolsRevision = $pin.depotToolsRevision
+$depotUrl = $pin.depotToolsUpstream
 $plan = [ordered]@{ status='PLAN_ONLY'; workspace=$root; chromiumVersion=$pin.version; chromiumRevision=$pin.revision; depotToolsRevision=$DepotToolsRevision; sourceSync='NOT RUN'; hooks='NOT RUN'; build='NOT RUN'; sandbox='NOT RUN' }
 if (-not $Execute) { $plan | ConvertTo-Json; return }
 if (Test-Path -LiteralPath $root) { throw 'Refusing to modify an existing workspace; choose a new dedicated path.' }
@@ -55,7 +56,7 @@ try {
     try {
         & $gclient config --name src $pin.upstream
         if ($LASTEXITCODE -ne 0) { throw 'gclient config failed.' }
-        & $gclient sync --nohooks --revision "src@$($pin.revision)"
+        & $gclient sync --nohooks --noprehooks --revision "src@$($pin.revision)"
         if ($LASTEXITCODE -ne 0) { throw 'gclient sync failed.' }
         $src=Join-Path $sourceRoot 'src'
         $actual=(& git -C $src rev-parse HEAD | Out-String).Trim()

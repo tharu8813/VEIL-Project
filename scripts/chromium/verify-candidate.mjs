@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { resolveTag, upstream, validateVersion } from './resolve-tag.mjs';
 export function validatePin(pin) {
-  if (!pin || pin.schemaVersion !== 1 || pin.upstream !== upstream || pin.tag !== 'refs/tags/'+validateVersion(pin.version) || !/^[a-f0-9]{40}$/.test(pin.revision) || pin.status !== 'MIRROR_OBSERVED_REMOTE_CHECK_REQUIRED') throw new Error('Invalid candidate pin');
+  if (!pin || pin.schemaVersion !== 1 || pin.upstream !== upstream || pin.tag !== 'refs/tags/'+validateVersion(pin.version) || !/^[a-f0-9]{40}$/.test(pin.revision) || pin.status !== 'MIRROR_OBSERVED_REMOTE_CHECK_REQUIRED' || pin.depotToolsUpstream !== 'https://chromium.googlesource.com/chromium/tools/depot_tools.git' || !/^[a-f0-9]{40}$/.test(pin.depotToolsRevision) || pin.depotToolsStatus !== 'OBSERVED_CANDIDATE_COMPATIBILITY_NOT_RUN') throw new Error('Invalid candidate pin');
   return pin;
 }
 export function compareRemote(pin, observed) {
