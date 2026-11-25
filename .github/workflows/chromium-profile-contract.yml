@@ -10,6 +10,8 @@ on:
       - 'chromium/dev/config-path-win.h'
       - 'chromium/dev/config-schema.h'
       - 'chromium/dev/client-migration-contract.h'
+      - 'chromium/dev/cutover-recovery-contract.h'
+      - 'tests/chromium/cutover-recovery-contract.test.cc'
       - 'chromium/dev/client-hash-win.h'
       - 'chromium/dev/client-signature-win.h'
       - 'chromium/dev/client-integrity-win.h'
@@ -101,6 +103,8 @@ jobs:
           "$RUNNER_TEMP/config-schema"
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/client-migration-contract.test.cc -o "$RUNNER_TEMP/client-migration-contract"
           "$RUNNER_TEMP/client-migration-contract"
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/cutover-recovery-contract.test.cc -o "$RUNNER_TEMP/cutover-recovery-contract"
+          "$RUNNER_TEMP/cutover-recovery-contract"
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/manifest-entry-contract.test.cc -o "$RUNNER_TEMP/manifest-entry-contract"
           "$RUNNER_TEMP/manifest-entry-contract"
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/chromium/manifest-inventory-contract.test.cc -o "$RUNNER_TEMP/manifest-inventory-contract"
