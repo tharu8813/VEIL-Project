@@ -192,7 +192,7 @@ internal sealed class VaultWindow : VeilDialog
             OverwritePrompt = false, AddToRecent = false,
         };
         if (dialog.ShowDialog(PromptOwner) != true || !Ready) return;
-        if (MessageBox.Show(PromptOwner, "선택한 위치에 암호화되지 않은 일반 파일을 만듭니다. 금고 밖에서는 VEIL의 보호가 적용되지 않을 수 있습니다. 계속할까요?",
+        if (MessageBox.Show(PromptOwner, "선택한 위치에 암호화되지 않은 일반 파일을 만듭니다. 금고 밖에서는 VEIL의 보호가 적용되지 않을 수 있으며, 강제 종료 시 선택한 폴더에 평문 임시 파일(.veil-export-*)이 남을 수 있습니다. 계속할까요?",
             "파일 내보내기", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes || !Ready) return;
         if (File.Exists(dialog.FileName) || Directory.Exists(dialog.FileName))
         {
