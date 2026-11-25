@@ -16,3 +16,7 @@ VEIL-specific patches are tracked separately in [patches/](patches/README.md). T
 
 
 The new [source-only patch materializer](patches/README.md#source-only-materialization-development-not-run-against-chromium) has a read-only default and requires a second independent, clean checkout for explicit execution. Actual patched builds and dependency sync are not supported by this tool.
+
+## Read-only build-machine preflight
+
+Run `powershell -NoProfile -File scripts/chromium/Get-BuildReadiness.ps1 -Workspace D:\veil-chromium` before syncing. In addition to tool/SDK observations, the report lists current source-sync contract blockers (path syntax, overlap with VEIL checkout, existing workspace, missing parent, ancestor reparse-point observation, NTFS/free space, Git/Node). It reports the 300 GiB recommendation separately from the 100 GiB minimum; no rounded value is used for the threshold. It does not create a workspace, install tools, approve sync, verify the selected revision's toolchain requirements, or prove the directory remains unchanged. A report with zero blockers is not an execution authorization. CI tests are synthetic/read-only hosted runner checks; actual dedicated Windows build machine, DEPS, toolchain and Chromium build remain NOT RUN.
