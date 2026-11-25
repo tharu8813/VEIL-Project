@@ -168,10 +168,22 @@ public partial class BrowserWindow
         foreach (var window in session.Windows.ToArray())
         {
             if (window.closing) continue;
+            window.CloseAddressSuggestions();
             window.UpdateBookmarkGlyph();
             window.RefreshBookmarkBar();
             if (refreshLibraries && window.bookmarkLibrary is { } library && !ReferenceEquals(library, source))
                 library.RefreshEntries();
+        }
+    }
+
+    private void RefreshHistoryLibraries(LibraryWindow? source = null)
+    {
+        foreach (var window in session.Windows.ToArray())
+        {
+            if (window.closing || window.Active is not { Url: "veil://history" }) continue;
+            if (window.historyLibrary is { } library && !ReferenceEquals(library, source))
+                library.RefreshEntries();
+            window.CloseAddressSuggestions();
         }
     }
 

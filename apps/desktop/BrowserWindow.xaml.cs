@@ -53,6 +53,7 @@ public partial class BrowserWindow : Window
     private bool openingDownloads;
     private string? startupAddress;
     private LibraryWindow? bookmarkLibrary;
+    private LibraryWindow? historyLibrary;
 
     private BrowserData data => session.Data;
     private Stack<ClosedTab> closedTabs => session.ClosedTabs;
@@ -462,7 +463,10 @@ public partial class BrowserWindow : Window
             }
         }
         if (!session.IsPrivate && args.IsSuccess && IsWebUrl(tab.Url))
+        {
             data.History.Insert(0, new PageEntry(tab.Title, tab.Url, DateTimeOffset.Now));
+            RefreshHistoryLibraries();
+        }
         if (Active == tab)
         {
             if (args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
@@ -1260,7 +1264,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private void BookmarkClick(object sender, RoutedEventArgs args)
     {
-        if (!SettingsReady() || Active is not { } tab || closingTabs.Contains(tab.Item) || !IsWebUrl(tab.Url)) return;
+        if (!SettingsReady() || Active is not { } tab || !CanUseTab(tab.Item) || !IsWebUrl(tab.Url)) return;
         if (data.Bookmarks.All(entry => entry.Url != tab.Url))
         {
             data.Bookmarks.Add(new PageEntry(tab.Title, tab.Url, DateTimeOffset.Now));
@@ -1302,8 +1306,6 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             try
             {
                 data.Save(statePath);
-                if (editable)
-                    RefreshBookmarkBars(dialog);
                 return true;
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -1312,11 +1314,30 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             }
         }
 
+        bool CanEditLibrary() => SettingsReady() && IsActive &&
+            Active is { CancelManagement: not null } active && active.Url == internalUrl &&
+            CanUseTab(active.Item) && ReferenceEquals(editable ? bookmarkLibrary : historyLibrary, dialog);
+        void PublishLibrary()
+        {
+            try
+            {
+                if (editable) RefreshBookmarkBars(dialog);
+                else
+                {
+                    foreach (var window in session.Windows.ToArray())
+                        if (!window.closing) window.CloseAddressSuggestions();
+                    RefreshHistoryLibraries(dialog);
+                }
+            }
+            catch (Exception error) when (RecoverableFailure.Is(error))
+            {
+                if (!closing) Status.Text = "목록은 저장했지만 일부 화면을 갱신하지 못했습니다.";
+            }
+        }
         dialog = new LibraryWindow(this, editable ? "북마크 관리" : "방문 기록", entries, editable, SaveLibrary,
-            editable ? data.BookmarkFolders : null, editable ? () =>
-                SettingsReady() && Active is { Url: "veil://bookmarks", CancelManagement: not null } active &&
-                !closingTabs.Contains(active.Item) && ReferenceEquals(bookmarkLibrary, dialog) : null);
+            editable ? data.BookmarkFolders : null, CanEditLibrary, PublishLibrary);
         if (editable) bookmarkLibrary = dialog;
+        else historyLibrary = dialog;
         try
         {
             bool open = await ShowManagementPageAsync(internalUrl, dialog);
@@ -1327,6 +1348,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         finally
         {
             if (ReferenceEquals(bookmarkLibrary, dialog)) bookmarkLibrary = null;
+            if (ReferenceEquals(historyLibrary, dialog)) historyLibrary = null;
         }
     }
     private void ClearDownloadIssues()
