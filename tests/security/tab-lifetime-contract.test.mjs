@@ -480,7 +480,7 @@ test('CEF exact synthetic cookie deletion rechecks per-cookie authorization and 
     assert.match(cefView, /private static readonly CefNative\.CookieDeleteAuthorization cookieDeleteAuthorization = AuthorizeCookieDelete;/);
     assert.match(cefView, /cookieDeleteAuthorizations\.TryAdd\(id,[\s\S]*?NativeHandle == id &&[\s\S]*?stillAuthorized\(\)/);
     assert.match(cefView, /if \(started\) CefNative\.VeilCefEndCookieDelete\(id\);\s*cookieDeleteAuthorizations\.Remove\(id\);/);
-    assert.match(cefView, /ClearOriginStorageAsync[\s\S]*?throw new NotSupportedException[\s\S]*?ClearProfileDataAsync[\s\S]*?if \(kinds != EngineProfileDataKinds\.Cookies\)\s*throw new NotSupportedException/);
+    assert.match(cefView, /ClearProfileDataAsync[\s\S]*?if \(kinds != EngineProfileDataKinds\.Cookies\)\s*throw new NotSupportedException/);
     assert.match(cefTabbed, /cookieDeletion\.Result is not null \|\|\s*deletionAuthorizationChecks < 2/);
     assert.match(cefTabbed, /firstDomains\.Result\.Count != 1 \|\| firstDomains\.Result\[0\] != "localhost"/);
 });
@@ -513,4 +513,17 @@ test('CEF storage usage exposes only a fixed numeric observation for fixture ori
     assert.match(cefView, /return double\.IsFinite\(bytes\) && bytes >= 0 \? bytes : null;/);
     assert.match(cefTabbed, /rejectedUsage\.Exception\?\.GetBaseException\(\) is not InvalidOperationException/);
     assert.match(cefTabbed, /Distinct fixture origins returned distinct finite storage usage/);
+});
+
+
+test('CEF origin storage clear has a fixed allowlist and authorization before dispatch', () => {
+    assert.match(cefNative, /if \(!CefCurrentlyOn\(TID_UI\) \|\| !origin \|\| !IsFixtureStorageOrigin\(origin\) \|\| !authorize\) return 0;/);
+    assert.match(cefNative, /parameters->SetString\("storageTypes", "local_storage,indexeddb,cache_storage,service_workers,websql,file_systems"\);/);
+    assert.match(cefNative, /const bool allowed = authorize\(id\) != 0;\s*if \(allowed && LookupView\(id\) == state && !state->closing && state->storage_clear == request\)\s*\{\s*request->message_id = host->ExecuteDevToolsMethod\(0, "Storage\.clearDataForOrigin", parameters\);/);
+    assert.match(cefNative, /message_id != request_->message_id\) return;/);
+    assert.match(cefNative, /storage_clear_registration = nullptr;\s*storage_clear\.reset\(\);/);
+    assert.match(cefView, /int start = CefNative\.VeilCefStartStorageClear\(id, origin, cookieDeleteAuthorization\);\s*if \(start == -2\) return false;/);
+    assert.match(cefView, /if \(started\) CefNative\.VeilCefEndStorageClear\(id\);\s*cookieDeleteAuthorizations\.Remove\(id\);/);
+    assert.match(cefTabbed, /storageClear\.Result \|\|\s*deletionAuthorizationChecks < 2/);
+    assert.match(cefTabbed, /Exact origin storage clear preserved the other origin and cookie scope/);
 });

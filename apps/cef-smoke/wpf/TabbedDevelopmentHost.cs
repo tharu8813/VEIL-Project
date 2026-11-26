@@ -45,6 +45,7 @@ internal sealed class TabbedDevelopmentHost
     private Task<int?>? cookieDeletion;
     private Task<bool>? profileCookieDeletion;
     private Task<double?>? firstUsage, secondUsage, rejectedUsage;
+    private Task<bool>? storageClear;
     private int deletionAuthorizationChecks;
     private int phase, result;
     private bool shuttingDown, windowClosed, allowWindowClose;
@@ -245,7 +246,7 @@ internal sealed class TabbedDevelopmentHost
 
     private void RunFixture()
     {
-        if (elapsed.Elapsed > TimeSpan.FromSeconds(35))
+        if (elapsed.Elapsed > TimeSpan.FromSeconds(45))
         {
             Log($"Tabbed fixture timeout at phase {phase}");
             BeginShutdown();
@@ -254,7 +255,7 @@ internal sealed class TabbedDevelopmentHost
         string Url(string path)
         {
             var url = new Uri(new Uri(fixture!), path);
-            return path is "/tabs-second" or "/tabs-preserved" or "/tabs-cleared-second"
+            return path is "/tabs-second" or "/tabs-preserved" or "/tabs-cleared-second" or "/tabs-storage-kept"
                 ? new UriBuilder(url) { Host = "localhost" }.Uri.AbsoluteUri : url.AbsoluteUri;
         }
         void Fail() { result = 42; Log($"Tabbed fixture failed at phase {phase}"); BeginShutdown(); }
@@ -469,6 +470,58 @@ internal sealed class TabbedDevelopmentHost
             if (!secondUsage.IsCompletedSuccessfully || secondUsage.Result is not double bytes ||
                 !double.IsFinite(bytes) || bytes < 524288 || bytes <= firstUsage!.Result!.Value) { Fail(); return; }
             Log("Distinct fixture origins returned distinct finite storage usage");
+            address.Text = Url("/tabs-storage-reseed");
+            NavigateAddress();
+            phase = 24;
+        }
+        else if (phase == 24 && first?.View.DocumentTitle == "TAB_STORAGE_RESEEDED")
+        {
+            storageClear = ((IEngineSiteDataWriter)first.View).ClearOriginStorageAsync(
+                "http://example.invalid", () => true);
+            phase = 25;
+        }
+        else if (phase == 25 && storageClear is { IsCompleted: true })
+        {
+            if (storageClear.Exception?.GetBaseException() is not InvalidOperationException) { Fail(); return; }
+            deletionAuthorizationChecks = 0;
+            storageClear = ((IEngineSiteDataWriter)first!.View).ClearOriginStorageAsync(
+                new Uri(Url("/tabs-first")).GetLeftPart(UriPartial.Authority),
+                () => ++deletionAuthorizationChecks == 1);
+            phase = 26;
+        }
+        else if (phase == 26 && storageClear is { IsCompleted: true })
+        {
+            if (!storageClear.IsCompletedSuccessfully || storageClear.Result ||
+                deletionAuthorizationChecks < 2) { Fail(); return; }
+            address.Text = Url("/tabs-storage-denied");
+            NavigateAddress();
+            phase = 27;
+        }
+        else if (phase == 27 && first?.View.DocumentTitle == "TAB_STORAGE_DENIED")
+        {
+            Log("Unapproved origin and revoked storage clear left fixture storage untouched");
+            storageClear = ((IEngineSiteDataWriter)first.View).ClearOriginStorageAsync(
+                new Uri(Url("/tabs-first")).GetLeftPart(UriPartial.Authority),
+                () => active == first && !first.Closing && !shuttingDown);
+            phase = 28;
+        }
+        else if (phase == 28 && storageClear is { IsCompleted: true })
+        {
+            if (!storageClear.IsCompletedSuccessfully || !storageClear.Result) { Fail(); return; }
+            address.Text = Url("/tabs-storage-deleted");
+            NavigateAddress();
+            phase = 29;
+        }
+        else if (phase == 29 && first?.View.DocumentTitle == "TAB_STORAGE_DELETED")
+        {
+            address.Text = Url("/tabs-storage-kept");
+            NavigateAddress();
+            phase = 30;
+        }
+        else if (phase == 30 && first?.View.DocumentTitle == "TAB_STORAGE_KEPT")
+        {
+            if (first.View.NativeHandle != firstId || first.View.Source != Url("/tabs-storage-kept")) { Fail(); return; }
+            Log("Exact origin storage clear preserved the other origin and cookie scope");
             result = 0;
             BeginShutdown();
         }
