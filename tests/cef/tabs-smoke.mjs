@@ -104,7 +104,9 @@ async function runFixture(fresh) {
   const runTemp = await mkdtemp(join(fixtureTemp, fresh ? 'fresh-' : 'seed-'));
   const child = spawn(executable, [], {
     cwd: dirname(executable),
-    env: { ...process.env, TEMP: runTemp, TMP: runTemp,
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+      !['TEMP', 'TMP', 'VEIL_CEF_WPF_TABS', 'VEIL_CEF_WPF_TABS_FRESH_PROBE', 'VEIL_CEF_WPF_TEST_URL', 'VEIL_CEF_WPF_VAULT_EXE'].includes(key.toUpperCase()))),
+      TEMP: runTemp, TMP: runTemp,
       VEIL_CEF_WPF_TABS: '1', VEIL_CEF_WPF_TABS_FRESH_PROBE: fresh ? '1' : '0',
       VEIL_CEF_WPF_TEST_URL: 'http://127.0.0.1:' + server.address().port + '/' },
     stdio: 'ignore', windowsHide: true,
@@ -136,13 +138,16 @@ function assertNoFixtureProcesses() {
     '$ErrorActionPreference = "Stop"',
     '$roots = $env:VEIL_TEST_RUN_ROOTS | ConvertFrom-Json',
     '$ids = $env:VEIL_TEST_RUN_PIDS | ConvertFrom-Json',
-    '$matches = @(Get-CimInstance Win32_Process | Where-Object {',
-    '  $p = $_; $p.ExecutablePath -eq $env:VEIL_TEST_EXECUTABLE -and (',
+    '$remaining = @(Get-CimInstance Win32_Process | Where-Object {',
+    '  $p = $_',
+    '  $sameExecutable = $p.ExecutablePath -eq $env:VEIL_TEST_EXECUTABLE -or',
+    '    (-not $p.ExecutablePath -and $p.Name -eq [IO.Path]::GetFileName($env:VEIL_TEST_EXECUTABLE))',
+    '  $sameExecutable -and (',
     '    $ids -contains $p.ProcessId -or $ids -contains $p.ParentProcessId -or',
     '    @($roots | Where-Object { $p.CommandLine -and $p.CommandLine.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -gt 0',
     '  )',
     '})',
-    'if ($matches.Count -ne 0) { $matches | Select-Object ProcessId, ParentProcessId | Out-String | Write-Output; exit 1 }',
+    'if ($remaining.Count -ne 0) { $remaining | Select-Object ProcessId, ParentProcessId | Out-String | Write-Output; exit 1 }',
   ].join('\n');
   const checked = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
     env: { ...process.env, VEIL_TEST_EXECUTABLE: executable,

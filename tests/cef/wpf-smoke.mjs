@@ -157,8 +157,10 @@ const watcher = watch(fixtureTemp, { recursive: true }, (_, filename) => {
 watcher.on('error', error => { watcherError = error; });
 const child = spawn(executable, [], {
   cwd: dirname(executable),
-    VEIL_CEF_WPF_TABS: '0', VEIL_CEF_WPF_TABS_FRESH_PROBE: '0',
-  env: { ...process.env, TEMP: fixtureTemp, TMP: fixtureTemp, VEIL_CEF_WPF_TEST_URL: url, VEIL_CEF_WPF_VAULT_EXE: vault },
+  env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+    !['TEMP', 'TMP', 'VEIL_CEF_WPF_TABS', 'VEIL_CEF_WPF_TABS_FRESH_PROBE', 'VEIL_CEF_WPF_TEST_URL', 'VEIL_CEF_WPF_VAULT_EXE'].includes(key.toUpperCase()))),
+    TEMP: fixtureTemp, TMP: fixtureTemp, VEIL_CEF_WPF_TABS: '0', VEIL_CEF_WPF_TABS_FRESH_PROBE: '0',
+    VEIL_CEF_WPF_TEST_URL: url, VEIL_CEF_WPF_VAULT_EXE: vault },
   stdio: 'ignore',
   windowsHide: true,
 });

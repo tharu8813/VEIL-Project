@@ -582,5 +582,9 @@ test('CEF tab fixture checks fresh-process isolation before removing only its ow
     assert.match(runner, /const fresh = await runFixture\(true\);[\s\S]*?assert\.notEqual\(fresh\.profile, profile\);[\s\S]*?cookieChecks\.get\('\/tabs-fresh-probe'\), ''/);
     assert.match(runner, /assertNoFixtureProcesses\(\);[\s\S]*?lstat\(fixtureTemp\)[\s\S]*?await rm\(fixtureTemp, \{ recursive: true, force: false, maxRetries: 5, retryDelay: 200 \}\)/);
     assert.match(runner, /if \(!passed\) console\.error\('Fixture evidence directory/);
-    assert.match(singleRunner, /VEIL_CEF_WPF_TABS: '0', VEIL_CEF_WPF_TABS_FRESH_PROBE: '0'/);
+    assert.match(singleRunner, /env: \{ \.\.\.Object\.fromEntries\([\s\S]*?TEMP: fixtureTemp, TMP: fixtureTemp, VEIL_CEF_WPF_TABS: '0', VEIL_CEF_WPF_TABS_FRESH_PROBE: '0',\s*VEIL_CEF_WPF_TEST_URL: url, VEIL_CEF_WPF_VAULT_EXE: vault \}/);
+    assert.doesNotMatch(singleRunner, /cwd: dirname\(executable\),\s*VEIL_CEF_WPF_TABS:/);
+    for (const source of [runner, singleRunner])
+        assert.match(source, /Object\.entries\(process\.env\)\.filter\(\(\[key\]\) =>\s*!\[[^\]]*'VEIL_CEF_WPF_TABS_FRESH_PROBE'[^\]]*\]\.includes\(key\.toUpperCase\(\)\)/);
+    assert.match(runner, /-not \$p\.ExecutablePath -and \$p\.Name -eq \[IO\.Path\]::GetFileName/);
 });
