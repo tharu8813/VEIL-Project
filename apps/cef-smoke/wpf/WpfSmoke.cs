@@ -27,7 +27,8 @@ public static class WpfSmoke
         IBrowserEngine engine = new CefDevelopmentEngine();
         engine.InitializeAsync(CefDevelopmentEngine.FixtureProfile, NetworkSettings.Standard)
             .GetAwaiter().GetResult();
-        var browser = engine.CreateView();
+        var browser = (CefDevelopmentView)engine.CreateView();
+        ulong closingHandle = 0;
         stack.Children.Add(browser.Element);
         window.Content = stack;
 
@@ -127,6 +128,22 @@ public static class WpfSmoke
             window.Loaded += async (_, _) =>
             {
                 await browser.InitializeAsync();
+                if (browser.NativeHandle == 0 || CefNative.VeilCefClosed(browser.NativeHandle) != 0 ||
+                    CefNative.VeilCefClosed(0) == 0 || CefNative.VeilCefSource(0) == 0 ||
+                    Marshal.PtrToStringUni(CefNative.VeilCefSource(0)) != "")
+                {
+                    Trace("Invalid CEF view handle contract");
+                    window.Close();
+                    return;
+                }
+                CefNative.VeilCefSetMuted(0, 1);
+                if (browser.IsMuted != false)
+                {
+                    Trace("Invalid handle modified the live view");
+                    window.Close();
+                    return;
+                }
+                Trace("Invalid view handle rejected without affecting live view");
                 int muteEvents = 0;
                 EventHandler audioChanged = (_, _) => muteEvents++;
                 browser.AudioStateChanged += audioChanged;
@@ -173,7 +190,8 @@ public static class WpfSmoke
             closing = true;
             vaultStream?.Complete(false);
             Trace("Requesting CEF close");
-            e.Cancel = CefNative.VeilCefTryClose() == 0;
+            closingHandle = browser.NativeHandle;
+            e.Cancel = CefNative.VeilCefTryClose(closingHandle) == 0;
         };
         window.Closed += (_, _) =>
         {
@@ -184,7 +202,7 @@ public static class WpfSmoke
         pump.Tick += (_, _) =>
         {
             CefNative.VeilCefPump();
-            if (windowClosed && CefNative.VeilCefClosed() != 0)
+            if (windowClosed && CefNative.VeilCefClosed(closingHandle) != 0)
             {
                 Trace("CEF browser closed");
                 pump.Stop();
@@ -193,7 +211,7 @@ public static class WpfSmoke
             }
             if (closing)
             {
-                if (!windowClosed && CefNative.VeilCefReadyToClose() != 0) window.Close();
+                if (!windowClosed && CefNative.VeilCefReadyToClose(browser.NativeHandle) != 0) window.Close();
                 return;
             }
 
@@ -274,15 +292,15 @@ public static class WpfSmoke
                 };
                 var url = new Uri(new Uri(fixture), path).AbsoluteUri;
                 if (vaultScenario == VaultScenario.Full &&
-                    CefNative.VeilCefStartOwnedAttachment(url, vaultStream.ChunkCallback) != 0)
+                    CefNative.VeilCefStartOwnedAttachment(browser.NativeHandle, url, vaultStream.ChunkCallback) != 0)
                 {
                     Trace("CEF accepted an attachment without a page handoff");
                     window.Close();
                     return;
                 }
                 if (!vaultStream.Ready.Result || (vaultScenario == VaultScenario.Full
-                    ? CefNative.VeilCefClickFixtureAttachment(url)
-                    : CefNative.VeilCefStartOwnedAttachment(url, vaultStream.ChunkCallback)) == 0)
+                    ? CefNative.VeilCefClickFixtureAttachment(browser.NativeHandle, url)
+                    : CefNative.VeilCefStartOwnedAttachment(browser.NativeHandle, url, vaultStream.ChunkCallback)) == 0)
                 {
                     Trace($"Could not start vault fixture for {path}");
                     window.Close();
@@ -294,7 +312,7 @@ public static class WpfSmoke
             {
                 Trace("Intercepted the page attachment before browser navigation reached HTTP");
                 var url = new Uri(new Uri(fixture), "/wpf-owned-attachment").AbsoluteUri;
-                if (CefNative.VeilCefStartOwnedAttachment(url, vaultStream!.ChunkCallback) == 0)
+                if (CefNative.VeilCefStartOwnedAttachment(browser.NativeHandle, url, vaultStream!.ChunkCallback) == 0)
                 {
                     window.Close();
                     return;

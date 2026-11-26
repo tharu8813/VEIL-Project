@@ -40,6 +40,7 @@ internal sealed class CefDevelopmentEngine : IBrowserEngine
 internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
 {
     private nint hwnd;
+    internal ulong NativeHandle { get; private set; }
     private readonly CefNative.BeforeBrowse onStarting;
     private readonly CefNative.NavigationComplete onCompleted;
     private readonly CefNative.PageStateChanged onPageStateChanged;
@@ -49,8 +50,8 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
     public event Func<EngineNewWindowRequest, Task>? NewWindowRequested { add { } remove { } }
     public event EventHandler? WindowCloseRequested { add { } remove { } }
     public event EventHandler? FullScreenChanged;
-    public bool? IsPageFullScreen => hwnd == 0 || CefNative.VeilCefClosed() != 0
-        ? null : CefNative.VeilCefIsPageFullScreen() != 0;
+    public bool? IsPageFullScreen => hwnd == 0 || CefNative.VeilCefClosed(NativeHandle) != 0
+        ? null : CefNative.VeilCefIsPageFullScreen(NativeHandle) != 0;
     public event EventHandler? SourceChanged;
     public event EventHandler? TitleChanged;
     public event EventHandler? HistoryChanged;
@@ -59,13 +60,13 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
     public Task<Stream?> GetFaviconPngAsync() => Task.FromResult<Stream?>(null);
     public event EventHandler? AudioStateChanged;
     public bool? IsDocumentPlayingAudio => null;
-    public bool? IsMuted => hwnd == 0 || CefNative.VeilCefClosed() != 0
-        ? null : CefNative.VeilCefIsMuted() != 0;
+    public bool? IsMuted => hwnd == 0 || CefNative.VeilCefClosed(NativeHandle) != 0
+        ? null : CefNative.VeilCefIsMuted(NativeHandle) != 0;
     public void SetMuted(bool muted)
     {
         RequireView();
         if (IsMuted == muted) return;
-        CefNative.VeilCefSetMuted(muted ? 1 : 0);
+        CefNative.VeilCefSetMuted(NativeHandle, muted ? 1 : 0);
         AudioStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -135,18 +136,18 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
     }
 
     public FrameworkElement Element => this;
-    public string Source => hwnd == 0 ? "" : Marshal.PtrToStringUni(CefNative.VeilCefSource()) ?? "";
-    public string DocumentTitle => hwnd == 0 ? "" : Marshal.PtrToStringUni(CefNative.VeilCefTitle()) ?? "";
-    public bool CanGoBack => hwnd != 0 && CefNative.VeilCefCanGoBack() != 0;
-    public bool CanGoForward => hwnd != 0 && CefNative.VeilCefCanGoForward() != 0;
+    public string Source => hwnd == 0 ? "" : Marshal.PtrToStringUni(CefNative.VeilCefSource(NativeHandle)) ?? "";
+    public string DocumentTitle => hwnd == 0 ? "" : Marshal.PtrToStringUni(CefNative.VeilCefTitle(NativeHandle)) ?? "";
+    public bool CanGoBack => hwnd != 0 && CefNative.VeilCefCanGoBack(NativeHandle) != 0;
+    public bool CanGoForward => hwnd != 0 && CefNative.VeilCefCanGoForward(NativeHandle) != 0;
     public double ZoomFactor
     {
-        get => Math.Pow(1.2, CefNative.VeilCefZoomLevel());
+        get => Math.Pow(1.2, CefNative.VeilCefZoomLevel(NativeHandle));
         set
         {
             if (!double.IsFinite(value) || value <= 0) throw new ArgumentOutOfRangeException(nameof(value));
             RequireView();
-            CefNative.VeilCefSetZoomLevel(Math.Log(value, 1.2));
+            CefNative.VeilCefSetZoomLevel(NativeHandle, Math.Log(value, 1.2));
         }
     }
 
@@ -163,27 +164,27 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
             url.Host is not ("127.0.0.1" or "[::1]" or "localhost") || url.UserInfo.Length != 0)
             throw new ArgumentException("Enter a local HTTP test URL.", nameof(address));
         RequireView();
-        CefNative.VeilCefNavigate(url.AbsoluteUri);
+        CefNative.VeilCefNavigate(NativeHandle, url.AbsoluteUri);
     }
 
     public void ShowInternalHtml(string trustedHostHtml) => throw new NotSupportedException();
-    public void GoBack() => CefNative.VeilCefGoBack();
-    public void GoForward() => CefNative.VeilCefGoForward();
-    public void Reload() => CefNative.VeilCefReload();
+    public void GoBack() => CefNative.VeilCefGoBack(NativeHandle);
+    public void GoForward() => CefNative.VeilCefGoForward(NativeHandle);
+    public void Reload() => CefNative.VeilCefReload(NativeHandle);
     public Task ReloadIgnoringCacheAsync()
     {
         RequireView();
-        CefNative.VeilCefReloadIgnoringCache();
+        CefNative.VeilCefReloadIgnoringCache(NativeHandle);
         return Task.CompletedTask;
     }
 
     // Native find callbacks and request lifetime have not yet been verified.
     public Task<bool?> FindTextAsync(string query, bool backwards) => Task.FromResult<bool?>(null);
-    public void Stop() => CefNative.VeilCefStop();
+    public void Stop() => CefNative.VeilCefStop(NativeHandle);
 
     private void RequireView()
     {
-        if (hwnd == 0 || CefNative.VeilCefClosed() != 0)
+        if (hwnd == 0 || CefNative.VeilCefClosed(NativeHandle) != 0)
             throw new InvalidOperationException("The CEF view is unavailable.");
     }
 
@@ -193,7 +194,8 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
         hwnd = CefNative.CreateWindowExW(0, "STATIC", "", childVisible,
             0, 0, 1, 1, parent.Handle, 0, 0, 0);
         if (hwnd == 0) throw new InvalidOperationException("Cannot create the CEF parent window.");
-        if (CefNative.VeilCefOpen(hwnd, onStarting, onCompleted, onPageStateChanged, onRenderProcessFailed) == 0)
+        NativeHandle = CefNative.VeilCefOpen(hwnd, onStarting, onCompleted, onPageStateChanged, onRenderProcessFailed);
+        if (NativeHandle == 0)
         {
             CefNative.DestroyWindow(hwnd);
             hwnd = 0;
@@ -205,12 +207,13 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
     protected override void OnWindowPositionChanged(Rect rcBoundingBox)
     {
         base.OnWindowPositionChanged(rcBoundingBox);
-        if (hwnd != 0) CefNative.VeilCefResize(hwnd);
+        if (hwnd != 0) CefNative.VeilCefResize(NativeHandle, hwnd);
     }
 
     protected override void DestroyWindowCore(HandleRef window)
     {
-        CefNative.VeilCefDetachCallbacks(window.Handle);
+        CefNative.VeilCefDetachCallbacks(NativeHandle, window.Handle);
+        NativeHandle = 0;
         CefNative.DestroyWindow(window.Handle);
         hwnd = 0;
     }
@@ -225,19 +228,19 @@ internal static class CefNative
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void NavigationComplete(ulong id, int success, int canceled, int code);
     [DllImport(Module)]
-    internal static extern int VeilCefOpen(nint parent, BeforeBrowse starting, NavigationComplete completed,
+    internal static extern ulong VeilCefOpen(nint parent, BeforeBrowse starting, NavigationComplete completed,
         PageStateChanged changed, RenderProcessFailed failed);
-    [DllImport(Module)] internal static extern void VeilCefDetachCallbacks(nint parent);
-    [DllImport(Module)] internal static extern void VeilCefResize(nint parent);
+    [DllImport(Module)] internal static extern void VeilCefDetachCallbacks(ulong id, nint parent);
+    [DllImport(Module)] internal static extern void VeilCefResize(ulong id, nint parent);
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
-    internal static extern void VeilCefNavigate(string url);
+    internal static extern void VeilCefNavigate(ulong id, string url);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void PageStateChanged(int kind);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void RenderProcessFailed(int code);
-    [DllImport(Module)] internal static extern int VeilCefIsPageFullScreen();
-    [DllImport(Module)] internal static extern nint VeilCefSource();
-    [DllImport(Module)] internal static extern nint VeilCefTitle();
+    [DllImport(Module)] internal static extern int VeilCefIsPageFullScreen(ulong id);
+    [DllImport(Module)] internal static extern nint VeilCefSource(ulong id);
+    [DllImport(Module)] internal static extern nint VeilCefTitle(ulong id);
     [DllImport(Module)] internal static extern nint VeilCefProfile();
     [DllImport(Module)] internal static extern uint VeilCefPopupsBlocked();
     [DllImport(Module)] internal static extern uint VeilCefDownloadsBlocked();
@@ -249,26 +252,26 @@ internal static class CefNative
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate int OwnedChunk(nint data, int length);
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
-    internal static extern int VeilCefStartOwnedAttachment(string url, OwnedChunk chunk);
+    internal static extern int VeilCefStartOwnedAttachment(ulong id, string url, OwnedChunk chunk);
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
-    internal static extern int VeilCefClickFixtureAttachment(string url);
+    internal static extern int VeilCefClickFixtureAttachment(ulong id, string url);
     [DllImport(Module)] internal static extern int VeilCefPageAttachmentIntercepted();
     [DllImport(Module)] internal static extern int VeilCefOwnedAttachmentResult();
-    [DllImport(Module)] internal static extern int VeilCefClosed();
-    [DllImport(Module)] internal static extern int VeilCefReadyToClose();
+    [DllImport(Module)] internal static extern int VeilCefClosed(ulong id);
+    [DllImport(Module)] internal static extern int VeilCefReadyToClose(ulong id);
     [DllImport(Module)] internal static extern void VeilCefPump();
-    [DllImport(Module)] internal static extern int VeilCefTryClose();
-    [DllImport(Module)] internal static extern int VeilCefIsMuted();
-    [DllImport(Module)] internal static extern void VeilCefSetMuted(int muted);
-    [DllImport(Module)] internal static extern int VeilCefCanGoBack();
-    [DllImport(Module)] internal static extern int VeilCefCanGoForward();
-    [DllImport(Module)] internal static extern void VeilCefGoBack();
-    [DllImport(Module)] internal static extern void VeilCefGoForward();
-    [DllImport(Module)] internal static extern void VeilCefReload();
-    [DllImport(Module)] internal static extern void VeilCefReloadIgnoringCache();
-    [DllImport(Module)] internal static extern void VeilCefStop();
-    [DllImport(Module)] internal static extern double VeilCefZoomLevel();
-    [DllImport(Module)] internal static extern void VeilCefSetZoomLevel(double level);
+    [DllImport(Module)] internal static extern int VeilCefTryClose(ulong id);
+    [DllImport(Module)] internal static extern int VeilCefIsMuted(ulong id);
+    [DllImport(Module)] internal static extern void VeilCefSetMuted(ulong id, int muted);
+    [DllImport(Module)] internal static extern int VeilCefCanGoBack(ulong id);
+    [DllImport(Module)] internal static extern int VeilCefCanGoForward(ulong id);
+    [DllImport(Module)] internal static extern void VeilCefGoBack(ulong id);
+    [DllImport(Module)] internal static extern void VeilCefGoForward(ulong id);
+    [DllImport(Module)] internal static extern void VeilCefReload(ulong id);
+    [DllImport(Module)] internal static extern void VeilCefReloadIgnoringCache(ulong id);
+    [DllImport(Module)] internal static extern void VeilCefStop(ulong id);
+    [DllImport(Module)] internal static extern double VeilCefZoomLevel(ulong id);
+    [DllImport(Module)] internal static extern void VeilCefSetZoomLevel(ulong id, double level);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
     internal static extern nint CreateWindowExW(uint exStyle, string className, string name,
         uint style, int x, int y, int width, int height, nint parent,
