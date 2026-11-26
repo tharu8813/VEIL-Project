@@ -40,7 +40,7 @@ internal sealed class WebView2BrowserEngine : IBrowserEngine
 }
 
 /// <summary>Transitional adapter. No navigation occurs in the constructor or controller initialization.</summary>
-internal sealed class WebView2EngineView(CoreWebView2Environment environment, string? privateProfileName = null) : IBrowserEngineView
+internal sealed class WebView2EngineView(CoreWebView2Environment environment, string? privateProfileName = null) : IBrowserEngineView, IEngineSiteDataReader
 {
     internal WebView2 NativeView { get; } = new() { Visibility = Visibility.Hidden };
     public FrameworkElement Element => NativeView;
@@ -71,6 +71,41 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
         return string.IsNullOrEmpty(core.FaviconUri) ? null :
             await core.GetFaviconAsync(CoreWebView2FaviconImageFormat.Png);
     }
+    private CoreWebView2 RequireStandardSiteDataCore()
+    {
+        var core = Core;
+        if (core.Profile.IsInPrivateModeEnabled)
+            throw new InvalidOperationException("Site data inspection is unavailable for private profiles.");
+        return core;
+    }
+
+    public async Task<IReadOnlyList<string>> GetCookieDomainsAsync()
+    {
+        var core = RequireStandardSiteDataCore();
+        // Empty URI enumerates this profile locally, without a network request.
+        var cookies = await core.CookieManager.GetCookiesAsync("");
+        if (!ReferenceEquals(core, RequireStandardSiteDataCore()))
+            throw new InvalidOperationException("The site data profile changed.");
+        return cookies.Select(cookie => cookie.Domain).Where(SiteDataPolicy.ValidDomain).ToArray();
+    }
+
+    public async Task<double?> GetOriginStorageUsageAsync(string origin)
+    {
+        if (SiteDataPolicy.Origin(origin) != origin)
+            throw new ArgumentException("A canonical HTTP(S) origin is required.", nameof(origin));
+        var core = RequireStandardSiteDataCore();
+        string response = await core.CallDevToolsProtocolMethodAsync("Storage.getUsageAndQuota",
+            System.Text.Json.JsonSerializer.Serialize(new { origin }));
+        if (!ReferenceEquals(core, RequireStandardSiteDataCore()))
+            throw new InvalidOperationException("The site data profile changed.");
+        using var json = System.Text.Json.JsonDocument.Parse(response);
+        return json.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object &&
+            json.RootElement.TryGetProperty("usage", out var usage) &&
+            usage.ValueKind == System.Text.Json.JsonValueKind.Number &&
+            usage.TryGetDouble(out double bytes) && double.IsFinite(bytes) && bytes >= 0
+                ? bytes : null;
+    }
+
     public string Source => Core.Source;
     public string DocumentTitle => Core.DocumentTitle;
     private bool disposed;

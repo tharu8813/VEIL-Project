@@ -116,7 +116,7 @@ test('permission grants require the original live tab and selection epoch', () =
 });
 test('site-data commands require original live regular WebView and exclusive selected scope', () => {
     assert.match(siteData, /bool SourceStillValid\(\) => SiteDataReady\(\) && IsActive && Active == source && CanUseTab\(source\.Item\) &&\s*source\.NavigationEpoch == epoch && ReferenceEquals\(source\.View\.CoreWebView2, web\) &&\s*!web\.Profile\.IsInPrivateModeEnabled;/);
-    assert.match(siteData, /GetCookiesAsync\(""\)\)[\s\S]*?if \(!SourceStillValid\(\) \|\| permissionSelectionEpoch != selectionEpoch/);
+    assert.match(siteData, /SiteDataPolicy\.Summarize\(await reader\.GetCookieDomainsAsync\(\)\);\s*if \(!SourceStillValid\(\) \|\| permissionSelectionEpoch != selectionEpoch/);
     assert.match(siteData, /!SourceStillValid\(\) \|\| session\.ActiveDownloads\.Count != 0 \|\| !SiteDataPolicy\.ValidSelection\(selection\)/);
     assert.match(siteData, /var fresh = await web\.CookieManager\.GetCookiesAsync\(""\);\s*if \(!SourceStillValid\(\) \|\| permissionSelectionEpoch != confirmedSelectionEpoch/);
 });
@@ -421,4 +421,21 @@ test('page fullscreen exit is a narrow adapter operation and window shutdown dis
     assert.match(browser, /initializingViews\.Add\(engineView\);\s*try\s*\{\s*Pages\.Children\.Add\(element\);\s*await engineView\.InitializeAsync\(\);/);
     assert.match(browser, /finally \{ initializingViews\.Remove\(engineView\); \}/);
     assert.match(browser, /if \(session\.IsPrivate\) DeletePrivateProfile\(\);[\s\S]*?foreach \(var view in ownedTabs\.Select\(tab => tab\.EngineView\)\.Concat\(initializingViews\)\.Distinct\(\)\.ToArray\(\)\)\s*view\.Dispose\(\);/);
+});
+
+
+test('site data inspection exposes only narrow read-only capability and refuses private profiles', () => {
+    assert.match(engineContract, /internal interface IEngineSiteDataReader\s*\{\s*Task<IReadOnlyList<string>> GetCookieDomainsAsync\(\);[\s\S]*?Task<double\?> GetOriginStorageUsageAsync\(string origin\);/);
+    assert.match(webView2, /: IBrowserEngineView, IEngineSiteDataReader/);
+    assert.match(webView2, /RequireStandardSiteDataCore\(\)\s*\{\s*var core = Core;\s*if \(core\.Profile\.IsInPrivateModeEnabled\)\s*throw new InvalidOperationException/);
+    assert.match(webView2, /var cookies = await core\.CookieManager\.GetCookiesAsync\(""\);\s*if \(!ReferenceEquals\(core, RequireStandardSiteDataCore\(\)\)\)[\s\S]*?return cookies\.Select\(cookie => cookie\.Domain\)\.Where\(SiteDataPolicy\.ValidDomain\)\.ToArray\(\);/);
+    assert.match(webView2, /if \(SiteDataPolicy\.Origin\(origin\) != origin\)[\s\S]*?CallDevToolsProtocolMethodAsync\("Storage\.getUsageAndQuota",[\s\S]*?if \(!ReferenceEquals\(core, RequireStandardSiteDataCore\(\)\)\)/);
+    assert.match(webView2, /usage\.ValueKind == System\.Text\.Json\.JsonValueKind\.Number &&\s*usage\.TryGetDouble\(out double bytes\) && double\.IsFinite\(bytes\) && bytes >= 0\s*\? bytes : null;/);
+    assert.doesNotMatch(cefView, /IEngineSiteDataReader/);
+    assert.match(siteData, /source\.EngineView is not IEngineSiteDataReader reader \|\|\s*source\.View\.CoreWebView2 is not \{ \} web \|\| web\.Profile\.IsInPrivateModeEnabled/);
+    assert.match(siteData, /await reader\.GetOriginStorageUsageAsync\(origin\);\s*if \(!SourceStillValid\(\) \|\| permissionSelectionEpoch != confirmedSelectionEpoch\) return;/);
+    assert.doesNotMatch(siteData, /Storage\.getUsageAndQuota|cookie\.Value/);
+    // Destructive operations retain the native scope and exact selection checks.
+    assert.match(siteData, /SiteDataPolicy\.SameCookieDomain\(cookie\.Domain, domain\)\) continue;\s*web\.CookieManager\.DeleteCookie\(cookie\);/);
+    assert.match(siteData, /"Storage\.clearDataForOrigin",\s*JsonSerializer\.Serialize\(new \{ origin, storageTypes = SiteDataPolicy\.OriginStorageTypes \}\)/);
 });
