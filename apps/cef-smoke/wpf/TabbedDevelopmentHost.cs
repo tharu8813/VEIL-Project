@@ -37,6 +37,7 @@ internal sealed class TabbedDevelopmentHost
     private readonly CefDevelopmentEngine engine = new();
     private readonly DispatcherTimer pump = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(10) };
     private readonly string? fixture;
+    private readonly bool freshProfileProbe;
     private readonly System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
     private Tab? active;
     private Tab? first, second;
@@ -54,6 +55,7 @@ internal sealed class TabbedDevelopmentHost
     private TabbedDevelopmentHost(string? fixture)
     {
         this.fixture = fixture;
+        freshProfileProbe = fixture is not null && Environment.GetEnvironmentVariable("VEIL_CEF_WPF_TABS_FRESH_PROBE") == "1";
         result = fixture is null ? 0 : 40;
         engine.InitializeAsync(CefDevelopmentEngine.FixtureProfile, NetworkSettings.Standard).GetAwaiter().GetResult();
 
@@ -271,6 +273,13 @@ internal sealed class TabbedDevelopmentHost
         {
             if (!emptyDomains.IsCompletedSuccessfully || emptyDomains.Result.Count != 0) { Fail(); return; }
             Log("Fresh fixture cookie scan returned an empty list");
+            if (freshProfileProbe)
+            {
+                address.Text = Url("/tabs-fresh-probe");
+                NavigateAddress();
+                phase = 50;
+                return;
+            }
             address.Text = Url("/tabs-first");
             NavigateAddress();
             second = AddTab();
@@ -647,6 +656,29 @@ internal sealed class TabbedDevelopmentHost
         {
             if (first.View.NativeHandle != firstId || first.View.Source != Url("/tabs-batch-second-deleted")) { Fail(); return; }
             Log("Known-origin batch cleared both fixture origins without claiming full profile clear");
+            address.Text = Url("/tabs-isolation-seed");
+            NavigateAddress();
+            phase = 49;
+        }
+        else if (phase == 49 && first?.View.DocumentTitle == "TAB_ISOLATION_SEEDED")
+        {
+            Log("Seeded persistent synthetic storage for next-process isolation probe");
+            firstDomains = ((IEngineSiteDataReader)first.View).GetCookieDomainsAsync();
+            phase = 51;
+        }
+        else if (phase == 51 && firstDomains is { IsCompleted: true })
+        {
+            if (!firstDomains.IsCompletedSuccessfully || firstDomains.Result.Count != 2 ||
+                firstDomains.Result.Any(domain => domain != "127.0.0.1")) { Fail(); return; }
+            Log("Persistent synthetic cookie present before shutdown");
+            result = 0;
+            BeginShutdown();
+        }
+        else if (phase == 50 && first?.View.DocumentTitle == "TAB_FRESH_PROFILE")
+        {
+            if (!freshProfileProbe || first.View.NativeHandle != firstId ||
+                first.View.Source != Url("/tabs-fresh-probe")) { Fail(); return; }
+            Log("Fresh process saw no earlier LocalStorage or CacheStorage");
             result = 0;
             BeginShutdown();
         }

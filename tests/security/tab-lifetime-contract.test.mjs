@@ -569,3 +569,18 @@ test('site-data capability metadata gates UI and does not promote CEF fixture to
     assert.match(dialog, /allStorage\.IsEnabled = support\.SupportsProfile\(EngineProfileDataKinds\.DomStorage\)/);
     assert.match(dialog, /void Sync\(\) => clearAll\.IsEnabled = support\.Supports\(new SiteDataSelection/);
 });
+
+
+test('CEF tab fixture checks fresh-process isolation before removing only its owned temporary root', async () => {
+    const runner = await readFile('tests/cef/tabs-smoke.mjs', 'utf8');
+    const singleRunner = await readFile('tests/cef/wpf-smoke.mjs', 'utf8');
+    assert.match(cefTabbed, /freshProfileProbe = fixture is not null && Environment\.GetEnvironmentVariable\("VEIL_CEF_WPF_TABS_FRESH_PROBE"\) == "1";/);
+    assert.match(cefTabbed, /Persistent synthetic cookie present before shutdown/);
+    assert.match(cefTabbed, /Fresh process saw no earlier LocalStorage or CacheStorage/);
+    assert.match(runner, /mkdtemp\(join\(fixtureTemp, fresh \? 'fresh-' : 'seed-'\)\)/);
+    assert.match(runner, /VEIL_CEF_WPF_TABS_FRESH_PROBE: fresh \? '1' : '0'/);
+    assert.match(runner, /const fresh = await runFixture\(true\);[\s\S]*?assert\.notEqual\(fresh\.profile, profile\);[\s\S]*?cookieChecks\.get\('\/tabs-fresh-probe'\), ''/);
+    assert.match(runner, /assertNoFixtureProcesses\(\);[\s\S]*?lstat\(fixtureTemp\)[\s\S]*?await rm\(fixtureTemp, \{ recursive: true, force: false, maxRetries: 5, retryDelay: 200 \}\)/);
+    assert.match(runner, /if \(!passed\) console\.error\('Fixture evidence directory/);
+    assert.match(singleRunner, /VEIL_CEF_WPF_TABS: '0', VEIL_CEF_WPF_TABS_FRESH_PROBE: '0'/);
+});
