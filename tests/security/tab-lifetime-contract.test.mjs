@@ -410,3 +410,15 @@ test('CEF opt-in tab shell keeps native views parented and routes commands to th
     assert.match(cefTabbed, /tab\.Closing && CefNative\.VeilCefReadyToClose\(tab\.ClosingId\) != 0[\s\S]*?tab\.View\.Dispose\(\);[\s\S]*?pages\.Children\.Remove/);
     assert.match(cefTabbed, /shuttingDown && tabs\.Count == 0 && retired\.Count == 0 && CefNative\.VeilCefLiveViewCount\(\) == 0/);
 });
+
+
+test('page fullscreen exit is a narrow adapter operation and window shutdown disposes pending views', () => {
+    assert.match(engineContract, /Task<bool> TryExitPageFullScreenAsync\(\);/);
+    assert.match(webView2, /public async Task<bool> TryExitPageFullScreenAsync\(\)[\s\S]*?if \(IsPageFullScreen != true\) return false;\s*await Core\.ExecuteScriptAsync\("document\.fullscreenElement && document\.exitFullscreen\(\)"\);/);
+    assert.match(cefView, /TryExitPageFullScreenAsync\(\) => Task\.FromResult\(false\);/);
+    assert.doesNotMatch(tabs, /CoreWebView2|ExecuteScriptAsync/);
+    assert.match(tabs, /bool Current\(\) => AcceptTabEvents\(tab\) && Active == tab && tab\.NavigationEpoch == epoch;[\s\S]*?await tab\.EngineView\.TryExitPageFullScreenAsync\(\) && Current\(\)/);
+    assert.match(browser, /initializingViews\.Add\(engineView\);\s*try\s*\{\s*Pages\.Children\.Add\(element\);\s*await engineView\.InitializeAsync\(\);/);
+    assert.match(browser, /finally \{ initializingViews\.Remove\(engineView\); \}/);
+    assert.match(browser, /if \(session\.IsPrivate\) DeletePrivateProfile\(\);[\s\S]*?foreach \(var view in ownedTabs\.Select\(tab => tab\.EngineView\)\.Concat\(initializingViews\)\.Distinct\(\)\.ToArray\(\)\)\s*view\.Dispose\(\);/);
+});
