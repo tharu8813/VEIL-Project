@@ -361,7 +361,7 @@ const cefSmoke = await readFile('apps/cef-smoke/wpf/WpfSmoke.cs', 'utf8');
 test('WPF fixture retains the original closing identity and waits for the vault task', () => {
     assert.match(cefSmoke, /window\.Closing \+= \(_, e\) =>\s*\{\s*if \(!closing\)\s*\{\s*closing = true;\s*closingHandle = browser\.NativeHandle;/);
     assert.match(cefSmoke, /CefNative\.VeilCefCancelOwnedAttachment\(closingHandle\);\s*vaultStream\?\.Complete\(false\);/);
-    assert.match(cefSmoke, /if \(windowClosed && CefNative\.VeilCefClosed\(closingHandle\) != 0 &&\s*CefNative\.VeilCefLiveViewCount\(\) == 0 && \(vaultStream is null \|\| vaultStream\.Finished\.IsCompleted\)\)[\s\S]*?app\.Shutdown\(\);/);
+    assert.match(cefSmoke, /if \(windowClosed && CefNative\.VeilCefClosed\(closingHandle\) != 0 &&\s*CefNative\.VeilCefLiveViewCount\(\) == 0 && \(vaultStream is null \|\| vaultStream\.Finished\.IsCompleted\) &&\s*\(parallelKeep is null \|\| parallelKeep\.Finished\.IsCompleted\) &&\s*\(parallelCancel is null \|\| parallelCancel\.Finished\.IsCompleted\)\)[\s\S]*?app\.Shutdown\(\);/);
 });
 
 
@@ -386,4 +386,15 @@ test('CEF managed view reservations are reclaimed only after disposal and native
     assert.match(cefSmoke, /var reservation = engine\.CreateView\(\);\s*bool reservedLimit = Rejects\(\(\) => engine\.CreateView\(\)\);\s*reservation\.Dispose\(\);/);
     assert.match(cefSmoke, /firstSecondaryHandle = secondaryHandle;[\s\S]*?OpenSecondary\("\/wpf-isolation-reopened"\)/);
     assert.match(cefSmoke, /secondaryHandle <= firstSecondaryHandle \|\| CefNative\.VeilCefClosed\(firstSecondaryHandle\) == 0/);
+});
+
+
+test('CEF parallel fixture cancels only its own stream and waits for both vault workers', () => {
+    assert.match(cefNative, /const bool parallel = path == "\/wpf-owned-parallel-keep" \|\| path == "\/wpf-owned-parallel-cancel";/);
+    assert.match(cefNative, /if \(parallel\) \{[\s\S]*?CefString\(&source\.origin\) != CefString\(&parts\.origin\)/);
+    assert.match(cefSmoke, /VeilCefStartOwnedAttachment\(browser\.NativeHandle, keepUrl, keep\.ChunkCallback\)[\s\S]*?VeilCefStartOwnedAttachment\(secondaryHandle, cancelUrl, cancel\.ChunkCallback\)/);
+    assert.match(cefSmoke, /parallelKeep!\.ReceivedBytes > 0 && parallelCancel!\.ReceivedBytes > 0/);
+    assert.match(cefSmoke, /canceledByteCount = parallelCancel\.ReceivedBytes;\s*CefNative\.VeilCefCancelOwnedAttachment\(secondaryHandle\);\s*parallelCancel\.Complete\(false\);/);
+    assert.match(cefSmoke, /parallelKeep!\.Complete\(true\);/);
+    assert.match(cefSmoke, /kept\.ReceivedBytes != FixtureVault\.BodySize \|\| canceled\.ReceivedBytes != canceledByteCount/);
 });

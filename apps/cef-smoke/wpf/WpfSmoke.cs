@@ -82,6 +82,8 @@ public static class WpfSmoke
         var redirectMatched = false;
         var failedHttpLoad = false;
         FixtureVault? vaultStream = null;
+        FixtureVault? parallelKeep = null, parallelCancel = null;
+        int canceledByteCount = 0;
         var vaultScenario = VaultScenario.Truncated;
         string? lastTitle = null;
         var observedSources = new HashSet<string>();
@@ -264,6 +266,9 @@ public static class WpfSmoke
                 closingHandle = browser.NativeHandle;
                 CefNative.VeilCefCancelOwnedAttachment(closingHandle);
                 vaultStream?.Complete(false);
+                parallelKeep?.Complete(false);
+                CefNative.VeilCefCancelOwnedAttachment(secondaryHandle);
+                parallelCancel?.Complete(false);
                 CloseSecondary();
                 Trace("Requesting CEF close");
             }
@@ -281,7 +286,9 @@ public static class WpfSmoke
             if (secondaryClosing && !secondaryWindowClosed && CefNative.VeilCefReadyToClose(secondaryHandle) != 0)
                 secondaryWindow?.Close();
             if (windowClosed && CefNative.VeilCefClosed(closingHandle) != 0 &&
-                CefNative.VeilCefLiveViewCount() == 0 && (vaultStream is null || vaultStream.Finished.IsCompleted))
+                CefNative.VeilCefLiveViewCount() == 0 && (vaultStream is null || vaultStream.Finished.IsCompleted) &&
+                (parallelKeep is null || parallelKeep.Finished.IsCompleted) &&
+                (parallelCancel is null || parallelCancel.Finished.IsCompleted))
             {
                 Trace("CEF browser closed");
                 Trace("CEF view registry drained and vault task settled");
@@ -370,8 +377,82 @@ public static class WpfSmoke
                     return;
                 }
                 Trace("CEF view slot reused with a fresh identity and clean state");
-                phase = 12;
+                if (fixtureVault is null)
+                {
+                    phase = 12;
+                    CloseSecondary();
+                }
+                else
+                {
+                    parallelKeep = new FixtureVault(fixtureVault, CefDevelopmentEngine.FixtureProfile, VaultScenario.ParallelFull);
+                    parallelCancel = new FixtureVault(fixtureVault, CefDevelopmentEngine.FixtureProfile, VaultScenario.ParallelCanceled);
+                    phase = 13;
+                }
+            }
+            else if (phase == 13 && parallelKeep is { Ready.IsCompleted: true } keep &&
+                     parallelCancel is { Ready.IsCompleted: true } cancel)
+            {
+                var keepUrl = new Uri(new Uri(fixture), "/wpf-owned-parallel-keep").AbsoluteUri;
+                var cancelUrl = new Uri(new Uri(fixture), "/wpf-owned-parallel-cancel").AbsoluteUri;
+                if (!keep.Ready.Result || !cancel.Ready.Result ||
+                    CefNative.VeilCefStartOwnedAttachment(browser.NativeHandle, keepUrl, keep.ChunkCallback) == 0 ||
+                    CefNative.VeilCefStartOwnedAttachment(secondaryHandle, cancelUrl, cancel.ChunkCallback) == 0)
+                {
+                    Trace("Could not start two independent vault streams");
+                    window.Close();
+                    return;
+                }
+                phase = 14;
+            }
+            else if (phase == 14 && parallelKeep!.ReceivedBytes > 0 && parallelCancel!.ReceivedBytes > 0)
+            {
+                if (CefNative.VeilCefOwnedAttachmentResult(browser.NativeHandle) != 0 ||
+                    CefNative.VeilCefOwnedAttachmentResult(secondaryHandle) != 0)
+                {
+                    Trace("Parallel streams were not simultaneously active");
+                    window.Close();
+                    return;
+                }
+                Trace("Observed both CEF vault streams receiving data concurrently");
+                canceledByteCount = parallelCancel.ReceivedBytes;
+                CefNative.VeilCefCancelOwnedAttachment(secondaryHandle);
+                parallelCancel.Complete(false);
+                if (CefNative.VeilCefOwnedAttachmentResult(secondaryHandle) != -1 ||
+                    CefNative.VeilCefOwnedAttachmentResult(browser.NativeHandle) != 0)
+                {
+                    Trace("Canceling one transfer affected the other");
+                    window.Close();
+                    return;
+                }
+                phase = 15;
                 CloseSecondary();
+            }
+            else if (phase == 15 && secondaryWindowClosed && CefNative.VeilCefClosed(secondaryHandle) != 0 &&
+                     CefNative.VeilCefOwnedAttachmentResult(browser.NativeHandle) != 0)
+            {
+                if (CefNative.VeilCefOwnedAttachmentResult(browser.NativeHandle) != FixtureVault.BodySize ||
+                    parallelCancel!.ReceivedBytes != canceledByteCount)
+                {
+                    Trace("Surviving transfer failed or canceled callback received late data");
+                    window.Close();
+                    return;
+                }
+                parallelKeep!.Complete(true);
+                phase = 16;
+            }
+            else if (phase == 16 && parallelKeep is { Finished.IsCompleted: true } kept &&
+                     parallelCancel is { Finished.IsCompleted: true } canceled)
+            {
+                if (!kept.Finished.IsCompletedSuccessfully || !kept.Finished.Result ||
+                    !canceled.Finished.IsCompletedSuccessfully || !canceled.Finished.Result ||
+                    kept.ReceivedBytes != FixtureVault.BodySize || canceled.ReceivedBytes != canceledByteCount)
+                {
+                    Trace("Parallel Rust vault result mismatch");
+                    window.Close();
+                    return;
+                }
+                Trace("Canceled parallel vault published no object; surviving vault restored all 786432 bytes");
+                phase = 12;
             }
             else if (phase == 12 && secondaryWindowClosed && CefNative.VeilCefClosed(secondaryHandle) != 0)
             {

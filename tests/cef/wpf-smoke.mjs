@@ -14,6 +14,8 @@ const executable = resolve(process.argv[2]);
 const vault = resolve(process.argv[3]);
 const requests = [];
 const pageAttachmentRequests = [];
+let parallelCancelClosed = false;
+let parallelKeepFinished = false;
 const deniedFile = 'veil-cef-denied-fixture.txt';
 const deniedBlob = 'veil-cef-denied-blob.txt';
 const body = Buffer.from(Array.from({ length: 96 * 1024 }, (_, index) => index % 251));
@@ -70,6 +72,34 @@ const server = http.createServer((request, response) => {
     });
     response.write(body.subarray(0, 16 * 1024));
     setTimeout(() => response.end(body.subarray(16 * 1024)), 250);
+    return;
+  }
+  if (['/wpf-owned-parallel-keep', '/wpf-owned-parallel-cancel'].includes(request.url)) {
+    response.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${deniedFile}"`,
+      'Content-Length': streamedBody.length,
+      'Cache-Control': 'no-store',
+      Connection: 'close',
+    });
+    response.write(streamedBody.subarray(0, chunkSize));
+    if (request.url === '/wpf-owned-parallel-cancel') {
+      response.once('close', () => { parallelCancelClosed = !response.writableFinished; });
+      return;
+    }
+    let offset = chunkSize;
+    function resumeAfterCancel() {
+      if (response.destroyed) return;
+      if (!parallelCancelClosed) { setTimeout(resumeAfterCancel, 15); return; }
+      const next = offset + chunkSize;
+      response.write(streamedBody.subarray(offset, next));
+      offset = next;
+      if (offset === streamedBody.length) {
+        response.once('finish', () => { parallelKeepFinished = true; });
+        response.end();
+      } else setTimeout(resumeAfterCancel, 15);
+    }
+    resumeAfterCancel();
     return;
   }
   if (['/wpf-owned-attachment', '/wpf-owned-truncated', '/wpf-owned-saturated'].includes(request.url)) {
@@ -153,6 +183,10 @@ try {
   assert.equal(requests.filter(request => request === '/wpf-isolation').length, 1, 'Secondary view must navigate once');
   assert.equal(requests.filter(request => request === '/wpf-isolation-reopened').length, 1, 'Reopened view must navigate once');
   assert.ok(!requests.includes('/wpf-stale-handle'), 'Retired identity must not navigate');
+  for (const route of ['/wpf-owned-parallel-keep', '/wpf-owned-parallel-cancel'])
+    assert.equal(requests.filter(request => request === route).length, 1, 'Parallel request must not replay');
+  assert.ok(parallelCancelClosed && parallelKeepFinished, 'Cancel must close only the canceled HTTP response');
+  assert.match(evidence, /Observed both CEF vault streams receiving data concurrently[\s\S]*Canceled parallel vault published no object; surviving vault restored all 786432 bytes/);
   assert.match(evidence, /CEF view slot reused with a fresh identity and clean state[\s\S]*Repeated secondary view close preserved primary view/);
   assert.match(evidence, /Observed two independent CEF views with distinct source, title, history and mute state[\s\S]*Secondary CEF view closed; stale handle rejected; primary remains live[\s\S]*Observed matched redirect, completion, and back and forward navigation/);
   assert.ok(requests.includes('/wpf-error'), 'The failed address did not navigate');
@@ -176,9 +210,12 @@ try {
   const files = await readdir(fixtureTemp, { recursive: true });
   assert.ok(!files.some(isDownloadFile), 'A download artifact remained after shutdown');
   const sealed = join(`veil-cef-wpf-profile-${child.pid}`, 'fixture-vault', 'fixture.veil');
-  assert.deepEqual(files.filter(file => file.endsWith('.veil')), [sealed]);
-  const ciphertext = await readFile(join(fixtureTemp, sealed));
-  assert.ok(!ciphertext.includes(body.subarray(0, 512)), 'The stored object contains a plaintext fixture segment');
+  const parallelSealed = join(`veil-cef-wpf-profile-${child.pid}`, 'fixture-vault-parallel-keep', 'fixture.veil');
+  assert.deepEqual(files.filter(file => file.endsWith('.veil')).sort(), [sealed, parallelSealed].sort());
+  for (const object of [sealed, parallelSealed]) {
+    const ciphertext = await readFile(join(fixtureTemp, object));
+    assert.ok(!ciphertext.includes(body.subarray(0, 512)), 'The stored object contains a plaintext fixture segment');
+  }
   assert.match(evidence, /Rust vault aborted the truncated stream without publishing an object[\s\S]*CEF canceled the saturated stream and Rust vault published no object[\s\S]*Rust vault streamed and restored all 786432 bytes/);
   const observed = /Verified 98304 response bytes in memory\. Blocked attachment passed (\d+) bytes to the filter\./.exec(evidence);
   assert.ok(observed);
