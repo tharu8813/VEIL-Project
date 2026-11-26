@@ -21,7 +21,8 @@ public partial class BrowserWindow
         }
         CloseAddressSuggestions();
         if (Active is not { } source || !CanUseTab(source.Item) || !IsActive ||
-            source.View.CoreWebView2 is not { } web) return;
+            source.EngineView is not IEngineSiteDataReader reader ||
+            source.View.CoreWebView2 is not { } web || web.Profile.IsInPrivateModeEnabled) return;
         long epoch = source.NavigationEpoch;
         long selectionEpoch = permissionSelectionEpoch;
         bool SourceStillValid() => SiteDataReady() && IsActive && Active == source && CanUseTab(source.Item) &&
@@ -32,9 +33,8 @@ public partial class BrowserWindow
         session.PermissionUiOpen = true;
         try
         {
-            // Empty URI selects all cookies in this engine profile, without contacting websites.
-            var domains = SiteDataPolicy.Summarize((await web.CookieManager.GetCookiesAsync(""))
-                .Select(cookie => cookie.Domain));
+            // Read-only capability exposes domains, never cookie values or native cookie objects.
+            var domains = SiteDataPolicy.Summarize(await reader.GetCookieDomainsAsync());
             if (!SourceStillValid() || permissionSelectionEpoch != selectionEpoch || session.ActiveDownloads.Count != 0) return;
             var urls = session.Windows.Where(window => !window.closing)
                 .SelectMany(window => window.Tabs.Items.OfType<TabItem>())
@@ -80,12 +80,9 @@ public partial class BrowserWindow
                 if (SiteDataPolicy.Origin(origin) != origin || !origins.Contains(origin, StringComparer.Ordinal)) return;
                 if (selection.InspectUsage)
                 {
-                    string response = await web.CallDevToolsProtocolMethodAsync("Storage.getUsageAndQuota",
-                        JsonSerializer.Serialize(new { origin }));
+                    double? observedUsage = await reader.GetOriginStorageUsageAsync(origin);
                     if (!SourceStillValid() || permissionSelectionEpoch != confirmedSelectionEpoch) return;
-                    using var json = JsonDocument.Parse(response);
-                    if (json.RootElement.TryGetProperty("usage", out var usage) &&
-                        usage.TryGetDouble(out double bytes) && double.IsFinite(bytes) && bytes >= 0)
+                    if (observedUsage is double bytes && double.IsFinite(bytes) && bytes >= 0)
                         UserPrompts.Notice(this, $"{origin}\n엔진 보고 저장소 사용량: {bytes:N0}바이트\n쿠키 및 모든 저장 유형의 총량을 의미하지 않습니다.",
                             "사이트 저장소 사용량", MessageBoxImage.Information);
                     else Status.Text = "사이트 저장소 사용량을 확인할 수 없습니다.";

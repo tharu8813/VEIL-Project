@@ -62,6 +62,15 @@ internal interface IBrowserEngineView : IDisposable
     void Stop();
 }
 
+// Optional read-only capability. No native cookie objects, values, arbitrary
+// CDP commands, or scripts cross this boundary. An absent capability is unsupported.
+internal interface IEngineSiteDataReader
+{
+    Task<IReadOnlyList<string>> GetCookieDomainsAsync();
+    // Null means no valid usage observation, not zero bytes.
+    Task<double?> GetOriginStorageUsageAsync(string origin);
+}
+
 // The adapter applies Cancel synchronously before the engine commits navigation.
 internal sealed class EngineNavigationStartingEventArgs(string uri, ulong navigationId, bool isRedirected)
 {
