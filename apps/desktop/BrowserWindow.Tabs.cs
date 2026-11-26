@@ -435,9 +435,9 @@ public partial class BrowserWindow
             if (!closing && !session.IsEnding && !session.EngineLost)
             {
                 if (target.Tabs.Items.Contains(item)) target.Tabs.Items.Remove(item);
-                if (target.Pages.Children.Contains(tab.View)) target.Pages.Children.Remove(tab.View);
+                if (target.Pages.Children.Contains(tab.EngineView.Element)) target.Pages.Children.Remove(tab.EngineView.Element);
                 tab.Owner = this;
-                if (!Pages.Children.Contains(tab.View)) Pages.Children.Add(tab.View);
+                if (!Pages.Children.Contains(tab.EngineView.Element)) Pages.Children.Add(tab.EngineView.Element);
                 if (!Tabs.Items.Contains(item)) Tabs.Items.Insert(TabInsertionIndex(tab.Pinned, originalIndex), item);
                 if (originalSelection is not null && Tabs.Items.Contains(originalSelection)) Tabs.SelectedItem = originalSelection;
                 LayoutTabs(animate: false);
@@ -468,7 +468,7 @@ public partial class BrowserWindow
         if (retryDownload?.Tab == tab) retryDownload = null;
         ClearManagement(tab);
         Tabs.Items.Remove(item);
-        Pages.Children.Remove(tab.View);
+        Pages.Children.Remove(tab.EngineView.Element);
     }
 
     /// <summary>Adopts a live tab from another window at <paramref name="index"/>.</summary>
@@ -478,12 +478,12 @@ public partial class BrowserWindow
         if (!ReferenceEquals(tab.Owner.session, session))
             throw new InvalidOperationException("Tabs cannot cross browser sessions.");
         tab.Owner = this;
-        Pages.Children.Add(tab.View);
+        Pages.Children.Add(tab.EngineView.Element);
         Tabs.Items.Insert(TabInsertionIndex(tab.Pinned, index), item);
         LayoutTabs(item);
         Tabs.SelectedItem = item;
         foreach (TabItem other in Tabs.Items)
-            ((BrowserTab)other.Tag).View.Visibility =
+            ((BrowserTab)other.Tag).EngineView.Element.Visibility =
                 other == item && (IsWebUrl(tab.Url) || IsInternalUrl(tab.Url)) ? Visibility.Visible : Visibility.Hidden;
         if (tab.View.CoreWebView2 is not null) UpdateAudio(tab);
         RefreshChrome();
