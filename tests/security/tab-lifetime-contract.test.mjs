@@ -432,7 +432,7 @@ test('site data inspection exposes only narrow read-only capability and refuses 
     assert.match(webView2, /var cookies = await core\.CookieManager\.GetCookiesAsync\(""\);\s*if \(!ReferenceEquals\(core, RequireStandardSiteDataCore\(\)\)\)[\s\S]*?return cookies\.Select\(cookie => cookie\.Domain\)\.Where\(SiteDataPolicy\.ValidDomain\)\.ToArray\(\);/);
     assert.match(webView2, /if \(SiteDataPolicy\.Origin\(origin\) != origin\)[\s\S]*?CallDevToolsProtocolMethodAsync\("Storage\.getUsageAndQuota",[\s\S]*?if \(!ReferenceEquals\(core, RequireStandardSiteDataCore\(\)\)\)/);
     assert.match(webView2, /usage\.ValueKind == System\.Text\.Json\.JsonValueKind\.Number &&\s*usage\.TryGetDouble\(out double bytes\) && double\.IsFinite\(bytes\) && bytes >= 0\s*\? bytes : null;/);
-    assert.doesNotMatch(cefView, /IEngineSiteDataReader/);
+    assert.match(cefView, /: HwndHost, IBrowserEngineView, IEngineSiteDataReader/);
     assert.match(siteData, /source\.EngineView is not IEngineSiteDataReader reader \|\|\s*source\.EngineView is not IEngineSiteDataWriter writer \|\|\s*source\.View\.CoreWebView2 is not \{ \} web \|\| web\.Profile\.IsInPrivateModeEnabled/);
     assert.match(siteData, /await reader\.GetOriginStorageUsageAsync\(origin\);\s*if \(!SourceStillValid\(\) \|\| permissionSelectionEpoch != confirmedSelectionEpoch\) return;/);
     assert.doesNotMatch(siteData, /Storage\.getUsageAndQuota|cookie\.Value/);
@@ -454,4 +454,19 @@ test('site data mutations are exact-scope capabilities with authorization rechec
     assert.match(siteData, /if \(!await writer\.ClearOriginStorageAsync\(origin, StillAuthorized\)\) return;/);
     assert.match(siteData, /if \(!await writer\.ClearProfileDataAsync\(kinds, StillAuthorized\)\) return;/);
     assert.match(siteData, /if \(!StillAuthorized\(\)\) return;\s*remaining = \(await reader\.GetCookieDomainsAsync\(\)\)\.Count/);
+});
+
+
+test('CEF cookie domain enumeration is a bounded read-only fixture operation tied to view lifetime', () => {
+    assert.match(cefNative, /class CookieDomainVisitor final : public CefCookieVisitor[\s\S]*?~CookieDomainVisitor\(\) override \{ scan_->done\.store\(true, std::memory_order_release\); \}/);
+    assert.match(cefNative, /delete_cookie = false;\s*const auto domain = CefString\(&cookie\.domain\)\.ToWString\(\);/);
+    assert.match(cefNative, /if \(!fixture_enabled \|\| !state \|\| !browser \|\| state->closing \|\| state->cookie_scan\) return 0;/);
+    assert.match(cefNative, /browser->GetHost\(\)->GetRequestContext\(\);[\s\S]*?context->GetCookieManager\(nullptr\)[\s\S]*?VisitAllCookies\(new CookieDomainVisitor\(scan\)\)/);
+    assert.match(cefNative, /if \(!scan->done\.load\(std::memory_order_acquire\)\) return 0;/);
+    assert.match(cefView, /ulong id = NativeHandle;[\s\S]*?VeilCefStartCookieDomainScan\(id\)[\s\S]*?if \(NativeHandle != id\) throw new InvalidOperationException/);
+    assert.match(cefView, /finally \{ CefNative\.VeilCefEndCookieDomainScan\(id\); \}/);
+    assert.match(cefView, /GetOriginStorageUsageAsync\(string origin\) => Task\.FromResult<double\?>\(null\);/);
+    assert.match(cefTabbed, /emptyDomains\.Result\.Count != 0/);
+    assert.match(cefTabbed, /firstDomains\.Result\.Count != 2 \|\| secondDomains\.Result\.Count != 2/);
+    assert.match(cefTabbed, /VeilCefCookieDomainScanStatus\(secondId\) != -1/);
 });

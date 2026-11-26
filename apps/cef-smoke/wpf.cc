@@ -2,6 +2,8 @@
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
+#include "include/cef_cookie.h"
+#include "include/cef_request_context.h"
 #include "include/cef_parser.h"
 #include "include/cef_sandbox_win.h"
 #include "include/cef_urlrequest.h"
@@ -55,6 +57,33 @@ struct OwnedTransfer {
   CefRefPtr<CefURLRequest> request;
 };
 
+// The visitor owns its result independently of the browser. Publish only
+// when the visitor is released, including the zero-cookie case. No managed
+// callback or native cookie object crosses the ABI.
+struct CookieDomainScan {
+  std::vector<std::wstring> domains;
+  bool valid = true;
+  std::atomic<bool> done{false};
+};
+class CookieDomainVisitor final : public CefCookieVisitor {
+ public:
+  explicit CookieDomainVisitor(std::shared_ptr<CookieDomainScan> scan) : scan_(std::move(scan)) {}
+  ~CookieDomainVisitor() override { scan_->done.store(true, std::memory_order_release); }
+  bool Visit(const CefCookie& cookie, int, int total, bool& delete_cookie) override {
+    delete_cookie = false;
+    const auto domain = CefString(&cookie.domain).ToWString();
+    if (total > 4096 || scan_->domains.size() >= 4096 || domain.size() > 255) {
+      scan_->valid = false;
+      return false;
+    }
+    scan_->domains.push_back(domain);
+    return true;
+  }
+ private:
+  const std::shared_ptr<CookieDomainScan> scan_;
+  IMPLEMENT_REFCOUNTING(CookieDomainVisitor);
+};
+
 // Owned by the CEF client; accessed on the browser UI thread only.
 // Registration belongs to the same view lifetime as its metadata.
 struct ViewState {
@@ -94,6 +123,7 @@ struct ViewState {
   CefString armed_attachment_source;
   bool page_attachment_intercepted = false;
   std::shared_ptr<OwnedTransfer> owned_transfer;
+  std::shared_ptr<CookieDomainScan> cookie_scan;
 };
 
 // Registry is browser-UI-thread confined. Keep one view until fixture-wide
@@ -668,6 +698,44 @@ extern "C" __declspec(dllexport) const wchar_t* VeilCefTitle(uint64_t id) {
   const auto state = LookupView(id);
   return state ? state->title.c_str() : L"";
 }
+// Read-only, synthetic fixture only. The browser's own request context
+// supplies the cookie manager; no global manager or arbitrary profile path.
+extern "C" __declspec(dllexport) int VeilCefStartCookieDomainScan(uint64_t id) {
+  const auto state = LookupView(id);
+  const auto browser = LookupBrowser(id);
+  if (!fixture_enabled || !state || !browser || state->closing || state->cookie_scan) return 0;
+  const auto context = browser->GetHost()->GetRequestContext();
+  const auto manager = context ? context->GetCookieManager(nullptr) : nullptr;
+  if (!manager) return 0;
+  const auto scan = std::make_shared<CookieDomainScan>();
+  state->cookie_scan = scan;
+  if (!manager->VisitAllCookies(new CookieDomainVisitor(scan))) {
+    state->cookie_scan.reset();
+    return 0;
+  }
+  return 1;
+}
+extern "C" __declspec(dllexport) int VeilCefCookieDomainScanStatus(uint64_t id) {
+  const auto state = LookupView(id);
+  if (!state || state->closing || !state->cookie_scan) return -1;
+  const auto& scan = state->cookie_scan;
+  if (!scan->done.load(std::memory_order_acquire)) return 0;
+  return scan->valid ? 1 : -1;
+}
+extern "C" __declspec(dllexport) int VeilCefCookieDomainCount(uint64_t id) {
+  if (VeilCefCookieDomainScanStatus(id) != 1) return -1;
+  return static_cast<int>(LookupView(id)->cookie_scan->domains.size());
+}
+extern "C" __declspec(dllexport) const wchar_t* VeilCefCookieDomainAt(uint64_t id, unsigned index) {
+  if (VeilCefCookieDomainScanStatus(id) != 1) return nullptr;
+  const auto& domains = LookupView(id)->cookie_scan->domains;
+  return index < domains.size() ? domains[index].c_str() : nullptr;
+}
+extern "C" __declspec(dllexport) void VeilCefEndCookieDomainScan(uint64_t id) {
+  const auto state = LookupView(id);
+  if (state) state->cookie_scan.reset();
+}
+
 extern "C" __declspec(dllexport) int VeilCefClosed(uint64_t id) { return LookupView(id) ? 0 : 1; }
 extern "C" __declspec(dllexport) unsigned VeilCefViewLimit() { return ViewLimit(); }
 extern "C" __declspec(dllexport) unsigned VeilCefLiveViewCount() {

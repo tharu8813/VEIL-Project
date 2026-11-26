@@ -15,7 +15,10 @@ const titles = new Map([['/tabs-first', 'TAB_FIRST'], ['/tabs-second', 'TAB_SECO
 const server = http.createServer((request, response) => {
   requests.push(request.url);
   if (!titles.has(request.url)) { response.writeHead(404).end(); return; }
-  response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+  const headers = { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' };
+  if (request.url === '/tabs-first') headers['Set-Cookie'] = 'fixture_first=synthetic-one; Path=/; HttpOnly; SameSite=Lax';
+  if (request.url === '/tabs-second') headers['Set-Cookie'] = 'fixture_second=synthetic-two; Path=/; HttpOnly; SameSite=Lax';
+  response.writeHead(200, headers);
   response.end('<!doctype html><title>' + titles.get(request.url) + '</title>');
 });
 server.listen(0, '127.0.0.1');
@@ -40,6 +43,7 @@ try {
   assert.equal(code, 0, evidence);
   for (const route of titles.keys()) assert.equal(requests.filter(x => x === route).length, 1, route);
   assert.ok(!requests.includes('/tabs-stale'));
+  assert.match(evidence, /Fresh fixture cookie scan returned an empty list[\s\S]*Both views returned only the two synthetic cookie domains[\s\S]*Closed view cookie scan identity rejected/);
   assert.match(evidence, /Tab selection preserved both native identities and active address[\s\S]*Closing active tab preserved surviving view and navigation[\s\S]*Tabbed host registry drained/);
   console.log('PASS: same-window tab selection and independent close');
 } finally {

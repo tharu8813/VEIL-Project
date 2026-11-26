@@ -10,5 +10,6 @@
   <ItemGroup>
     <Compile Include="../../desktop/Engine/IBrowserEngine.cs" Link="Contracts/IBrowserEngine.cs" />
     <Compile Include="../../desktop/NetworkPolicy.cs" Link="Contracts/NetworkPolicy.cs" />
+    <Compile Include="../../desktop/SiteDataPolicy.cs" Link="Contracts/SiteDataPolicy.cs" />
   </ItemGroup>
 </Project>
