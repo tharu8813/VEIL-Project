@@ -100,6 +100,11 @@ const server = http.createServer((request, response) => {
     writeChunk();
     return;
   }
+  if (request.url === '/wpf-isolation') {
+    response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+    response.end('<!doctype html><title>VEIL_CEF_WPF_ISOLATION</title>');
+    return;
+  }
   if (request.url !== '/wpf-first' && request.url !== '/wpf-second') {
     response.writeHead(404).end();
     return;
@@ -144,6 +149,8 @@ try {
   assert.ok(requests.includes('/wpf-first'), 'The redirect did not navigate');
   assert.ok(!requests.includes('/wpf-denied'), 'Canceled navigation contacted the server');
   assert.ok(requests.includes('/wpf-second'), 'The second address did not navigate');
+  assert.equal(requests.filter(request => request === '/wpf-isolation').length, 1, 'Secondary view must navigate once');
+  assert.match(evidence, /Observed two independent CEF views with distinct source, title, history and mute state[\s\S]*Secondary CEF view closed; stale handle rejected; primary remains live[\s\S]*Observed matched redirect, completion, and back and forward navigation/);
   assert.ok(requests.includes('/wpf-error'), 'The failed address did not navigate');
   assert.ok(requests.includes('/wpf-policy'), 'The permission fixture did not navigate');
   assert.equal(requests.filter(request => request === '/wpf-attachment').length, 1, 'The attachment must not be replayed');
