@@ -18,6 +18,18 @@ cmake --build $build --config Release
 
 Run `Release/veil-cef-smoke.exe` from the build directory. CMake copies the official `bootstrap.exe` under that name so it loads `veil-cef-smoke.dll`. The same executable serves as the browser and subprocess entry point. [CEF Windows sandbox setup](https://github.com/chromiumembedded/cef/blob/master/docs/sandbox_setup.md)
 
+## Repeatable compile-only validation
+
+On 64-bit Windows with CMake, Visual C++ x64 tools and the .NET 10 x64 SDK installed, run from the repository root:
+
+```powershell
+.\scripts\build-cef-smoke.ps1
+# Or reuse an already downloaded archive (its SHA-256 is still checked):
+.\scripts\build-cef-smoke.ps1 -Archive 'C:\Downloads\cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_windows64_minimal.tar.bz2'
+```
+
+The helper uses a fresh work directory, checks the pinned SHA-256 before extraction, compiles both native hosts and the managed adapter, and verifies the copied official bootstrap executables. It never launches the browser or changes the product engine. It prefers Visual Studio 2026; the 2022 generator is a compile attempt only, not a certified toolchain. The separate CEF native compile workflow runs on relevant pull requests and can be manually dispatched after it is on the default branch. A passing job does not establish sandbox or interactive WPF behavior. Continue to use the standard-user runtime fixture below for those checks. Build outputs are retained in the reported directory for manual use. No full Chromium source checkout is required.
+
 ## Observed results
 
 On Windows x64, the Win32 host returned `0` and left no matching processes. The browser ran at Medium integrity. Three renderer processes ran at Untrusted integrity with restricted tokens and no observed `--no-sandbox` switch. Cross-site frame-to-process mapping and protected storage have yet to be verified.
