@@ -108,7 +108,7 @@ public partial class BrowserWindow
             }
             if (tab.ManagementSurface is { } page)
                 page.Visibility = selected && management ? Visibility.Visible : Visibility.Collapsed;
-            tab.View.Visibility = selected && !management && tab.Url != "about:blank"
+            tab.EngineView.Element.Visibility = selected && !management && tab.Url != "about:blank"
                 ? Visibility.Visible : Visibility.Hidden;
         }
     }

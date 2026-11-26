@@ -268,7 +268,7 @@ public partial class BrowserWindow
                     BookmarksClick(this, new RoutedEventArgs());
                     await WaitFor(() => Active?.Url == "veil://bookmarks" && Active.CancelManagement is not null, "bookmark manager opened in native tab");
                     Check(Active?.Title == "북마크", "bookmark library tab title");
-                    Check(Active?.ManagementSurface is not null && Active.View.Visibility == System.Windows.Visibility.Hidden,
+                    Check(Active?.ManagementSurface is not null && Active.EngineView.Element.Visibility == System.Windows.Visibility.Hidden,
                         "bookmark management uses native tab surface");
                     CloseTab((TabItem)Tabs.SelectedItem);
                     await ReadyAt("/");
@@ -300,7 +300,7 @@ public partial class BrowserWindow
                     Check(Active == selectedBeforeBackground && backgroundSettings.ManagementSurface is not null &&
                         backgroundSettings.CancelManagement is null &&
                         backgroundSettings.ManagementSurface.Visibility == Visibility.Collapsed &&
-                        backgroundSettings.View.Visibility == Visibility.Hidden &&
+                        backgroundSettings.EngineView.Element.Visibility == Visibility.Hidden &&
                         BrowserData.Load(statePath).Tabs.Contains("veil://settings"),
                         "background native tab persisted without selecting or opening privileged controls");
                     await CloseTabAsync(backgroundSettings.Item);

@@ -33,7 +33,7 @@ const session = await readFile('apps/desktop/BrowserSession.cs', 'utf8');
 test('tab transfer keeps source alive until adoption and defers intermediate snapshots', () => {
     const transfer = tabs.slice(tabs.indexOf('private bool TransferTabTo'), tabs.indexOf('private void AttachTab'));
     assert.match(transfer, /session\.TabTransferDepth\+\+;[\s\S]*?DetachTab\(item\);[\s\S]*?target\.AttachTab\(item, index\);\s*if \(Tabs\.Items\.Count == 0\) Close\(\)/);
-    assert.match(transfer, /catch \(Exception error\) when \(RecoverableFailure\.Is\(error\)\)[\s\S]*?tab\.Owner = this;[\s\S]*?Pages\.Children\.Add\(tab\.View\)[\s\S]*?Tabs\.Items\.Insert\(TabInsertionIndex\(tab\.Pinned, originalIndex\), item\)/);
+    assert.match(transfer, /catch \(Exception error\) when \(RecoverableFailure\.Is\(error\)\)[\s\S]*?tab\.Owner = this;[\s\S]*?Pages\.Children\.Add\(tab\.EngineView\.Element\)[\s\S]*?Tabs\.Items\.Insert\(TabInsertionIndex\(tab\.Pinned, originalIndex\), item\)/);
     assert.match(transfer, /finally\s*\{\s*session\.TabTransferDepth--;\s*SaveSession\(\);/);
     const detach = transfer.slice(transfer.indexOf('private void DetachTab'));
     assert.doesNotMatch(detach, /\b(?:Close|SaveTabs|SaveSession)\(\)/);
@@ -166,4 +166,18 @@ test('navigation completion and deferred protection actions are scoped to the li
     assert.match(threatsUi, /QueueNavigationAction\(tab, \(\) => ShowThreatWarning/);
     assert.match(networkUi, /PendingHttp: \{ \} plain \} tab \|\| !CanUseTab\(tab\.Item\)/);
     assert.match(threatsUi, /PendingThreat: \{ \} blocked \} tab \|\| !CanUseTab\(tab\.Item\)/);
+});
+
+
+test('tab visuals, focus and native management visibility use the shared engine element', () => {
+    const open = browser.slice(browser.indexOf('private async Task<BrowserTab?> OpenTab'), browser.indexOf('// ── Engine events'));
+    assert.match(open, /if \(session\.EngineHost is not WebView2BrowserEngine\)\s*throw new InvalidOperationException[\s\S]*?var element = engineView\.Element;\s*[\s\S]*?Pages\.Children\.Add\(element\)/);
+    assert.match(browser, /Pages\.Children\.Remove\(tab\.EngineView\.Element\);\s*tab\.EngineView\.Dispose\(\)/);
+    assert.match(browser, /tab\.EngineView\.Element\.Visibility = Visibility\.Visible;\s*tab\.EngineView\.Element\.Focus\(\);\s*tab\.EngineView\.Navigate\(/);
+    assert.match(tabs, /Pages\.Children\.Remove\(tab\.EngineView\.Element\)/);
+    assert.match(tabs, /Pages\.Children\.Add\(tab\.EngineView\.Element\)/);
+    assert.match(tabs, /EngineView\.Element\.Visibility =/);
+    assert.match(management, /tab\.EngineView\.Element\.Visibility = selected && !management/);
+    for (const source of [browser, tabs, management])
+        assert.doesNotMatch(source, /Pages\.Children\.(?:Add|Remove|Contains)\(tab\.View\)|tab\.View\.(?:Visibility|Focus\b)/);
 });
