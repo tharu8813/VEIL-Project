@@ -1,6 +1,6 @@
 # VEIL CEF 전환 로드맵
 
-2026-11-27 기준으로 기존 Windows x64 WPF 앱의 엔진을 WebView2에서 CEF로 전환한다. 개발에는 버전을 고정한 사전 빌드 CEF 배포본을 사용한다. 현재 제품은 WebView2로 동작하며, CEF 구현과 검증은 아직 시작 전이다.
+2026-11-27 기준으로 기존 Windows x64 WPF 앱의 엔진을 WebView2에서 CEF로 전환한다. 개발에는 버전을 고정한 사전 빌드 CEF 배포본을 사용한다. 현재 제품은 WebView2로 동작한다. CEF 1단계에서 [독립 Win32 호스트](../apps/cef-smoke/README.md)의 로컬 JavaScript 실행, 렌더러 제한 토큰, 프로세스 종료를 확인했다. WPF 호스팅과 사이트 격리 실측은 남아 있다.
 
 ## 구현 순서와 완료 기준
 
