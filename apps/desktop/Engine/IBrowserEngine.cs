@@ -66,13 +66,23 @@ internal sealed class EngineNavigationStartingEventArgs(string uri, ulong naviga
     internal bool Cancel { get; set; }
 }
 
+internal enum EngineErrorDomain { WebView2, Cef }
+
+// Diagnostic only. Native codes from different engines must never be interpreted interchangeably.
+internal sealed record EngineNavigationError(EngineErrorDomain Domain, int NativeCode, string Name)
+{
+    public override string ToString() => Name;
+}
+
 internal sealed class EngineNavigationCompletedEventArgs(
-    ulong navigationId, bool isSuccess, bool isCanceled, int nativeErrorCode)
+    ulong navigationId, bool isSuccess, bool isCanceled, EngineNavigationError nativeResult)
 {
     internal ulong NavigationId { get; } = navigationId;
     internal bool IsSuccess { get; } = isSuccess;
     internal bool IsCanceled { get; } = isCanceled;
-    internal int NativeErrorCode { get; } = nativeErrorCode;
+    internal EngineNavigationError NativeResult { get; } = nativeResult;
+    internal int NativeErrorCode => NativeResult.NativeCode;
+    internal EngineNavigationError? Error => IsSuccess || IsCanceled ? null : NativeResult;
 }
 
 internal enum EngineFailureScope { PageOrChildProcess, BrowserSession }

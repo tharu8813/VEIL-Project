@@ -105,10 +105,16 @@ public static class WpfSmoke
             if (fixture is null) return;
             if (!pendingRequests.Remove(completed.NavigationId, out var path)) return;
             Trace($"Navigation {completed.NavigationId} complete {path} success={completed.IsSuccess} canceled={completed.IsCanceled} code={completed.NativeErrorCode}");
+            if (completed.NativeResult.Domain != EngineErrorDomain.Cef ||
+                ((completed.IsSuccess || completed.IsCanceled) != (completed.Error is null)))
+            {
+                Trace("Unexpected navigation error domain or success/cancellation state");
+                return;
+            }
             if (path == "/wpf-denied" && completed.IsCanceled) canceledByPolicy = true;
             // Empty error responses can surface as ERR_HTTP_RESPONSE_CODE_FAILURE.
             if (path == "/wpf-error" && !completed.IsSuccess && !completed.IsCanceled &&
-                completed.NativeErrorCode is 404 or -379)
+                completed.Error is { Domain: EngineErrorDomain.Cef, NativeCode: 404 or -379 })
                 failedHttpLoad = true;
             if (completed.IsSuccess) completedRequests.Add(path);
         };

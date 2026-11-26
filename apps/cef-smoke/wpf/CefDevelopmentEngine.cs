@@ -124,7 +124,8 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
             try
             {
                 NavigationCompleted?.Invoke(this,
-                    new EngineNavigationCompletedEventArgs(id, success != 0, canceled != 0, code));
+                    new EngineNavigationCompletedEventArgs(id, success != 0, canceled != 0,
+                        new EngineNavigationError(EngineErrorDomain.Cef, code, $"CEF ({code})")));
             }
             catch (Exception error)
             {
