@@ -46,6 +46,11 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
     public FrameworkElement Element => NativeView;
     public event EventHandler<EngineNavigationStartingEventArgs>? NavigationStarting;
     public event EventHandler<EngineNavigationCompletedEventArgs>? NavigationCompleted;
+    public event EventHandler? SourceChanged;
+    public event EventHandler? TitleChanged;
+    public event EventHandler? HistoryChanged;
+    public string Source => Core.Source;
+    public string DocumentTitle => Core.DocumentTitle;
     private bool disposed;
     private CoreWebView2 Core => !disposed && NativeView.CoreWebView2 is { } core
         ? core : throw new InvalidOperationException("The engine view is unavailable.");
@@ -73,6 +78,12 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
         core.NavigationStarting += OnNavigationStarting;
         core.NavigationCompleted -= OnNavigationCompleted;
         core.NavigationCompleted += OnNavigationCompleted;
+        core.SourceChanged -= OnSourceChanged;
+        core.SourceChanged += OnSourceChanged;
+        core.DocumentTitleChanged -= OnTitleChanged;
+        core.DocumentTitleChanged += OnTitleChanged;
+        core.HistoryChanged -= OnHistoryChanged;
+        core.HistoryChanged += OnHistoryChanged;
     }
 
     private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
@@ -89,6 +100,13 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
         NavigationCompleted?.Invoke(this, new EngineNavigationCompletedEventArgs(args.NavigationId,
             args.IsSuccess, args.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled,
             (int)args.WebErrorStatus));
+
+    private void OnSourceChanged(object? sender, CoreWebView2SourceChangedEventArgs args) =>
+        SourceChanged?.Invoke(this, EventArgs.Empty);
+    private void OnTitleChanged(object? sender, object args) =>
+        TitleChanged?.Invoke(this, EventArgs.Empty);
+    private void OnHistoryChanged(object? sender, object args) =>
+        HistoryChanged?.Invoke(this, EventArgs.Empty);
 
     public bool CanGoBack => !disposed && NativeView.CoreWebView2?.CanGoBack == true;
     public bool CanGoForward => !disposed && NativeView.CoreWebView2?.CanGoForward == true;
@@ -115,6 +133,9 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
         {
             core.NavigationStarting -= OnNavigationStarting;
             core.NavigationCompleted -= OnNavigationCompleted;
+            core.SourceChanged -= OnSourceChanged;
+            core.DocumentTitleChanged -= OnTitleChanged;
+            core.HistoryChanged -= OnHistoryChanged;
         }
         NativeView.Dispose();
     }

@@ -151,6 +151,7 @@ try {
     assert.equal(requests.filter(request => request === route).length, 1, `${route} must not be replayed`);
   }
   assert.match(evidence, /Development adapter rejected unsupported profile, network and navigation inputs[\s\S]*Navigation request canceled before HTTP[\s\S]*Observed JavaScript title[\s\S]*Observed matched redirect, completion, and back and forward navigation[\s\S]*Observed HTTP failure completion[\s\S]*Observed rejected HTTP and Blob downloads, geolocation and media permissions[\s\S]*WPF window closed[\s\S]*CEF browser closed[\s\S]*WPF dispatcher stopped/);
+  assert.match(evidence, /Observed shared engine source, title and history events/);
   assert.match(evidence, /Intercepted the page attachment before browser navigation reached HTTP/);
   assert.deepEqual(pageAttachmentRequests, [['GET', '1']], 'Only the native handoff may send the page attachment request');
   assert.equal(watcherError, undefined, 'The temporary directory watcher failed');

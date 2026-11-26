@@ -42,12 +42,33 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
     private nint hwnd;
     private readonly CefNative.BeforeBrowse onStarting;
     private readonly CefNative.NavigationComplete onCompleted;
+    private readonly CefNative.PageStateChanged onPageStateChanged;
+    public event EventHandler? SourceChanged;
+    public event EventHandler? TitleChanged;
+    public event EventHandler? HistoryChanged;
 
     public event EventHandler<EngineNavigationStartingEventArgs>? NavigationStarting;
     public event EventHandler<EngineNavigationCompletedEventArgs>? NavigationCompleted;
 
     internal CefDevelopmentView()
     {
+        onPageStateChanged = kind =>
+        {
+            if (hwnd == 0) return;
+            try
+            {
+                switch (kind)
+                {
+                    case 1: SourceChanged?.Invoke(this, EventArgs.Empty); break;
+                    case 2: TitleChanged?.Invoke(this, EventArgs.Empty); break;
+                    case 3: HistoryChanged?.Invoke(this, EventArgs.Empty); break;
+                }
+            }
+            catch (Exception error)
+            {
+                System.Diagnostics.Trace.TraceError("CEF page state handler failed: {0}", error.GetType().Name);
+            }
+        };
         onStarting = (url, id, redirect) =>
         {
             var callback = NavigationStarting;
@@ -78,6 +99,8 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
     }
 
     public FrameworkElement Element => this;
+    public string Source => hwnd == 0 ? "" : Marshal.PtrToStringUni(CefNative.VeilCefSource()) ?? "";
+    public string DocumentTitle => hwnd == 0 ? "" : Marshal.PtrToStringUni(CefNative.VeilCefTitle()) ?? "";
     public bool CanGoBack => hwnd != 0 && CefNative.VeilCefCanGoBack() != 0;
     public bool CanGoForward => hwnd != 0 && CefNative.VeilCefCanGoForward() != 0;
     public double ZoomFactor
@@ -126,8 +149,10 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
             0, 0, 1, 1, parent.Handle, 0, 0, 0);
         if (hwnd == 0) throw new InvalidOperationException("Cannot create the CEF parent window.");
         CefNative.VeilCefSetNavigationCallbacks(onStarting, onCompleted);
+        CefNative.VeilCefSetPageStateCallback(onPageStateChanged);
         if (CefNative.VeilCefOpen(hwnd) == 0)
         {
+            CefNative.VeilCefSetPageStateCallback(null);
             CefNative.VeilCefSetNavigationCallbacks(null, null);
             CefNative.DestroyWindow(hwnd);
             hwnd = 0;
@@ -144,8 +169,9 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
 
     protected override void DestroyWindowCore(HandleRef window)
     {
-        CefNative.DestroyWindow(window.Handle);
+        CefNative.VeilCefSetPageStateCallback(null);
         CefNative.VeilCefSetNavigationCallbacks(null, null);
+        CefNative.DestroyWindow(window.Handle);
         hwnd = 0;
     }
 }
@@ -165,6 +191,10 @@ internal static class CefNative
     [DllImport(Module)] internal static extern void VeilCefResize(nint parent);
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
     internal static extern void VeilCefNavigate(string url);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void PageStateChanged(int kind);
+    [DllImport(Module)] internal static extern void VeilCefSetPageStateCallback(PageStateChanged? callback);
+    [DllImport(Module)] internal static extern nint VeilCefSource();
     [DllImport(Module)] internal static extern nint VeilCefTitle();
     [DllImport(Module)] internal static extern nint VeilCefProfile();
     [DllImport(Module)] internal static extern uint VeilCefDownloadsBlocked();

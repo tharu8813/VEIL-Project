@@ -20,6 +20,9 @@
 namespace {
 CefRefPtr<CefBrowser> browser;
 std::wstring title;
+std::wstring page_source = L"about:blank";
+using PageStateChanged = void (*)(int);
+PageStateChanged page_state_changed = nullptr;
 std::wstring profile_root;
 using BeforeBrowse = int (*)(const wchar_t*, uint64_t, int);
 using NavigationComplete = void (*)(uint64_t, int, int, int);
@@ -252,8 +255,18 @@ class Client final : public CefClient,
     if (frame->IsMain() && failed_url == active_url_)
       Complete(false, error == ERR_ABORTED, error);
   }
+  void OnAddressChange(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
+                       const CefString& value) override {
+    if (!frame->IsMain()) return;
+    page_source = value.ToWString();
+    if (page_state_changed) page_state_changed(1);
+  }
   void OnTitleChange(CefRefPtr<CefBrowser>, const CefString& value) override {
     title = value.ToWString();
+    if (page_state_changed) page_state_changed(2);
+  }
+  void OnLoadingStateChange(CefRefPtr<CefBrowser>, bool, bool, bool) override {
+    if (page_state_changed) page_state_changed(3);
   }
   void OnBeforeClose(CefRefPtr<CefBrowser>) override { browser = nullptr; }
 
@@ -419,6 +432,10 @@ extern "C" __declspec(dllexport) void VeilCefSetZoomLevel(double level) {
   if (browser) browser->GetHost()->SetZoomLevel(level);
 }
 
+extern "C" __declspec(dllexport) void VeilCefSetPageStateCallback(PageStateChanged callback) {
+  page_state_changed = callback;
+}
+extern "C" __declspec(dllexport) const wchar_t* VeilCefSource() { return page_source.c_str(); }
 extern "C" __declspec(dllexport) const wchar_t* VeilCefTitle() { return title.c_str(); }
 extern "C" __declspec(dllexport) int VeilCefClosed() { return browser ? 0 : 1; }
 extern "C" __declspec(dllexport) int VeilCefReadyToClose() {

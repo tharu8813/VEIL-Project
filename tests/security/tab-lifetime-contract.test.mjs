@@ -181,3 +181,22 @@ test('tab visuals, focus and native management visibility use the shared engine 
     for (const source of [browser, tabs, management])
         assert.doesNotMatch(source, /Pages\.Children\.(?:Add|Remove|Contains)\(tab\.View\)|tab\.View\.(?:Visibility|Focus\b)/);
 });
+
+
+const webView2Window = await readFile('apps/desktop/BrowserWindow.WebView2.cs', 'utf8');
+const cefView = await readFile('apps/cef-smoke/wpf/CefDevelopmentEngine.cs', 'utf8');
+test('page metadata and history availability route through the live engine view', () => {
+    assert.match(browser, /engineView\.SourceChanged \+= \(_, _\) => tab\.Owner\.OnSourceChanged\(tab\);/);
+    assert.match(browser, /engineView\.TitleChanged \+= \(_, _\) => tab\.Owner\.OnTitleChanged\(tab\);/);
+    assert.match(browser, /engineView\.HistoryChanged \+= \(_, _\) => tab\.Owner\.OnHistoryChanged\(tab\);/);
+    assert.match(browser, /if \(!AcceptTabEvents\(tab\) \|\| IsInternalUrl\(tab\.Url\)\) return;\s*tab\.Url = tab\.EngineView\.Source;/);
+    assert.match(browser, /if \(AcceptTabEvents\(tab\) && Active == tab\) UpdateNavigationButtons\(\);/);
+    assert.match(browser, /string title = tab\.EngineView\.DocumentTitle;/);
+    assert.doesNotMatch(webView2Window, /web\.(?:SourceChanged|DocumentTitleChanged|HistoryChanged) \+=/);
+    assert.match(webView2, /core\.SourceChanged \+= OnSourceChanged;/);
+    assert.match(webView2, /core\.DocumentTitleChanged \+= OnTitleChanged;/);
+    assert.match(webView2, /core\.HistoryChanged \+= OnHistoryChanged;/);
+    const dispose = webView2.slice(webView2.indexOf('public void Dispose()'));
+    assert.match(dispose, /core\.SourceChanged -= OnSourceChanged;[\s\S]*?core\.DocumentTitleChanged -= OnTitleChanged;[\s\S]*?core\.HistoryChanged -= OnHistoryChanged;/);
+    assert.match(cefView, /DestroyWindowCore[\s\S]*?VeilCefSetPageStateCallback\(null\);[\s\S]*?DestroyWindow\(window\.Handle\)/);
+});

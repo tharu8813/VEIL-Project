@@ -21,6 +21,12 @@ internal interface IBrowserEngineView : IDisposable
 {
     event EventHandler<EngineNavigationStartingEventArgs>? NavigationStarting;
     event EventHandler<EngineNavigationCompletedEventArgs>? NavigationCompleted;
+    // Read-only page metadata and history availability, not authorization signals.
+    event EventHandler? SourceChanged;
+    event EventHandler? TitleChanged;
+    event EventHandler? HistoryChanged;
+    string Source { get; }
+    string DocumentTitle { get; }
     FrameworkElement Element { get; }
     Task InitializeAsync();
     bool CanGoBack { get; }
