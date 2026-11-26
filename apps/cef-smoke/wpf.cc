@@ -51,6 +51,19 @@ struct ViewState {
   NavigationComplete navigation_complete;
   PageStateChanged page_state_changed;
   RenderProcessFailed render_process_failed;
+
+  // UI-thread-only counters and attachment handoff. IO-thread probes retain
+  // this state by shared ownership and publish only atomic observations.
+  unsigned popups_blocked = 0;
+  unsigned downloads_blocked = 0;
+  unsigned blob_downloads_blocked = 0;
+  unsigned permissions_denied = 0;
+  unsigned media_permissions_denied = 0;
+  std::atomic<int> response_matches{0};
+  std::atomic<int> attachment_filtered_bytes{-1};
+  CefString armed_page_attachment;
+  CefString armed_attachment_source;
+  bool page_attachment_intercepted = false;
 };
 
 // Registry is browser-UI-thread confined. Keep one view until fixture-wide
@@ -78,14 +91,7 @@ void RemoveView(const std::shared_ptr<ViewState>& state) {
     views.erase(entry);
 }
 std::wstring profile_root;
-unsigned popups_blocked = 0;
-unsigned downloads_blocked = 0;
-unsigned blob_downloads_blocked = 0;
-unsigned permissions_denied = 0;
-unsigned media_permissions_denied = 0;
 bool fixture_enabled = false;
-std::atomic<int> response_matches{0};
-std::atomic<int> attachment_filtered_bytes{-1};
 constexpr size_t kFixtureBodySize = 96 * 1024;
 constexpr size_t kOwnedBodySize = 768 * 1024;
 constexpr size_t kOwnedChunkSize = 16 * 1024;
@@ -94,9 +100,7 @@ OwnedChunk owned_chunk = nullptr;
 size_t owned_bytes = 0;
 int owned_result = 0;
 CefRefPtr<CefURLRequest> owned_request;
-CefString armed_page_attachment;
-CefString armed_attachment_source;
-bool page_attachment_intercepted = false;
+
 
 class OwnedAttachmentClient final : public CefURLRequestClient {
  public:
@@ -170,7 +174,8 @@ class FixtureBodyFilter final : public CefResponseFilter {
 
 class FixtureResponseProbe final : public CefResourceRequestHandler {
  public:
-  explicit FixtureResponseProbe(bool attachment) : attachment_(attachment) {}
+  FixtureResponseProbe(std::shared_ptr<ViewState> state, bool attachment)
+      : state_(std::move(state)), attachment_(attachment) {}
 
   CefRefPtr<CefResponseFilter> GetResourceResponseFilter(
       CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefRequest>,
@@ -184,16 +189,17 @@ class FixtureResponseProbe final : public CefResourceRequestHandler {
                               CefRefPtr<CefRequest>, CefRefPtr<CefResponse>,
                               URLRequestStatus status, int64_t) override {
     if (attachment_) {
-      attachment_filtered_bytes.store(!filter_ ? 0 : filter_->matches ?
+      state_->attachment_filtered_bytes.store(!filter_ ? 0 : filter_->matches ?
           static_cast<int>(filter_->bytes) : -2);
     } else {
       const bool matched = status == UR_SUCCESS && filter_ && filter_->matches &&
                            filter_->bytes == kFixtureBodySize;
-      response_matches.store(matched ? 1 : -1);
+      state_->response_matches.store(matched ? 1 : -1);
     }
   }
 
  private:
+  const std::shared_ptr<ViewState> state_;
   const bool attachment_;
   CefRefPtr<FixtureBodyFilter> filter_;
   IMPLEMENT_REFCOUNTING(FixtureResponseProbe);
@@ -232,7 +238,7 @@ class Client final : public CefClient,
                      bool, const CefPopupFeatures&, CefWindowInfo&,
                      CefRefPtr<CefClient>&, CefBrowserSettings&,
                      CefRefPtr<CefDictionaryValue>&, bool*) override {
-    ++popups_blocked;
+    ++state_->popups_blocked;
     return true;
   }
   CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
@@ -248,20 +254,20 @@ class Client final : public CefClient,
     if (!CefParseURL(request->GetURL(), parts) || CefString(&parts.scheme) != "http" ||
         CefString(&parts.host) != "127.0.0.1") return nullptr;
     const CefString path(&parts.path);
-    if (path == "/wpf-response") return new FixtureResponseProbe(false);
-    if (path == "/wpf-attachment") return new FixtureResponseProbe(true);
+    if (path == "/wpf-response") return new FixtureResponseProbe(state_, false);
+    if (path == "/wpf-attachment") return new FixtureResponseProbe(state_, true);
     return nullptr;
   }
 
   bool CanDownload(CefRefPtr<CefBrowser>, const CefString& url, const CefString&) override {
-    ++downloads_blocked;
-    if (url.ToString().rfind("blob:", 0) == 0) ++blob_downloads_blocked;
+    ++state_->downloads_blocked;
+    if (url.ToString().rfind("blob:", 0) == 0) ++state_->blob_downloads_blocked;
     return false;
   }
   bool OnBeforeDownload(CefRefPtr<CefBrowser>, CefRefPtr<CefDownloadItem> item,
                         const CefString&, CefRefPtr<CefBeforeDownloadCallback>) override {
-    ++downloads_blocked;
-    if (item->GetURL().ToString().rfind("blob:", 0) == 0) ++blob_downloads_blocked;
+    ++state_->downloads_blocked;
+    if (item->GetURL().ToString().rfind("blob:", 0) == 0) ++state_->blob_downloads_blocked;
     // Claim the request and let CEF discard the uncontinued callback.
     return true;
   }
@@ -271,14 +277,14 @@ class Client final : public CefClient,
   }
   bool OnShowPermissionPrompt(CefRefPtr<CefBrowser>, uint64_t, const CefString&,
                               uint32_t, CefRefPtr<CefPermissionPromptCallback> callback) override {
-    ++permissions_denied;
+    ++state_->permissions_denied;
     callback->Continue(CEF_PERMISSION_RESULT_DENY);
     return true;
   }
   bool OnRequestMediaAccessPermission(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>,
                                       const CefString&, uint32_t,
                                       CefRefPtr<CefMediaAccessCallback> callback) override {
-    ++media_permissions_denied;
+    ++state_->media_permissions_denied;
     callback->Cancel();
     return true;
   }
@@ -295,9 +301,9 @@ class Client final : public CefClient,
       return true;
     }
     if (!frame->IsMain()) return false;
-    if (fixture_enabled && !armed_page_attachment.empty() && url == armed_page_attachment) {
-      if (!redirect && request->GetMethod() == "GET" && frame->GetURL() == armed_attachment_source)
-        page_attachment_intercepted = true;
+    if (fixture_enabled && !state_->armed_page_attachment.empty() && url == state_->armed_page_attachment) {
+      if (!redirect && request->GetMethod() == "GET" && frame->GetURL() == state_->armed_attachment_source)
+        state_->page_attachment_intercepted = true;
       return true;
     }
     // The fixture serializes top-level loads. CEF load callbacks do not carry
@@ -408,15 +414,34 @@ extern "C" __declspec(dllexport) void VeilCefDetachCallbacks(uint64_t id, HWND p
     state->DetachCallbacks();
 }
 
-extern "C" __declspec(dllexport) unsigned VeilCefDownloadsBlocked() { return downloads_blocked; }
-extern "C" __declspec(dllexport) unsigned VeilCefBlobDownloadsBlocked() { return blob_downloads_blocked; }
-extern "C" __declspec(dllexport) unsigned VeilCefPermissionsDenied() { return permissions_denied; }
-extern "C" __declspec(dllexport) unsigned VeilCefMediaPermissionsDenied() { return media_permissions_denied; }
-extern "C" __declspec(dllexport) int VeilCefResponseMatches() { return response_matches.load(); }
-extern "C" __declspec(dllexport) int VeilCefAttachmentFilteredBytes() { return attachment_filtered_bytes.load(); }
+extern "C" __declspec(dllexport) unsigned VeilCefDownloadsBlocked(uint64_t id) {
+  const auto state = LookupView(id);
+  return state ? state->downloads_blocked : 0;
+}
+extern "C" __declspec(dllexport) unsigned VeilCefBlobDownloadsBlocked(uint64_t id) {
+  const auto state = LookupView(id);
+  return state ? state->blob_downloads_blocked : 0;
+}
+extern "C" __declspec(dllexport) unsigned VeilCefPermissionsDenied(uint64_t id) {
+  const auto state = LookupView(id);
+  return state ? state->permissions_denied : 0;
+}
+extern "C" __declspec(dllexport) unsigned VeilCefMediaPermissionsDenied(uint64_t id) {
+  const auto state = LookupView(id);
+  return state ? state->media_permissions_denied : 0;
+}
+extern "C" __declspec(dllexport) int VeilCefResponseMatches(uint64_t id) {
+  const auto state = LookupView(id);
+  return state ? state->response_matches.load() : 0;
+}
+extern "C" __declspec(dllexport) int VeilCefAttachmentFilteredBytes(uint64_t id) {
+  const auto state = LookupView(id);
+  return state ? state->attachment_filtered_bytes.load() : -1;
+}
 extern "C" __declspec(dllexport) int VeilCefClickFixtureAttachment(uint64_t id, const wchar_t* address) {
   const auto browser = LookupBrowser(id);
-  if (!fixture_enabled || !browser || !armed_page_attachment.empty()) return 0;
+  const auto state = LookupView(id);
+  if (!fixture_enabled || !browser || !state || !state->armed_page_attachment.empty()) return 0;
   const auto frame = browser->GetMainFrame();
   const auto source = frame->GetURL();
   CefURLParts parts;
@@ -427,19 +452,21 @@ extern "C" __declspec(dllexport) int VeilCefClickFixtureAttachment(uint64_t id, 
   if (!CefParseURL(address, target) ||
       CefString(&target.origin) != CefString(&parts.origin) ||
       CefString(&target.path) != "/wpf-owned-attachment") return 0;
-  armed_page_attachment = address;
-  armed_attachment_source = source;
-  page_attachment_intercepted = false;
+  state->armed_page_attachment = address;
+  state->armed_attachment_source = source;
+  state->page_attachment_intercepted = false;
   frame->ExecuteJavaScript("document.getElementById('vault-download').click()", source, 0);
   return 1;
 }
-extern "C" __declspec(dllexport) int VeilCefPageAttachmentIntercepted() {
-  return page_attachment_intercepted ? 1 : 0;
+extern "C" __declspec(dllexport) int VeilCefPageAttachmentIntercepted(uint64_t id) {
+  const auto state = LookupView(id);
+  return state && state->page_attachment_intercepted ? 1 : 0;
 }
 extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(uint64_t id, const wchar_t* address,
                                                                  OwnedChunk chunk) {
   const auto browser = LookupBrowser(id);
-  if (!fixture_enabled || !browser || owned_request || !chunk) return 0;
+  const auto state = LookupView(id);
+  if (!fixture_enabled || !browser || !state || owned_request || !chunk) return 0;
   CefString url(address);
   CefURLParts parts;
   if (!CefParseURL(url, parts) || CefString(&parts.scheme) != "http" ||
@@ -448,10 +475,10 @@ extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(uint64_t id, co
   if (path != "/wpf-owned-attachment" && path != "/wpf-owned-truncated" &&
       path != "/wpf-owned-saturated") return 0;
   if (path == "/wpf-owned-attachment") {
-    if (!page_attachment_intercepted || url != armed_page_attachment) return 0;
-    page_attachment_intercepted = false;
-    armed_page_attachment.clear();
-    armed_attachment_source.clear();
+    if (!state->page_attachment_intercepted || url != state->armed_page_attachment) return 0;
+    state->page_attachment_intercepted = false;
+    state->armed_page_attachment.clear();
+    state->armed_attachment_source.clear();
   }
   owned_bytes = 0;
   owned_result = 0;
@@ -554,7 +581,10 @@ extern "C" __declspec(dllexport) void VeilCefSetZoomLevel(uint64_t id, double le
   if (browser) browser->GetHost()->SetZoomLevel(level);
 }
 
-extern "C" __declspec(dllexport) unsigned VeilCefPopupsBlocked() { return popups_blocked; }
+extern "C" __declspec(dllexport) unsigned VeilCefPopupsBlocked(uint64_t id) {
+  const auto state = LookupView(id);
+  return state ? state->popups_blocked : 0;
+}
 extern "C" __declspec(dllexport) int VeilCefIsPageFullScreen(uint64_t id) {
   const auto state = LookupView(id);
   return state && state->page_fullscreen ? 1 : 0;

@@ -239,7 +239,7 @@ test('popup adoption is one-shot, same-engine and profile-bound; CEF denies unsu
     assert.match(webView2, /finally \{ request\.Complete\(\); \}/);
     assert.match(engineContract, /var callback = pending;\s*pending = null;\s*return callback\?\.Invoke\(target\) == true;/);
     assert.doesNotMatch(webView2Window, /web\.(?:NewWindowRequested|WindowCloseRequested) \+=/);
-    assert.match(cefNative, /bool OnBeforePopup\([\s\S]*?\+\+popups_blocked;\s*return true;/);
+    assert.match(cefNative, /bool OnBeforePopup\([\s\S]*?\+\+state_->popups_blocked;\s*return true;/);
     assert.match(cefView, /NewWindowRequested \{ add \{ \} remove \{ \} \}/);
 });
 
@@ -314,4 +314,21 @@ test('CEF native registry reserves identities before creation and erases only th
     assert.match(cefNative, /void RemoveView\(const std::shared_ptr<ViewState>& state\) \{\s*state->DetachCallbacks\(\);\s*const auto entry = views\.find\(state->id\);\s*if \(entry != views\.end\(\) && entry->second\.state == state\)\s*views\.erase\(entry\);/);
     assert.match(cefNative, /LookupBrowser\(uint64_t id\) \{\s*const auto entry = views\.find\(id\);\s*return entry == views\.end\(\) \? nullptr : entry->second\.browser;/);
     assert.doesNotMatch(cefNative, /CefRefPtr<CefBrowser> active_browser;|std::shared_ptr<ViewState> active_view;/);
+});
+
+
+test('CEF fixture observations and attachment handoff are scoped to the originating view', () => {
+    assert.match(cefNative, /struct ViewState \{[\s\S]*?std::atomic<int> response_matches\{0\};[\s\S]*?std::atomic<int> attachment_filtered_bytes\{-1\};[\s\S]*?CefString armed_page_attachment;/);
+    assert.match(cefNative, /FixtureResponseProbe\(std::shared_ptr<ViewState> state, bool attachment\)\s*:\s*state_\(std::move\(state\)\), attachment_\(attachment\)/);
+    assert.match(cefNative, /new FixtureResponseProbe\(state_, false\)/);
+    assert.match(cefNative, /new FixtureResponseProbe\(state_, true\)/);
+    assert.match(cefNative, /state_->response_matches\.store/);
+    assert.match(cefNative, /state_->attachment_filtered_bytes\.store/);
+    assert.match(cefNative, /fixture_enabled && !state_->armed_page_attachment\.empty\(\) && url == state_->armed_page_attachment/);
+    assert.match(cefNative, /if \(!state->page_attachment_intercepted \|\| url != state->armed_page_attachment\) return 0;/);
+    for (const name of ['PopupsBlocked','DownloadsBlocked','BlobDownloadsBlocked','PermissionsDenied','MediaPermissionsDenied','ResponseMatches','AttachmentFilteredBytes','PageAttachmentIntercepted']) {
+        assert.match(cefNative, new RegExp('VeilCef' + name + '\\(uint64_t id\\) \\{\\s*const auto state = LookupView\\(id\\);'));
+        assert.match(cefView, new RegExp('VeilCef' + name + '\\(ulong id\\)'));
+    }
+    assert.match(cefNative, /constexpr size_t kDevelopmentViewLimit = 1;/);
 });
