@@ -23,3 +23,16 @@ COPY_FILES(veil-cef-smoke "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${runti
 add_custom_command(TARGET veil-cef-smoke POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${CEF_BINARY_DIR_RELEASE}/bootstrap.exe" "${runtime_dir}/veil-cef-smoke.exe")
+
+if(DOTNET_HOST_PACK)
+  add_library(veil-cef-wpf SHARED wpf.cc)
+  SET_LIBRARY_TARGET_PROPERTIES(veil-cef-wpf)
+  target_include_directories(veil-cef-wpf PRIVATE "${CEF_ROOT}" "${DOTNET_HOST_PACK}")
+  target_compile_definitions(veil-cef-wpf PRIVATE NETHOST_USE_AS_STATIC)
+  target_link_libraries(veil-cef-wpf PRIVATE libcef_dll_wrapper "${CEF_LIB_RELEASE}"
+    "${DOTNET_HOST_PACK}/libnethost.lib" ${CEF_STANDARD_LIBS} ole32 user32)
+  add_dependencies(veil-cef-wpf veil-cef-smoke)
+  add_custom_command(TARGET veil-cef-wpf POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CEF_BINARY_DIR_RELEASE}/bootstrap.exe" "$<TARGET_FILE_DIR:veil-cef-wpf>/veil-cef-wpf.exe")
+endif()

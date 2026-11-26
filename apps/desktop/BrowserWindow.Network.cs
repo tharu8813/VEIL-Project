@@ -1,6 +1,5 @@
 using System.IO;
 using System.Windows;
-using Microsoft.Web.WebView2.Core;
 
 namespace Veil.Desktop;
 
@@ -17,7 +16,7 @@ public partial class BrowserWindow
 #endif
 
     /// <summary>Returns true when the navigation was handled here (cancelled and replaced).</summary>
-    private bool HandleHttpsFirst(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
+    private bool HandleHttpsFirst(BrowserTab tab, EngineNavigationStartingEventArgs args)
     {
         // Web content can never downgrade a connection: a page-triggered veil://allow-http (including one a
         // site pushes into a popup it opened) is always dropped. The only way is the native HttpsBar button.
@@ -42,7 +41,7 @@ public partial class BrowserWindow
         }
         tab.UpgradedFrom = uri;
         tab.ExpectedUpgrade = secure;
-        QueueNavigationAction(tab, () => tab.View.CoreWebView2.Navigate(secure.AbsoluteUri));
+        QueueNavigationAction(tab, () => tab.EngineView.Navigate(secure.AbsoluteUri));
         return true;
     }
 
@@ -74,7 +73,7 @@ public partial class BrowserWindow
         tab.Title = InternalTitle(HttpsWarningUrl);
         tab.Header.Label.Text = tab.Title;
         UpdateTabToolTip(tab);
-        tab.View.CoreWebView2.NavigateToString($$"""
+        tab.EngineView.ShowInternalHtml($$"""
 <!doctype html><html><head><meta charset="utf-8"><style>
 body{margin:0;background:#0A0C13;color:#E9ECF5;font:14px Segoe UI,Malgun Gothic,sans-serif}
 main{max-width:720px;margin:64px auto;padding:0 32px}h1{font-size:24px;margin:0 0 12px}
@@ -106,7 +105,7 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
         session.HttpAllowed.Add(plain.IdnHost);
         tab.Url = plain.AbsoluteUri;
         tab.PendingHttp = null;
-        tab.View.CoreWebView2.Navigate(plain.AbsoluteUri);
+        tab.EngineView.Navigate(plain.AbsoluteUri);
         UpdateHttpsBar();
     }
 

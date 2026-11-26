@@ -1,0 +1,201 @@
+// SPDX-License-Identifier: MPL-2.0
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Interop;
+
+namespace Veil.Desktop;
+
+internal sealed class CefDevelopmentEngine : IBrowserEngine
+{
+    private bool viewCreated;
+
+    public string DisplayName => "CEF development host";
+    public string? RuntimeVersion => null;
+    public bool IsReady { get; private set; }
+
+    internal static string FixtureProfile => Path.GetFullPath(Path.Combine(Path.GetTempPath(),
+        $"veil-cef-wpf-profile-{Environment.ProcessId}"));
+
+    public Task InitializeAsync(string protectedProfileRoot, NetworkSettings network)
+    {
+        string? nativeProfile = Marshal.PtrToStringUni(CefNative.VeilCefProfile());
+        if (network != NetworkSettings.Standard ||
+            !string.Equals(FixtureProfile, Path.GetFullPath(protectedProfileRoot), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(FixtureProfile, nativeProfile, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("CEF development requires its synthetic profile and default fixture settings.");
+        IsReady = true;
+        return Task.CompletedTask;
+    }
+
+    public IBrowserEngineView CreateView(string? privateProfileName = null)
+    {
+        if (!IsReady || viewCreated || privateProfileName is not null)
+            throw new InvalidOperationException("The CEF fixture supports one standard development view.");
+        viewCreated = true;
+        return new CefDevelopmentView();
+    }
+}
+
+internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
+{
+    private nint hwnd;
+    private readonly CefNative.BeforeBrowse onStarting;
+    private readonly CefNative.NavigationComplete onCompleted;
+
+    public event EventHandler<EngineNavigationStartingEventArgs>? NavigationStarting;
+    public event EventHandler<EngineNavigationCompletedEventArgs>? NavigationCompleted;
+
+    internal CefDevelopmentView()
+    {
+        onStarting = (url, id, redirect) =>
+        {
+            var callback = NavigationStarting;
+            if (callback is null) return 1;
+            try
+            {
+                var request = new EngineNavigationStartingEventArgs(url, id, redirect != 0);
+                callback(this, request);
+                return request.Cancel ? 1 : 0;
+            }
+            catch (Exception)
+            {
+                return 1;
+            }
+        };
+        onCompleted = (id, success, canceled, code) =>
+        {
+            try
+            {
+                NavigationCompleted?.Invoke(this,
+                    new EngineNavigationCompletedEventArgs(id, success != 0, canceled != 0, code));
+            }
+            catch (Exception error)
+            {
+                System.Diagnostics.Trace.TraceError("CEF navigation completion handler failed: {0}", error.GetType().Name);
+            }
+        };
+    }
+
+    public FrameworkElement Element => this;
+    public bool CanGoBack => hwnd != 0 && CefNative.VeilCefCanGoBack() != 0;
+    public bool CanGoForward => hwnd != 0 && CefNative.VeilCefCanGoForward() != 0;
+    public double ZoomFactor
+    {
+        get => Math.Pow(1.2, CefNative.VeilCefZoomLevel());
+        set
+        {
+            if (!double.IsFinite(value) || value <= 0) throw new ArgumentOutOfRangeException(nameof(value));
+            RequireView();
+            CefNative.VeilCefSetZoomLevel(Math.Log(value, 1.2));
+        }
+    }
+
+    public Task InitializeAsync()
+    {
+        RequireView();
+        return Task.CompletedTask;
+    }
+
+    public void Navigate(string address)
+    {
+        if (!Uri.TryCreate(address, UriKind.Absolute, out var url) ||
+            url.Scheme != Uri.UriSchemeHttp ||
+            url.Host is not ("127.0.0.1" or "[::1]" or "localhost") || url.UserInfo.Length != 0)
+            throw new ArgumentException("Enter a local HTTP test URL.", nameof(address));
+        RequireView();
+        CefNative.VeilCefNavigate(url.AbsoluteUri);
+    }
+
+    public void ShowInternalHtml(string trustedHostHtml) => throw new NotSupportedException();
+    public void GoBack() => CefNative.VeilCefGoBack();
+    public void GoForward() => CefNative.VeilCefGoForward();
+    public void Reload() => CefNative.VeilCefReload();
+    public void Stop() => CefNative.VeilCefStop();
+
+    private void RequireView()
+    {
+        if (hwnd == 0 || CefNative.VeilCefClosed() != 0)
+            throw new InvalidOperationException("The CEF view is unavailable.");
+    }
+
+    protected override HandleRef BuildWindowCore(HandleRef parent)
+    {
+        const uint childVisible = 0x50000000;
+        hwnd = CefNative.CreateWindowExW(0, "STATIC", "", childVisible,
+            0, 0, 1, 1, parent.Handle, 0, 0, 0);
+        if (hwnd == 0) throw new InvalidOperationException("Cannot create the CEF parent window.");
+        CefNative.VeilCefSetNavigationCallbacks(onStarting, onCompleted);
+        if (CefNative.VeilCefOpen(hwnd) == 0)
+        {
+            CefNative.VeilCefSetNavigationCallbacks(null, null);
+            CefNative.DestroyWindow(hwnd);
+            hwnd = 0;
+            throw new InvalidOperationException("Cannot create the CEF browser.");
+        }
+        return new HandleRef(this, hwnd);
+    }
+
+    protected override void OnWindowPositionChanged(Rect rcBoundingBox)
+    {
+        base.OnWindowPositionChanged(rcBoundingBox);
+        if (hwnd != 0) CefNative.VeilCefResize(hwnd);
+    }
+
+    protected override void DestroyWindowCore(HandleRef window)
+    {
+        CefNative.DestroyWindow(window.Handle);
+        CefNative.VeilCefSetNavigationCallbacks(null, null);
+        hwnd = 0;
+    }
+}
+
+internal static class CefNative
+{
+    private const string Module = "veil-cef-wpf.dll";
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
+    internal delegate int BeforeBrowse([MarshalAs(UnmanagedType.LPWStr)] string url, ulong id, int redirect);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void NavigationComplete(ulong id, int success, int canceled, int code);
+    [DllImport(Module)]
+    internal static extern void VeilCefSetNavigationCallbacks(BeforeBrowse? starting, NavigationComplete? completed);
+
+    [DllImport(Module)] internal static extern int VeilCefOpen(nint parent);
+    [DllImport(Module)] internal static extern void VeilCefResize(nint parent);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern void VeilCefNavigate(string url);
+    [DllImport(Module)] internal static extern nint VeilCefTitle();
+    [DllImport(Module)] internal static extern nint VeilCefProfile();
+    [DllImport(Module)] internal static extern uint VeilCefDownloadsBlocked();
+    [DllImport(Module)] internal static extern uint VeilCefBlobDownloadsBlocked();
+    [DllImport(Module)] internal static extern uint VeilCefPermissionsDenied();
+    [DllImport(Module)] internal static extern uint VeilCefMediaPermissionsDenied();
+    [DllImport(Module)] internal static extern int VeilCefResponseMatches();
+    [DllImport(Module)] internal static extern int VeilCefAttachmentFilteredBytes();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int OwnedChunk(nint data, int length);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern int VeilCefStartOwnedAttachment(string url, OwnedChunk chunk);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern int VeilCefClickFixtureAttachment(string url);
+    [DllImport(Module)] internal static extern int VeilCefPageAttachmentIntercepted();
+    [DllImport(Module)] internal static extern int VeilCefOwnedAttachmentResult();
+    [DllImport(Module)] internal static extern int VeilCefClosed();
+    [DllImport(Module)] internal static extern int VeilCefReadyToClose();
+    [DllImport(Module)] internal static extern void VeilCefPump();
+    [DllImport(Module)] internal static extern int VeilCefTryClose();
+    [DllImport(Module)] internal static extern int VeilCefCanGoBack();
+    [DllImport(Module)] internal static extern int VeilCefCanGoForward();
+    [DllImport(Module)] internal static extern void VeilCefGoBack();
+    [DllImport(Module)] internal static extern void VeilCefGoForward();
+    [DllImport(Module)] internal static extern void VeilCefReload();
+    [DllImport(Module)] internal static extern void VeilCefStop();
+    [DllImport(Module)] internal static extern double VeilCefZoomLevel();
+    [DllImport(Module)] internal static extern void VeilCefSetZoomLevel(double level);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern nint CreateWindowExW(uint exStyle, string className, string name,
+        uint style, int x, int y, int width, int height, nint parent,
+        nint menu, nint instance, nint parameter);
+    [DllImport("user32.dll")] internal static extern int DestroyWindow(nint hwnd);
+}

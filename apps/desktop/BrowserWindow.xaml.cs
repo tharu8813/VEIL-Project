@@ -284,72 +284,24 @@ public partial class BrowserWindow : Window
             throw new InvalidOperationException("The selected engine has no approved security integration.");
         var engineView = session.EngineHost.CreateView(session.PrivateProfileName);
         var tab = new BrowserTab(engineView, this) { Pinned = pinned };
-        var view = tab.View;
+        var element = engineView.Element;
         var item = new TabItem { Tag = tab };
         tab.Item = item;
         tab.Header = CreateTabHeader(item, tab);
         UpdatePinnedHeader(tab);
-        Pages.Children.Add(view);
+        Pages.Children.Add(element);
         try
         {
             await engineView.InitializeAsync();
             if (closing || session.IsEnding || session.EngineLost)
             {
                 engineView.Dispose();
-                Pages.Children.Remove(view);
+                Pages.Children.Remove(element);
                 return null;
             }
-            var web = view.CoreWebView2;
-            web.Settings.AreHostObjectsAllowed = false;
-            web.Settings.IsWebMessageEnabled = false;
-            web.Settings.IsPasswordAutosaveEnabled = false;
-            web.Settings.IsGeneralAutofillEnabled = false;
-            web.Settings.AreDefaultContextMenusEnabled = true;
-            web.Settings.AreDevToolsEnabled = false;
-            web.Settings.AreBrowserAcceleratorKeysEnabled = false;
-            // ADR-0007: SmartScreen policy before the first navigation (an unset view re-enables it for all).
-            if (!session.Security.Apply(web))
-            {
-                Status.Text = session.Security.Describe();
-                UpdateSecurityIndicators();
-            }
-            // SEC-004/007: the engine writes download bytes (GUID.tmp) before DownloadStarting can cancel
-            // them. Keep that partial data on the profile volume instead of the user's Downloads folder.
-            string downloadScratch = Path.Combine(session.Root, ProfileScratch.FolderName,
-                session.IsPrivate ? session.PrivateProfileName! : "downloads");
-            Directory.CreateDirectory(downloadScratch);
-            web.Profile.DefaultDownloadFolderPath = downloadScratch;
-            // ADR-0006 standard protection: strict tracking prevention for every profile.
-            web.Profile.PreferredTrackingPreventionLevel = CoreWebView2TrackingPreventionLevel.Strict;
-            web.PermissionRequested += (_, args) => tab.Owner.OnSitePermissionRequested(tab, args);
-            web.LaunchingExternalUriScheme += (_, args) => args.Cancel = true;
-            web.NavigationStarting += (_, args) => tab.Owner.OnNavigationStarting(tab, args);
-            web.SourceChanged += (_, _) => tab.Owner.OnSourceChanged(tab);
-            web.HistoryChanged += (_, _) => { if (tab.Owner.Active == tab) tab.Owner.UpdateNavigationButtons(); };
-            web.DocumentTitleChanged += (_, _) => tab.Owner.OnTitleChanged(tab);
-            web.FaviconChanged += async (_, _) => await tab.Owner.UpdateFavicon(tab, web);
-            web.NavigationCompleted += (_, args) => tab.Owner.OnNavigationCompleted(tab, args);
-            web.DownloadStarting += (_, args) => tab.Owner.OnDownloadStarting(tab, args);
-            // Record navigation methods so the vault never replays a POST download as GET.
-            if (!session.IsPrivate)
-            {
-                web.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Document);
-                web.WebResourceRequested += (_, args) =>
-                {
-                    if (!IsWebUrl(args.Request.Uri)) return;
-                    session.Vault.NoteRequest(args.Request.Method, args.Request.Uri);
-                    tab.LastDownloadRequest = (args.Request.Method, args.Request.Uri, tab.NavigationEpoch);
-                };
-            }
-            web.NewWindowRequested += (_, args) => tab.Owner.OnNewWindowRequested(tab, args);
-            web.WindowCloseRequested += (_, _) => tab.Owner.Dispatcher.BeginInvoke(() => tab.Owner.CloseTab(tab.Item));
-            web.IsDocumentPlayingAudioChanged += (_, _) => tab.Owner.UpdateAudio(tab);
-            web.IsMutedChanged += (_, _) => tab.Owner.UpdateAudio(tab);
-            web.ProcessFailed += (_, args) => tab.Owner.OnProcessFailed(tab, args);
-            web.ContainsFullScreenElementChanged += (_, _) =>
-            {
-                if (tab.Owner.Active == tab) tab.Owner.SetFullScreen(web.ContainsFullScreenElement, page: true);
-            };
+            engineView.NavigationStarting += (_, args) => tab.Owner.OnNavigationStarting(tab, args);
+            engineView.NavigationCompleted += (_, args) => tab.Owner.OnNavigationCompleted(tab, args);
+            ConfigureWebView2Tab(tab);
             // SelectionChanged can synchronously save the session. Publish an internal route
             // before inserting the item, since native pages may never navigate the WebView.
             if (IsInternalUrl(url))
@@ -383,7 +335,7 @@ public partial class BrowserWindow : Window
         catch (Exception)
         {
             engineView.Dispose();
-            Pages.Children.Remove(view);
+            Pages.Children.Remove(element);
             if (Tabs.Items.Contains(item)) Tabs.Items.Remove(item);
             if (!closing) Status.Text = "탭을 열 수 없습니다. WebView2 런타임과 테스트 프로필을 확인하세요.";
             return null;
@@ -395,7 +347,7 @@ public partial class BrowserWindow : Window
     private bool AcceptTabEvents(BrowserTab tab) => !closing && !tab.Closing && !session.IsEnding && !session.EngineLost &&
         ReferenceEquals(tab.Owner, this);
 
-    private void OnNavigationStarting(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
+    private void OnNavigationStarting(BrowserTab tab, EngineNavigationStartingEventArgs args)
     {
         if (!AcceptTabEvents(tab)) { args.Cancel = true; return; }
         tab.NavigationEpoch++;
@@ -457,18 +409,19 @@ public partial class BrowserWindow : Window
         Motion.Enter(label, 0, dx: 8, ms: 450);
     }
 
-    private void OnNavigationCompleted(BrowserTab tab, CoreWebView2NavigationCompletedEventArgs args)
+    private void OnNavigationCompleted(BrowserTab tab, EngineNavigationCompletedEventArgs args)
     {
         if (!AcceptTabEvents(tab) || tab.NavigationId != args.NavigationId) return;
         SetTabLoading(tab, false);
-        if (args.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled) return;
-        tab.LastNavigationError = args.IsSuccess ? null : args.WebErrorStatus;
+        if (args.IsCanceled) return;
+        var errorStatus = (CoreWebView2WebErrorStatus)args.NativeErrorCode;
+        tab.LastNavigationError = args.IsSuccess ? null : errorStatus;
         if (tab.UpgradedFrom is { } plain && tab.ExpectedUpgrade is null)
         {
             tab.UpgradedFrom = null;
             if (!args.IsSuccess)
             {
-                ShowHttpsWarning(tab, plain, $"HTTPS 연결에 실패했습니다 ({args.WebErrorStatus}).");
+                ShowHttpsWarning(tab, plain, $"HTTPS 연결에 실패했습니다 ({errorStatus}).");
                 return;
             }
         }
@@ -479,8 +432,7 @@ public partial class BrowserWindow : Window
         }
         if (Active == tab)
         {
-            if (args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
-                Status.Text = args.IsSuccess ? "준비" : $"페이지를 불러오지 못했습니다 ({args.WebErrorStatus}).";
+            Status.Text = args.IsSuccess ? "준비" : $"페이지를 불러오지 못했습니다 ({errorStatus}).";
             UpdateNavigationButtons();
         }
         if (args.IsSuccess)

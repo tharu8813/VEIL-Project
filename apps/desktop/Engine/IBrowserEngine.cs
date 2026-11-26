@@ -19,6 +19,8 @@ internal interface IBrowserEngine
 /// <summary>Common presentation and navigation operations; privileged native features are intentionally absent.</summary>
 internal interface IBrowserEngineView : IDisposable
 {
+    event EventHandler<EngineNavigationStartingEventArgs>? NavigationStarting;
+    event EventHandler<EngineNavigationCompletedEventArgs>? NavigationCompleted;
     FrameworkElement Element { get; }
     Task InitializeAsync();
     bool CanGoBack { get; }
@@ -30,4 +32,22 @@ internal interface IBrowserEngineView : IDisposable
     void GoForward();
     void Reload();
     void Stop();
+}
+
+// The adapter applies Cancel synchronously before the engine commits navigation.
+internal sealed class EngineNavigationStartingEventArgs(string uri, ulong navigationId, bool isRedirected)
+{
+    internal string Uri { get; } = uri;
+    internal ulong NavigationId { get; } = navigationId;
+    internal bool IsRedirected { get; } = isRedirected;
+    internal bool Cancel { get; set; }
+}
+
+internal sealed class EngineNavigationCompletedEventArgs(
+    ulong navigationId, bool isSuccess, bool isCanceled, int nativeErrorCode)
+{
+    internal ulong NavigationId { get; } = navigationId;
+    internal bool IsSuccess { get; } = isSuccess;
+    internal bool IsCanceled { get; } = isCanceled;
+    internal int NativeErrorCode { get; } = nativeErrorCode;
 }

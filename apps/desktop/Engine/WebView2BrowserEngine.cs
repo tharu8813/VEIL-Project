@@ -44,6 +44,8 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
 {
     internal WebView2 NativeView { get; } = new() { Visibility = Visibility.Hidden };
     public FrameworkElement Element => NativeView;
+    public event EventHandler<EngineNavigationStartingEventArgs>? NavigationStarting;
+    public event EventHandler<EngineNavigationCompletedEventArgs>? NavigationCompleted;
     private bool disposed;
     private CoreWebView2 Core => !disposed && NativeView.CoreWebView2 is { } core
         ? core : throw new InvalidOperationException("The engine view is unavailable.");
@@ -66,7 +68,27 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
                 !string.Equals(Core.Profile.ProfileName, privateProfileName, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Private controller verification failed.");
         }
+        var core = Core;
+        core.NavigationStarting -= OnNavigationStarting;
+        core.NavigationStarting += OnNavigationStarting;
+        core.NavigationCompleted -= OnNavigationCompleted;
+        core.NavigationCompleted += OnNavigationCompleted;
     }
+
+    private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
+    {
+        var navigation = new EngineNavigationStartingEventArgs(args.Uri, args.NavigationId, args.IsRedirected)
+        {
+            Cancel = args.Cancel,
+        };
+        NavigationStarting?.Invoke(this, navigation);
+        args.Cancel = navigation.Cancel;
+    }
+
+    private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args) =>
+        NavigationCompleted?.Invoke(this, new EngineNavigationCompletedEventArgs(args.NavigationId,
+            args.IsSuccess, args.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled,
+            (int)args.WebErrorStatus));
 
     public bool CanGoBack => !disposed && NativeView.CoreWebView2?.CanGoBack == true;
     public bool CanGoForward => !disposed && NativeView.CoreWebView2?.CanGoForward == true;
@@ -89,6 +111,11 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
     {
         if (disposed) return;
         disposed = true;
+        if (NativeView.CoreWebView2 is { } core)
+        {
+            core.NavigationStarting -= OnNavigationStarting;
+            core.NavigationCompleted -= OnNavigationCompleted;
+        }
         NativeView.Dispose();
     }
 }

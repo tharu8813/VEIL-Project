@@ -1,5 +1,4 @@
 using System.Windows;
-using Microsoft.Web.WebView2.Core;
 
 namespace Veil.Desktop;
 
@@ -13,7 +12,7 @@ public partial class BrowserWindow
     internal string? LastThreatNotice { get; private set; }
 
     /// <summary>Returns true when the navigation was cancelled and replaced by the warning page.</summary>
-    private bool HandleThreat(BrowserTab tab, CoreWebView2NavigationStartingEventArgs args)
+    private bool HandleThreat(BrowserTab tab, EngineNavigationStartingEventArgs args)
     {
         if (!IsWebUrl(args.Uri) || !Uri.TryCreate(args.Uri, UriKind.Absolute, out var uri) || session.ThreatAllowed.Contains(uri.IdnHost))
             return false;
@@ -47,7 +46,7 @@ public partial class BrowserWindow
         tab.Header.Label.Text = tab.Title;
         UpdateTabToolTip(tab);
         SetTabLoading(tab, false);
-        tab.View.CoreWebView2.NavigateToString($$"""
+        tab.EngineView.ShowInternalHtml($$"""
 <!doctype html><html><head><meta charset="utf-8"><style>
 body{margin:0;background:#0A0C13;color:#E9ECF5;font:14px Segoe UI,Malgun Gothic,sans-serif}
 main{max-width:720px;margin:64px auto;padding:0 32px}h1{font-size:24px;margin:0 0 12px}
@@ -79,7 +78,7 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
         session.ThreatAllowed.Add(blocked.IdnHost);
         tab.Url = blocked.AbsoluteUri;
         tab.PendingThreat = null;
-        tab.View.CoreWebView2.Navigate(blocked.AbsoluteUri);
+        tab.EngineView.Navigate(blocked.AbsoluteUri);
         UpdateThreatBar();
     }
 }

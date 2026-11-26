@@ -5,6 +5,14 @@ import { readFile } from 'node:fs/promises';
 const browser = await readFile('apps/desktop/BrowserWindow.xaml.cs', 'utf8');
 const tabs = await readFile('apps/desktop/BrowserWindow.Tabs.cs', 'utf8');
 const motion = await readFile('apps/desktop/BrowserWindow.Motion.cs', 'utf8');
+const webView2 = await readFile('apps/desktop/Engine/WebView2BrowserEngine.cs', 'utf8');
+
+test('WebView2 synchronously applies shared navigation policy before loading a new tab', () => {
+    const open = browser.slice(browser.indexOf('private async Task<BrowserTab?> OpenTab'),
+        browser.indexOf('// ── Engine events'));
+    assert.match(open, /await engineView\.InitializeAsync\(\);[\s\S]*?engineView\.NavigationStarting \+= \(_, args\) => tab\.Owner\.OnNavigationStarting\(tab, args\);[\s\S]*?ConfigureWebView2Tab\(tab\);[\s\S]*?engineView\.Navigate\(url\)/);
+    assert.match(webView2, /var navigation = new EngineNavigationStartingEventArgs\(args\.Uri, args\.NavigationId, args\.IsRedirected\)\s*\{\s*Cancel = args\.Cancel,\s*\};\s*NavigationStarting\?\.Invoke\(this, navigation\);\s*args\.Cancel = navigation\.Cancel;/);
+});
 test('closing tab invalidates engine events and native actions before animation', () => {
     assert.match(browser, /private bool AcceptTabEvents\(BrowserTab tab\) => !closing && !tab\.Closing && !session\.IsEnding && !session\.EngineLost &&\s*ReferenceEquals\(tab\.Owner, this\)/);
     assert.match(browser, /OnNavigationStarting\(BrowserTab tab,[^\n]+\n\s*\{\s*if \(!AcceptTabEvents\(tab\)\) \{ args\.Cancel = true; return; \}/);

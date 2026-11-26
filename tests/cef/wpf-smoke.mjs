@@ -1,0 +1,173 @@
+// SPDX-License-Identifier: MPL-2.0
+import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { watch } from 'node:fs';
+import { mkdtemp, readFile, readdir } from 'node:fs/promises';
+import http from 'node:http';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+
+assert.equal(process.platform, 'win32');
+assert.equal(process.argv.length, 4, 'Pass the built veil-cef-wpf.exe and veil-vault.exe paths');
+const executable = resolve(process.argv[2]);
+const vault = resolve(process.argv[3]);
+const requests = [];
+const pageAttachmentRequests = [];
+const deniedFile = 'veil-cef-denied-fixture.txt';
+const deniedBlob = 'veil-cef-denied-blob.txt';
+const body = Buffer.from(Array.from({ length: 96 * 1024 }, (_, index) => index % 251));
+const chunkSize = 16 * 1024;
+const streamedBody = Buffer.from(Array.from({ length: 768 * 1024 }, (_, index) => index % 251));
+const isDownloadFile = file => /\.crdownload$/i.test(file) ||
+  file.toLowerCase().endsWith(deniedFile) || file.toLowerCase().endsWith(deniedBlob);
+const server = http.createServer((request, response) => {
+  requests.push(request.url);
+  if (request.url === '/wpf-address') {
+    response.writeHead(302, { Location: '/wpf-first' }).end();
+    return;
+  }
+  if (request.url === '/wpf-policy') {
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end(`<!doctype html><a id="download" href="/wpf-attachment">Download</a>
+      <a id="vault-download" href="/wpf-owned-attachment">Save to fixture vault</a>
+      <script>
+        const locationDenied = new Promise(resolve => navigator.geolocation.getCurrentPosition(
+          () => resolve(false), error => resolve(error.code === 1)));
+        const mediaDenied = navigator.mediaDevices.getUserMedia({ video: true }).then(
+          stream => { stream.getTracks().forEach(track => track.stop()); return false; },
+          error => error.name === 'NotAllowedError');
+        const responseMatches = fetch('/wpf-response').then(response => response.arrayBuffer()).then(buffer => {
+          const bytes = new Uint8Array(buffer);
+          return bytes.length === ${body.length} && bytes.every((value, index) => value === index % 251);
+        });
+        Promise.all([locationDenied, mediaDenied, responseMatches]).then(results => {
+          if (!results.every(Boolean)) return;
+          document.title = 'VEIL_CEF_RESPONSE_AND_' + 'PERMISSIONS_OK';
+          const blob = document.createElement('a');
+          blob.href = URL.createObjectURL(new Blob(['Synthetic CEF Blob fixture']));
+          blob.download = '${deniedBlob}';
+          document.body.append(blob);
+          blob.click();
+          setTimeout(() => document.getElementById('download').click(), 100);
+        });
+      </script>`);
+    return;
+  }
+  if (request.url === '/wpf-response') {
+    response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' });
+    response.write(body.subarray(0, 32 * 1024));
+    setTimeout(() => response.end(body.subarray(32 * 1024)), 25);
+    return;
+  }
+  if (request.url === '/wpf-attachment') {
+    response.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${deniedFile}"`,
+      'Cache-Control': 'no-store',
+      'Content-Length': body.length,
+    });
+    response.write(body.subarray(0, 16 * 1024));
+    setTimeout(() => response.end(body.subarray(16 * 1024)), 250);
+    return;
+  }
+  if (['/wpf-owned-attachment', '/wpf-owned-truncated', '/wpf-owned-saturated'].includes(request.url)) {
+    if (request.url === '/wpf-owned-attachment') {
+      pageAttachmentRequests.push([request.method, request.headers['x-veil-fixture-handoff']]);
+    }
+    response.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${deniedFile}"`,
+      'Content-Length': streamedBody.length,
+      'Cache-Control': 'no-store',
+      Connection: 'close',
+    });
+    if (request.url === '/wpf-owned-truncated') {
+      response.write(streamedBody.subarray(0, chunkSize));
+      setTimeout(() => response.end(), 50);
+      return;
+    }
+    let offset = 0;
+    function writeChunk() {
+      if (response.destroyed) return;
+      const nextOffset = offset + chunkSize;
+      response.write(streamedBody.subarray(offset, nextOffset));
+      offset = nextOffset;
+      if (offset === streamedBody.length) response.end();
+      else setTimeout(writeChunk, 15);
+    }
+    writeChunk();
+    return;
+  }
+  if (request.url !== '/wpf-first' && request.url !== '/wpf-second') {
+    response.writeHead(404).end();
+    return;
+  }
+  response.writeHead(200, { 'Content-Type': 'text/html' });
+  const title = request.url === '/wpf-first' ? 'WPF_OK' : 'WPF_SECOND';
+  response.end(`<!doctype html><script>document.title="VEIL_CEF_"+"${title}"</script>`);
+});
+
+server.listen(0, '127.0.0.1');
+await once(server, 'listening');
+const url = `http://127.0.0.1:${server.address().port}/wpf-address`;
+const fixtureTemp = await mkdtemp(join(tmpdir(), 'veil-cef-wpf-run-'));
+const observedDownloads = [];
+let watcherError;
+const watcher = watch(fixtureTemp, { recursive: true }, (_, filename) => {
+  if (filename && isDownloadFile(filename)) observedDownloads.push(filename);
+});
+watcher.on('error', error => { watcherError = error; });
+const child = spawn(executable, [], {
+  cwd: dirname(executable),
+  env: { ...process.env, TEMP: fixtureTemp, TMP: fixtureTemp, VEIL_CEF_WPF_TEST_URL: url, VEIL_CEF_WPF_VAULT_EXE: vault },
+  stdio: 'ignore',
+  windowsHide: true,
+});
+let timedOut = false;
+const timer = setTimeout(() => {
+  timedOut = true;
+  if (child.pid && child.exitCode === null) {
+    const result = spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
+    if (result.status !== 0) child.kill();
+  }
+}, 25000);
+
+try {
+  const [exitCode] = await once(child, 'exit');
+  const log = join(fixtureTemp, `veil-cef-wpf-profile-${child.pid}`, 'smoke.log');
+  const evidence = await readFile(log, 'utf8').catch(() => 'No WPF smoke log was written.');
+  assert.equal(timedOut, false, 'WPF browser timed out');
+  assert.equal(exitCode, 0, `WPF browser exited unsuccessfully\n${evidence}`);
+  assert.ok(requests.includes('/wpf-address'), 'The address bar did not navigate');
+  assert.ok(requests.includes('/wpf-first'), 'The redirect did not navigate');
+  assert.ok(!requests.includes('/wpf-denied'), 'Canceled navigation contacted the server');
+  assert.ok(requests.includes('/wpf-second'), 'The second address did not navigate');
+  assert.ok(requests.includes('/wpf-error'), 'The failed address did not navigate');
+  assert.ok(requests.includes('/wpf-policy'), 'The permission fixture did not navigate');
+  assert.equal(requests.filter(request => request === '/wpf-attachment').length, 1, 'The attachment must not be replayed');
+  assert.equal(requests.filter(request => request === '/wpf-response').length, 1, 'The body must come from the original request');
+  for (const route of ['/wpf-owned-truncated', '/wpf-owned-saturated', '/wpf-owned-attachment']) {
+    assert.equal(requests.filter(request => request === route).length, 1, `${route} must not be replayed`);
+  }
+  assert.match(evidence, /Development adapter rejected unsupported profile, network and navigation inputs[\s\S]*Navigation request canceled before HTTP[\s\S]*Observed JavaScript title[\s\S]*Observed matched redirect, completion, and back and forward navigation[\s\S]*Observed HTTP failure completion[\s\S]*Observed rejected HTTP and Blob downloads, geolocation and media permissions[\s\S]*WPF window closed[\s\S]*CEF browser closed[\s\S]*WPF dispatcher stopped/);
+  assert.match(evidence, /Intercepted the page attachment before browser navigation reached HTTP/);
+  assert.deepEqual(pageAttachmentRequests, [['GET', '1']], 'Only the native handoff may send the page attachment request');
+  assert.equal(watcherError, undefined, 'The temporary directory watcher failed');
+  assert.deepEqual(observedDownloads, [], 'Observed a download artifact during the run');
+  const files = await readdir(fixtureTemp, { recursive: true });
+  assert.ok(!files.some(isDownloadFile), 'A download artifact remained after shutdown');
+  const sealed = join(`veil-cef-wpf-profile-${child.pid}`, 'fixture-vault', 'fixture.veil');
+  assert.deepEqual(files.filter(file => file.endsWith('.veil')), [sealed]);
+  const ciphertext = await readFile(join(fixtureTemp, sealed));
+  assert.ok(!ciphertext.includes(body.subarray(0, 512)), 'The stored object contains a plaintext fixture segment');
+  assert.match(evidence, /Rust vault aborted the truncated stream without publishing an object[\s\S]*CEF canceled the saturated stream and Rust vault published no object[\s\S]*Rust vault streamed and restored all 786432 bytes/);
+  const observed = /Verified 98304 response bytes in memory\. Blocked attachment passed (\d+) bytes to the filter\./.exec(evidence);
+  assert.ok(observed);
+  assert.ok(Number(observed[1]) < body.length, 'The delayed attachment should be canceled before the full body arrives');
+  console.log(`PASS: CEF vault round trip and download policy. Blocked attachment filter bytes=${observed[1]} (${log})`);
+} finally {
+  clearTimeout(timer);
+  watcher.close();
+  server.close();
+}

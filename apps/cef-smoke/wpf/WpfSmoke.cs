@@ -1,0 +1,325 @@
+// SPDX-License-Identifier: MPL-2.0
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Threading;
+using Veil.Desktop;
+
+namespace Veil.Cef;
+
+public static class WpfSmoke
+{
+    [UnmanagedCallersOnly]
+    public static int Run()
+    {
+        var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        var window = new Window { Title = "VEIL CEF test", Width = 840, Height = 600 };
+        var stack = new DockPanel();
+        var toolbar = new DockPanel { Margin = new Thickness(8) };
+        DockPanel.SetDock(toolbar, Dock.Top);
+        stack.Children.Add(toolbar);
+        var go = new Button { Content = "Go", Padding = new Thickness(12, 2, 12, 2) };
+        DockPanel.SetDock(go, Dock.Right);
+        toolbar.Children.Add(go);
+        var address = new TextBox { VerticalContentAlignment = VerticalAlignment.Center };
+        toolbar.Children.Add(address);
+        IBrowserEngine engine = new CefDevelopmentEngine();
+        engine.InitializeAsync(CefDevelopmentEngine.FixtureProfile, NetworkSettings.Standard)
+            .GetAwaiter().GetResult();
+        var browser = engine.CreateView();
+        stack.Children.Add(browser.Element);
+        window.Content = stack;
+
+        void Navigate()
+        {
+            try
+            {
+                browser.Navigate(address.Text);
+                window.Title = "VEIL CEF test";
+            }
+            catch (ArgumentException)
+            {
+                window.Title = "Enter a local HTTP test URL";
+            }
+        }
+
+        go.Click += (_, _) => Navigate();
+        address.KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            Navigate();
+            e.Handled = true;
+        };
+
+        var fixture = Environment.GetEnvironmentVariable("VEIL_CEF_WPF_TEST_URL");
+        var fixtureVault = Environment.GetEnvironmentVariable("VEIL_CEF_WPF_VAULT_EXE");
+        var deadline = System.Diagnostics.Stopwatch.StartNew();
+        var fixtureLog = System.IO.Path.Combine(CefDevelopmentEngine.FixtureProfile, "smoke.log");
+        void Trace(string message)
+        {
+            if (fixture is not null) System.IO.File.AppendAllText(fixtureLog, message + Environment.NewLine);
+        }
+        var closing = false;
+        var windowClosed = false;
+        var phase = -1;
+        var pendingRequests = new Dictionary<ulong, string>();
+        var completedRequests = new HashSet<string>();
+        var canceledByPolicy = false;
+        var redirectMatched = false;
+        var failedHttpLoad = false;
+        FixtureVault? vaultStream = null;
+        var vaultScenario = VaultScenario.Truncated;
+        string? lastTitle = null;
+        var result = fixture is null ? 0 : 30;
+        browser.NavigationStarting += (_, request) =>
+        {
+            if (fixture is null) return;
+            var path = new Uri(request.Uri).AbsolutePath;
+            request.Cancel = path == "/wpf-denied";
+            Trace($"Navigation {request.NavigationId} start {path} redirect={request.IsRedirected}");
+            if (request.IsRedirected && path == "/wpf-first" &&
+                pendingRequests.TryGetValue(request.NavigationId, out var previous) && previous == "/wpf-address")
+                redirectMatched = true;
+            pendingRequests[request.NavigationId] = path;
+        };
+        browser.NavigationCompleted += (_, completed) =>
+        {
+            if (fixture is null) return;
+            if (!pendingRequests.Remove(completed.NavigationId, out var path)) return;
+            Trace($"Navigation {completed.NavigationId} complete {path} success={completed.IsSuccess} canceled={completed.IsCanceled} code={completed.NativeErrorCode}");
+            if (path == "/wpf-denied" && completed.IsCanceled) canceledByPolicy = true;
+            // Empty error responses can surface as ERR_HTTP_RESPONSE_CODE_FAILURE.
+            if (path == "/wpf-error" && !completed.IsSuccess && !completed.IsCanceled &&
+                completed.NativeErrorCode is 404 or -379)
+                failedHttpLoad = true;
+            if (completed.IsSuccess) completedRequests.Add(path);
+        };
+        if (fixture is not null)
+        {
+            window.Left = -32000;
+            window.Top = -32000;
+            window.ShowActivated = false;
+            window.ShowInTaskbar = false;
+            window.Loaded += async (_, _) =>
+            {
+                await browser.InitializeAsync();
+                if (!Rejects(() => engine.InitializeAsync("C:\\unexpected-profile", NetworkSettings.Standard)) ||
+                    !Rejects(() => engine.InitializeAsync(CefDevelopmentEngine.FixtureProfile,
+                        new NetworkSettings(NetworkMode.Proxy, "http", "127.0.0.1", 3128))) ||
+                    !Rejects(() => engine.CreateView("private")) ||
+                    !Rejects(() => browser.Navigate("http://example.invalid/")))
+                {
+                    Trace("Development adapter accepted an unsupported input");
+                    window.Close();
+                    return;
+                }
+                Trace("Development adapter rejected unsupported profile, network and navigation inputs");
+                address.Text = new Uri(new Uri(fixture), "/wpf-denied").AbsoluteUri;
+                Trace("WPF loaded and submitting address");
+                go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            };
+        }
+        else
+        {
+            window.Loaded += async (_, _) => await browser.InitializeAsync();
+        }
+
+        var pump = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(10),
+        };
+        window.Closing += (_, e) =>
+        {
+            closing = true;
+            vaultStream?.Complete(false);
+            Trace("Requesting CEF close");
+            e.Cancel = CefNative.VeilCefTryClose() == 0;
+        };
+        window.Closed += (_, _) =>
+        {
+            browser.Dispose();
+            windowClosed = true;
+            Trace("WPF window closed");
+        };
+        pump.Tick += (_, _) =>
+        {
+            CefNative.VeilCefPump();
+            if (windowClosed && CefNative.VeilCefClosed() != 0)
+            {
+                Trace("CEF browser closed");
+                pump.Stop();
+                app.Shutdown();
+                return;
+            }
+            if (closing)
+            {
+                if (!windowClosed && CefNative.VeilCefReadyToClose() != 0) window.Close();
+                return;
+            }
+
+            var title = Marshal.PtrToStringUni(CefNative.VeilCefTitle());
+            if (!string.IsNullOrEmpty(title) && title != lastTitle)
+            {
+                lastTitle = title;
+                window.Title = title;
+            }
+            if (fixture is null) return;
+            if (phase == -1 && canceledByPolicy)
+            {
+                phase = 0;
+                Trace("Navigation request canceled before HTTP");
+                address.Text = fixture;
+                go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            }
+            else if (phase == 0 && title == "VEIL_CEF_WPF_OK" && redirectMatched && completedRequests.Remove("/wpf-first"))
+            {
+                phase = 1;
+                Trace("Observed JavaScript title");
+                address.Text = new Uri(new Uri(fixture), "/wpf-second").AbsoluteUri;
+                go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            }
+            else if (phase == 1 && title == "VEIL_CEF_WPF_SECOND" && browser.CanGoBack &&
+                     completedRequests.Remove("/wpf-second"))
+            {
+                phase = 2;
+                browser.GoBack();
+            }
+            // A restored history entry may update the title without load callbacks.
+            else if (phase == 2 && title == "VEIL_CEF_WPF_OK" && browser.CanGoForward)
+            {
+                phase = 3;
+                browser.GoForward();
+            }
+            else if (phase == 3 && title == "VEIL_CEF_WPF_SECOND")
+            {
+                phase = 4;
+                Trace("Observed matched redirect, completion, and back and forward navigation");
+                address.Text = new Uri(new Uri(fixture), "/wpf-error").AbsoluteUri;
+                go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            }
+            else if (phase == 4 && failedHttpLoad)
+            {
+                phase = 5;
+                Trace("Observed HTTP failure completion");
+                address.Text = new Uri(new Uri(fixture), "/wpf-policy").AbsoluteUri;
+                go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            }
+            else if (phase == 5 && title == "VEIL_CEF_RESPONSE_AND_PERMISSIONS_OK" &&
+                     CefNative.VeilCefResponseMatches() == 1 && CefNative.VeilCefAttachmentFilteredBytes() >= 0 &&
+                     CefNative.VeilCefPermissionsDenied() != 0 &&
+                     CefNative.VeilCefMediaPermissionsDenied() != 0 &&
+                     CefNative.VeilCefBlobDownloadsBlocked() != 0 &&
+                     CefNative.VeilCefDownloadsBlocked() > CefNative.VeilCefBlobDownloadsBlocked())
+            {
+                phase = 6;
+                Trace("Observed rejected HTTP and Blob downloads, geolocation and media permissions");
+                Trace($"Verified 98304 response bytes in memory. Blocked attachment passed {CefNative.VeilCefAttachmentFilteredBytes()} bytes to the filter.");
+                if (fixtureVault is null)
+                {
+                    window.Close();
+                    return;
+                }
+                vaultStream = new FixtureVault(fixtureVault, CefDevelopmentEngine.FixtureProfile, vaultScenario);
+            }
+            else if (phase == 6 && vaultStream is { Ready.IsCompleted: true })
+            {
+                var path = vaultScenario switch
+                {
+                    VaultScenario.Truncated => "/wpf-owned-truncated",
+                    VaultScenario.Saturated => "/wpf-owned-saturated",
+                    _ => "/wpf-owned-attachment",
+                };
+                var url = new Uri(new Uri(fixture), path).AbsoluteUri;
+                if (vaultScenario == VaultScenario.Full &&
+                    CefNative.VeilCefStartOwnedAttachment(url, vaultStream.ChunkCallback) != 0)
+                {
+                    Trace("CEF accepted an attachment without a page handoff");
+                    window.Close();
+                    return;
+                }
+                if (!vaultStream.Ready.Result || (vaultScenario == VaultScenario.Full
+                    ? CefNative.VeilCefClickFixtureAttachment(url)
+                    : CefNative.VeilCefStartOwnedAttachment(url, vaultStream.ChunkCallback)) == 0)
+                {
+                    Trace($"Could not start vault fixture for {path}");
+                    window.Close();
+                    return;
+                }
+                phase = vaultScenario == VaultScenario.Full ? 9 : 7;
+            }
+            else if (phase == 9 && CefNative.VeilCefPageAttachmentIntercepted() != 0)
+            {
+                Trace("Intercepted the page attachment before browser navigation reached HTTP");
+                var url = new Uri(new Uri(fixture), "/wpf-owned-attachment").AbsoluteUri;
+                if (CefNative.VeilCefStartOwnedAttachment(url, vaultStream!.ChunkCallback) == 0)
+                {
+                    window.Close();
+                    return;
+                }
+                phase = 7;
+            }
+            else if (phase == 7 && CefNative.VeilCefOwnedAttachmentResult() != 0)
+            {
+                var nativeResult = CefNative.VeilCefOwnedAttachmentResult();
+                var expected = vaultScenario switch
+                {
+                    VaultScenario.Truncated => -1,
+                    VaultScenario.Saturated => -2,
+                    _ => FixtureVault.BodySize,
+                };
+                vaultStream!.Complete(nativeResult == FixtureVault.BodySize);
+                if (nativeResult != expected)
+                {
+                    Trace($"Unexpected CEF result for {vaultScenario}: {nativeResult}");
+                    window.Close();
+                    return;
+                }
+                phase = 8;
+            }
+            else if (phase == 8 && vaultStream is { Finished.IsCompleted: true })
+            {
+                var finished = vaultStream.Finished;
+                if (!finished.IsCompletedSuccessfully || !finished.Result)
+                {
+                    Trace($"Rust vault fixture failed. Scenario: {vaultScenario}, native result: {CefNative.VeilCefOwnedAttachmentResult()}, error: {finished.Exception?.GetBaseException().Message}");
+                    window.Close();
+                }
+                else if (vaultScenario != VaultScenario.Full)
+                {
+                    Trace(vaultScenario == VaultScenario.Truncated
+                        ? "Rust vault aborted the truncated stream without publishing an object"
+                        : "CEF canceled the saturated stream and Rust vault published no object");
+                    vaultScenario = vaultScenario == VaultScenario.Truncated ? VaultScenario.Saturated : VaultScenario.Full;
+                    vaultStream = new FixtureVault(fixtureVault!, CefDevelopmentEngine.FixtureProfile, vaultScenario);
+                    phase = 6;
+                }
+                else
+                {
+                    result = 0;
+                    Trace($"Rust vault streamed and restored all {FixtureVault.BodySize} bytes from the owned CEF request");
+                    window.Close();
+                }
+            }
+            else if (deadline.Elapsed > TimeSpan.FromSeconds(15))
+            {
+                Trace($"Fixture timed out at phase {phase}. Download decisions: {CefNative.VeilCefDownloadsBlocked()}, " +
+                    $"Blob: {CefNative.VeilCefBlobDownloadsBlocked()}, permission prompts: {CefNative.VeilCefPermissionsDenied()}, " +
+                    $"media: {CefNative.VeilCefMediaPermissionsDenied()}, response: {CefNative.VeilCefResponseMatches()}, " +
+                    $"attachment bytes: {CefNative.VeilCefAttachmentFilteredBytes()}.");
+                window.Close();
+            }
+        };
+        pump.Start();
+        app.Run(window);
+        Trace("WPF dispatcher stopped");
+        return result;
+    }
+
+    private static bool Rejects(Action action)
+    {
+        try { action(); return false; }
+        catch (Exception error) when (error is InvalidOperationException or ArgumentException)
+        { return true; }
+    }
+}
