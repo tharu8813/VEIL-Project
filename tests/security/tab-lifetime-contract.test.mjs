@@ -539,3 +539,17 @@ test('CEF HTTP cache clear is confined to the explicit disk-backed synthetic fix
     assert.match(cefTabbed, /EngineProfileDataKinds\.Cookies \| EngineProfileDataKinds\.DiskCache, \(\) => true/);
     assert.match(cefTabbed, /HTTP cache clear refetched resource and preserved origin storage/);
 });
+
+
+test('CEF known-origin batch never claims profile-wide DOM storage coverage and reports partial authorization', () => {
+    assert.match(cefView, /internal async Task<int> ClearKnownFixtureOriginsAsync\(Func<bool> stillAuthorized\)/);
+    assert.match(cefView, /Environment\.GetEnvironmentVariable\("VEIL_CEF_WPF_TABS"\) != "1"[\s\S]*?fixture\.Host != "127\.0\.0\.1"/);
+    assert.match(cefView, /string\[\] origins = \[\s*fixture\.GetLeftPart\(UriPartial\.Authority\),\s*new UriBuilder\(fixture\) \{ Host = "localhost" \}\.Uri\.GetLeftPart\(UriPartial\.Authority\)\s*\];/);
+    assert.match(cefView, /foreach \(string origin in origins\)[\s\S]*?if \(NativeHandle != id\) throw new InvalidOperationException[\s\S]*?if \(!await ClearOriginStorageAsync\(origin, stillAuthorized\)\) return completed;\s*completed\+\+;/);
+    assert.match(cefView, /Known-origin clear acknowledged \{completed\} of \{origins\.Length\} requests; other changes may have been applied/);
+    assert.match(cefTabbed, /EngineProfileDataKinds\.DomStorage, \(\) => true[\s\S]*?storageClear\.Exception\?\.GetBaseException\(\) is not NotSupportedException/);
+    assert.match(cefTabbed, /knownOriginClear\.Result != 0/);
+    assert.match(cefTabbed, /knownOriginClear\.Result != 1/);
+    assert.match(cefTabbed, /knownOriginClear\.Result != 2/);
+    assert.match(cefTabbed, /Known-origin batch cleared both fixture origins without claiming full profile clear/);
+});
