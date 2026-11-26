@@ -41,6 +41,7 @@ internal sealed class TabbedDevelopmentHost
     private Tab? active;
     private Tab? first, second;
     private ulong firstId, secondId;
+    private Task<IReadOnlyList<string>>? emptyDomains, firstDomains, secondDomains;
     private int phase, result;
     private bool shuttingDown, windowClosed, allowWindowClose;
 
@@ -252,6 +253,13 @@ internal sealed class TabbedDevelopmentHost
         if (phase == 0 && first is { } a && a.View.NativeHandle != 0)
         {
             firstId = a.View.NativeHandle;
+            emptyDomains = ((IEngineSiteDataReader)a.View).GetCookieDomainsAsync();
+            phase = 10;
+        }
+        else if (phase == 10 && emptyDomains is { IsCompleted: true })
+        {
+            if (!emptyDomains.IsCompletedSuccessfully || emptyDomains.Result.Count != 0) { Fail(); return; }
+            Log("Fresh fixture cookie scan returned an empty list");
             address.Text = Url("/tabs-first");
             NavigateAddress();
             second = AddTab();
@@ -276,13 +284,30 @@ internal sealed class TabbedDevelopmentHost
             if (address.Text != Url("/tabs-second") || first.View.NativeHandle != firstId ||
                 second.View.NativeHandle != secondId) { Fail(); return; }
             Log("Tab selection preserved both native identities and active address");
-            RequestClose(second);
+            firstDomains = ((IEngineSiteDataReader)first.View).GetCookieDomainsAsync();
+            secondDomains = ((IEngineSiteDataReader)second.View).GetCookieDomainsAsync();
+            phase = 11;
+        }
+        else if (phase == 11 && firstDomains is { IsCompleted: true } && secondDomains is { IsCompleted: true })
+        {
+            if (!firstDomains.IsCompletedSuccessfully || !secondDomains.IsCompletedSuccessfully ||
+                firstDomains.Result.Count != 2 || secondDomains.Result.Count != 2 ||
+                firstDomains.Result.Any(domain => domain != "127.0.0.1") ||
+                secondDomains.Result.Any(domain => domain != "127.0.0.1"))
+            { Fail(); return; }
+            Log("Both views returned only the two synthetic cookie domains");
+            if (CefNative.VeilCefStartCookieDomainScan(secondId) == 0) { Fail(); return; }
+            RequestClose(second!);
             phase = 3;
         }
         else if (phase == 3 && CefNative.VeilCefClosed(secondId) != 0 && tabs.Count == 1)
         {
             if (active != first || first!.View.NativeHandle != firstId || address.Text != Url("/tabs-first") ||
                 CefNative.VeilCefLiveViewCount() != 1) { Fail(); return; }
+            if (CefNative.VeilCefCookieDomainScanStatus(secondId) != -1 ||
+                CefNative.VeilCefStartCookieDomainScan(secondId) != 0 ||
+                CefNative.VeilCefCookieDomainAt(secondId, 0) != 0) { Fail(); return; }
+            Log("Closed view cookie scan identity rejected");
             CefNative.VeilCefNavigate(secondId, Url("/tabs-stale"));
             address.Text = Url("/tabs-after-close");
             NavigateAddress();

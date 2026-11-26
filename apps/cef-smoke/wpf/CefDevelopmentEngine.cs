@@ -45,7 +45,7 @@ internal sealed class CefDevelopmentEngine : IBrowserEngine
     }
 }
 
-internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
+internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngineSiteDataReader
 {
     private nint hwnd;
     private bool disposed;
@@ -148,6 +148,42 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
             }
         };
     }
+
+    public async Task<IReadOnlyList<string>> GetCookieDomainsAsync()
+    {
+        Dispatcher.VerifyAccess();
+        RequireView();
+        ulong id = NativeHandle;
+        if (CefNative.VeilCefStartCookieDomainScan(id) == 0)
+            throw new InvalidOperationException("The fixture cookie scan is unavailable or already active.");
+        try
+        {
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (CefNative.VeilCefCookieDomainScanStatus(id) == 0)
+            {
+                if (deadline.Elapsed > TimeSpan.FromSeconds(5))
+                    throw new TimeoutException("The fixture cookie scan did not complete.");
+                await Task.Delay(10);
+                RequireView();
+                if (NativeHandle != id) throw new InvalidOperationException("The CEF view changed.");
+            }
+            if (CefNative.VeilCefCookieDomainScanStatus(id) != 1)
+                throw new InvalidOperationException("The fixture cookie scan failed.");
+            int count = CefNative.VeilCefCookieDomainCount(id);
+            if (count is < 0 or > 4096) throw new InvalidOperationException("Invalid cookie domain count.");
+            var domains = new List<string>(count);
+            for (uint index = 0; index < count; index++)
+            {
+                string? domain = Marshal.PtrToStringUni(CefNative.VeilCefCookieDomainAt(id, index));
+                if (SiteDataPolicy.ValidDomain(domain)) domains.Add(domain!);
+            }
+            return domains;
+        }
+        finally { CefNative.VeilCefEndCookieDomainScan(id); }
+    }
+
+    // Storage usage needs a separately verified implementation.
+    public Task<double?> GetOriginStorageUsageAsync(string origin) => Task.FromResult<double?>(null);
 
     public FrameworkElement Element => this;
     public string Source => hwnd == 0 ? "" : Marshal.PtrToStringUni(CefNative.VeilCefSource(NativeHandle)) ?? "";
@@ -281,6 +317,11 @@ internal static class CefNative
     [DllImport(Module)] internal static extern int VeilCefPageAttachmentIntercepted(ulong id);
     [DllImport(Module)] internal static extern int VeilCefOwnedAttachmentResult(ulong id);
     [DllImport(Module)] internal static extern void VeilCefCancelOwnedAttachment(ulong id);
+    [DllImport(Module)] internal static extern int VeilCefStartCookieDomainScan(ulong id);
+    [DllImport(Module)] internal static extern int VeilCefCookieDomainScanStatus(ulong id);
+    [DllImport(Module)] internal static extern int VeilCefCookieDomainCount(ulong id);
+    [DllImport(Module)] internal static extern nint VeilCefCookieDomainAt(ulong id, uint index);
+    [DllImport(Module)] internal static extern void VeilCefEndCookieDomainScan(ulong id);
     [DllImport(Module)] internal static extern int VeilCefClosed(ulong id);
     [DllImport(Module)] internal static extern uint VeilCefViewLimit();
     [DllImport(Module)] internal static extern uint VeilCefLiveViewCount();
