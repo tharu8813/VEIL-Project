@@ -104,9 +104,10 @@ struct ViewEntry {
 };
 std::unordered_map<uint64_t, ViewEntry> views;
 bool fixture_enabled = false;
+bool tabbed_development_enabled = false;
 constexpr unsigned kDevelopmentViewLimit = 1;
 constexpr unsigned kFixtureViewLimit = 2;
-unsigned ViewLimit() { return fixture_enabled ? kFixtureViewLimit : kDevelopmentViewLimit; }
+unsigned ViewLimit() { return (fixture_enabled || tabbed_development_enabled) ? kFixtureViewLimit : kDevelopmentViewLimit; }
 uint64_t last_view_id = 0;
 
 std::shared_ptr<ViewState> LookupView(uint64_t id) {
@@ -710,6 +711,9 @@ int RunWinMain(HINSTANCE instance, LPWSTR, int, void* sandbox_info, cef_version_
   CefString(&settings.log_file) = (profile / L"cef.log").wstring();
   CefRefPtr<CefApp> app;
   fixture_enabled = GetEnvironmentVariableW(L"VEIL_CEF_WPF_TEST_URL", nullptr, 0) != 0;
+  wchar_t tabs_mode[2]{};
+  tabbed_development_enabled =
+      GetEnvironmentVariableW(L"VEIL_CEF_WPF_TABS", tabs_mode, 2) == 1 && tabs_mode[0] == L'1';
   if (fixture_enabled)
     app = new FixtureApp();
   if (!CefInitialize(args, settings, app, sandbox_info)) {

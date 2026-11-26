@@ -60,3 +60,21 @@ The smoke runner watches its own temporary directory for the fixture download na
 The WPF regression passes a built repository `veil-vault.exe` as `$vaultExe`. A test-only `CefURLRequest` starts each loopback GET once, rejects redirects, disables caching and disables retries for 5xx responses. The fixture delivers chunks of up to 16 KiB through a bounded eight-entry queue to the existing Rust vault protocol. The saturation fixture pauses the vault reader, fills all eight queue entries, and checks that CEF reports request cancellation and Rust publishes no object. The full 768 KiB attachment produces one encrypted object, and decrypted bytes match the source. The truncated attachment reaches the vault with partial data and aborts without publishing an object.
 
 The full-response case starts with a scripted click on a known link in the loopback fixture page. The native host cancels that top-level GET navigation in `OnBeforeBrowse` and then issues one explicit `CefURLRequest` for the same target. The server checks that only the native handoff reaches HTTP. The fixture uses a predeclared route and does not transfer cookies, request headers, or POST data.
+
+## Opt-in same-window development tabs (unverified runtime)
+
+After building, run in a standard-user Windows terminal:
+
+```powershell
+$env:VEIL_CEF_WPF_TABS = '1'
+& "$build/Release/veil-cef-wpf.exe"
+Remove-Item Env:VEIL_CEF_WPF_TABS
+```
+
+This shell allows two loopback-only views in one window, with independent tab selection, close and navigation controls. It uses the synthetic profile, not the product's encrypted profile. The existing single-window/vault fixture is unchanged. To exercise the same-window shell separately:
+
+```powershell
+node tests/cef/tabs-smoke.mjs "$build/Release/veil-cef-wpf.exe"
+```
+
+Actual Windows execution is pending; compilation is not evidence of HWND visibility, focus or tab lifecycle behavior.

@@ -13,6 +13,9 @@ public static class WpfSmoke
     [UnmanagedCallersOnly]
     public static int Run()
     {
+        if (Environment.GetEnvironmentVariable("VEIL_CEF_WPF_TABS") == "1")
+            return TabbedDevelopmentHost.Run(Environment.GetEnvironmentVariable("VEIL_CEF_WPF_TEST_URL"));
+
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var window = new Window { Title = "VEIL CEF test", Width = 840, Height = 600 };
         var stack = new DockPanel();
