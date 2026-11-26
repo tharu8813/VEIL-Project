@@ -103,7 +103,10 @@ struct ViewEntry {
   CefRefPtr<CefBrowser> browser;
 };
 std::unordered_map<uint64_t, ViewEntry> views;
-constexpr size_t kDevelopmentViewLimit = 1;
+bool fixture_enabled = false;
+constexpr unsigned kDevelopmentViewLimit = 1;
+constexpr unsigned kFixtureViewLimit = 2;
+unsigned ViewLimit() { return fixture_enabled ? kFixtureViewLimit : kDevelopmentViewLimit; }
 uint64_t last_view_id = 0;
 
 std::shared_ptr<ViewState> LookupView(uint64_t id) {
@@ -122,7 +125,6 @@ void RemoveView(const std::shared_ptr<ViewState>& state) {
   if (state->owned_transfer) state->owned_transfer->Cancel();
 }
 std::wstring profile_root;
-bool fixture_enabled = false;
 constexpr size_t kFixtureBodySize = 96 * 1024;
 constexpr size_t kOwnedBodySize = 768 * 1024;
 constexpr size_t kOwnedChunkSize = 16 * 1024;
@@ -557,7 +559,7 @@ extern "C" __declspec(dllexport) void VeilCefCancelOwnedAttachment(uint64_t id) 
 extern "C" __declspec(dllexport) uint64_t VeilCefOpen(
     HWND parent, BeforeBrowse starting, NavigationComplete completed,
     PageStateChanged changed, RenderProcessFailed failed) {
-  if (views.size() >= kDevelopmentViewLimit || !parent || !starting || !completed || !changed || !failed ||
+  if (views.size() >= ViewLimit() || !parent || !starting || !completed || !changed || !failed ||
       last_view_id == (std::numeric_limits<uint64_t>::max)())
     return 0;
   auto state = std::make_shared<ViewState>(++last_view_id, parent, starting, completed, changed, failed);
@@ -657,6 +659,7 @@ extern "C" __declspec(dllexport) const wchar_t* VeilCefTitle(uint64_t id) {
   return state ? state->title.c_str() : L"";
 }
 extern "C" __declspec(dllexport) int VeilCefClosed(uint64_t id) { return LookupView(id) ? 0 : 1; }
+extern "C" __declspec(dllexport) unsigned VeilCefViewLimit() { return ViewLimit(); }
 extern "C" __declspec(dllexport) unsigned VeilCefLiveViewCount() {
   return static_cast<unsigned>(views.size());
 }

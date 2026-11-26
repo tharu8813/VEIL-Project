@@ -29,6 +29,17 @@ public static class WpfSmoke
             .GetAwaiter().GetResult();
         var browser = (CefDevelopmentView)engine.CreateView();
         ulong closingHandle = 0;
+        CefDevelopmentView? secondary = null;
+        Window? secondaryWindow = null;
+        ulong secondaryHandle = 0;
+        bool secondaryClosing = false, secondaryWindowClosed = false, secondaryLoaded = false;
+        bool secondaryNavigationSucceeded = false;
+        int secondaryStarts = 0;
+        void CloseSecondary()
+        {
+            if (secondaryWindow is not null && !secondaryWindowClosed && !secondaryClosing)
+                secondaryWindow.Close();
+        }
         stack.Children.Add(browser.Element);
         window.Content = stack;
 
@@ -171,6 +182,50 @@ public static class WpfSmoke
                     return;
                 }
                 Trace("Development adapter rejected unsupported profile, network and navigation inputs");
+                var second = (CefDevelopmentView)engine.CreateView();
+                secondary = second;
+                var secondWindow = new Window { Title = "VEIL CEF secondary", Width = 480, Height = 320,
+                    Left = -32000, Top = -32000, ShowActivated = false, ShowInTaskbar = false,
+                    Content = second.Element };
+                secondaryWindow = secondWindow;
+                var secondaryUrl = new Uri(new Uri(fixture), "/wpf-isolation").AbsoluteUri;
+                second.NavigationStarting += (_, request) =>
+                {
+                    secondaryStarts++;
+                    request.Cancel = request.Uri != secondaryUrl;
+                };
+                second.NavigationCompleted += (_, completed) =>
+                    secondaryNavigationSucceeded = completed.IsSuccess && completed.NativeResult.Domain == EngineErrorDomain.Cef;
+                second.ProcessFailed += (_, _) => unexpectedProcessFailures++;
+                secondWindow.Closing += (_, e) =>
+                {
+                    if (!secondaryClosing)
+                    {
+                        secondaryClosing = true;
+                        secondaryHandle = second.NativeHandle;
+                        CefNative.VeilCefCancelOwnedAttachment(secondaryHandle);
+                    }
+                    e.Cancel = CefNative.VeilCefTryClose(secondaryHandle) == 0;
+                };
+                secondWindow.Closed += (_, _) =>
+                {
+                    second.Dispose();
+                    secondaryWindowClosed = true;
+                };
+                secondWindow.Loaded += async (_, _) =>
+                {
+                    await second.InitializeAsync();
+                    secondaryHandle = second.NativeHandle;
+                    secondaryLoaded = true;
+                    second.Navigate(secondaryUrl);
+                };
+                secondWindow.Show();
+                if (!Rejects(() => engine.CreateView()))
+                {
+                    Trace("Development fixture accepted a third view");
+                    window.Close();
+                    return;
+                }
                 address.Text = new Uri(new Uri(fixture), "/wpf-denied").AbsoluteUri;
                 Trace("WPF loaded and submitting address");
                 go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -193,6 +248,7 @@ public static class WpfSmoke
                 closingHandle = browser.NativeHandle;
                 CefNative.VeilCefCancelOwnedAttachment(closingHandle);
                 vaultStream?.Complete(false);
+                CloseSecondary();
                 Trace("Requesting CEF close");
             }
             e.Cancel = CefNative.VeilCefTryClose(closingHandle) == 0;
@@ -206,6 +262,8 @@ public static class WpfSmoke
         pump.Tick += (_, _) =>
         {
             CefNative.VeilCefPump();
+            if (secondaryClosing && !secondaryWindowClosed && CefNative.VeilCefReadyToClose(secondaryHandle) != 0)
+                secondaryWindow?.Close();
             if (windowClosed && CefNative.VeilCefClosed(closingHandle) != 0 &&
                 CefNative.VeilCefLiveViewCount() == 0 && (vaultStream is null || vaultStream.Finished.IsCompleted))
             {
@@ -235,8 +293,43 @@ public static class WpfSmoke
                 address.Text = fixture;
                 go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             }
-            else if (phase == 0 && PageStateMatches("/wpf-first", "VEIL_CEF_WPF_OK") && redirectMatched && completedRequests.Remove("/wpf-first"))
+            else if (phase == 0 && PageStateMatches("/wpf-first", "VEIL_CEF_WPF_OK") && redirectMatched &&
+                     completedRequests.Contains("/wpf-first") && secondaryLoaded && secondaryNavigationSucceeded &&
+                     secondary is { } second && second.DocumentTitle == "VEIL_CEF_WPF_ISOLATION")
             {
+                completedRequests.Remove("/wpf-first");
+                if (secondaryHandle == 0 || secondaryHandle == browser.NativeHandle ||
+                    CefNative.VeilCefLiveViewCount() != 2 || secondaryStarts != 1 ||
+                    second.Source != new Uri(new Uri(fixture), "/wpf-isolation").AbsoluteUri ||
+                    second.CanGoBack || second.CanGoForward || browser.IsMuted != false ||
+                    CefNative.VeilCefDownloadsBlocked(secondaryHandle) != 0)
+                {
+                    Trace("Two-view identity, history or state isolation failed");
+                    window.Close();
+                    return;
+                }
+                second.SetMuted(true);
+                if (second.IsMuted != true || browser.IsMuted != false)
+                {
+                    Trace("Two-view mute isolation failed");
+                    window.Close();
+                    return;
+                }
+                Trace("Observed two independent CEF views with distinct source, title, history and mute state");
+                phase = 10;
+                CloseSecondary();
+            }
+            else if (phase == 10 && secondaryWindowClosed && CefNative.VeilCefClosed(secondaryHandle) != 0)
+            {
+                CefNative.VeilCefSetMuted(secondaryHandle, 1);
+                if (CefNative.VeilCefLiveViewCount() != 1 || CefNative.VeilCefClosed(browser.NativeHandle) != 0 ||
+                    !PageStateMatches("/wpf-first", "VEIL_CEF_WPF_OK") || browser.IsMuted != false)
+                {
+                    Trace("Closing secondary view affected primary view");
+                    window.Close();
+                    return;
+                }
+                Trace("Secondary CEF view closed; stale handle rejected; primary remains live");
                 phase = 1;
                 Trace("Observed JavaScript title");
                 address.Text = new Uri(new Uri(fixture), "/wpf-second").AbsoluteUri;

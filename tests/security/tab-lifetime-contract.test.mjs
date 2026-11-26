@@ -285,7 +285,7 @@ test('hard reload and find use narrow engine operations with stale result guards
 test('CEF client owns view metadata and callback registration as one lifetime', () => {
     assert.match(cefNative, /struct ViewState \{[\s\S]*?const HWND parent;[\s\S]*?std::wstring title;[\s\S]*?std::wstring page_source[\s\S]*?BeforeBrowse before_browse;/);
     assert.match(cefNative, /explicit Client\(std::shared_ptr<ViewState> state\) : state_\(std::move\(state\)\)/);
-    assert.match(cefNative, /if \(views\.size\(\) >= kDevelopmentViewLimit \|\| !parent \|\| !starting \|\| !completed \|\| !changed \|\| !failed \|\|[\s\S]*?\)\s*return 0;/);
+    assert.match(cefNative, /if \(views\.size\(\) >= ViewLimit\(\) \|\| !parent \|\| !starting \|\| !completed \|\| !changed \|\| !failed \|\|[\s\S]*?\)\s*return 0;/);
     assert.match(cefNative, /if \(!created \|\| entry == views\.end\(\) \|\| entry->second\.state != state\) \{\s*RemoveView\(state\);\s*return 0;/);
     assert.match(cefNative, /void VeilCefDetachCallbacks\(uint64_t id, HWND parent\) \{\s*const auto state = LookupView\(id\);\s*if \(state && state->parent == parent\) \{\s*state->closing = true;\s*state->DetachCallbacks\(\);\s*if \(state->owned_transfer\) state->owned_transfer->Cancel\(\);/);
     assert.match(cefNative, /void OnBeforeClose\([\s\S]*?RemoveView\(state_\);/);
@@ -309,7 +309,7 @@ test('CEF view operations require a nonzero matching monotonic identity', () => 
 
 test('CEF native registry reserves identities before creation and erases only the matching view', () => {
     assert.match(cefNative, /std::unordered_map<uint64_t, ViewEntry> views;/);
-    assert.match(cefNative, /constexpr size_t kDevelopmentViewLimit = 1;/);
+    assert.match(cefNative, /constexpr unsigned kDevelopmentViewLimit = 1;/);
     assert.match(cefNative, /views\.emplace\(state->id, ViewEntry\{state, nullptr\}\);[\s\S]*?CreateBrowserSync\([\s\S]*?const auto entry = views\.find\(state->id\);[\s\S]*?entry->second\.browser = created;/);
     assert.match(cefNative, /void RemoveView\(const std::shared_ptr<ViewState>& state\) \{\s*state->DetachCallbacks\(\);\s*const auto entry = views\.find\(state->id\);\s*if \(entry != views\.end\(\) && entry->second\.state == state\)\s*views\.erase\(entry\);/);
     assert.match(cefNative, /LookupBrowser\(uint64_t id\) \{\s*const auto entry = views\.find\(id\);\s*return entry == views\.end\(\) \? nullptr : entry->second\.browser;/);
@@ -330,7 +330,7 @@ test('CEF fixture observations and attachment handoff are scoped to the originat
         assert.match(cefNative, new RegExp('VeilCef' + name + '\\(uint64_t id\\) \\{\\s*const auto state = LookupView\\(id\\);'));
         assert.match(cefView, new RegExp('VeilCef' + name + '\\(ulong id\\)'));
     }
-    assert.match(cefNative, /constexpr size_t kDevelopmentViewLimit = 1;/);
+    assert.match(cefNative, /constexpr unsigned kDevelopmentViewLimit = 1;/);
 });
 
 
@@ -362,4 +362,16 @@ test('WPF fixture retains the original closing identity and waits for the vault 
     assert.match(cefSmoke, /window\.Closing \+= \(_, e\) =>\s*\{\s*if \(!closing\)\s*\{\s*closing = true;\s*closingHandle = browser\.NativeHandle;/);
     assert.match(cefSmoke, /CefNative\.VeilCefCancelOwnedAttachment\(closingHandle\);\s*vaultStream\?\.Complete\(false\);/);
     assert.match(cefSmoke, /if \(windowClosed && CefNative\.VeilCefClosed\(closingHandle\) != 0 &&\s*CefNative\.VeilCefLiveViewCount\(\) == 0 && \(vaultStream is null \|\| vaultStream\.Finished\.IsCompleted\)\)[\s\S]*?app\.Shutdown\(\);/);
+});
+
+
+test('CEF permits two views only in the synthetic fixture and proves independent close', () => {
+    assert.match(cefNative, /constexpr unsigned kFixtureViewLimit = 2;/);
+    assert.match(cefNative, /unsigned ViewLimit\(\) \{ return fixture_enabled \? kFixtureViewLimit : kDevelopmentViewLimit; \}/);
+    assert.match(cefNative, /if \(views\.size\(\) >= ViewLimit\(\)/);
+    assert.match(cefView, /privateProfileName is not null \|\| viewsCreated >= CefNative\.VeilCefViewLimit\(\)/);
+    assert.match(cefSmoke, /var second = \(CefDevelopmentView\)engine\.CreateView\(\);/);
+    assert.match(cefSmoke, /secondaryHandle == browser\.NativeHandle \|\|[\s\S]*?VeilCefLiveViewCount\(\) != 2/);
+    assert.match(cefSmoke, /secondaryWindowClosed && CefNative\.VeilCefClosed\(secondaryHandle\) != 0/);
+    assert.match(cefSmoke, /VeilCefSetMuted\(secondaryHandle, 1\);[\s\S]*?VeilCefLiveViewCount\(\) != 1/);
 });

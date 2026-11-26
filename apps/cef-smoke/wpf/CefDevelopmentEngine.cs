@@ -8,7 +8,7 @@ namespace Veil.Desktop;
 
 internal sealed class CefDevelopmentEngine : IBrowserEngine
 {
-    private bool viewCreated;
+    private uint viewsCreated;
 
     public string DisplayName => "CEF development host";
     public string? RuntimeVersion => null;
@@ -30,9 +30,9 @@ internal sealed class CefDevelopmentEngine : IBrowserEngine
 
     public IBrowserEngineView CreateView(string? privateProfileName = null)
     {
-        if (!IsReady || viewCreated || privateProfileName is not null)
-            throw new InvalidOperationException("The CEF fixture supports one standard development view.");
-        viewCreated = true;
+        if (!IsReady || privateProfileName is not null || viewsCreated >= CefNative.VeilCefViewLimit())
+            throw new InvalidOperationException("The CEF development view limit or profile restriction was reached.");
+        viewsCreated++;
         return new CefDevelopmentView();
     }
 }
@@ -259,6 +259,7 @@ internal static class CefNative
     [DllImport(Module)] internal static extern int VeilCefOwnedAttachmentResult(ulong id);
     [DllImport(Module)] internal static extern void VeilCefCancelOwnedAttachment(ulong id);
     [DllImport(Module)] internal static extern int VeilCefClosed(ulong id);
+    [DllImport(Module)] internal static extern uint VeilCefViewLimit();
     [DllImport(Module)] internal static extern uint VeilCefLiveViewCount();
     [DllImport(Module)] internal static extern int VeilCefReadyToClose(ulong id);
     [DllImport(Module)] internal static extern void VeilCefPump();
