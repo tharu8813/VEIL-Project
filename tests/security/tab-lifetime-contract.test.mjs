@@ -199,7 +199,7 @@ test('page metadata and history availability route through the live engine view'
     assert.match(webView2, /core\.HistoryChanged \+= OnHistoryChanged;/);
     const dispose = webView2.slice(webView2.indexOf('public void Dispose()'));
     assert.match(dispose, /core\.SourceChanged -= OnSourceChanged;[\s\S]*?core\.DocumentTitleChanged -= OnTitleChanged;[\s\S]*?core\.HistoryChanged -= OnHistoryChanged;/);
-    assert.match(cefView, /DestroyWindowCore[\s\S]*?VeilCefSetPageStateCallback\(null\);[\s\S]*?DestroyWindow\(window\.Handle\)/);
+    assert.match(cefView, /DestroyWindowCore[\s\S]*?VeilCefDetachCallbacks\(window\.Handle\);[\s\S]*?DestroyWindow\(window\.Handle\)/);
 });
 
 
@@ -226,7 +226,7 @@ test('process failure distinguishes page loss from shared session shutdown', () 
     assert.match(failed, /if \(args\.Scope != EngineFailureScope\.BrowserSession\)[\s\S]*?AcceptTabEvents\(tab\) && Active == tab[\s\S]*?return;[\s\S]*?if \(closing \|\| session\.EngineLost\) return;\s*session\.EngineLost = true;/);
     assert.match(failed, /session\.EngineLost = true;[\s\S]*?session\.MainSession\.Save\(\)[\s\S]*?session\.IsEnding = true;[\s\S]*?session\.AllWindows\.ToList\(\)\) window\.Close\(\);/);
     assert.match(cefView, /new EngineProcessFailedEventArgs\(EngineFailureScope\.PageOrChildProcess, code\)/);
-    assert.match(cefView, /DestroyWindowCore[\s\S]*?VeilCefSetRenderProcessFailedCallback\(null\);[\s\S]*?DestroyWindow\(window\.Handle\)/);
+    assert.match(cefView, /DestroyWindowCore[\s\S]*?VeilCefDetachCallbacks\(window\.Handle\);[\s\S]*?DestroyWindow\(window\.Handle\)/);
 });
 
 
@@ -251,7 +251,7 @@ test('page fullscreen is an observed engine state scoped to the active live tab'
     assert.doesNotMatch(webView2Window, /web\.ContainsFullScreenElementChanged \+=/);
     assert.match(webView2, /core\.ContainsFullScreenElementChanged \+= OnFullScreenChanged;/);
     assert.match(webView2.slice(webView2.indexOf('public void Dispose()')), /core\.ContainsFullScreenElementChanged -= OnFullScreenChanged;/);
-    assert.match(cefNative, /void OnFullscreenModeChange\([\s\S]*?page_fullscreen = fullscreen;\s*if \(page_state_changed\) page_state_changed\(4\);/);
+    assert.match(cefNative, /void OnFullscreenModeChange\([\s\S]*?state_->page_fullscreen = fullscreen;\s*if \(state_->page_state_changed\) state_->page_state_changed\(4\);/);
     assert.match(cefView, /case 4: FullScreenChanged\?\.Invoke\(this, EventArgs\.Empty\); break;/);
 });
 
@@ -279,4 +279,16 @@ test('hard reload and find use narrow engine operations with stale result guards
     assert.match(cefNative, /VeilCefReloadIgnoringCache\(\) \{\s*if \(browser\) browser->ReloadIgnoreCache\(\);/);
     assert.match(cefView, /FindTextAsync\(string query, bool backwards\) => Task\.FromResult<bool\?>\(null\)/);
     assert.match(browser, /null => "현재 엔진에서는 페이지 검색을 지원하지 않습니다."/);
+});
+
+
+test('CEF client owns view metadata and callback registration as one lifetime', () => {
+    assert.match(cefNative, /struct ViewState \{[\s\S]*?const HWND parent;[\s\S]*?std::wstring title;[\s\S]*?std::wstring page_source[\s\S]*?BeforeBrowse before_browse;/);
+    assert.match(cefNative, /explicit Client\(std::shared_ptr<ViewState> state\) : state_\(std::move\(state\)\)/);
+    assert.match(cefNative, /if \(browser \|\| active_view \|\| !parent \|\| !starting \|\| !completed \|\| !changed \|\| !failed\)\s*return 0;/);
+    assert.match(cefNative, /if \(!browser\) \{\s*state->DetachCallbacks\(\);\s*if \(active_view == state\) active_view\.reset\(\);/);
+    assert.match(cefNative, /void VeilCefDetachCallbacks\(HWND parent\) \{\s*if \(active_view && active_view->parent == parent\)\s*active_view->DetachCallbacks\(\);/);
+    assert.match(cefNative, /void OnBeforeClose\([\s\S]*?state_->DetachCallbacks\(\);\s*if \(active_view == state_\) \{\s*browser = nullptr;\s*active_view\.reset\(\);/);
+    assert.match(cefView, /VeilCefOpen\(hwnd, onStarting, onCompleted, onPageStateChanged, onRenderProcessFailed\)/);
+    assert.doesNotMatch(cefView, /VeilCefSet(?:NavigationCallbacks|PageStateCallback|RenderProcessFailedCallback)/);
 });

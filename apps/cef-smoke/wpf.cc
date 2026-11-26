@@ -16,21 +16,44 @@
 #include <atomic>
 #include <cstring>
 #include <filesystem>
+#include <memory>
+#include <utility>
 
 namespace {
-CefRefPtr<CefBrowser> browser;
-std::wstring title;
-std::wstring page_source = L"about:blank";
-bool page_fullscreen = false;
 using PageStateChanged = void (*)(int);
-PageStateChanged page_state_changed = nullptr;
 using RenderProcessFailed = void (*)(int);
-RenderProcessFailed render_process_failed = nullptr;
-std::wstring profile_root;
 using BeforeBrowse = int (*)(const wchar_t*, uint64_t, int);
 using NavigationComplete = void (*)(uint64_t, int, int, int);
-BeforeBrowse before_browse = nullptr;
-NavigationComplete navigation_complete = nullptr;
+
+// Owned by the CEF client; accessed on the browser UI thread only.
+// Registration belongs to the same view lifetime as its metadata.
+struct ViewState {
+  explicit ViewState(HWND owner, BeforeBrowse starting, NavigationComplete completed,
+                     PageStateChanged changed, RenderProcessFailed failed)
+      : parent(owner), before_browse(starting), navigation_complete(completed),
+        page_state_changed(changed), render_process_failed(failed) {}
+
+  void DetachCallbacks() {
+    before_browse = nullptr;
+    navigation_complete = nullptr;
+    page_state_changed = nullptr;
+    render_process_failed = nullptr;
+  }
+
+  const HWND parent;
+  std::wstring title;
+  std::wstring page_source = L"about:blank";
+  bool page_fullscreen = false;
+  BeforeBrowse before_browse;
+  NavigationComplete navigation_complete;
+  PageStateChanged page_state_changed;
+  RenderProcessFailed render_process_failed;
+};
+
+// Transitional one-view host; fixture-wide request probes remain separate.
+CefRefPtr<CefBrowser> browser;
+std::shared_ptr<ViewState> active_view;
+std::wstring profile_root;
 unsigned popups_blocked = 0;
 unsigned downloads_blocked = 0;
 unsigned blob_downloads_blocked = 0;
@@ -176,6 +199,7 @@ class Client final : public CefClient,
                      public CefDownloadHandler,
                      public CefPermissionHandler {
  public:
+  explicit Client(std::shared_ptr<ViewState> state) : state_(std::move(state)) {}
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, int,
@@ -258,7 +282,7 @@ class Client final : public CefClient,
     const bool continuation = active_id_ != 0;
     if (!continuation) active_id_ = ++sequence_;
     active_url_ = url;
-    if (!before_browse || before_browse(url.ToWString().c_str(), active_id_, continuation)) {
+    if (!state_->before_browse || state_->before_browse(url.ToWString().c_str(), active_id_, continuation)) {
       Complete(0, true, ERR_ABORTED);
       return true;
     }
@@ -276,32 +300,36 @@ class Client final : public CefClient,
   void OnAddressChange(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
                        const CefString& value) override {
     if (!frame->IsMain()) return;
-    page_source = value.ToWString();
-    if (page_state_changed) page_state_changed(1);
+    state_->page_source = value.ToWString();
+    if (state_->page_state_changed) state_->page_state_changed(1);
   }
   void OnTitleChange(CefRefPtr<CefBrowser>, const CefString& value) override {
-    title = value.ToWString();
-    if (page_state_changed) page_state_changed(2);
+    state_->title = value.ToWString();
+    if (state_->page_state_changed) state_->page_state_changed(2);
   }
   void OnLoadingStateChange(CefRefPtr<CefBrowser>, bool, bool, bool) override {
-    if (page_state_changed) page_state_changed(3);
+    if (state_->page_state_changed) state_->page_state_changed(3);
   }
   void OnFullscreenModeChange(CefRefPtr<CefBrowser>, bool fullscreen) override {
-    page_fullscreen = fullscreen;
-    if (page_state_changed) page_state_changed(4);
+    state_->page_fullscreen = fullscreen;
+    if (state_->page_state_changed) state_->page_state_changed(4);
   }
   void OnRenderProcessTerminated(CefRefPtr<CefBrowser>, TerminationStatus,
                                  int error_code, const CefString&) override {
     // A renderer is a child process. The browser/managed host is still alive.
     // Release any serialized navigation so a user-directed retry can proceed.
     Complete(false, false, ERR_FAILED);
-    if (render_process_failed) render_process_failed(error_code);
+    if (state_->render_process_failed) state_->render_process_failed(error_code);
   }
   // Normal shutdown is not a crash notification. The host process cannot
   // report its own abrupt termination through this in-process callback.
   void OnBeforeClose(CefRefPtr<CefBrowser>) override {
-    page_fullscreen = false;
-    browser = nullptr;
+    state_->page_fullscreen = false;
+    state_->DetachCallbacks();
+    if (active_view == state_) {
+      browser = nullptr;
+      active_view.reset();
+    }
   }
 
  private:
@@ -309,9 +337,10 @@ class Client final : public CefClient,
     const uint64_t id = active_id_;
     active_id_ = 0;
     active_url_.clear();
-    if (id && navigation_complete) navigation_complete(id, success, canceled, code);
+    if (id && state_->navigation_complete) state_->navigation_complete(id, success, canceled, code);
   }
 
+  const std::shared_ptr<ViewState> state_;
   uint64_t sequence_ = 0;
   uint64_t active_id_ = 0;
   CefString active_url_;
@@ -353,10 +382,9 @@ int RunManagedWindow() {
 }
 }  // namespace
 
-extern "C" __declspec(dllexport) void VeilCefSetNavigationCallbacks(
-    BeforeBrowse starting, NavigationComplete completed) {
-  before_browse = starting;
-  navigation_complete = completed;
+extern "C" __declspec(dllexport) void VeilCefDetachCallbacks(HWND parent) {
+  if (active_view && active_view->parent == parent)
+    active_view->DetachCallbacks();
 }
 
 extern "C" __declspec(dllexport) unsigned VeilCefDownloadsBlocked() { return downloads_blocked; }
@@ -417,14 +445,24 @@ extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(const wchar_t* 
 }
 extern "C" __declspec(dllexport) int VeilCefOwnedAttachmentResult() { return owned_result; }
 
-extern "C" __declspec(dllexport) int VeilCefOpen(HWND parent) {
-  if (browser) return 0;
+extern "C" __declspec(dllexport) int VeilCefOpen(
+    HWND parent, BeforeBrowse starting, NavigationComplete completed,
+    PageStateChanged changed, RenderProcessFailed failed) {
+  if (browser || active_view || !parent || !starting || !completed || !changed || !failed)
+    return 0;
+  auto state = std::make_shared<ViewState>(parent, starting, completed, changed, failed);
+  active_view = state;
   CefWindowInfo window;
   window.SetAsChild(parent, CefRect(0, 0, 1, 1));
   window.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
-  browser = CefBrowserHost::CreateBrowserSync(window, new Client(), "about:blank",
+  browser = CefBrowserHost::CreateBrowserSync(window, new Client(state), "about:blank",
       CefBrowserSettings(), nullptr, nullptr);
-  return browser ? 1 : 0;
+  if (!browser) {
+    state->DetachCallbacks();
+    if (active_view == state) active_view.reset();
+    return 0;
+  }
+  return 1;
 }
 
 extern "C" __declspec(dllexport) void VeilCefResize(HWND parent) {
@@ -475,16 +513,10 @@ extern "C" __declspec(dllexport) void VeilCefSetZoomLevel(double level) {
   if (browser) browser->GetHost()->SetZoomLevel(level);
 }
 
-extern "C" __declspec(dllexport) void VeilCefSetPageStateCallback(PageStateChanged callback) {
-  page_state_changed = callback;
-}
-extern "C" __declspec(dllexport) void VeilCefSetRenderProcessFailedCallback(RenderProcessFailed callback) {
-  render_process_failed = callback;
-}
 extern "C" __declspec(dllexport) unsigned VeilCefPopupsBlocked() { return popups_blocked; }
-extern "C" __declspec(dllexport) int VeilCefIsPageFullScreen() { return page_fullscreen ? 1 : 0; }
-extern "C" __declspec(dllexport) const wchar_t* VeilCefSource() { return page_source.c_str(); }
-extern "C" __declspec(dllexport) const wchar_t* VeilCefTitle() { return title.c_str(); }
+extern "C" __declspec(dllexport) int VeilCefIsPageFullScreen() { return active_view && active_view->page_fullscreen ? 1 : 0; }
+extern "C" __declspec(dllexport) const wchar_t* VeilCefSource() { return active_view ? active_view->page_source.c_str() : L""; }
+extern "C" __declspec(dllexport) const wchar_t* VeilCefTitle() { return active_view ? active_view->title.c_str() : L""; }
 extern "C" __declspec(dllexport) int VeilCefClosed() { return browser ? 0 : 1; }
 extern "C" __declspec(dllexport) int VeilCefReadyToClose() {
   return !browser || browser->GetHost()->IsReadyToBeClosed();
