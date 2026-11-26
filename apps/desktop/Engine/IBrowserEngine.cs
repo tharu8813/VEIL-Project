@@ -32,6 +32,8 @@ internal interface IBrowserEngineView : IDisposable
     event EventHandler? FaviconChanged;
     Task<Stream?> GetFaviconPngAsync();
     event EventHandler? AudioStateChanged;
+    // Unexpected process failure only. A normal view close is not an engine failure.
+    event EventHandler<EngineProcessFailedEventArgs>? ProcessFailed;
     // Null means unavailable or unverified; it is not equivalent to silence/unmuted.
     bool? IsDocumentPlayingAudio { get; }
     bool? IsMuted { get; }
@@ -65,4 +67,13 @@ internal sealed class EngineNavigationCompletedEventArgs(
     internal bool IsSuccess { get; } = isSuccess;
     internal bool IsCanceled { get; } = isCanceled;
     internal int NativeErrorCode { get; } = nativeErrorCode;
+}
+
+internal enum EngineFailureScope { PageOrChildProcess, BrowserSession }
+
+// NativeCode is diagnostic only and must never be interpreted as another engine's error enum.
+internal sealed class EngineProcessFailedEventArgs(EngineFailureScope scope, int nativeCode) : EventArgs
+{
+    internal EngineFailureScope Scope { get; } = scope;
+    internal int NativeCode { get; } = nativeCode;
 }

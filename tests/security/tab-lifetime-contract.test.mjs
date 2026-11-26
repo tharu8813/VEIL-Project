@@ -213,3 +213,17 @@ test('tab audio and favicon data use the engine boundary without external icon f
     assert.match(cefView, /GetFaviconPngAsync\(\) => Task\.FromResult<Stream\?>\(null\)/);
     assert.match(cefView, /VeilCefSetMuted\(muted \? 1 : 0\);/);
 });
+
+
+test('process failure distinguishes page loss from shared session shutdown', () => {
+    assert.match(browser, /engineView\.ProcessFailed \+= \(_, args\) => tab\.Owner\.OnProcessFailed\(tab, args\);/);
+    assert.doesNotMatch(webView2Window, /web\.ProcessFailed \+=/);
+    assert.match(webView2, /args\.ProcessFailedKind == CoreWebView2ProcessFailedKind\.BrowserProcessExited\s*\? EngineFailureScope\.BrowserSession : EngineFailureScope\.PageOrChildProcess/);
+    assert.match(webView2, /core\.ProcessFailed \+= OnProcessFailed;/);
+    assert.match(webView2.slice(webView2.indexOf('public void Dispose()')), /core\.ProcessFailed -= OnProcessFailed;/);
+    const failed = browser.slice(browser.indexOf('private void OnProcessFailed'), browser.indexOf('private void OnDownloadStarting'));
+    assert.match(failed, /if \(args\.Scope != EngineFailureScope\.BrowserSession\)[\s\S]*?AcceptTabEvents\(tab\) && Active == tab[\s\S]*?return;[\s\S]*?if \(closing \|\| session\.EngineLost\) return;\s*session\.EngineLost = true;/);
+    assert.match(failed, /session\.EngineLost = true;[\s\S]*?session\.MainSession\.Save\(\)[\s\S]*?session\.IsEnding = true;[\s\S]*?session\.AllWindows\.ToList\(\)\) window\.Close\(\);/);
+    assert.match(cefView, /new EngineProcessFailedEventArgs\(EngineFailureScope\.PageOrChildProcess, code\)/);
+    assert.match(cefView, /DestroyWindowCore[\s\S]*?VeilCefSetRenderProcessFailedCallback\(null\);[\s\S]*?DestroyWindow\(window\.Handle\)/);
+});
