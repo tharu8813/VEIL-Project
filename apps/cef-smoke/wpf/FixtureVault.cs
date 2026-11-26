@@ -8,7 +8,7 @@ using System.Threading.Channels;
 
 namespace Veil.Cef;
 
-internal enum VaultScenario { Truncated, Saturated, Full }
+internal enum VaultScenario { Truncated, Saturated, Full, ParallelCanceled, ParallelFull }
 
 internal sealed class FixtureVault
 {
@@ -19,6 +19,8 @@ internal sealed class FixtureVault
     private readonly TaskCompletionSource releaseReader = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private volatile bool fullResponse;
     private int completed;
+    private int receivedBytes;
+    internal int ReceivedBytes => Volatile.Read(ref receivedBytes);
 
     internal FixtureVault(string executable, string profile, VaultScenario scenario)
     {
@@ -43,7 +45,11 @@ internal sealed class FixtureVault
         if (data == 0 || length is <= 0 or > ChunkSize) return 0;
         var chunk = new byte[length];
         Marshal.Copy(data, chunk, 0, length);
-        if (chunks.Writer.TryWrite(chunk)) return 1;
+        if (chunks.Writer.TryWrite(chunk))
+        {
+            Interlocked.Add(ref receivedBytes, length);
+            return 1;
+        }
         CryptographicOperations.ZeroMemory(chunk);
         return 0;
     }
@@ -52,12 +58,18 @@ internal sealed class FixtureVault
     {
         try
         {
-            var directory = Path.Combine(profile, "fixture-vault");
+            var directory = Path.Combine(profile, scenario switch
+            {
+                VaultScenario.ParallelCanceled => "fixture-vault-parallel-cancel",
+                VaultScenario.ParallelFull => "fixture-vault-parallel-keep",
+                _ => "fixture-vault",
+            });
             Directory.CreateDirectory(directory);
             var objectPath = Path.Combine(directory, scenario switch
             {
                 VaultScenario.Truncated => "truncated.veil",
                 VaultScenario.Saturated => "saturated.veil",
+                VaultScenario.ParallelCanceled => "canceled.veil",
                 _ => "fixture.veil",
             });
             var start = new ProcessStartInfo(executable)
@@ -74,7 +86,7 @@ internal sealed class FixtureVault
             {
                 var input = process.StandardInput.BaseStream;
                 var output = process.StandardOutput.BaseStream;
-                WriteLine(input, scenario == VaultScenario.Truncated
+                WriteLine(input, scenario is VaultScenario.Truncated or VaultScenario.ParallelCanceled or VaultScenario.ParallelFull
                     ? "create\tcef-fixture-passphrase\tTESTA-TESTB-TESTC-TESTD-TESTE-TESTF-TESTG-TESTH"
                     : "unlock\tcef-fixture-passphrase");
                 if (ReadLine(output) != "ok") return false;
@@ -106,7 +118,7 @@ internal sealed class FixtureVault
                     }
                 }
                 var reply = ReadLine(output);
-                if (scenario != VaultScenario.Full)
+                if (scenario is not (VaultScenario.Full or VaultScenario.ParallelFull))
                 {
                     if (fullResponse || total is <= 0 or >= BodySize || !reply.StartsWith("err\t", StringComparison.Ordinal) ||
                         File.Exists(objectPath)) return false;

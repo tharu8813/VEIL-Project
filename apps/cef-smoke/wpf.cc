@@ -518,8 +518,17 @@ extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(uint64_t id, co
   if (!CefParseURL(url, parts) || CefString(&parts.scheme) != "http" ||
       CefString(&parts.host) != "127.0.0.1") return 0;
   const CefString path(&parts.path);
+  const bool parallel = path == "/wpf-owned-parallel-keep" || path == "/wpf-owned-parallel-cancel";
   if (path != "/wpf-owned-attachment" && path != "/wpf-owned-truncated" &&
-      path != "/wpf-owned-saturated") return 0;
+      path != "/wpf-owned-saturated" && !parallel) return 0;
+  if (parallel) {
+    CefURLParts source;
+    if (!CefParseURL(browser->GetMainFrame()->GetURL(), source) ||
+        CefString(&source.origin) != CefString(&parts.origin)) return 0;
+    const CefString source_path(&source.path);
+    if ((path == "/wpf-owned-parallel-keep" && source_path != "/wpf-first") ||
+        (path == "/wpf-owned-parallel-cancel" && source_path != "/wpf-isolation-reopened")) return 0;
+  }
   if (path == "/wpf-owned-attachment") {
     if (!state->page_attachment_intercepted || url != state->armed_page_attachment) return 0;
     state->page_attachment_intercepted = false;
