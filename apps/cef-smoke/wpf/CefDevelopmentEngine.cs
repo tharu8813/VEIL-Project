@@ -259,6 +259,7 @@ internal static class CefNative
     [DllImport(Module)] internal static extern int VeilCefOwnedAttachmentResult(ulong id);
     [DllImport(Module)] internal static extern void VeilCefCancelOwnedAttachment(ulong id);
     [DllImport(Module)] internal static extern int VeilCefClosed(ulong id);
+    [DllImport(Module)] internal static extern uint VeilCefLiveViewCount();
     [DllImport(Module)] internal static extern int VeilCefReadyToClose(ulong id);
     [DllImport(Module)] internal static extern void VeilCefPump();
     [DllImport(Module)] internal static extern int VeilCefTryClose(ulong id);

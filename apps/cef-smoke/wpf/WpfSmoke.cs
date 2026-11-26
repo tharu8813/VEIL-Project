@@ -187,11 +187,14 @@ public static class WpfSmoke
         };
         window.Closing += (_, e) =>
         {
-            closing = true;
-            CefNative.VeilCefCancelOwnedAttachment(browser.NativeHandle);
-            vaultStream?.Complete(false);
-            Trace("Requesting CEF close");
-            closingHandle = browser.NativeHandle;
+            if (!closing)
+            {
+                closing = true;
+                closingHandle = browser.NativeHandle;
+                CefNative.VeilCefCancelOwnedAttachment(closingHandle);
+                vaultStream?.Complete(false);
+                Trace("Requesting CEF close");
+            }
             e.Cancel = CefNative.VeilCefTryClose(closingHandle) == 0;
         };
         window.Closed += (_, _) =>
@@ -203,16 +206,18 @@ public static class WpfSmoke
         pump.Tick += (_, _) =>
         {
             CefNative.VeilCefPump();
-            if (windowClosed && CefNative.VeilCefClosed(closingHandle) != 0)
+            if (windowClosed && CefNative.VeilCefClosed(closingHandle) != 0 &&
+                CefNative.VeilCefLiveViewCount() == 0 && (vaultStream is null || vaultStream.Finished.IsCompleted))
             {
                 Trace("CEF browser closed");
+                Trace("CEF view registry drained and vault task settled");
                 pump.Stop();
                 app.Shutdown();
                 return;
             }
             if (closing)
             {
-                if (!windowClosed && CefNative.VeilCefReadyToClose(browser.NativeHandle) != 0) window.Close();
+                if (!windowClosed && CefNative.VeilCefReadyToClose(closingHandle) != 0) window.Close();
                 return;
             }
 

@@ -155,6 +155,7 @@ try {
   assert.match(evidence, /Observed shared mute state round trip; playback and favicon unavailable/);
   assert.match(evidence, /Observed shared engine source, title and history events/);
   assert.match(evidence, /Normal fixture shutdown emitted no unexpected process failure/);
+  assert.match(evidence, /CEF view registry drained and vault task settled/);
   assert.match(evidence, /Observed mandatory native popup denial/);
   assert.ok(!requests.includes('/wpf-popup-target'), 'Denied popup must not reach HTTP');
   assert.match(evidence, /Intercepted the page attachment before browser navigation reached HTTP/);
