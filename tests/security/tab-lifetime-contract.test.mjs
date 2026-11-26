@@ -287,7 +287,7 @@ test('CEF client owns view metadata and callback registration as one lifetime', 
     assert.match(cefNative, /explicit Client\(std::shared_ptr<ViewState> state\) : state_\(std::move\(state\)\)/);
     assert.match(cefNative, /if \(views\.size\(\) >= kDevelopmentViewLimit \|\| !parent \|\| !starting \|\| !completed \|\| !changed \|\| !failed \|\|[\s\S]*?\)\s*return 0;/);
     assert.match(cefNative, /if \(!created \|\| entry == views\.end\(\) \|\| entry->second\.state != state\) \{\s*RemoveView\(state\);\s*return 0;/);
-    assert.match(cefNative, /void VeilCefDetachCallbacks\(uint64_t id, HWND parent\) \{\s*const auto state = LookupView\(id\);\s*if \(state && state->parent == parent\) \{\s*state->DetachCallbacks\(\);\s*if \(state->owned_transfer\) state->owned_transfer->Cancel\(\);/);
+    assert.match(cefNative, /void VeilCefDetachCallbacks\(uint64_t id, HWND parent\) \{\s*const auto state = LookupView\(id\);\s*if \(state && state->parent == parent\) \{\s*state->closing = true;\s*state->DetachCallbacks\(\);\s*if \(state->owned_transfer\) state->owned_transfer->Cancel\(\);/);
     assert.match(cefNative, /void OnBeforeClose\([\s\S]*?RemoveView\(state_\);/);
     assert.match(cefView, /VeilCefOpen\(hwnd, onStarting, onCompleted, onPageStateChanged, onRenderProcessFailed\)/);
     assert.doesNotMatch(cefView, /VeilCefSet(?:NavigationCallbacks|PageStateCallback|RenderProcessFailedCallback)/);
@@ -344,4 +344,22 @@ test('owned download requests have per-transfer lifetime and cancel before relea
     assert.match(cefNative, /VeilCefOwnedAttachmentResult\(uint64_t id\)[\s\S]*?state->owned_transfer->result/);
     assert.match(cefNative, /VeilCefCancelOwnedAttachment\(uint64_t id\)[\s\S]*?state->owned_transfer->Cancel\(\)/);
     assert.doesNotMatch(cefNative, /OwnedChunk owned_chunk|CefRefPtr<CefURLRequest> owned_request/);
+});
+
+
+test('CEF close is scoped to a view and host shutdown waits for the native registry', () => {
+    assert.match(cefNative, /VeilCefClosed\(uint64_t id\) \{ return LookupView\(id\) \? 0 : 1; \}/);
+    assert.match(cefNative, /VeilCefLiveViewCount\(\) \{\s*return static_cast<unsigned>\(views\.size\(\)\);/);
+    assert.match(cefNative, /void VeilCefDetachCallbacks\([\s\S]*?state->closing = true;\s*state->DetachCallbacks\(\);[\s\S]*?if \(browser && !browser->GetHost\(\)->IsReadyToBeClosed\(\)\)\s*browser->GetHost\(\)->CloseBrowser\(true\);/);
+    assert.match(cefNative, /bool OnBeforeBrowse\([\s\S]*?if \(state_->closing\) return true;/);
+    assert.match(cefNative, /const bool ready = browser->GetHost\(\)->TryCloseBrowser\(\);\s*if \(ready\) state->closing = true;/);
+    assert.match(cefNative, /while \(!views\.empty\(\) && GetTickCount64\(\) - drain_started < 5000\)[\s\S]*?if \(!views\.empty\(\)\) \{[\s\S]*?std::quick_exit\(27\);[\s\S]*?CefShutdown\(\);/);
+    assert.match(cefView, /VeilCefLiveViewCount\(\)/);
+});
+
+const cefSmoke = await readFile('apps/cef-smoke/wpf/WpfSmoke.cs', 'utf8');
+test('WPF fixture retains the original closing identity and waits for the vault task', () => {
+    assert.match(cefSmoke, /window\.Closing \+= \(_, e\) =>\s*\{\s*if \(!closing\)\s*\{\s*closing = true;\s*closingHandle = browser\.NativeHandle;/);
+    assert.match(cefSmoke, /CefNative\.VeilCefCancelOwnedAttachment\(closingHandle\);\s*vaultStream\?\.Complete\(false\);/);
+    assert.match(cefSmoke, /if \(windowClosed && CefNative\.VeilCefClosed\(closingHandle\) != 0 &&\s*CefNative\.VeilCefLiveViewCount\(\) == 0 && \(vaultStream is null \|\| vaultStream\.Finished\.IsCompleted\)\)[\s\S]*?app\.Shutdown\(\);/);
 });

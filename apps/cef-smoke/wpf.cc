@@ -15,6 +15,7 @@
 #include <iterator>
 #include <atomic>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <limits>
@@ -74,6 +75,7 @@ struct ViewState {
   std::wstring title;
   std::wstring page_source = L"about:blank";
   bool page_fullscreen = false;
+  bool closing = false;
   BeforeBrowse before_browse;
   NavigationComplete navigation_complete;
   PageStateChanged page_state_changed;
@@ -322,6 +324,7 @@ class Client final : public CefClient,
   }
   bool OnBeforeBrowse(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
                       CefRefPtr<CefRequest> request, bool, bool redirect) override {
+    if (state_->closing) return true;
     const CefString url = request->GetURL();
     if (url == "about:blank") return false;
     CefURLParts parts;
@@ -443,8 +446,14 @@ int RunManagedWindow() {
 extern "C" __declspec(dllexport) void VeilCefDetachCallbacks(uint64_t id, HWND parent) {
   const auto state = LookupView(id);
   if (state && state->parent == parent) {
+    state->closing = true;
     state->DetachCallbacks();
     if (state->owned_transfer) state->owned_transfer->Cancel();
+    const auto browser = LookupBrowser(id);
+    // HwndHost is disposing: finish this browser even if normal close was
+    // never requested. Keep the registry entry until OnBeforeClose.
+    if (browser && !browser->GetHost()->IsReadyToBeClosed())
+      browser->GetHost()->CloseBrowser(true);
   }
 }
 
@@ -475,7 +484,7 @@ extern "C" __declspec(dllexport) int VeilCefAttachmentFilteredBytes(uint64_t id)
 extern "C" __declspec(dllexport) int VeilCefClickFixtureAttachment(uint64_t id, const wchar_t* address) {
   const auto browser = LookupBrowser(id);
   const auto state = LookupView(id);
-  if (!fixture_enabled || !browser || !state || !state->armed_page_attachment.empty()) return 0;
+  if (!fixture_enabled || !browser || !state || state->closing || !state->armed_page_attachment.empty()) return 0;
   const auto frame = browser->GetMainFrame();
   const auto source = frame->GetURL();
   CefURLParts parts;
@@ -500,7 +509,7 @@ extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(uint64_t id, co
                                                                  OwnedChunk chunk) {
   const auto browser = LookupBrowser(id);
   const auto state = LookupView(id);
-  if (!fixture_enabled || !browser || !state || !chunk ||
+  if (!fixture_enabled || !browser || !state || state->closing || !chunk ||
       (state->owned_transfer && state->owned_transfer->active)) return 0;
   CefString url(address);
   CefURLParts parts;
@@ -647,15 +656,24 @@ extern "C" __declspec(dllexport) const wchar_t* VeilCefTitle(uint64_t id) {
   const auto state = LookupView(id);
   return state ? state->title.c_str() : L"";
 }
-extern "C" __declspec(dllexport) int VeilCefClosed(uint64_t id) { return LookupBrowser(id) ? 0 : 1; }
+extern "C" __declspec(dllexport) int VeilCefClosed(uint64_t id) { return LookupView(id) ? 0 : 1; }
+extern "C" __declspec(dllexport) unsigned VeilCefLiveViewCount() {
+  return static_cast<unsigned>(views.size());
+}
 extern "C" __declspec(dllexport) int VeilCefReadyToClose(uint64_t id) {
   const auto browser = LookupBrowser(id);
-  return !browser || browser->GetHost()->IsReadyToBeClosed();
+  return !LookupView(id) || (browser && browser->GetHost()->IsReadyToBeClosed());
 }
 extern "C" __declspec(dllexport) void VeilCefPump() { CefDoMessageLoopWork(); }
 extern "C" __declspec(dllexport) int VeilCefTryClose(uint64_t id) {
   const auto browser = LookupBrowser(id);
-  return !browser || browser->GetHost()->TryCloseBrowser();
+  const auto state = LookupView(id);
+  if (!state) return 1;
+  if (!browser) return 0;
+  if (state->owned_transfer) state->owned_transfer->Cancel();
+  const bool ready = browser->GetHost()->TryCloseBrowser();
+  if (ready) state->closing = true;
+  return ready ? 1 : 0;
 }
 
 int RunWinMain(HINSTANCE instance, LPWSTR, int, void* sandbox_info, cef_version_info_t*) {
@@ -693,8 +711,23 @@ int RunWinMain(HINSTANCE instance, LPWSTR, int, void* sandbox_info, cef_version_
   std::vector<std::shared_ptr<ViewState>> remaining;
   for (const auto& entry : views) remaining.push_back(entry.second.state);
   for (const auto& state : remaining) {
+    state->closing = true;
     state->DetachCallbacks();
     if (state->owned_transfer) state->owned_transfer->Cancel();
+    const auto browser = LookupBrowser(state->id);
+    if (browser) browser->GetHost()->CloseBrowser(true);
+  }
+  remaining.clear();
+  // Never call CefShutdown while a browser still has a live registry entry.
+  // This is an abnormal fixture exit, not a successful shutdown.
+  const ULONGLONG drain_started = GetTickCount64();
+  while (!views.empty() && GetTickCount64() - drain_started < 5000) {
+    CefDoMessageLoopWork();
+    Sleep(1);
+  }
+  if (!views.empty()) {
+    OutputDebugStringW(L"VEIL CEF: browser registry failed to drain before shutdown.");
+    std::quick_exit(27);
   }
   profile_root.clear();
   CefShutdown();
