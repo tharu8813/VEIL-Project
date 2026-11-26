@@ -348,7 +348,12 @@ extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(const wchar_t* 
       CefString(&parts.host) != "127.0.0.1") return 0;
   const CefString path(&parts.path);
   if (path != "/wpf-owned-attachment" && path != "/wpf-owned-truncated" &&
-      path != "/wpf-owned-saturated") return 0;
+      path != "/wpf-owned-saturated" && path != "/wpf-owned-redirect") return 0;
+  // All fixture-owned requests must remain on the current page's loopback origin,
+  // including its port. A redirect must not silently broaden this scope.
+  CefURLParts source;
+  if (!CefParseURL(browser->GetMainFrame()->GetURL(), source) ||
+      CefString(&parts.origin) != CefString(&source.origin)) return 0;
   if (path == "/wpf-owned-attachment") {
     if (!page_attachment_intercepted || url != armed_page_attachment) return 0;
     page_attachment_intercepted = false;

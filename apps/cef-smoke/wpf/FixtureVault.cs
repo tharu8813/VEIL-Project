@@ -8,7 +8,7 @@ using System.Threading.Channels;
 
 namespace Veil.Cef;
 
-internal enum VaultScenario { Truncated, Saturated, Full }
+internal enum VaultScenario { Truncated, Redirect, Saturated, Full }
 
 internal sealed class FixtureVault
 {
@@ -57,6 +57,7 @@ internal sealed class FixtureVault
             var objectPath = Path.Combine(directory, scenario switch
             {
                 VaultScenario.Truncated => "truncated.veil",
+                VaultScenario.Redirect => "redirect.veil",
                 VaultScenario.Saturated => "saturated.veil",
                 _ => "fixture.veil",
             });
@@ -108,7 +109,10 @@ internal sealed class FixtureVault
                 var reply = ReadLine(output);
                 if (scenario != VaultScenario.Full)
                 {
-                    if (fullResponse || total is <= 0 or >= BodySize || !reply.StartsWith("err\t", StringComparison.Ordinal) ||
+                    bool expectedBytes = scenario == VaultScenario.Redirect
+                        ? total == 0
+                        : total > 0 && total < BodySize;
+                    if (fullResponse || !expectedBytes || !reply.StartsWith("err\t", StringComparison.Ordinal) ||
                         File.Exists(objectPath)) return false;
                 }
                 else

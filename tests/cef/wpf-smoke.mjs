@@ -71,7 +71,15 @@ const server = http.createServer((request, response) => {
     setTimeout(() => response.end(body.subarray(16 * 1024)), 250);
     return;
   }
-  if (['/wpf-owned-attachment', '/wpf-owned-truncated', '/wpf-owned-saturated'].includes(request.url)) {
+  if (request.url === '/wpf-owned-redirect') {
+    response.writeHead(302, {
+      Location: '/wpf-owned-redirect-target',
+      'Content-Length': 0,
+      'Cache-Control': 'no-store',
+    }).end();
+    return;
+  }
+  if (['/wpf-owned-attachment', '/wpf-owned-truncated', '/wpf-owned-saturated', '/wpf-owned-redirect-target'].includes(request.url)) {
     if (request.url === '/wpf-owned-attachment') {
       pageAttachmentRequests.push([request.method, request.headers['x-veil-fixture-handoff']]);
     }
@@ -147,7 +155,8 @@ try {
   assert.ok(requests.includes('/wpf-policy'), 'The permission fixture did not navigate');
   assert.equal(requests.filter(request => request === '/wpf-attachment').length, 1, 'The attachment must not be replayed');
   assert.equal(requests.filter(request => request === '/wpf-response').length, 1, 'The body must come from the original request');
-  for (const route of ['/wpf-owned-truncated', '/wpf-owned-saturated', '/wpf-owned-attachment']) {
+  assert.ok(!requests.includes('/wpf-owned-redirect-target'), 'Owned attachment followed a redirect');
+  for (const route of ['/wpf-owned-truncated', '/wpf-owned-redirect', '/wpf-owned-saturated', '/wpf-owned-attachment']) {
     assert.equal(requests.filter(request => request === route).length, 1, `${route} must not be replayed`);
   }
   assert.match(evidence, /Development adapter rejected unsupported profile, network and navigation inputs[\s\S]*Navigation request canceled before HTTP[\s\S]*Observed JavaScript title[\s\S]*Observed matched redirect, completion, and back and forward navigation[\s\S]*Observed HTTP failure completion[\s\S]*Observed rejected HTTP and Blob downloads, geolocation and media permissions[\s\S]*WPF window closed[\s\S]*CEF browser closed[\s\S]*WPF dispatcher stopped/);
@@ -161,7 +170,7 @@ try {
   assert.deepEqual(files.filter(file => file.endsWith('.veil')), [sealed]);
   const ciphertext = await readFile(join(fixtureTemp, sealed));
   assert.ok(!ciphertext.includes(body.subarray(0, 512)), 'The stored object contains a plaintext fixture segment');
-  assert.match(evidence, /Rust vault aborted the truncated stream without publishing an object[\s\S]*CEF canceled the saturated stream and Rust vault published no object[\s\S]*Rust vault streamed and restored all 786432 bytes/);
+  assert.match(evidence, /Rust vault aborted the truncated stream without publishing an object[\s\S]*CEF refused the redirect and Rust vault published no object or response bytes[\s\S]*CEF canceled the saturated stream and Rust vault published no object[\s\S]*Rust vault streamed and restored all 786432 bytes/);
   const observed = /Verified 98304 response bytes in memory\. Blocked attachment passed (\d+) bytes to the filter\./.exec(evidence);
   assert.ok(observed);
   assert.ok(Number(observed[1]) < body.length, 'The delayed attachment should be canceled before the full body arrives');

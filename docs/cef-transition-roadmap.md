@@ -25,3 +25,7 @@
 공식 CEF Windows Sandbox 문서는 M138부터 사전 빌드된 bootstrap 실행 파일로 클라이언트 DLL을 로드하고, 같은 실행 파일이 브라우저·자식 프로세스를 담당하는 구성을 설명한다. 이 구성을 1단계에서 먼저 실측한다. CefSharp는 WPF 연동 사례가 있지만 프로젝트 문서가 CEF 샌드박스 미지원으로 명시하므로, VEIL 제품의 기본 어댑터로 선정하지 않는다. [CEF Windows 샌드박스 문서](https://github.com/chromiumembedded/cef/blob/master/docs/sandbox_setup.md) · [CefSharp 배포 안내](https://github.com/cefsharp/CefSharp/blob/master/NuGet/Readme.txt)
 
 브라우저 컨트롤의 렌더링만으로 보안 통과를 판정하지 않는다. 사용자 데이터는 2단계 합성 검증에 사용하지 않는다. 현재 Windows x64 배포 버전은 1단계 시작 시 확인한다. [CEF 공식 문서](https://github.com/chromiumembedded/cef/blob/master/docs/README.md) · [VEIL 출시 게이트](11-security-release-gates.md)
+
+### 추가 검증: 다운로드 리다이렉트 거부
+
+개발용 소유 GET 요청은 현재 루프백 페이지와 같은 origin(포트 포함)만 허용한다. HTTP 302 응답의 대상 주소에 요청하지 않고, 금고에 전달한 바이트가 0이며 완성 객체를 발행하지 않는지 확인하는 회귀 시나리오를 추가했다. Windows 실측은 NOT RUN (작성 시점). 인증 다운로드와 제품 네트워크 정책의 통과 증거는 아니다.

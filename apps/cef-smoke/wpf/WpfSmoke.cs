@@ -227,6 +227,7 @@ public static class WpfSmoke
                 var path = vaultScenario switch
                 {
                     VaultScenario.Truncated => "/wpf-owned-truncated",
+                    VaultScenario.Redirect => "/wpf-owned-redirect",
                     VaultScenario.Saturated => "/wpf-owned-saturated",
                     _ => "/wpf-owned-attachment",
                 };
@@ -265,6 +266,7 @@ public static class WpfSmoke
                 var expected = vaultScenario switch
                 {
                     VaultScenario.Truncated => -1,
+                    VaultScenario.Redirect => -1,
                     VaultScenario.Saturated => -2,
                     _ => FixtureVault.BodySize,
                 };
@@ -287,10 +289,18 @@ public static class WpfSmoke
                 }
                 else if (vaultScenario != VaultScenario.Full)
                 {
-                    Trace(vaultScenario == VaultScenario.Truncated
-                        ? "Rust vault aborted the truncated stream without publishing an object"
-                        : "CEF canceled the saturated stream and Rust vault published no object");
-                    vaultScenario = vaultScenario == VaultScenario.Truncated ? VaultScenario.Saturated : VaultScenario.Full;
+                    Trace(vaultScenario switch
+                    {
+                        VaultScenario.Truncated => "Rust vault aborted the truncated stream without publishing an object",
+                        VaultScenario.Redirect => "CEF refused the redirect and Rust vault published no object or response bytes",
+                        _ => "CEF canceled the saturated stream and Rust vault published no object",
+                    });
+                    vaultScenario = vaultScenario switch
+                    {
+                        VaultScenario.Truncated => VaultScenario.Redirect,
+                        VaultScenario.Redirect => VaultScenario.Saturated,
+                        _ => VaultScenario.Full,
+                    };
                     vaultStream = new FixtureVault(fixtureVault!, CefDevelopmentEngine.FixtureProfile, vaultScenario);
                     phase = 6;
                 }
