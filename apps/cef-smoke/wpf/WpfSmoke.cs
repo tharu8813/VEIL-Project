@@ -264,17 +264,17 @@ public static class WpfSmoke
                 go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             }
             else if (phase == 5 && title == "VEIL_CEF_RESPONSE_AND_PERMISSIONS_OK" &&
-                     CefNative.VeilCefResponseMatches() == 1 && CefNative.VeilCefAttachmentFilteredBytes() >= 0 &&
-                     CefNative.VeilCefPopupsBlocked() != 0 &&
-                     CefNative.VeilCefPermissionsDenied() != 0 &&
-                     CefNative.VeilCefMediaPermissionsDenied() != 0 &&
-                     CefNative.VeilCefBlobDownloadsBlocked() != 0 &&
-                     CefNative.VeilCefDownloadsBlocked() > CefNative.VeilCefBlobDownloadsBlocked())
+                     CefNative.VeilCefResponseMatches(browser.NativeHandle) == 1 && CefNative.VeilCefAttachmentFilteredBytes(browser.NativeHandle) >= 0 &&
+                     CefNative.VeilCefPopupsBlocked(browser.NativeHandle) != 0 &&
+                     CefNative.VeilCefPermissionsDenied(browser.NativeHandle) != 0 &&
+                     CefNative.VeilCefMediaPermissionsDenied(browser.NativeHandle) != 0 &&
+                     CefNative.VeilCefBlobDownloadsBlocked(browser.NativeHandle) != 0 &&
+                     CefNative.VeilCefDownloadsBlocked(browser.NativeHandle) > CefNative.VeilCefBlobDownloadsBlocked(browser.NativeHandle))
             {
                 phase = 6;
                 Trace("Observed rejected HTTP and Blob downloads, geolocation and media permissions");
                 Trace("Observed mandatory native popup denial");
-                Trace($"Verified 98304 response bytes in memory. Blocked attachment passed {CefNative.VeilCefAttachmentFilteredBytes()} bytes to the filter.");
+                Trace($"Verified 98304 response bytes in memory. Blocked attachment passed {CefNative.VeilCefAttachmentFilteredBytes(browser.NativeHandle)} bytes to the filter.");
                 if (fixtureVault is null)
                 {
                     window.Close();
@@ -308,7 +308,7 @@ public static class WpfSmoke
                 }
                 phase = vaultScenario == VaultScenario.Full ? 9 : 7;
             }
-            else if (phase == 9 && CefNative.VeilCefPageAttachmentIntercepted() != 0)
+            else if (phase == 9 && CefNative.VeilCefPageAttachmentIntercepted(browser.NativeHandle) != 0)
             {
                 Trace("Intercepted the page attachment before browser navigation reached HTTP");
                 var url = new Uri(new Uri(fixture), "/wpf-owned-attachment").AbsoluteUri;
@@ -363,10 +363,10 @@ public static class WpfSmoke
             }
             else if (deadline.Elapsed > TimeSpan.FromSeconds(15))
             {
-                Trace($"Fixture timed out at phase {phase}. Download decisions: {CefNative.VeilCefDownloadsBlocked()}, " +
-                    $"Blob: {CefNative.VeilCefBlobDownloadsBlocked()}, permission prompts: {CefNative.VeilCefPermissionsDenied()}, " +
-                    $"media: {CefNative.VeilCefMediaPermissionsDenied()}, response: {CefNative.VeilCefResponseMatches()}, " +
-                    $"attachment bytes: {CefNative.VeilCefAttachmentFilteredBytes()}.");
+                Trace($"Fixture timed out at phase {phase}. Download decisions: {CefNative.VeilCefDownloadsBlocked(browser.NativeHandle)}, " +
+                    $"Blob: {CefNative.VeilCefBlobDownloadsBlocked(browser.NativeHandle)}, permission prompts: {CefNative.VeilCefPermissionsDenied(browser.NativeHandle)}, " +
+                    $"media: {CefNative.VeilCefMediaPermissionsDenied(browser.NativeHandle)}, response: {CefNative.VeilCefResponseMatches(browser.NativeHandle)}, " +
+                    $"attachment bytes: {CefNative.VeilCefAttachmentFilteredBytes(browser.NativeHandle)}.");
                 window.Close();
             }
         };

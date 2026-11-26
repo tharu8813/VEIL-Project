@@ -242,20 +242,20 @@ internal static class CefNative
     [DllImport(Module)] internal static extern nint VeilCefSource(ulong id);
     [DllImport(Module)] internal static extern nint VeilCefTitle(ulong id);
     [DllImport(Module)] internal static extern nint VeilCefProfile();
-    [DllImport(Module)] internal static extern uint VeilCefPopupsBlocked();
-    [DllImport(Module)] internal static extern uint VeilCefDownloadsBlocked();
-    [DllImport(Module)] internal static extern uint VeilCefBlobDownloadsBlocked();
-    [DllImport(Module)] internal static extern uint VeilCefPermissionsDenied();
-    [DllImport(Module)] internal static extern uint VeilCefMediaPermissionsDenied();
-    [DllImport(Module)] internal static extern int VeilCefResponseMatches();
-    [DllImport(Module)] internal static extern int VeilCefAttachmentFilteredBytes();
+    [DllImport(Module)] internal static extern uint VeilCefPopupsBlocked(ulong id);
+    [DllImport(Module)] internal static extern uint VeilCefDownloadsBlocked(ulong id);
+    [DllImport(Module)] internal static extern uint VeilCefBlobDownloadsBlocked(ulong id);
+    [DllImport(Module)] internal static extern uint VeilCefPermissionsDenied(ulong id);
+    [DllImport(Module)] internal static extern uint VeilCefMediaPermissionsDenied(ulong id);
+    [DllImport(Module)] internal static extern int VeilCefResponseMatches(ulong id);
+    [DllImport(Module)] internal static extern int VeilCefAttachmentFilteredBytes(ulong id);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate int OwnedChunk(nint data, int length);
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
     internal static extern int VeilCefStartOwnedAttachment(ulong id, string url, OwnedChunk chunk);
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
     internal static extern int VeilCefClickFixtureAttachment(ulong id, string url);
-    [DllImport(Module)] internal static extern int VeilCefPageAttachmentIntercepted();
+    [DllImport(Module)] internal static extern int VeilCefPageAttachmentIntercepted(ulong id);
     [DllImport(Module)] internal static extern int VeilCefOwnedAttachmentResult();
     [DllImport(Module)] internal static extern int VeilCefClosed(ulong id);
     [DllImport(Module)] internal static extern int VeilCefReadyToClose(ulong id);
