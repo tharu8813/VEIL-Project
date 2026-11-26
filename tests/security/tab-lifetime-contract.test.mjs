@@ -242,3 +242,15 @@ test('popup adoption is one-shot, same-engine and profile-bound; CEF denies unsu
     assert.match(cefNative, /bool OnBeforePopup\([\s\S]*?\+\+popups_blocked;\s*return true;/);
     assert.match(cefView, /NewWindowRequested \{ add \{ \} remove \{ \} \}/);
 });
+
+
+test('page fullscreen is an observed engine state scoped to the active live tab', () => {
+    assert.match(browser, /engineView\.FullScreenChanged \+= \(_, _\) => tab\.Owner\.OnPageFullScreenChanged\(tab\);/);
+    assert.match(browser, /if \(!AcceptTabEvents\(tab\) \|\| Active != tab \|\| IsInternalUrl\(tab\.Url\)\) return;\s*if \(tab\.EngineView\.IsPageFullScreen is \{ \} pageFullScreen\)\s*SetFullScreen\(pageFullScreen, page: true\);/);
+    assert.match(browser, /fullScreen && fullScreenFromPage && Active\?\.EngineView\.IsPageFullScreen != true/);
+    assert.doesNotMatch(webView2Window, /web\.ContainsFullScreenElementChanged \+=/);
+    assert.match(webView2, /core\.ContainsFullScreenElementChanged \+= OnFullScreenChanged;/);
+    assert.match(webView2.slice(webView2.indexOf('public void Dispose()')), /core\.ContainsFullScreenElementChanged -= OnFullScreenChanged;/);
+    assert.match(cefNative, /void OnFullscreenModeChange\([\s\S]*?page_fullscreen = fullscreen;\s*if \(page_state_changed\) page_state_changed\(4\);/);
+    assert.match(cefView, /case 4: FullScreenChanged\?\.Invoke\(this, EventArgs\.Empty\); break;/);
+});

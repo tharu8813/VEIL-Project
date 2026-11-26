@@ -310,6 +310,7 @@ public partial class BrowserWindow : Window
             engineView.ProcessFailed += (_, args) => tab.Owner.OnProcessFailed(tab, args);
             engineView.NewWindowRequested += request => tab.Owner.OnNewWindowRequested(tab, request);
             engineView.WindowCloseRequested += (_, _) => tab.Owner.OnWindowCloseRequested(tab);
+            engineView.FullScreenChanged += (_, _) => tab.Owner.OnPageFullScreenChanged(tab);
             ConfigureWebView2Tab(tab);
             // SelectionChanged can synchronously save the session. Publish an internal route
             // before inserting the item, since native pages may never navigate the WebView.
@@ -853,6 +854,13 @@ public partial class BrowserWindow : Window
         });
     }
 
+    private void OnPageFullScreenChanged(BrowserTab tab)
+    {
+        if (!AcceptTabEvents(tab) || Active != tab || IsInternalUrl(tab.Url)) return;
+        if (tab.EngineView.IsPageFullScreen is { } pageFullScreen)
+            SetFullScreen(pageFullScreen, page: true);
+    }
+
     private void UpdateAudio(BrowserTab tab)
     {
         if (!AcceptTabEvents(tab)) return;
@@ -934,7 +942,7 @@ public partial class BrowserWindow : Window
             if (tab != Active && tab.Url == "veil://passwords" && tab.CancelManagement is not null) ClearManagement(tab);
         SetAddressText(Active?.Url is null or "about:blank" ? "" : Active.Url);
         UpdateManagementVisibility();
-        if (fullScreen && fullScreenFromPage && Active?.View.CoreWebView2?.ContainsFullScreenElement != true) SetFullScreen(false);
+        if (fullScreen && fullScreenFromPage && Active?.EngineView.IsPageFullScreen != true) SetFullScreen(false);
         RefreshChrome();
         if (Active is { } selected) _ = ProbeLoginFormAsync(selected);
         SyncProgress();

@@ -48,6 +48,9 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
     // Native CEF denies popups until multi-view adoption and web-requested close are supported.
     public event Func<EngineNewWindowRequest, Task>? NewWindowRequested { add { } remove { } }
     public event EventHandler? WindowCloseRequested { add { } remove { } }
+    public event EventHandler? FullScreenChanged;
+    public bool? IsPageFullScreen => hwnd == 0 || CefNative.VeilCefClosed() != 0
+        ? null : CefNative.VeilCefIsPageFullScreen() != 0;
     public event EventHandler? SourceChanged;
     public event EventHandler? TitleChanged;
     public event EventHandler? HistoryChanged;
@@ -93,6 +96,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
                     case 1: SourceChanged?.Invoke(this, EventArgs.Empty); break;
                     case 2: TitleChanged?.Invoke(this, EventArgs.Empty); break;
                     case 3: HistoryChanged?.Invoke(this, EventArgs.Empty); break;
+                    case 4: FullScreenChanged?.Invoke(this, EventArgs.Empty); break;
                 }
             }
             catch (Exception error)
@@ -231,6 +235,7 @@ internal static class CefNative
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void RenderProcessFailed(int code);
     [DllImport(Module)] internal static extern void VeilCefSetRenderProcessFailedCallback(RenderProcessFailed? callback);
+    [DllImport(Module)] internal static extern int VeilCefIsPageFullScreen();
     [DllImport(Module)] internal static extern nint VeilCefSource();
     [DllImport(Module)] internal static extern nint VeilCefTitle();
     [DllImport(Module)] internal static extern nint VeilCefProfile();
