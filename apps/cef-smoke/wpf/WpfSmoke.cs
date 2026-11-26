@@ -188,6 +188,7 @@ public static class WpfSmoke
         window.Closing += (_, e) =>
         {
             closing = true;
+            CefNative.VeilCefCancelOwnedAttachment(browser.NativeHandle);
             vaultStream?.Complete(false);
             Trace("Requesting CEF close");
             closingHandle = browser.NativeHandle;
@@ -319,9 +320,9 @@ public static class WpfSmoke
                 }
                 phase = 7;
             }
-            else if (phase == 7 && CefNative.VeilCefOwnedAttachmentResult() != 0)
+            else if (phase == 7 && CefNative.VeilCefOwnedAttachmentResult(browser.NativeHandle) != 0)
             {
-                var nativeResult = CefNative.VeilCefOwnedAttachmentResult();
+                var nativeResult = CefNative.VeilCefOwnedAttachmentResult(browser.NativeHandle);
                 var expected = vaultScenario switch
                 {
                     VaultScenario.Truncated => -1,
@@ -342,7 +343,7 @@ public static class WpfSmoke
                 var finished = vaultStream.Finished;
                 if (!finished.IsCompletedSuccessfully || !finished.Result)
                 {
-                    Trace($"Rust vault fixture failed. Scenario: {vaultScenario}, native result: {CefNative.VeilCefOwnedAttachmentResult()}, error: {finished.Exception?.GetBaseException().Message}");
+                    Trace($"Rust vault fixture failed. Scenario: {vaultScenario}, native result: {CefNative.VeilCefOwnedAttachmentResult(browser.NativeHandle)}, error: {finished.Exception?.GetBaseException().Message}");
                     window.Close();
                 }
                 else if (vaultScenario != VaultScenario.Full)

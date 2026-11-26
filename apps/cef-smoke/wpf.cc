@@ -20,12 +20,39 @@
 #include <limits>
 #include <utility>
 #include <unordered_map>
+#include <vector>
 
 namespace {
 using PageStateChanged = void (*)(int);
 using RenderProcessFailed = void (*)(int);
 using BeforeBrowse = int (*)(const wchar_t*, uint64_t, int);
 using NavigationComplete = void (*)(uint64_t, int, int, int);
+using OwnedChunk = int (*)(const void*, int);
+
+// CEF URLRequest callbacks run on the thread that creates the request (UI here).
+// A fresh transfer per request prevents late callbacks from touching a new stream.
+struct OwnedTransfer {
+  explicit OwnedTransfer(OwnedChunk callback) : chunk(callback) {}
+
+  void Cancel() {
+    if (!active) return;
+    active = false;
+    canceled = true;
+    result = -1;
+    chunk = nullptr;
+    const auto pending = request;
+    request = nullptr;
+    if (pending) pending->Cancel();
+  }
+
+  OwnedChunk chunk;
+  size_t bytes = 0;
+  int result = 0;
+  bool active = true;
+  bool canceled = false;
+  bool chunk_rejected = false;
+  CefRefPtr<CefURLRequest> request;
+};
 
 // Owned by the CEF client; accessed on the browser UI thread only.
 // Registration belongs to the same view lifetime as its metadata.
@@ -64,6 +91,7 @@ struct ViewState {
   CefString armed_page_attachment;
   CefString armed_attachment_source;
   bool page_attachment_intercepted = false;
+  std::shared_ptr<OwnedTransfer> owned_transfer;
 };
 
 // Registry is browser-UI-thread confined. Keep one view until fixture-wide
@@ -89,53 +117,57 @@ void RemoveView(const std::shared_ptr<ViewState>& state) {
   const auto entry = views.find(state->id);
   if (entry != views.end() && entry->second.state == state)
     views.erase(entry);
+  if (state->owned_transfer) state->owned_transfer->Cancel();
 }
 std::wstring profile_root;
 bool fixture_enabled = false;
 constexpr size_t kFixtureBodySize = 96 * 1024;
 constexpr size_t kOwnedBodySize = 768 * 1024;
 constexpr size_t kOwnedChunkSize = 16 * 1024;
-using OwnedChunk = int (*)(const void*, int);
-OwnedChunk owned_chunk = nullptr;
-size_t owned_bytes = 0;
-int owned_result = 0;
-CefRefPtr<CefURLRequest> owned_request;
-
-
 class OwnedAttachmentClient final : public CefURLRequestClient {
  public:
+  explicit OwnedAttachmentClient(const std::shared_ptr<OwnedTransfer>& transfer)
+      : transfer_(transfer) {}
   void OnRequestComplete(CefRefPtr<CefURLRequest> request) override {
+    const auto transfer = transfer_.lock();
+    if (!transfer || !transfer->active) return;
     const auto response = request->GetResponse();
-    if (chunk_rejected_ && request->GetRequestStatus() == UR_CANCELED) {
-      owned_result = -2;
+    if (transfer->chunk_rejected && request->GetRequestStatus() == UR_CANCELED) {
+      transfer->result = -2;
     } else if (request->GetRequestStatus() == UR_SUCCESS && response &&
-        response->GetStatus() == 200 && owned_bytes == kOwnedBodySize &&
+        response->GetStatus() == 200 && transfer->bytes == kOwnedBodySize &&
         response->GetHeaderByName("Content-Disposition").ToString().rfind("attachment;", 0) == 0) {
-      owned_result = static_cast<int>(owned_bytes);
+      transfer->result = static_cast<int>(transfer->bytes);
     } else {
-      owned_result = -1;
+      transfer->result = -1;
     }
-    owned_request = nullptr;
-    owned_chunk = nullptr;
+    transfer->active = false;
+    transfer->chunk = nullptr;
+    transfer->request = nullptr;
   }
   void OnUploadProgress(CefRefPtr<CefURLRequest>, int64_t, int64_t) override {}
   void OnDownloadProgress(CefRefPtr<CefURLRequest>, int64_t, int64_t) override {}
   void OnDownloadData(CefRefPtr<CefURLRequest> request, const void* data,
                       size_t length) override {
-    if (!owned_chunk || length > kOwnedBodySize - owned_bytes) {
+    const auto transfer = transfer_.lock();
+    if (!transfer || !transfer->active) return;
+    if (!transfer->chunk || length > kOwnedBodySize - transfer->bytes) {
       request->Cancel();
       return;
     }
     const auto* bytes = static_cast<const unsigned char*>(data);
     for (size_t offset = 0; offset < length;) {
+      if (!transfer->active || !transfer->chunk) return;
       const auto count = std::min(length - offset, kOwnedChunkSize);
-      if (!owned_chunk(bytes + offset, static_cast<int>(count))) {
-        chunk_rejected_ = true;
+      const bool accepted = transfer->chunk(bytes + offset, static_cast<int>(count)) != 0;
+      if (!transfer->active) return;
+      if (!accepted) {
+        transfer->chunk_rejected = true;
         request->Cancel();
         return;
       }
       offset += count;
-      owned_bytes += count;
+      transfer->bytes += count;
     }
   }
   bool GetAuthCredentials(bool, const CefString&, int, const CefString&,
@@ -144,7 +176,7 @@ class OwnedAttachmentClient final : public CefURLRequestClient {
   }
 
  private:
-  bool chunk_rejected_ = false;
+  const std::weak_ptr<OwnedTransfer> transfer_;
   IMPLEMENT_REFCOUNTING(OwnedAttachmentClient);
 };
 
@@ -410,8 +442,10 @@ int RunManagedWindow() {
 
 extern "C" __declspec(dllexport) void VeilCefDetachCallbacks(uint64_t id, HWND parent) {
   const auto state = LookupView(id);
-  if (state && state->parent == parent)
+  if (state && state->parent == parent) {
     state->DetachCallbacks();
+    if (state->owned_transfer) state->owned_transfer->Cancel();
+  }
 }
 
 extern "C" __declspec(dllexport) unsigned VeilCefDownloadsBlocked(uint64_t id) {
@@ -466,7 +500,8 @@ extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(uint64_t id, co
                                                                  OwnedChunk chunk) {
   const auto browser = LookupBrowser(id);
   const auto state = LookupView(id);
-  if (!fixture_enabled || !browser || !state || owned_request || !chunk) return 0;
+  if (!fixture_enabled || !browser || !state || !chunk ||
+      (state->owned_transfer && state->owned_transfer->active)) return 0;
   CefString url(address);
   CefURLParts parts;
   if (!CefParseURL(url, parts) || CefString(&parts.scheme) != "http" ||
@@ -480,20 +515,35 @@ extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(uint64_t id, co
     state->armed_page_attachment.clear();
     state->armed_attachment_source.clear();
   }
-  owned_bytes = 0;
-  owned_result = 0;
-  owned_chunk = chunk;
+  const auto transfer = std::make_shared<OwnedTransfer>(chunk);
+  state->owned_transfer = transfer;
   const auto request = CefRequest::Create();
   request->SetURL(url);
   request->SetMethod("GET");
   if (path == "/wpf-owned-attachment")
     request->SetHeaderByName("X-Veil-Fixture-Handoff", "1", true);
   request->SetFlags(UR_FLAG_DISABLE_CACHE | UR_FLAG_STOP_ON_REDIRECT | UR_FLAG_NO_RETRY_ON_5XX);
-  owned_request = CefURLRequest::Create(request, new OwnedAttachmentClient(), nullptr);
-  if (!owned_request) owned_chunk = nullptr;
-  return owned_request ? 1 : 0;
+  const auto created = CefURLRequest::Create(request, new OwnedAttachmentClient(transfer), nullptr);
+  if (!created) {
+    transfer->Cancel();
+    return 0;
+  }
+  if (transfer->active) {
+    transfer->request = created;
+  } else if (transfer->canceled) {
+    created->Cancel();
+    return 0;
+  }
+  return 1;
 }
-extern "C" __declspec(dllexport) int VeilCefOwnedAttachmentResult() { return owned_result; }
+extern "C" __declspec(dllexport) int VeilCefOwnedAttachmentResult(uint64_t id) {
+  const auto state = LookupView(id);
+  return state && state->owned_transfer ? state->owned_transfer->result : 0;
+}
+extern "C" __declspec(dllexport) void VeilCefCancelOwnedAttachment(uint64_t id) {
+  const auto state = LookupView(id);
+  if (state && state->owned_transfer) state->owned_transfer->Cancel();
+}
 
 extern "C" __declspec(dllexport) uint64_t VeilCefOpen(
     HWND parent, BeforeBrowse starting, NavigationComplete completed,
@@ -638,12 +688,14 @@ int RunWinMain(HINSTANCE instance, LPWSTR, int, void* sandbox_info, cef_version_
   }
   profile_root = profile.wstring();
   const int result = RunManagedWindow();
-  if (owned_request) {
-    const auto pending = owned_request;
-    pending->Cancel();
-    owned_request = nullptr;
+  // Defensive cleanup if the managed host exits unexpectedly. Cancel using
+  // a snapshot because native callbacks may re-enter the view registry.
+  std::vector<std::shared_ptr<ViewState>> remaining;
+  for (const auto& entry : views) remaining.push_back(entry.second.state);
+  for (const auto& state : remaining) {
+    state->DetachCallbacks();
+    if (state->owned_transfer) state->owned_transfer->Cancel();
   }
-  owned_chunk = nullptr;
   profile_root.clear();
   CefShutdown();
   OleUninitialize();
