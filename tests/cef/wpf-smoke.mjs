@@ -32,6 +32,7 @@ const server = http.createServer((request, response) => {
     response.end(`<!doctype html><a id="download" href="/wpf-attachment">Download</a>
       <a id="vault-download" href="/wpf-owned-attachment">Save to fixture vault</a>
       <script>
+        window.open('/wpf-popup-target', '_blank');
         const locationDenied = new Promise(resolve => navigator.geolocation.getCurrentPosition(
           () => resolve(false), error => resolve(error.code === 1)));
         const mediaDenied = navigator.mediaDevices.getUserMedia({ video: true }).then(
@@ -154,6 +155,8 @@ try {
   assert.match(evidence, /Observed shared mute state round trip; playback and favicon unavailable/);
   assert.match(evidence, /Observed shared engine source, title and history events/);
   assert.match(evidence, /Normal fixture shutdown emitted no unexpected process failure/);
+  assert.match(evidence, /Observed mandatory native popup denial/);
+  assert.ok(!requests.includes('/wpf-popup-target'), 'Denied popup must not reach HTTP');
   assert.match(evidence, /Intercepted the page attachment before browser navigation reached HTTP/);
   assert.deepEqual(pageAttachmentRequests, [['GET', '1']], 'Only the native handoff may send the page attachment request');
   assert.equal(watcherError, undefined, 'The temporary directory watcher failed');

@@ -52,6 +52,8 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
     public event EventHandler? FaviconChanged;
     public event EventHandler? AudioStateChanged;
     public event EventHandler<EngineProcessFailedEventArgs>? ProcessFailed;
+    public event Func<EngineNewWindowRequest, Task>? NewWindowRequested;
+    public event EventHandler? WindowCloseRequested;
     public bool? IsDocumentPlayingAudio => disposed ? null : NativeView.CoreWebView2?.IsDocumentPlayingAudio;
     public bool? IsMuted => disposed ? null : NativeView.CoreWebView2?.IsMuted;
     public void SetMuted(bool muted) => Core.IsMuted = muted;
@@ -104,6 +106,10 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
         core.IsMutedChanged += OnAudioStateChanged;
         core.ProcessFailed -= OnProcessFailed;
         core.ProcessFailed += OnProcessFailed;
+        core.NewWindowRequested -= OnNewWindowRequested;
+        core.NewWindowRequested += OnNewWindowRequested;
+        core.WindowCloseRequested -= OnWindowCloseRequested;
+        core.WindowCloseRequested += OnWindowCloseRequested;
     }
 
     private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
@@ -139,6 +145,34 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
                 ? EngineFailureScope.BrowserSession : EngineFailureScope.PageOrChildProcess,
             (int)args.ProcessFailedKind));
 
+    private async void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs args)
+    {
+        using var deferral = args.GetDeferral();
+        args.Handled = true;
+        var handler = NewWindowRequested;
+        if (disposed || handler is null || handler.GetInvocationList().Length != 1) return;
+        var request = new EngineNewWindowRequest(args.Uri, args.IsUserInitiated, target =>
+        {
+            if (disposed || target is not WebView2EngineView view || ReferenceEquals(view, this) ||
+                view.disposed || !ReferenceEquals(view.environmentForPopup, environment) ||
+                !string.Equals(view.privateProfileForPopup, privateProfileName, StringComparison.OrdinalIgnoreCase) ||
+                view.NativeView.CoreWebView2 is not { } destination) return false;
+            args.NewWindow = destination;
+            return true;
+        });
+        try { await handler(request); }
+        catch (Exception error)
+        {
+            System.Diagnostics.Trace.TraceError("Engine popup request failed: {0}", error.GetType().Name);
+        }
+        finally { request.Complete(); }
+    }
+
+    private readonly CoreWebView2Environment environmentForPopup = environment;
+    private readonly string? privateProfileForPopup = privateProfileName;
+    private void OnWindowCloseRequested(object? sender, object args) =>
+        WindowCloseRequested?.Invoke(this, EventArgs.Empty);
+
     public bool CanGoBack => !disposed && NativeView.CoreWebView2?.CanGoBack == true;
     public bool CanGoForward => !disposed && NativeView.CoreWebView2?.CanGoForward == true;
     public double ZoomFactor { get => NativeView.ZoomFactor; set => NativeView.ZoomFactor = value; }
@@ -171,6 +205,8 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
             core.IsDocumentPlayingAudioChanged -= OnAudioStateChanged;
             core.IsMutedChanged -= OnAudioStateChanged;
             core.ProcessFailed -= OnProcessFailed;
+            core.NewWindowRequested -= OnNewWindowRequested;
+            core.WindowCloseRequested -= OnWindowCloseRequested;
         }
         NativeView.Dispose();
     }

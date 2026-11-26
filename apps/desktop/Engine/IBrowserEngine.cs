@@ -34,6 +34,9 @@ internal interface IBrowserEngineView : IDisposable
     event EventHandler? AudioStateChanged;
     // Unexpected process failure only. A normal view close is not an engine failure.
     event EventHandler<EngineProcessFailedEventArgs>? ProcessFailed;
+    // Single asynchronous host handler. An unsupported or unhandled popup is denied.
+    event Func<EngineNewWindowRequest, Task>? NewWindowRequested;
+    event EventHandler? WindowCloseRequested;
     // Null means unavailable or unverified; it is not equivalent to silence/unmuted.
     bool? IsDocumentPlayingAudio { get; }
     bool? IsMuted { get; }
@@ -76,4 +79,22 @@ internal sealed class EngineProcessFailedEventArgs(EngineFailureScope scope, int
 {
     internal EngineFailureScope Scope { get; } = scope;
     internal int NativeCode { get; } = nativeCode;
+}
+
+internal sealed class EngineNewWindowRequest(string uri, bool isUserInitiated,
+    Func<IBrowserEngineView, bool> attach)
+{
+    private Func<IBrowserEngineView, bool>? pending = attach;
+    internal string Uri { get; } = uri;
+    internal bool IsUserInitiated { get; } = isUserInitiated;
+
+    // Only one attempt is allowed, and the native adapter invalidates the request when its deferral ends.
+    internal bool TryAttach(IBrowserEngineView target)
+    {
+        var callback = pending;
+        pending = null;
+        return callback?.Invoke(target) == true;
+    }
+
+    internal void Complete() => pending = null;
 }

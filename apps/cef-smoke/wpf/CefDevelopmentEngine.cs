@@ -45,6 +45,9 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
     private readonly CefNative.PageStateChanged onPageStateChanged;
     private readonly CefNative.RenderProcessFailed onRenderProcessFailed;
     public event EventHandler<EngineProcessFailedEventArgs>? ProcessFailed;
+    // Native CEF denies popups until multi-view adoption and web-requested close are supported.
+    public event Func<EngineNewWindowRequest, Task>? NewWindowRequested { add { } remove { } }
+    public event EventHandler? WindowCloseRequested { add { } remove { } }
     public event EventHandler? SourceChanged;
     public event EventHandler? TitleChanged;
     public event EventHandler? HistoryChanged;
@@ -231,6 +234,7 @@ internal static class CefNative
     [DllImport(Module)] internal static extern nint VeilCefSource();
     [DllImport(Module)] internal static extern nint VeilCefTitle();
     [DllImport(Module)] internal static extern nint VeilCefProfile();
+    [DllImport(Module)] internal static extern uint VeilCefPopupsBlocked();
     [DllImport(Module)] internal static extern uint VeilCefDownloadsBlocked();
     [DllImport(Module)] internal static extern uint VeilCefBlobDownloadsBlocked();
     [DllImport(Module)] internal static extern uint VeilCefPermissionsDenied();
