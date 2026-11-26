@@ -43,6 +43,8 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
     private readonly CefNative.BeforeBrowse onStarting;
     private readonly CefNative.NavigationComplete onCompleted;
     private readonly CefNative.PageStateChanged onPageStateChanged;
+    private readonly CefNative.RenderProcessFailed onRenderProcessFailed;
+    public event EventHandler<EngineProcessFailedEventArgs>? ProcessFailed;
     public event EventHandler? SourceChanged;
     public event EventHandler? TitleChanged;
     public event EventHandler? HistoryChanged;
@@ -66,6 +68,18 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
 
     internal CefDevelopmentView()
     {
+        onRenderProcessFailed = code =>
+        {
+            if (hwnd == 0) return;
+            try
+            {
+                ProcessFailed?.Invoke(this, new EngineProcessFailedEventArgs(EngineFailureScope.PageOrChildProcess, code));
+            }
+            catch (Exception error)
+            {
+                System.Diagnostics.Trace.TraceError("CEF process failure handler failed: {0}", error.GetType().Name);
+            }
+        };
         onPageStateChanged = kind =>
         {
             if (hwnd == 0) return;
@@ -164,8 +178,10 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
         if (hwnd == 0) throw new InvalidOperationException("Cannot create the CEF parent window.");
         CefNative.VeilCefSetNavigationCallbacks(onStarting, onCompleted);
         CefNative.VeilCefSetPageStateCallback(onPageStateChanged);
+        CefNative.VeilCefSetRenderProcessFailedCallback(onRenderProcessFailed);
         if (CefNative.VeilCefOpen(hwnd) == 0)
         {
+            CefNative.VeilCefSetRenderProcessFailedCallback(null);
             CefNative.VeilCefSetPageStateCallback(null);
             CefNative.VeilCefSetNavigationCallbacks(null, null);
             CefNative.DestroyWindow(hwnd);
@@ -183,6 +199,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
 
     protected override void DestroyWindowCore(HandleRef window)
     {
+        CefNative.VeilCefSetRenderProcessFailedCallback(null);
         CefNative.VeilCefSetPageStateCallback(null);
         CefNative.VeilCefSetNavigationCallbacks(null, null);
         CefNative.DestroyWindow(window.Handle);
@@ -208,6 +225,9 @@ internal static class CefNative
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void PageStateChanged(int kind);
     [DllImport(Module)] internal static extern void VeilCefSetPageStateCallback(PageStateChanged? callback);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void RenderProcessFailed(int code);
+    [DllImport(Module)] internal static extern void VeilCefSetRenderProcessFailedCallback(RenderProcessFailed? callback);
     [DllImport(Module)] internal static extern nint VeilCefSource();
     [DllImport(Module)] internal static extern nint VeilCefTitle();
     [DllImport(Module)] internal static extern nint VeilCefProfile();

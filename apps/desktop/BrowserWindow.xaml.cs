@@ -307,6 +307,7 @@ public partial class BrowserWindow : Window
             engineView.HistoryChanged += (_, _) => tab.Owner.OnHistoryChanged(tab);
             engineView.FaviconChanged += async (_, _) => await tab.Owner.UpdateFavicon(tab);
             engineView.AudioStateChanged += (_, _) => tab.Owner.UpdateAudio(tab);
+            engineView.ProcessFailed += (_, args) => tab.Owner.OnProcessFailed(tab, args);
             ConfigureWebView2Tab(tab);
             // SelectionChanged can synchronously save the session. Publish an internal route
             // before inserting the item, since native pages may never navigate the WebView.
@@ -455,13 +456,16 @@ public partial class BrowserWindow : Window
 
     /// <summary>Engine browser exit ends the session cleanly (app state saved once, every window closed so the
     /// profile lock and protected-volume relock run); a renderer failure only affects that page.</summary>
-    private void OnProcessFailed(BrowserTab tab, CoreWebView2ProcessFailedEventArgs args)
+    private void OnProcessFailed(BrowserTab tab, EngineProcessFailedEventArgs args)
     {
-        if (args.ProcessFailedKind != CoreWebView2ProcessFailedKind.BrowserProcessExited)
+        if (args.Scope != EngineFailureScope.BrowserSession)
         {
-            if (Active == tab) Status.Text = "페이지 프로세스가 중단되었습니다. 새로고침(F5)하세요.";
+            if (AcceptTabEvents(tab) && Active == tab)
+                Status.Text = "페이지 프로세스가 중단되었습니다. 새로고침(F5)하세요.";
             return;
         }
+        // Browser-wide loss is shared with private windows. Do not ignore it merely
+        // because the reporting tab is closing; keep the existing session shutdown path.
         if (closing || session.EngineLost) return;
         session.EngineLost = true;
         bool saved = false;

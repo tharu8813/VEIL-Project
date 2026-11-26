@@ -82,6 +82,13 @@ public static class WpfSmoke
             source.AbsolutePath == path && observedSources.Contains(browser.Source) &&
             observedTitles.Contains(expectedTitle) && browser.DocumentTitle == expectedTitle;
         var result = fixture is null ? 0 : 30;
+        int unexpectedProcessFailures = 0;
+        browser.ProcessFailed += (_, failure) =>
+        {
+            unexpectedProcessFailures++;
+            Trace($"Unexpected engine process failure: {failure.Scope}, code={failure.NativeCode}");
+            // Leave the normal close/pump path in control; do not close inside a native callback.
+        };
         browser.NavigationStarting += (_, request) =>
         {
             if (fixture is null) return;
@@ -340,6 +347,11 @@ public static class WpfSmoke
         pump.Start();
         app.Run(window);
         Trace("WPF dispatcher stopped");
+        if (fixture is not null)
+        {
+            if (unexpectedProcessFailures != 0) return 31;
+            Trace("Normal fixture shutdown emitted no unexpected process failure");
+        }
         return result;
     }
 

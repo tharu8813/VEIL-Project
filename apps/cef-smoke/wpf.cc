@@ -23,6 +23,8 @@ std::wstring title;
 std::wstring page_source = L"about:blank";
 using PageStateChanged = void (*)(int);
 PageStateChanged page_state_changed = nullptr;
+using RenderProcessFailed = void (*)(int);
+RenderProcessFailed render_process_failed = nullptr;
 std::wstring profile_root;
 using BeforeBrowse = int (*)(const wchar_t*, uint64_t, int);
 using NavigationComplete = void (*)(uint64_t, int, int, int);
@@ -268,6 +270,15 @@ class Client final : public CefClient,
   void OnLoadingStateChange(CefRefPtr<CefBrowser>, bool, bool, bool) override {
     if (page_state_changed) page_state_changed(3);
   }
+  void OnRenderProcessTerminated(CefRefPtr<CefBrowser>, TerminationStatus,
+                                 int error_code, const CefString&) override {
+    // A renderer is a child process. The browser/managed host is still alive.
+    // Release any serialized navigation so a user-directed retry can proceed.
+    Complete(false, false, ERR_FAILED);
+    if (render_process_failed) render_process_failed(error_code);
+  }
+  // Normal shutdown is not a crash notification. The host process cannot
+  // report its own abrupt termination through this in-process callback.
   void OnBeforeClose(CefRefPtr<CefBrowser>) override { browser = nullptr; }
 
  private:
@@ -440,6 +451,9 @@ extern "C" __declspec(dllexport) void VeilCefSetZoomLevel(double level) {
 
 extern "C" __declspec(dllexport) void VeilCefSetPageStateCallback(PageStateChanged callback) {
   page_state_changed = callback;
+}
+extern "C" __declspec(dllexport) void VeilCefSetRenderProcessFailedCallback(RenderProcessFailed callback) {
+  render_process_failed = callback;
 }
 extern "C" __declspec(dllexport) const wchar_t* VeilCefSource() { return page_source.c_str(); }
 extern "C" __declspec(dllexport) const wchar_t* VeilCefTitle() { return title.c_str(); }

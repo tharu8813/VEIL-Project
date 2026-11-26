@@ -51,6 +51,7 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
     public event EventHandler? HistoryChanged;
     public event EventHandler? FaviconChanged;
     public event EventHandler? AudioStateChanged;
+    public event EventHandler<EngineProcessFailedEventArgs>? ProcessFailed;
     public bool? IsDocumentPlayingAudio => disposed ? null : NativeView.CoreWebView2?.IsDocumentPlayingAudio;
     public bool? IsMuted => disposed ? null : NativeView.CoreWebView2?.IsMuted;
     public void SetMuted(bool muted) => Core.IsMuted = muted;
@@ -101,6 +102,8 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
         core.IsDocumentPlayingAudioChanged += OnAudioStateChanged;
         core.IsMutedChanged -= OnAudioStateChanged;
         core.IsMutedChanged += OnAudioStateChanged;
+        core.ProcessFailed -= OnProcessFailed;
+        core.ProcessFailed += OnProcessFailed;
     }
 
     private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
@@ -129,6 +132,12 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
         FaviconChanged?.Invoke(this, EventArgs.Empty);
     private void OnAudioStateChanged(object? sender, object args) =>
         AudioStateChanged?.Invoke(this, EventArgs.Empty);
+
+    private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs args) =>
+        ProcessFailed?.Invoke(this, new EngineProcessFailedEventArgs(
+            args.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited
+                ? EngineFailureScope.BrowserSession : EngineFailureScope.PageOrChildProcess,
+            (int)args.ProcessFailedKind));
 
     public bool CanGoBack => !disposed && NativeView.CoreWebView2?.CanGoBack == true;
     public bool CanGoForward => !disposed && NativeView.CoreWebView2?.CanGoForward == true;
@@ -161,6 +170,7 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
             core.FaviconChanged -= OnFaviconChanged;
             core.IsDocumentPlayingAudioChanged -= OnAudioStateChanged;
             core.IsMutedChanged -= OnAudioStateChanged;
+            core.ProcessFailed -= OnProcessFailed;
         }
         NativeView.Dispose();
     }

@@ -45,7 +45,6 @@ public partial class BrowserWindow
         }
         web.NewWindowRequested += (_, args) => tab.Owner.OnNewWindowRequested(tab, args);
         web.WindowCloseRequested += (_, _) => tab.Owner.Dispatcher.BeginInvoke(() => tab.Owner.CloseTab(tab.Item));
-        web.ProcessFailed += (_, args) => tab.Owner.OnProcessFailed(tab, args);
         web.ContainsFullScreenElementChanged += (_, _) =>
         {
             if (tab.Owner.Active == tab) tab.Owner.SetFullScreen(web.ContainsFullScreenElement, page: true);
