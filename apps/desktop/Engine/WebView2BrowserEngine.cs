@@ -54,6 +54,8 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
     public event EventHandler<EngineProcessFailedEventArgs>? ProcessFailed;
     public event Func<EngineNewWindowRequest, Task>? NewWindowRequested;
     public event EventHandler? WindowCloseRequested;
+    public event EventHandler? FullScreenChanged;
+    public bool? IsPageFullScreen => disposed ? null : NativeView.CoreWebView2?.ContainsFullScreenElement;
     public bool? IsDocumentPlayingAudio => disposed ? null : NativeView.CoreWebView2?.IsDocumentPlayingAudio;
     public bool? IsMuted => disposed ? null : NativeView.CoreWebView2?.IsMuted;
     public void SetMuted(bool muted) => Core.IsMuted = muted;
@@ -110,6 +112,8 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
         core.NewWindowRequested += OnNewWindowRequested;
         core.WindowCloseRequested -= OnWindowCloseRequested;
         core.WindowCloseRequested += OnWindowCloseRequested;
+        core.ContainsFullScreenElementChanged -= OnFullScreenChanged;
+        core.ContainsFullScreenElementChanged += OnFullScreenChanged;
     }
 
     private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
@@ -172,6 +176,8 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
     private readonly string? privateProfileForPopup = privateProfileName;
     private void OnWindowCloseRequested(object? sender, object args) =>
         WindowCloseRequested?.Invoke(this, EventArgs.Empty);
+    private void OnFullScreenChanged(object? sender, object args) =>
+        FullScreenChanged?.Invoke(this, EventArgs.Empty);
 
     public bool CanGoBack => !disposed && NativeView.CoreWebView2?.CanGoBack == true;
     public bool CanGoForward => !disposed && NativeView.CoreWebView2?.CanGoForward == true;
@@ -207,6 +213,7 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
             core.ProcessFailed -= OnProcessFailed;
             core.NewWindowRequested -= OnNewWindowRequested;
             core.WindowCloseRequested -= OnWindowCloseRequested;
+            core.ContainsFullScreenElementChanged -= OnFullScreenChanged;
         }
         NativeView.Dispose();
     }

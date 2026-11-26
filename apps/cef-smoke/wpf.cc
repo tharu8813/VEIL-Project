@@ -21,6 +21,7 @@ namespace {
 CefRefPtr<CefBrowser> browser;
 std::wstring title;
 std::wstring page_source = L"about:blank";
+bool page_fullscreen = false;
 using PageStateChanged = void (*)(int);
 PageStateChanged page_state_changed = nullptr;
 using RenderProcessFailed = void (*)(int);
@@ -285,6 +286,10 @@ class Client final : public CefClient,
   void OnLoadingStateChange(CefRefPtr<CefBrowser>, bool, bool, bool) override {
     if (page_state_changed) page_state_changed(3);
   }
+  void OnFullscreenModeChange(CefRefPtr<CefBrowser>, bool fullscreen) override {
+    page_fullscreen = fullscreen;
+    if (page_state_changed) page_state_changed(4);
+  }
   void OnRenderProcessTerminated(CefRefPtr<CefBrowser>, TerminationStatus,
                                  int error_code, const CefString&) override {
     // A renderer is a child process. The browser/managed host is still alive.
@@ -294,7 +299,10 @@ class Client final : public CefClient,
   }
   // Normal shutdown is not a crash notification. The host process cannot
   // report its own abrupt termination through this in-process callback.
-  void OnBeforeClose(CefRefPtr<CefBrowser>) override { browser = nullptr; }
+  void OnBeforeClose(CefRefPtr<CefBrowser>) override {
+    page_fullscreen = false;
+    browser = nullptr;
+  }
 
  private:
   void Complete(bool success, bool canceled, int code) {
@@ -471,6 +479,7 @@ extern "C" __declspec(dllexport) void VeilCefSetRenderProcessFailedCallback(Rend
   render_process_failed = callback;
 }
 extern "C" __declspec(dllexport) unsigned VeilCefPopupsBlocked() { return popups_blocked; }
+extern "C" __declspec(dllexport) int VeilCefIsPageFullScreen() { return page_fullscreen ? 1 : 0; }
 extern "C" __declspec(dllexport) const wchar_t* VeilCefSource() { return page_source.c_str(); }
 extern "C" __declspec(dllexport) const wchar_t* VeilCefTitle() { return title.c_str(); }
 extern "C" __declspec(dllexport) int VeilCefClosed() { return browser ? 0 : 1; }

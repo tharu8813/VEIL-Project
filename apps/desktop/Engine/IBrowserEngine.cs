@@ -37,6 +37,9 @@ internal interface IBrowserEngineView : IDisposable
     // Single asynchronous host handler. An unsupported or unhandled popup is denied.
     event Func<EngineNewWindowRequest, Task>? NewWindowRequested;
     event EventHandler? WindowCloseRequested;
+    // Read-only page fullscreen state; null means unavailable, not fullscreen permission.
+    event EventHandler? FullScreenChanged;
+    bool? IsPageFullScreen { get; }
     // Null means unavailable or unverified; it is not equivalent to silence/unmuted.
     bool? IsDocumentPlayingAudio { get; }
     bool? IsMuted { get; }
