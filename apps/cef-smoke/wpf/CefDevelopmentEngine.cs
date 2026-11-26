@@ -45,8 +45,17 @@ internal sealed class CefDevelopmentEngine : IBrowserEngine
     }
 }
 
-internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngineSiteDataReader
+internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngineSiteDataReader, IEngineSiteDataWriter
 {
+    // Process-lifetime delegate: a native visitor can outlive its initiating Task.
+    // Only a current per-view authorization can permit a cookie deletion.
+    private static readonly Dictionary<ulong, Func<bool>> cookieDeleteAuthorizations = new();
+    private static readonly CefNative.CookieDeleteAuthorization cookieDeleteAuthorization = AuthorizeCookieDelete;
+    private static int AuthorizeCookieDelete(ulong id)
+    {
+        try { return cookieDeleteAuthorizations.TryGetValue(id, out var authorize) && authorize() ? 1 : 0; }
+        catch (Exception) { return 0; }
+    }
     private nint hwnd;
     private bool disposed;
     private ulong retiredHandle;
@@ -185,6 +194,53 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
     // Storage usage needs a separately verified implementation.
     public Task<double?> GetOriginStorageUsageAsync(string origin) => Task.FromResult<double?>(null);
 
+    public async Task<int?> DeleteCookieDomainAsync(string domain, Func<bool> stillAuthorized)
+    {
+        Dispatcher.VerifyAccess();
+        if (!SiteDataPolicy.ValidDomain(domain) || domain is not ("127.0.0.1" or "localhost"))
+            throw new ArgumentException("An exact synthetic loopback domain is required.", nameof(domain));
+        if (!stillAuthorized()) return null;
+        RequireView();
+        ulong id = NativeHandle;
+        if (!cookieDeleteAuthorizations.TryAdd(id,
+            () => Dispatcher.CheckAccess() && !disposed && NativeHandle == id &&
+                CefNative.VeilCefClosed(id) == 0 && stillAuthorized()))
+            throw new InvalidOperationException("A cookie deletion is already active.");
+        bool started = false;
+        try
+        {
+            started = CefNative.VeilCefStartCookieDelete(id, domain, cookieDeleteAuthorization) != 0;
+            if (!started) throw new InvalidOperationException("The fixture cookie deletion is unavailable.");
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            int status;
+            while ((status = CefNative.VeilCefCookieDeleteStatus(id)) == 0)
+            {
+                if (deadline.Elapsed > TimeSpan.FromSeconds(5))
+                    throw new TimeoutException("Cookie deletion did not complete; some requests may have been issued.");
+                await Task.Delay(10);
+                RequireView();
+                if (NativeHandle != id) throw new InvalidOperationException("The CEF view changed.");
+            }
+            if (status == -2) return null;
+            if (status != 1) throw new InvalidOperationException("Cookie deletion failed; some requests may have been issued.");
+            int count = CefNative.VeilCefCookieDeleteCount(id);
+            if (count is < 0 or > 4096) throw new InvalidOperationException("Invalid cookie deletion count.");
+            return count;
+        }
+        finally
+        {
+            // Invalidate native scan before removing the authorization. A late
+            // visitor cannot acquire authorization from a later operation.
+            if (started) CefNative.VeilCefEndCookieDelete(id);
+            cookieDeleteAuthorizations.Remove(id);
+        }
+    }
+
+    public Task<bool> ClearOriginStorageAsync(string origin, Func<bool> stillAuthorized) =>
+        throw new NotSupportedException("CEF origin storage clearing is not verified.");
+    public Task<bool> ClearProfileDataAsync(EngineProfileDataKinds kinds, Func<bool> stillAuthorized) =>
+        throw new NotSupportedException("CEF profile data clearing is not verified.");
+
     public FrameworkElement Element => this;
     public string Source => hwnd == 0 ? "" : Marshal.PtrToStringUni(CefNative.VeilCefSource(NativeHandle)) ?? "";
     public string DocumentTitle => hwnd == 0 ? "" : Marshal.PtrToStringUni(CefNative.VeilCefTitle(NativeHandle)) ?? "";
@@ -322,6 +378,13 @@ internal static class CefNative
     [DllImport(Module)] internal static extern int VeilCefCookieDomainCount(ulong id);
     [DllImport(Module)] internal static extern nint VeilCefCookieDomainAt(ulong id, uint index);
     [DllImport(Module)] internal static extern void VeilCefEndCookieDomainScan(ulong id);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int CookieDeleteAuthorization(ulong id);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern int VeilCefStartCookieDelete(ulong id, string domain, CookieDeleteAuthorization authorize);
+    [DllImport(Module)] internal static extern int VeilCefCookieDeleteStatus(ulong id);
+    [DllImport(Module)] internal static extern int VeilCefCookieDeleteCount(ulong id);
+    [DllImport(Module)] internal static extern void VeilCefEndCookieDelete(ulong id);
     [DllImport(Module)] internal static extern int VeilCefClosed(ulong id);
     [DllImport(Module)] internal static extern uint VeilCefViewLimit();
     [DllImport(Module)] internal static extern uint VeilCefLiveViewCount();

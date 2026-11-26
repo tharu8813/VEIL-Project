@@ -442,7 +442,7 @@ test('site data inspection exposes only narrow read-only capability and refuses 
 
 test('site data mutations are exact-scope capabilities with authorization rechecked before native operations', () => {
     assert.match(engineContract, /internal interface IEngineSiteDataWriter[\s\S]*?Task<int\?> DeleteCookieDomainAsync\(string domain, Func<bool> stillAuthorized\);[\s\S]*?Task<bool> ClearOriginStorageAsync\(string origin, Func<bool> stillAuthorized\);[\s\S]*?Task<bool> ClearProfileDataAsync\(EngineProfileDataKinds kinds, Func<bool> stillAuthorized\);/);
-    assert.doesNotMatch(cefView, /IEngineSiteDataWriter/);
+    assert.match(cefView, /: HwndHost, IBrowserEngineView, IEngineSiteDataReader, IEngineSiteDataWriter/);
     assert.match(webView2, /if \(!SiteDataPolicy\.ValidDomain\(domain\)\)[\s\S]*?var fresh = await core\.CookieManager\.GetCookiesAsync\(""\);\s*if \(!stillAuthorized\(\)\) return null;\s*if \(!ReferenceEquals\(core, RequireStandardSiteDataCore\(\)\)\)/);
     assert.match(webView2, /SiteDataPolicy\.SameCookieDomain\(cookie\.Domain, domain\)\) continue;\s*core\.CookieManager\.DeleteCookie\(cookie\);/);
     assert.match(webView2, /if \(string\.IsNullOrEmpty\(origin\) \|\| SiteDataPolicy\.Origin\(origin\) != origin\)[\s\S]*?if \(!stillAuthorized\(\)\) return false;\s*var core = RequireStandardSiteDataCore\(\);\s*await core\.CallDevToolsProtocolMethodAsync\("Storage\.clearDataForOrigin",\s*System\.Text\.Json\.JsonSerializer\.Serialize\(new \{ origin, storageTypes = SiteDataPolicy\.OriginStorageTypes \}\)\)/);
@@ -469,4 +469,18 @@ test('CEF cookie domain enumeration is a bounded read-only fixture operation tie
     assert.match(cefTabbed, /emptyDomains\.Result\.Count != 0/);
     assert.match(cefTabbed, /firstDomains\.Result\.Count != 2 \|\| secondDomains\.Result\.Count != 2/);
     assert.match(cefTabbed, /VeilCefCookieDomainScanStatus\(secondId\) != -1/);
+});
+
+
+test('CEF exact synthetic cookie deletion rechecks per-cookie authorization and rejects stale scans', () => {
+    assert.match(cefNative, /class ExactCookieDeleteVisitor final : public CefCookieVisitor[\s\S]*?delete_cookie = false;\s*if \(!CefCurrentlyOn\(TID_UI\) \|\| total > 4096\)/);
+    assert.match(cefNative, /if \(CefString\(&cookie\.domain\)\.ToWString\(\) != scan_->domain\) return true;[\s\S]*?if \(!scan_->authorize\(id_\) \|\| state->closing \|\| LookupView\(id_\) != state \|\|\s*state->cookie_delete != scan_\)[\s\S]*?delete_cookie = true;/);
+    assert.match(cefNative, /if \(exact != L"127\.0\.0\.1" && exact != L"localhost"\) return 0;/);
+    assert.match(cefNative, /if \(scan->denied\) return scan->requested == 0 \? -2 : -1;/);
+    assert.match(cefView, /private static readonly CefNative\.CookieDeleteAuthorization cookieDeleteAuthorization = AuthorizeCookieDelete;/);
+    assert.match(cefView, /cookieDeleteAuthorizations\.TryAdd\(id,[\s\S]*?NativeHandle == id &&[\s\S]*?stillAuthorized\(\)/);
+    assert.match(cefView, /if \(started\) CefNative\.VeilCefEndCookieDelete\(id\);\s*cookieDeleteAuthorizations\.Remove\(id\);/);
+    assert.match(cefView, /ClearOriginStorageAsync[\s\S]*?throw new NotSupportedException[\s\S]*?ClearProfileDataAsync[\s\S]*?throw new NotSupportedException/);
+    assert.match(cefTabbed, /cookieDeletion\.Result is not null \|\|\s*deletionAuthorizationChecks < 2/);
+    assert.match(cefTabbed, /firstDomains\.Result\.Count != 1 \|\| firstDomains\.Result\[0\] != "localhost"/);
 });

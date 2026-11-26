@@ -3,6 +3,7 @@
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
 #include "include/cef_cookie.h"
+#include "include/cef_task.h"
 #include "include/cef_request_context.h"
 #include "include/cef_parser.h"
 #include "include/cef_sandbox_win.h"
@@ -31,6 +32,7 @@ using RenderProcessFailed = void (*)(int);
 using BeforeBrowse = int (*)(const wchar_t*, uint64_t, int);
 using NavigationComplete = void (*)(uint64_t, int, int, int);
 using OwnedChunk = int (*)(const void*, int);
+using CookieDeleteAuthorization = int (*)(uint64_t);
 
 // CEF URLRequest callbacks run on the thread that creates the request (UI here).
 // A fresh transfer per request prevents late callbacks from touching a new stream.
@@ -84,6 +86,17 @@ class CookieDomainVisitor final : public CefCookieVisitor {
   IMPLEMENT_REFCOUNTING(CookieDomainVisitor);
 };
 
+struct CookieDeleteScan {
+  explicit CookieDeleteScan(std::wstring exact_domain, CookieDeleteAuthorization callback)
+      : domain(std::move(exact_domain)), authorize(callback) {}
+  const std::wstring domain;
+  const CookieDeleteAuthorization authorize;
+  int requested = 0;
+  bool denied = false;
+  bool valid = true;
+  std::atomic<bool> done{false};
+};
+
 // Owned by the CEF client; accessed on the browser UI thread only.
 // Registration belongs to the same view lifetime as its metadata.
 struct ViewState {
@@ -97,6 +110,7 @@ struct ViewState {
     navigation_complete = nullptr;
     page_state_changed = nullptr;
     render_process_failed = nullptr;
+    cookie_delete.reset();
   }
 
   const uint64_t id;
@@ -124,6 +138,7 @@ struct ViewState {
   bool page_attachment_intercepted = false;
   std::shared_ptr<OwnedTransfer> owned_transfer;
   std::shared_ptr<CookieDomainScan> cookie_scan;
+  std::shared_ptr<CookieDeleteScan> cookie_delete;
 };
 
 // Registry is browser-UI-thread confined. Keep one view until fixture-wide
@@ -148,6 +163,42 @@ CefRefPtr<CefBrowser> LookupBrowser(uint64_t id) {
   const auto entry = views.find(id);
   return entry == views.end() ? nullptr : entry->second.browser;
 }
+// CEF cookie visitors execute on the browser UI thread. Refuse any other
+// thread rather than accessing the registry or managed dispatcher callback.
+class ExactCookieDeleteVisitor final : public CefCookieVisitor {
+ public:
+  ExactCookieDeleteVisitor(uint64_t id, std::shared_ptr<CookieDeleteScan> scan)
+      : id_(id), scan_(std::move(scan)) {}
+  ~ExactCookieDeleteVisitor() override { scan_->done.store(true, std::memory_order_release); }
+  bool Visit(const CefCookie& cookie, int, int total, bool& delete_cookie) override {
+    delete_cookie = false;
+    if (!CefCurrentlyOn(TID_UI) || total > 4096) {
+      scan_->valid = false;
+      return false;
+    }
+    const auto state = LookupView(id_);
+    if (!state || state->closing || state->cookie_delete != scan_) {
+      scan_->denied = true;
+      return false;
+    }
+    if (CefString(&cookie.domain).ToWString() != scan_->domain) return true;
+    // Check the host immediately before each mutation, including after a
+    // callback that might re-enter the registry and close the view.
+    if (!scan_->authorize(id_) || state->closing || LookupView(id_) != state ||
+        state->cookie_delete != scan_) {
+      scan_->denied = true;
+      return false;
+    }
+    delete_cookie = true;
+    ++scan_->requested;
+    return true;
+  }
+ private:
+  const uint64_t id_;
+  const std::shared_ptr<CookieDeleteScan> scan_;
+  IMPLEMENT_REFCOUNTING(ExactCookieDeleteVisitor);
+};
+
 void RemoveView(const std::shared_ptr<ViewState>& state) {
   state->DetachCallbacks();
   const auto entry = views.find(state->id);
@@ -734,6 +785,46 @@ extern "C" __declspec(dllexport) const wchar_t* VeilCefCookieDomainAt(uint64_t i
 extern "C" __declspec(dllexport) void VeilCefEndCookieDomainScan(uint64_t id) {
   const auto state = LookupView(id);
   if (state) state->cookie_scan.reset();
+}
+
+// Exact host-only cookie deletion is deliberately limited to the two
+// synthetic loopback domains. No URL-based bulk deletion or wildcard.
+extern "C" __declspec(dllexport) int VeilCefStartCookieDelete(
+    uint64_t id, const wchar_t* domain, CookieDeleteAuthorization authorize) {
+  const auto state = LookupView(id);
+  const auto browser = LookupBrowser(id);
+  if (!fixture_enabled || !state || !browser || state->closing || state->cookie_delete ||
+      !domain || !authorize || !CefCurrentlyOn(TID_UI)) return 0;
+  const std::wstring exact(domain);
+  if (exact != L"127.0.0.1" && exact != L"localhost") return 0;
+  const auto context = browser->GetHost()->GetRequestContext();
+  const auto manager = context ? context->GetCookieManager(nullptr) : nullptr;
+  if (!manager) return 0;
+  const auto scan = std::make_shared<CookieDeleteScan>(exact, authorize);
+  state->cookie_delete = scan;
+  if (!manager->VisitAllCookies(new ExactCookieDeleteVisitor(id, scan))) {
+    state->cookie_delete.reset();
+    return 0;
+  }
+  return 1;
+}
+extern "C" __declspec(dllexport) int VeilCefCookieDeleteStatus(uint64_t id) {
+  const auto state = LookupView(id);
+  if (!state || state->closing || !state->cookie_delete) return -1;
+  const auto& scan = state->cookie_delete;
+  if (!scan->done.load(std::memory_order_acquire)) return 0;
+  if (!scan->valid) return -1;
+  // A partially issued deletion is not equivalent to an untouched scope.
+  if (scan->denied) return scan->requested == 0 ? -2 : -1;
+  return 1;
+}
+extern "C" __declspec(dllexport) int VeilCefCookieDeleteCount(uint64_t id) {
+  if (VeilCefCookieDeleteStatus(id) != 1) return -1;
+  return LookupView(id)->cookie_delete->requested;
+}
+extern "C" __declspec(dllexport) void VeilCefEndCookieDelete(uint64_t id) {
+  const auto state = LookupView(id);
+  if (state) state->cookie_delete.reset();
 }
 
 extern "C" __declspec(dllexport) int VeilCefClosed(uint64_t id) { return LookupView(id) ? 0 : 1; }

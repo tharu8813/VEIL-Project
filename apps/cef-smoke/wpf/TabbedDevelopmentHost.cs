@@ -42,6 +42,8 @@ internal sealed class TabbedDevelopmentHost
     private Tab? first, second;
     private ulong firstId, secondId;
     private Task<IReadOnlyList<string>>? emptyDomains, firstDomains, secondDomains;
+    private Task<int?>? cookieDeletion;
+    private int deletionAuthorizationChecks;
     private int phase, result;
     private bool shuttingDown, windowClosed, allowWindowClose;
 
@@ -247,7 +249,12 @@ internal sealed class TabbedDevelopmentHost
             BeginShutdown();
             return;
         }
-        string Url(string path) => new Uri(new Uri(fixture!), path).AbsoluteUri;
+        string Url(string path)
+        {
+            var url = new Uri(new Uri(fixture!), path);
+            return path is "/tabs-second" or "/tabs-preserved"
+                ? new UriBuilder(url) { Host = "localhost" }.Uri.AbsoluteUri : url.AbsoluteUri;
+        }
         void Fail() { result = 42; Log($"Tabbed fixture failed at phase {phase}"); BeginShutdown(); }
 
         if (phase == 0 && first is { } a && a.View.NativeHandle != 0)
@@ -292,10 +299,53 @@ internal sealed class TabbedDevelopmentHost
         {
             if (!firstDomains.IsCompletedSuccessfully || !secondDomains.IsCompletedSuccessfully ||
                 firstDomains.Result.Count != 2 || secondDomains.Result.Count != 2 ||
-                firstDomains.Result.Any(domain => domain != "127.0.0.1") ||
-                secondDomains.Result.Any(domain => domain != "127.0.0.1"))
+                firstDomains.Result.Count(domain => domain == "127.0.0.1") != 1 ||
+                firstDomains.Result.Count(domain => domain == "localhost") != 1 ||
+                secondDomains.Result.Count(domain => domain == "127.0.0.1") != 1 ||
+                secondDomains.Result.Count(domain => domain == "localhost") != 1)
             { Fail(); return; }
             Log("Both views returned only the two synthetic cookie domains");
+            // Initial authorization succeeds; the visitor must check it again.
+            deletionAuthorizationChecks = 0;
+            cookieDeletion = ((IEngineSiteDataWriter)second!.View).DeleteCookieDomainAsync("127.0.0.1",
+                () => ++deletionAuthorizationChecks == 1);
+            phase = 12;
+        }
+        else if (phase == 12 && cookieDeletion is { IsCompleted: true })
+        {
+            if (!cookieDeletion.IsCompletedSuccessfully || cookieDeletion.Result is not null ||
+                deletionAuthorizationChecks < 2) { Fail(); return; }
+            firstDomains = ((IEngineSiteDataReader)first!.View).GetCookieDomainsAsync();
+            phase = 13;
+        }
+        else if (phase == 13 && firstDomains is { IsCompleted: true })
+        {
+            if (!firstDomains.IsCompletedSuccessfully || firstDomains.Result.Count != 2 ||
+                firstDomains.Result.Count(domain => domain == "127.0.0.1") != 1 ||
+                firstDomains.Result.Count(domain => domain == "localhost") != 1) { Fail(); return; }
+            Log("Revoked cookie deletion left both domains untouched");
+            cookieDeletion = ((IEngineSiteDataWriter)second!.View).DeleteCookieDomainAsync("127.0.0.1",
+                () => active == second && !second.Closing && !shuttingDown);
+            phase = 14;
+        }
+        else if (phase == 14 && cookieDeletion is { IsCompleted: true })
+        {
+            if (!cookieDeletion.IsCompletedSuccessfully || cookieDeletion.Result != 1) { Fail(); return; }
+            firstDomains = ((IEngineSiteDataReader)first!.View).GetCookieDomainsAsync();
+            phase = 15;
+        }
+        else if (phase == 15 && firstDomains is { IsCompleted: true })
+        {
+            if (!firstDomains.IsCompletedSuccessfully) { Fail(); return; }
+            if (firstDomains.Result.Count == 2 && firstDomains.Result.Contains("127.0.0.1") &&
+                firstDomains.Result.Contains("localhost"))
+            {
+                // CEF issues deletion asynchronously; verify the observed state.
+                firstDomains = ((IEngineSiteDataReader)first!.View).GetCookieDomainsAsync();
+                return;
+            }
+            if (firstDomains.Result.Count != 1 || firstDomains.Result[0] != "localhost") { Fail(); return; }
+            Log("Exact domain deletion preserved the other domain");
             if (CefNative.VeilCefStartCookieDomainScan(secondId) == 0) { Fail(); return; }
             RequestClose(second!);
             phase = 3;
@@ -318,6 +368,14 @@ internal sealed class TabbedDevelopmentHost
             if (first.View.NativeHandle != firstId || first.View.Source != Url("/tabs-after-close") ||
                 !first.View.CanGoBack) { Fail(); return; }
             Log("Closing active tab preserved surviving view and navigation");
+            address.Text = Url("/tabs-preserved");
+            NavigateAddress();
+            phase = 5;
+        }
+        else if (phase == 5 && first?.View.DocumentTitle == "TAB_PRESERVED")
+        {
+            if (first.View.NativeHandle != firstId || first.View.Source != Url("/tabs-preserved")) { Fail(); return; }
+            Log("Preserved domain HTTP check completed");
             result = 0;
             BeginShutdown();
         }
