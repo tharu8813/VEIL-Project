@@ -256,7 +256,8 @@ internal static class CefNative
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
     internal static extern int VeilCefClickFixtureAttachment(ulong id, string url);
     [DllImport(Module)] internal static extern int VeilCefPageAttachmentIntercepted(ulong id);
-    [DllImport(Module)] internal static extern int VeilCefOwnedAttachmentResult();
+    [DllImport(Module)] internal static extern int VeilCefOwnedAttachmentResult(ulong id);
+    [DllImport(Module)] internal static extern void VeilCefCancelOwnedAttachment(ulong id);
     [DllImport(Module)] internal static extern int VeilCefClosed(ulong id);
     [DllImport(Module)] internal static extern int VeilCefReadyToClose(ulong id);
     [DllImport(Module)] internal static extern void VeilCefPump();

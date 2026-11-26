@@ -287,7 +287,7 @@ test('CEF client owns view metadata and callback registration as one lifetime', 
     assert.match(cefNative, /explicit Client\(std::shared_ptr<ViewState> state\) : state_\(std::move\(state\)\)/);
     assert.match(cefNative, /if \(views\.size\(\) >= kDevelopmentViewLimit \|\| !parent \|\| !starting \|\| !completed \|\| !changed \|\| !failed \|\|[\s\S]*?\)\s*return 0;/);
     assert.match(cefNative, /if \(!created \|\| entry == views\.end\(\) \|\| entry->second\.state != state\) \{\s*RemoveView\(state\);\s*return 0;/);
-    assert.match(cefNative, /void VeilCefDetachCallbacks\(uint64_t id, HWND parent\) \{\s*const auto state = LookupView\(id\);\s*if \(state && state->parent == parent\)\s*state->DetachCallbacks\(\);/);
+    assert.match(cefNative, /void VeilCefDetachCallbacks\(uint64_t id, HWND parent\) \{\s*const auto state = LookupView\(id\);\s*if \(state && state->parent == parent\) \{\s*state->DetachCallbacks\(\);\s*if \(state->owned_transfer\) state->owned_transfer->Cancel\(\);/);
     assert.match(cefNative, /void OnBeforeClose\([\s\S]*?RemoveView\(state_\);/);
     assert.match(cefView, /VeilCefOpen\(hwnd, onStarting, onCompleted, onPageStateChanged, onRenderProcessFailed\)/);
     assert.doesNotMatch(cefView, /VeilCefSet(?:NavigationCallbacks|PageStateCallback|RenderProcessFailedCallback)/);
@@ -331,4 +331,17 @@ test('CEF fixture observations and attachment handoff are scoped to the originat
         assert.match(cefView, new RegExp('VeilCef' + name + '\\(ulong id\\)'));
     }
     assert.match(cefNative, /constexpr size_t kDevelopmentViewLimit = 1;/);
+});
+
+
+test('owned download requests have per-transfer lifetime and cancel before releasing callbacks', () => {
+    assert.match(cefNative, /struct OwnedTransfer \{[\s\S]*?void Cancel\(\) \{\s*if \(!active\) return;\s*active = false;\s*canceled = true;\s*result = -1;\s*chunk = nullptr;\s*const auto pending = request;\s*request = nullptr;\s*if \(pending\) pending->Cancel\(\);/);
+    assert.match(cefNative, /const std::weak_ptr<OwnedTransfer> transfer_;/);
+    assert.match(cefNative, /void OnRequestComplete\([\s\S]*?const auto transfer = transfer_\.lock\(\);\s*if \(!transfer \|\| !transfer->active\) return;/);
+    assert.match(cefNative, /void OnDownloadData\([\s\S]*?if \(!transfer->active \|\| !transfer->chunk\) return;[\s\S]*?if \(!transfer->active\) return;/);
+    assert.match(cefNative, /state->owned_transfer = transfer;[\s\S]*?new OwnedAttachmentClient\(transfer\)/);
+    assert.match(cefNative, /if \(state->owned_transfer\) state->owned_transfer->Cancel\(\);/);
+    assert.match(cefNative, /VeilCefOwnedAttachmentResult\(uint64_t id\)[\s\S]*?state->owned_transfer->result/);
+    assert.match(cefNative, /VeilCefCancelOwnedAttachment\(uint64_t id\)[\s\S]*?state->owned_transfer->Cancel\(\)/);
+    assert.doesNotMatch(cefNative, /OwnedChunk owned_chunk|CefRefPtr<CefURLRequest> owned_request/);
 });
