@@ -14,6 +14,11 @@ const executable = resolve(process.argv[2]);
 const vault = resolve(process.argv[3]);
 const requests = [];
 const pageAttachmentRequests = [];
+const anonymousCredentialObservations = [];
+// Synthetic fixture cookie only; never a real user's credentials.
+const sessionCookie = 'veil_fixture_session=synthetic-session';
+const hasSessionCookie = request => (request.headers.cookie ?? '')
+  .split(';').some(part => part.trim() === sessionCookie);
 const deniedFile = 'veil-cef-denied-fixture.txt';
 const deniedBlob = 'veil-cef-denied-blob.txt';
 const body = Buffer.from(Array.from({ length: 96 * 1024 }, (_, index) => index % 251));
@@ -28,7 +33,11 @@ const server = http.createServer((request, response) => {
     return;
   }
   if (request.url === '/wpf-policy') {
-    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.writeHead(200, {
+      'Content-Type': 'text/html',
+      'Set-Cookie': sessionCookie + '; Path=/; HttpOnly; SameSite=Lax',
+      'Cache-Control': 'no-store',
+    });
     response.end(`<!doctype html><a id="download" href="/wpf-attachment">Download</a>
       <a id="vault-download" href="/wpf-owned-attachment">Save to fixture vault</a>
       <script>
@@ -72,6 +81,7 @@ const server = http.createServer((request, response) => {
     return;
   }
   if (request.url === '/wpf-owned-redirect') {
+    anonymousCredentialObservations.push([request.url, hasSessionCookie(request)]);
     response.writeHead(302, {
       Location: '/wpf-owned-redirect-target',
       'Content-Length': 0,
@@ -81,7 +91,14 @@ const server = http.createServer((request, response) => {
   }
   if (['/wpf-owned-attachment', '/wpf-owned-truncated', '/wpf-owned-saturated', '/wpf-owned-redirect-target'].includes(request.url)) {
     if (request.url === '/wpf-owned-attachment') {
-      pageAttachmentRequests.push([request.method, request.headers['x-veil-fixture-handoff']]);
+      const authenticated = hasSessionCookie(request);
+      pageAttachmentRequests.push([request.method, request.headers['x-veil-fixture-handoff'], authenticated]);
+      if (!authenticated) {
+        response.writeHead(401, { 'Content-Length': 0, 'Cache-Control': 'no-store' }).end();
+        return;
+      }
+    } else {
+      anonymousCredentialObservations.push([request.url, hasSessionCookie(request)]);
     }
     response.writeHead(200, {
       'Content-Type': 'application/octet-stream',
@@ -161,7 +178,13 @@ try {
   }
   assert.match(evidence, /Development adapter rejected unsupported profile, network and navigation inputs[\s\S]*Navigation request canceled before HTTP[\s\S]*Observed JavaScript title[\s\S]*Observed matched redirect, completion, and back and forward navigation[\s\S]*Observed HTTP failure completion[\s\S]*Observed rejected HTTP and Blob downloads, geolocation and media permissions[\s\S]*WPF window closed[\s\S]*CEF browser closed[\s\S]*WPF dispatcher stopped/);
   assert.match(evidence, /Intercepted the page attachment before browser navigation reached HTTP/);
-  assert.deepEqual(pageAttachmentRequests, [['GET', '1']], 'Only the native handoff may send the page attachment request');
+  assert.deepEqual(pageAttachmentRequests, [['GET', '1', true]],
+    'Only the native same-origin handoff may send the authenticated attachment request');
+  assert.deepEqual(anonymousCredentialObservations, [
+    ['/wpf-owned-truncated', false],
+    ['/wpf-owned-redirect', false],
+    ['/wpf-owned-saturated', false],
+  ], 'Anonymous fixture requests must not receive the session cookie');
   assert.equal(watcherError, undefined, 'The temporary directory watcher failed');
   assert.deepEqual(observedDownloads, [], 'Observed a download artifact during the run');
   const files = await readdir(fixtureTemp, { recursive: true });

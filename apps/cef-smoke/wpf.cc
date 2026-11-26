@@ -354,8 +354,11 @@ extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(const wchar_t* 
   CefURLParts source;
   if (!CefParseURL(browser->GetMainFrame()->GetURL(), source) ||
       CefString(&parts.origin) != CefString(&source.origin)) return 0;
-  if (path == "/wpf-owned-attachment") {
-    if (!page_attachment_intercepted || url != armed_page_attachment) return 0;
+  const bool authenticated_fixture = path == "/wpf-owned-attachment";
+  const auto frame = browser->GetMainFrame();
+  if (authenticated_fixture) {
+    if (!page_attachment_intercepted || url != armed_page_attachment ||
+        frame->GetURL() != armed_attachment_source) return 0;
     page_attachment_intercepted = false;
     armed_page_attachment.clear();
     armed_attachment_source.clear();
@@ -366,10 +369,18 @@ extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(const wchar_t* 
   const auto request = CefRequest::Create();
   request->SetURL(url);
   request->SetMethod("GET");
-  if (path == "/wpf-owned-attachment")
+  int flags = UR_FLAG_DISABLE_CACHE | UR_FLAG_STOP_ON_REDIRECT | UR_FLAG_NO_RETRY_ON_5XX;
+  if (authenticated_fixture) {
     request->SetHeaderByName("X-Veil-Fixture-Handoff", "1", true);
-  request->SetFlags(UR_FLAG_DISABLE_CACHE | UR_FLAG_STOP_ON_REDIRECT | UR_FLAG_NO_RETRY_ON_5XX);
-  owned_request = CefURLRequest::Create(request, new OwnedAttachmentClient(), nullptr);
+    // Only the predeclared same-origin GET intercepted from the fixture page
+    // may use stored credentials. Let CEF apply its own cookie policy.
+    flags |= UR_FLAG_ALLOW_STORED_CREDENTIALS;
+  }
+  request->SetFlags(flags);
+  auto client = new OwnedAttachmentClient();
+  owned_request = authenticated_fixture
+      ? frame->CreateURLRequest(request, client)
+      : CefURLRequest::Create(request, client, nullptr);
   if (!owned_request) owned_chunk = nullptr;
   return owned_request ? 1 : 0;
 }
