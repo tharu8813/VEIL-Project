@@ -462,6 +462,9 @@ extern "C" __declspec(dllexport) void VeilCefGoForward() {
 extern "C" __declspec(dllexport) void VeilCefReload() {
   if (browser) browser->Reload();
 }
+extern "C" __declspec(dllexport) void VeilCefReloadIgnoringCache() {
+  if (browser) browser->ReloadIgnoreCache();
+}
 extern "C" __declspec(dllexport) void VeilCefStop() {
   if (browser) browser->StopLoad();
 }
