@@ -193,14 +193,8 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
         hwnd = CefNative.CreateWindowExW(0, "STATIC", "", childVisible,
             0, 0, 1, 1, parent.Handle, 0, 0, 0);
         if (hwnd == 0) throw new InvalidOperationException("Cannot create the CEF parent window.");
-        CefNative.VeilCefSetNavigationCallbacks(onStarting, onCompleted);
-        CefNative.VeilCefSetPageStateCallback(onPageStateChanged);
-        CefNative.VeilCefSetRenderProcessFailedCallback(onRenderProcessFailed);
-        if (CefNative.VeilCefOpen(hwnd) == 0)
+        if (CefNative.VeilCefOpen(hwnd, onStarting, onCompleted, onPageStateChanged, onRenderProcessFailed) == 0)
         {
-            CefNative.VeilCefSetRenderProcessFailedCallback(null);
-            CefNative.VeilCefSetPageStateCallback(null);
-            CefNative.VeilCefSetNavigationCallbacks(null, null);
             CefNative.DestroyWindow(hwnd);
             hwnd = 0;
             throw new InvalidOperationException("Cannot create the CEF browser.");
@@ -216,9 +210,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
 
     protected override void DestroyWindowCore(HandleRef window)
     {
-        CefNative.VeilCefSetRenderProcessFailedCallback(null);
-        CefNative.VeilCefSetPageStateCallback(null);
-        CefNative.VeilCefSetNavigationCallbacks(null, null);
+        CefNative.VeilCefDetachCallbacks(window.Handle);
         CefNative.DestroyWindow(window.Handle);
         hwnd = 0;
     }
@@ -233,18 +225,16 @@ internal static class CefNative
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void NavigationComplete(ulong id, int success, int canceled, int code);
     [DllImport(Module)]
-    internal static extern void VeilCefSetNavigationCallbacks(BeforeBrowse? starting, NavigationComplete? completed);
-
-    [DllImport(Module)] internal static extern int VeilCefOpen(nint parent);
+    internal static extern int VeilCefOpen(nint parent, BeforeBrowse starting, NavigationComplete completed,
+        PageStateChanged changed, RenderProcessFailed failed);
+    [DllImport(Module)] internal static extern void VeilCefDetachCallbacks(nint parent);
     [DllImport(Module)] internal static extern void VeilCefResize(nint parent);
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
     internal static extern void VeilCefNavigate(string url);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void PageStateChanged(int kind);
-    [DllImport(Module)] internal static extern void VeilCefSetPageStateCallback(PageStateChanged? callback);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void RenderProcessFailed(int code);
-    [DllImport(Module)] internal static extern void VeilCefSetRenderProcessFailedCallback(RenderProcessFailed? callback);
     [DllImport(Module)] internal static extern int VeilCefIsPageFullScreen();
     [DllImport(Module)] internal static extern nint VeilCefSource();
     [DllImport(Module)] internal static extern nint VeilCefTitle();
