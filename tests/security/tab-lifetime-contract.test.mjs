@@ -369,9 +369,21 @@ test('CEF permits two views only in the synthetic fixture and proves independent
     assert.match(cefNative, /constexpr unsigned kFixtureViewLimit = 2;/);
     assert.match(cefNative, /unsigned ViewLimit\(\) \{ return fixture_enabled \? kFixtureViewLimit : kDevelopmentViewLimit; \}/);
     assert.match(cefNative, /if \(views\.size\(\) >= ViewLimit\(\)/);
-    assert.match(cefView, /privateProfileName is not null \|\| viewsCreated >= CefNative\.VeilCefViewLimit\(\)/);
+    assert.match(cefView, /privateProfileName is not null \|\| views\.Count >= CefNative\.VeilCefViewLimit\(\)/);
     assert.match(cefSmoke, /var second = \(CefDevelopmentView\)engine\.CreateView\(\);/);
     assert.match(cefSmoke, /secondaryHandle == browser\.NativeHandle \|\|[\s\S]*?VeilCefLiveViewCount\(\) != 2/);
     assert.match(cefSmoke, /secondaryWindowClosed && CefNative\.VeilCefClosed\(secondaryHandle\) != 0/);
     assert.match(cefSmoke, /VeilCefSetMuted\(secondaryHandle, 1\);[\s\S]*?VeilCefLiveViewCount\(\) != 1/);
+});
+
+
+test('CEF managed view reservations are reclaimed only after disposal and native closure', () => {
+    assert.match(cefView, /views\.RemoveAll\(view => view\.IsSlotReleased\);[\s\S]*?views\.Add\(view\);/);
+    assert.match(cefView, /IsSlotReleased => disposed && NativeHandle == 0 &&\s*\(retiredHandle == 0 \|\| CefNative\.VeilCefClosed\(retiredHandle\) != 0\)/);
+    assert.match(cefView, /if \(NativeHandle != 0\) retiredHandle = NativeHandle;\s*CefNative\.VeilCefDetachCallbacks/);
+    assert.match(cefView, /protected override void Dispose\(bool disposing\)\s*\{\s*base\.Dispose\(disposing\);\s*if \(disposing\) disposed = true;/);
+    assert.match(cefView, /if \(disposed \|\| NativeHandle != 0 \|\| \(retiredHandle != 0 && CefNative\.VeilCefClosed\(retiredHandle\) == 0\)\)/);
+    assert.match(cefSmoke, /var reservation = engine\.CreateView\(\);\s*bool reservedLimit = Rejects\(\(\) => engine\.CreateView\(\)\);\s*reservation\.Dispose\(\);/);
+    assert.match(cefSmoke, /firstSecondaryHandle = secondaryHandle;[\s\S]*?OpenSecondary\("\/wpf-isolation-reopened"\)/);
+    assert.match(cefSmoke, /secondaryHandle <= firstSecondaryHandle \|\| CefNative\.VeilCefClosed\(firstSecondaryHandle\) == 0/);
 });

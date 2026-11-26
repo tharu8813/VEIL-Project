@@ -8,7 +8,8 @@ namespace Veil.Desktop;
 
 internal sealed class CefDevelopmentEngine : IBrowserEngine
 {
-    private uint viewsCreated;
+    private readonly System.Windows.Threading.Dispatcher dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+    private readonly List<CefDevelopmentView> views = new();
 
     public string DisplayName => "CEF development host";
     public string? RuntimeVersion => null;
@@ -19,6 +20,7 @@ internal sealed class CefDevelopmentEngine : IBrowserEngine
 
     public Task InitializeAsync(string protectedProfileRoot, NetworkSettings network)
     {
+        dispatcher.VerifyAccess();
         string? nativeProfile = Marshal.PtrToStringUni(CefNative.VeilCefProfile());
         if (network != NetworkSettings.Standard ||
             !string.Equals(FixtureProfile, Path.GetFullPath(protectedProfileRoot), StringComparison.OrdinalIgnoreCase) ||
@@ -30,16 +32,26 @@ internal sealed class CefDevelopmentEngine : IBrowserEngine
 
     public IBrowserEngineView CreateView(string? privateProfileName = null)
     {
-        if (!IsReady || privateProfileName is not null || viewsCreated >= CefNative.VeilCefViewLimit())
+        dispatcher.VerifyAccess();
+        // Disposed reservations are reusable only after native OnBeforeClose.
+        // Unattached views also occupy a slot until explicitly disposed.
+        views.RemoveAll(view => view.IsSlotReleased);
+        if (!IsReady || privateProfileName is not null || views.Count >= CefNative.VeilCefViewLimit() ||
+            CefNative.VeilCefLiveViewCount() >= CefNative.VeilCefViewLimit())
             throw new InvalidOperationException("The CEF development view limit or profile restriction was reached.");
-        viewsCreated++;
-        return new CefDevelopmentView();
+        var view = new CefDevelopmentView();
+        views.Add(view);
+        return view;
     }
 }
 
 internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
 {
     private nint hwnd;
+    private bool disposed;
+    private ulong retiredHandle;
+    internal bool IsSlotReleased => disposed && NativeHandle == 0 &&
+        (retiredHandle == 0 || CefNative.VeilCefClosed(retiredHandle) != 0);
     internal ulong NativeHandle { get; private set; }
     private readonly CefNative.BeforeBrowse onStarting;
     private readonly CefNative.NavigationComplete onCompleted;
@@ -190,6 +202,8 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
 
     protected override HandleRef BuildWindowCore(HandleRef parent)
     {
+        if (disposed || NativeHandle != 0 || (retiredHandle != 0 && CefNative.VeilCefClosed(retiredHandle) == 0))
+            throw new InvalidOperationException("The previous CEF view has not closed.");
         const uint childVisible = 0x50000000;
         hwnd = CefNative.CreateWindowExW(0, "STATIC", "", childVisible,
             0, 0, 1, 1, parent.Handle, 0, 0, 0);
@@ -212,10 +226,17 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
 
     protected override void DestroyWindowCore(HandleRef window)
     {
+        if (NativeHandle != 0) retiredHandle = NativeHandle;
         CefNative.VeilCefDetachCallbacks(NativeHandle, window.Handle);
         NativeHandle = 0;
         CefNative.DestroyWindow(window.Handle);
         hwnd = 0;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        if (disposing) disposed = true;
     }
 }
 
