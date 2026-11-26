@@ -31,7 +31,6 @@ public partial class BrowserWindow
         web.Profile.PreferredTrackingPreventionLevel = CoreWebView2TrackingPreventionLevel.Strict;
         web.PermissionRequested += (_, args) => tab.Owner.OnSitePermissionRequested(tab, args);
         web.LaunchingExternalUriScheme += (_, args) => args.Cancel = true;
-        web.FaviconChanged += async (_, _) => await tab.Owner.UpdateFavicon(tab, web);
         web.DownloadStarting += (_, args) => tab.Owner.OnDownloadStarting(tab, args);
         // Record navigation methods so the vault never replays a POST download as GET.
         if (!session.IsPrivate)
@@ -46,8 +45,6 @@ public partial class BrowserWindow
         }
         web.NewWindowRequested += (_, args) => tab.Owner.OnNewWindowRequested(tab, args);
         web.WindowCloseRequested += (_, _) => tab.Owner.Dispatcher.BeginInvoke(() => tab.Owner.CloseTab(tab.Item));
-        web.IsDocumentPlayingAudioChanged += (_, _) => tab.Owner.UpdateAudio(tab);
-        web.IsMutedChanged += (_, _) => tab.Owner.UpdateAudio(tab);
         web.ProcessFailed += (_, args) => tab.Owner.OnProcessFailed(tab, args);
         web.ContainsFullScreenElementChanged += (_, _) =>
         {

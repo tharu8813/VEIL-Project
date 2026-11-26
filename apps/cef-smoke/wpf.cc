@@ -407,6 +407,12 @@ extern "C" __declspec(dllexport) void VeilCefNavigate(const wchar_t* url) {
 extern "C" __declspec(dllexport) const wchar_t* VeilCefProfile() {
   return profile_root.c_str();
 }
+extern "C" __declspec(dllexport) int VeilCefIsMuted() {
+  return browser && browser->GetHost()->IsAudioMuted();
+}
+extern "C" __declspec(dllexport) void VeilCefSetMuted(int muted) {
+  if (browser) browser->GetHost()->SetAudioMuted(muted != 0);
+}
 extern "C" __declspec(dllexport) int VeilCefCanGoBack() {
   return browser && browser->CanGoBack();
 }

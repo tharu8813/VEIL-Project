@@ -46,6 +46,20 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
     public event EventHandler? SourceChanged;
     public event EventHandler? TitleChanged;
     public event EventHandler? HistoryChanged;
+    // The development adapter does not yet expose cached favicon image bytes.
+    public event EventHandler? FaviconChanged { add { } remove { } }
+    public Task<Stream?> GetFaviconPngAsync() => Task.FromResult<Stream?>(null);
+    public event EventHandler? AudioStateChanged;
+    public bool? IsDocumentPlayingAudio => null;
+    public bool? IsMuted => hwnd == 0 || CefNative.VeilCefClosed() != 0
+        ? null : CefNative.VeilCefIsMuted() != 0;
+    public void SetMuted(bool muted)
+    {
+        RequireView();
+        if (IsMuted == muted) return;
+        CefNative.VeilCefSetMuted(muted ? 1 : 0);
+        AudioStateChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     public event EventHandler<EngineNavigationStartingEventArgs>? NavigationStarting;
     public event EventHandler<EngineNavigationCompletedEventArgs>? NavigationCompleted;
@@ -215,6 +229,8 @@ internal static class CefNative
     [DllImport(Module)] internal static extern int VeilCefReadyToClose();
     [DllImport(Module)] internal static extern void VeilCefPump();
     [DllImport(Module)] internal static extern int VeilCefTryClose();
+    [DllImport(Module)] internal static extern int VeilCefIsMuted();
+    [DllImport(Module)] internal static extern void VeilCefSetMuted(int muted);
     [DllImport(Module)] internal static extern int VeilCefCanGoBack();
     [DllImport(Module)] internal static extern int VeilCefCanGoForward();
     [DllImport(Module)] internal static extern void VeilCefGoBack();

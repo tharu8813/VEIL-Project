@@ -28,6 +28,7 @@ public partial class BrowserWindow : Window
         internal FrameworkElement? ManagementSurface { get; set; }
         internal Action? CancelManagement { get; set; }
         internal long NavigationEpoch { get; set; }
+        internal long FaviconRequest { get; set; }
         internal ulong? NavigationId { get; set; }
         internal Uri? ExpectedUpgrade { get; set; }
         internal bool Closing { get; set; }
@@ -304,6 +305,8 @@ public partial class BrowserWindow : Window
             engineView.SourceChanged += (_, _) => tab.Owner.OnSourceChanged(tab);
             engineView.TitleChanged += (_, _) => tab.Owner.OnTitleChanged(tab);
             engineView.HistoryChanged += (_, _) => tab.Owner.OnHistoryChanged(tab);
+            engineView.FaviconChanged += async (_, _) => await tab.Owner.UpdateFavicon(tab);
+            engineView.AudioStateChanged += (_, _) => tab.Owner.UpdateAudio(tab);
             ConfigureWebView2Tab(tab);
             // SelectionChanged can synchronously save the session. Publish an internal route
             // before inserting the item, since native pages may never navigate the WebView.
@@ -831,19 +834,22 @@ public partial class BrowserWindow : Window
 
     private void UpdateAudio(BrowserTab tab)
     {
-        var web = tab.View.CoreWebView2;
-        bool show = web.IsDocumentPlayingAudio || web.IsMuted;
+        if (!AcceptTabEvents(tab)) return;
+        bool muted = tab.EngineView.IsMuted == true;
+        bool show = tab.EngineView.IsDocumentPlayingAudio == true || muted;
         var button = tab.Header.Audio;
         if (show && button.Visibility != Visibility.Visible)
             Motion.Enter(button, 0, scale: 0.3, ms: 500, ease: Motion.Spring);
         button.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        button.Content = web.IsMuted ? "" : "";
-        button.ToolTip = web.IsMuted ? "탭 음소거 해제" : "탭 음소거";
+        button.IsEnabled = tab.EngineView.IsMuted.HasValue;
+        button.Content = muted ? "" : "";
+        button.ToolTip = muted ? "탭 음소거 해제" : "탭 음소거";
     }
 
     private void ToggleMute(BrowserTab tab)
     {
-        if (tab.View.CoreWebView2 is { } web) web.IsMuted = !web.IsMuted;
+        if (AcceptTabEvents(tab) && tab.EngineView.IsMuted is { } muted)
+            tab.EngineView.SetMuted(!muted);
     }
 
     private static void UpdateTabToolTip(BrowserTab tab)

@@ -49,6 +49,17 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
     public event EventHandler? SourceChanged;
     public event EventHandler? TitleChanged;
     public event EventHandler? HistoryChanged;
+    public event EventHandler? FaviconChanged;
+    public event EventHandler? AudioStateChanged;
+    public bool? IsDocumentPlayingAudio => disposed ? null : NativeView.CoreWebView2?.IsDocumentPlayingAudio;
+    public bool? IsMuted => disposed ? null : NativeView.CoreWebView2?.IsMuted;
+    public void SetMuted(bool muted) => Core.IsMuted = muted;
+    public async Task<Stream?> GetFaviconPngAsync()
+    {
+        var core = Core;
+        return string.IsNullOrEmpty(core.FaviconUri) ? null :
+            await core.GetFaviconAsync(CoreWebView2FaviconImageFormat.Png);
+    }
     public string Source => Core.Source;
     public string DocumentTitle => Core.DocumentTitle;
     private bool disposed;
@@ -84,6 +95,12 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
         core.DocumentTitleChanged += OnTitleChanged;
         core.HistoryChanged -= OnHistoryChanged;
         core.HistoryChanged += OnHistoryChanged;
+        core.FaviconChanged -= OnFaviconChanged;
+        core.FaviconChanged += OnFaviconChanged;
+        core.IsDocumentPlayingAudioChanged -= OnAudioStateChanged;
+        core.IsDocumentPlayingAudioChanged += OnAudioStateChanged;
+        core.IsMutedChanged -= OnAudioStateChanged;
+        core.IsMutedChanged += OnAudioStateChanged;
     }
 
     private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
@@ -107,6 +124,11 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
         TitleChanged?.Invoke(this, EventArgs.Empty);
     private void OnHistoryChanged(object? sender, object args) =>
         HistoryChanged?.Invoke(this, EventArgs.Empty);
+
+    private void OnFaviconChanged(object? sender, object args) =>
+        FaviconChanged?.Invoke(this, EventArgs.Empty);
+    private void OnAudioStateChanged(object? sender, object args) =>
+        AudioStateChanged?.Invoke(this, EventArgs.Empty);
 
     public bool CanGoBack => !disposed && NativeView.CoreWebView2?.CanGoBack == true;
     public bool CanGoForward => !disposed && NativeView.CoreWebView2?.CanGoForward == true;
@@ -136,6 +158,9 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
             core.SourceChanged -= OnSourceChanged;
             core.DocumentTitleChanged -= OnTitleChanged;
             core.HistoryChanged -= OnHistoryChanged;
+            core.FaviconChanged -= OnFaviconChanged;
+            core.IsDocumentPlayingAudioChanged -= OnAudioStateChanged;
+            core.IsMutedChanged -= OnAudioStateChanged;
         }
         NativeView.Dispose();
     }

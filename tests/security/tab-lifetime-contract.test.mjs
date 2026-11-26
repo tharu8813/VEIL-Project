@@ -200,3 +200,16 @@ test('page metadata and history availability route through the live engine view'
     assert.match(dispose, /core\.SourceChanged -= OnSourceChanged;[\s\S]*?core\.DocumentTitleChanged -= OnTitleChanged;[\s\S]*?core\.HistoryChanged -= OnHistoryChanged;/);
     assert.match(cefView, /DestroyWindowCore[\s\S]*?VeilCefSetPageStateCallback\(null\);[\s\S]*?DestroyWindow\(window\.Handle\)/);
 });
+
+
+test('tab audio and favicon data use the engine boundary without external icon fetches', () => {
+    assert.match(browser, /engineView\.FaviconChanged \+= async \(_, _\) => await tab\.Owner\.UpdateFavicon\(tab\);/);
+    assert.match(browser, /engineView\.AudioStateChanged \+= \(_, _\) => tab\.Owner\.UpdateAudio\(tab\);/);
+    assert.match(browser, /AcceptTabEvents\(tab\) && tab\.EngineView\.IsMuted is \{ \} muted\)\s*tab\.EngineView\.SetMuted\(!muted\)/);
+    assert.match(motion, /long epoch = tab\.NavigationEpoch;\s*long request = \+\+tab\.FaviconRequest;[\s\S]*?await tab\.EngineView\.GetFaviconPngAsync\(\)[\s\S]*?if \(!AcceptTabEvents\(tab\) \|\| tab\.NavigationEpoch != epoch \|\| tab\.FaviconRequest != request\) return;/);
+    assert.doesNotMatch(webView2Window, /web\.(?:FaviconChanged|IsMutedChanged|IsDocumentPlayingAudioChanged) \+=/);
+    assert.match(webView2, /await core\.GetFaviconAsync\(CoreWebView2FaviconImageFormat\.Png\)/);
+    assert.match(cefView, /IsDocumentPlayingAudio => null;/);
+    assert.match(cefView, /GetFaviconPngAsync\(\) => Task\.FromResult<Stream\?>\(null\)/);
+    assert.match(cefView, /VeilCefSetMuted\(muted \? 1 : 0\);/);
+});
