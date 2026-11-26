@@ -40,6 +40,8 @@ internal interface IBrowserEngineView : IDisposable
     // Read-only page fullscreen state; null means unavailable, not fullscreen permission.
     event EventHandler? FullScreenChanged;
     bool? IsPageFullScreen { get; }
+    // Request exit only; false means unsupported. Actual state remains event-driven.
+    Task<bool> TryExitPageFullScreenAsync();
     // Null means unavailable or unverified; it is not equivalent to silence/unmuted.
     bool? IsDocumentPlayingAudio { get; }
     bool? IsMuted { get; }

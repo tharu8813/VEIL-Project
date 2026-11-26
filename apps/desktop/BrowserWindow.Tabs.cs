@@ -555,11 +555,25 @@ public partial class BrowserWindow
             WindowState = restoreState;
             if (roundedCorners) WindowCorners.SetRounded(this, true);
             SyncWindowState();
-            if (page && Active?.View.CoreWebView2 is { ContainsFullScreenElement: true } web)
-                _ = web.ExecuteScriptAsync("document.fullscreenElement && document.exitFullscreen()");
         }
-        if (!on && !page && Active?.View.CoreWebView2 is { ContainsFullScreenElement: true } current)
-            _ = current.ExecuteScriptAsync("document.exitFullscreen()");
+        if (!on && Active is { } tab && AcceptTabEvents(tab) && tab.EngineView.IsPageFullScreen == true)
+            _ = ExitPageFullScreenAsync(tab);
+    }
+
+    private async Task ExitPageFullScreenAsync(BrowserTab tab)
+    {
+        long epoch = tab.NavigationEpoch;
+        bool Current() => AcceptTabEvents(tab) && Active == tab && tab.NavigationEpoch == epoch;
+        if (!Current()) return;
+        try
+        {
+            if (!await tab.EngineView.TryExitPageFullScreenAsync() && Current())
+                Status.Text = "현재 엔진에서 페이지 전체 화면 종료를 지원하지 않습니다.";
+        }
+        catch (Exception error) when (RecoverableFailure.Is(error))
+        {
+            if (Current()) Status.Text = "페이지 전체 화면을 종료하지 못했습니다.";
+        }
     }
 }
 

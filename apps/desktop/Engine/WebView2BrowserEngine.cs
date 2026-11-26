@@ -56,6 +56,12 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
     public event EventHandler? WindowCloseRequested;
     public event EventHandler? FullScreenChanged;
     public bool? IsPageFullScreen => disposed ? null : NativeView.CoreWebView2?.ContainsFullScreenElement;
+    public async Task<bool> TryExitPageFullScreenAsync()
+    {
+        if (IsPageFullScreen != true) return false;
+        await Core.ExecuteScriptAsync("document.fullscreenElement && document.exitFullscreen()");
+        return true;
+    }
     public bool? IsDocumentPlayingAudio => disposed ? null : NativeView.CoreWebView2?.IsDocumentPlayingAudio;
     public bool? IsMuted => disposed ? null : NativeView.CoreWebView2?.IsMuted;
     public void SetMuted(bool muted) => Core.IsMuted = muted;

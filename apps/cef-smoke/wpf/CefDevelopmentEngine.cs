@@ -64,6 +64,8 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
     public event EventHandler? FullScreenChanged;
     public bool? IsPageFullScreen => hwnd == 0 || CefNative.VeilCefClosed(NativeHandle) != 0
         ? null : CefNative.VeilCefIsPageFullScreen(NativeHandle) != 0;
+    // Native fullscreen-exit behavior is not yet verified; never inject arbitrary script.
+    public Task<bool> TryExitPageFullScreenAsync() => Task.FromResult(false);
     public event EventHandler? SourceChanged;
     public event EventHandler? TitleChanged;
     public event EventHandler? HistoryChanged;

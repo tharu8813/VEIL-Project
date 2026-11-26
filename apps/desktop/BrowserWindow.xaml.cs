@@ -54,6 +54,8 @@ public partial class BrowserWindow : Window
     private bool restoring = true;
     private bool smokeRun;
     private bool openingDownloads;
+    // Views can be attached while initialization awaits and before a TabItem is published.
+    private readonly HashSet<IBrowserEngineView> initializingViews = new();
     private string? startupAddress;
     private LibraryWindow? bookmarkLibrary;
     private LibraryWindow? historyLibrary;
@@ -124,10 +126,12 @@ public partial class BrowserWindow : Window
                 if (item.Tag is BrowserTab tab) session.RememberClosedTab(new ClosedTab(tab.Url, tab.Pinned));
             SaveSession();
         }
-        foreach (var tab in Tabs.Items.OfType<TabItem>().Select(item => (BrowserTab)item.Tag).ToArray())
-            ClearManagement(tab);
+        var ownedTabs = Tabs.Items.OfType<TabItem>().Select(item => (BrowserTab)item.Tag).ToArray();
+        foreach (var tab in ownedTabs) ClearManagement(tab);
         if (session.IsPrivate) DeletePrivateProfile();
-        foreach (var view in Pages.Children.OfType<WebView2>())
+        // Preserve the native profile deletion ordering, but dispose through the adapter.
+        // Include unpublished views so a close racing initialization cannot leak a controller.
+        foreach (var view in ownedTabs.Select(tab => tab.EngineView).Concat(initializingViews).Distinct().ToArray())
             view.Dispose();
         session.ReleasePrivate();
         session.StopProxyMonitorIfIdle();
@@ -290,9 +294,10 @@ public partial class BrowserWindow : Window
         tab.Item = item;
         tab.Header = CreateTabHeader(item, tab);
         UpdatePinnedHeader(tab);
-        Pages.Children.Add(element);
+        initializingViews.Add(engineView);
         try
         {
+            Pages.Children.Add(element);
             await engineView.InitializeAsync();
             if (closing || session.IsEnding || session.EngineLost)
             {
@@ -350,6 +355,7 @@ public partial class BrowserWindow : Window
             if (!closing) Status.Text = "탭을 열 수 없습니다. WebView2 런타임과 테스트 프로필을 확인하세요.";
             return null;
         }
+        finally { initializingViews.Remove(engineView); }
     }
 
     // ── Engine events, always handled by the tab's current window ───────────
