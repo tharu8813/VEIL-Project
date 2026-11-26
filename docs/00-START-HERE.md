@@ -26,7 +26,8 @@
 | [DEVELOPMENT.md](DEVELOPMENT.md) | 빌드·실행·자동 시험 안내 (이전 README) | 개발 환경 준비 시 |
 | `01-product-requirements.md` | 사용자 목표·기능·수용 기준 | 항상 |
 | `02-threat-model.md` | 보호 자산, 공격자, 잔여 위험 | 보안 설계 전 |
-| `03-engine-selection.md` | Qt/CEF/Chromium/WebView2 실측 비교 | 엔진 확정 전 |
+| `03-engine-selection.md` | 엔진 선정과 실측 기준 | 엔진 검증 시 |
+| `cef-transition-roadmap.md` | CEF 구현·검증 순서 | 엔진 전환 시 |
 | `04-system-architecture.md` | 모듈, 프로세스, 인터페이스 | 설계·구현 시 |
 | `05-encrypted-profile.md` | 쿠키·방문기록·사이트 데이터의 안전한 영속화 | 프로필 구현 시 |
 | `06-crypto-key-management.md` | 암호화, 키 수명, 잠금, 백업 | 암호화 구현 시 |

@@ -1,7 +1,0 @@
-# Synthetic cutover journal record contract
-
-PR #168 exact head db6f04af09641079196bbcef0a8705599446062c [CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45692660823) PASS 61440 synthetic recovery combinations; merged 3e643e9f6b0f64c6800f63e6dc02662471476658.
-
-New canonical ASCII JSON record (format 1, 8KiB bound, exact final newline) binds nonzero 32-lowercase-hex transaction ID, prepared/replaced/committed state, two distinct exact client pins, verified-registration-backup candidate digest and target registration byte digest. Strict decode uses existing narrow reader, rejects unknown/duplicate fields, noncanonical representation, truncation and invalid identities; output preserved on refusal. Successor allows prepared -> replaced -> committed only, with every other field byte-identical. No same-state rewrite or backwards transition; invalid/absent are observations, never serialized as records. Tests exercise all 25 state pairs, every truncation, malformed and changed bindings. Exact-head CI NOT RUN at commit.
-
-This is only a record codec and comparison contract. Hash fields are not authentication, transaction ID generation not implemented, no durable storage/atomic rename/flush, no rollback-resistant journal, no marker absence inference or evidence of actual activation. Real admin-only storage and independent trusted recovery evidence remain required. Existing WebView2/Rust/broker/installer unchanged. No real registration write or upstream build; no gate advancement.

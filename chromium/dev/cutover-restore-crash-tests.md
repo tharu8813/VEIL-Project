@@ -1,7 +1,0 @@
-# Synthetic restore process interruption tests
-
-PR #175 exact head 122ece4fbfed9dc6e5697aa869e32ec716487b66 [Windows CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45699394580) PASS fixture restoration and post-commit refusal; merged 87035747c55ae2408b768dff7b53827254ac0103.
-
-Four dedicated random fixture roots exercise actual abrupt child process self-termination (TerminateProcess, exit code 77) at empty restore marker, populated flushed backup copy, displaced original rename, and restored copy rename/flush before final verification. Fault injection only in existing native test executable via its injected object policy, no new hook in library. No sleep/polling race. Parent checks exact exit, starts fresh executable, requires lease reacquisition and refusal of history, backup, publication, activation and repeated restoration; verifies exact retained backup/target/current/copy layout and absence of activation/replacement journal records. Test-owned files only, explicit nonrecursive cleanup. Exact-head CI NOT RUN at commit.
-
-This is process interruption, not OS crash/power-loss durability, actual product migration or trusted ACL positive. The two-rename gap intentionally demonstrates missing registration can occur; no automatic repair or production rollback authorization. No existing WebView2, Rust, broker, installer or Chromium gate changes. Actual upstream build remains critical prerequisite.

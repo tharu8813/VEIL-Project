@@ -37,7 +37,6 @@
 |---|---|---|
 | Qt C++ | PySide6와 같은 Qt API로 저장 경로·쿠키 정책·다운로드 경로를 제어한다. 브라우저 본문을 보호 저장소로 보내는 경로는 추가 실증이 필요하다. [프로필](https://doc.qt.io/qt-6.11/qwebengineprofile.html) · [다운로드](https://doc.qt.io/qt-6.10/qwebenginedownloadrequest.html) | NOT RUN |
 | CEF | Chromium 브랜치 추적 및 자체 빌드가 가능하다. 보호 저장소 연결과 샌드박스 통합에 드는 비용을 측정해야 한다. [CEF 브랜치와 빌드](https://github.com/chromiumembedded/cef/blob/master/docs/branches_and_building.md) | NOT RUN |
-| Chromium 포크 | 프로필 경로를 설정할 수 있고 소스 수준 변경이 가능하다. 저장/다운로드 계층 수정, 패치 추적 및 재빌드 비용이 크다. [데이터 경로](https://chromium.googlesource.com/chromium/src/+/master/docs/user_data_dir.md) · [샌드박스](https://chromium.googlesource.com/chromium/src/+/main/docs/design/sandbox.md) | NOT RUN |
 | WebView2 | UDF 경로 및 다운로드 취소·대상 경로 변경을 지원한다. 전체 저장소 암호화와 본문 스트림 제어는 공개 API에서 확인하지 못했다. [UDF](https://learn.microsoft.com/dotnet/api/microsoft.web.webview2.core.corewebview2environment.createasync) · [다운로드 이벤트](https://learn.microsoft.com/microsoft-edge/webview2/reference/win32/icorewebview2downloadstartingeventargs) | 위 표 참조 |
 | Python + Qt | 프로필 및 캐시 경로를 설정하고 다운로드 수용·취소와 디스크 대상을 제어한다. 다운로드 응답 바이트를 직접 받는 공개 API는 확인하지 못했다. [프로필](https://doc.qt.io/qt-6.11/qwebengineprofile.html) · [다운로드](https://doc.qt.io/qt-6.10/qwebenginedownloadrequest.html) | 위 표 참조 |
 

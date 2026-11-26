@@ -1,16 +1,15 @@
 # 03. 브라우저 엔진 기술 검증 및 선정
 
-## 결론은 아직 미확정
+## 전환 방향
 
-**[검증 필요]** 초기 생산성 때문에 Python + PySide6 + Qt WebEngine을 우선 PoC 후보로 고려한다. 단, 프로필 암호화와 다운로드 스트림 제어 요구를 충족하지 못하면 CEF/Chromium 수정 또는 다른 검증된 아키텍처로 전환한다. 사용자용 엔진을 미리 확정하지 않는다.
+현재 WebView2 제품의 다음 엔진으로 CEF를 검증한다. 구현 순서와 출시 기준은 [CEF 전환 로드맵](cef-transition-roadmap.md)을 따른다.
 
 ## 비교 대상
 
 1. Python + PySide6 + Qt WebEngine
 2. C++ + Qt WebEngine
 3. CEF (Chromium Embedded Framework)
-4. Chromium 소스 포크/커스텀 빌드
-5. Microsoft WebView2
+4. Microsoft WebView2
 
 ## 필수 비교 항목
 
@@ -46,7 +45,7 @@
 
 ### E-05. 업데이트 및 공급망
 
-보안 수정 반영 시간, 이슈 대응 가능성, 릴리스 자동화 가능성을 확인한다. Chromium을 직접 포크하는 경우 누적 패치 적용 비용을 반드시 평가한다.
+보안 수정 반영 시간, 이슈 대응 가능성, 릴리스 자동화 가능성을 확인한다.
 
 ## 의사결정 규칙
 

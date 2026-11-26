@@ -1,7 +1,0 @@
-# Combined synthetic executable integrity observation
-
-PR #155 exact head d6eaa9181e7ddf99fa94a6c33ecf81c191a72608 [Windows CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45678804543) PASS unsigned/non-PE/path refusals and actual independently selected signed fixture policy match plus corrupted copy refusal (positive not skipped); merged 2860c82dfa6ee04f24b52a1ca3af8391f1356c59.
-
-New standalone integration retains ancestor handles and opens only fixed client-fixture.exe once, checks shape, computes bounded CNG hash, rejects mismatch before WinVerifyTrust, resets position, passes same handle/path to existing offline provider, rechecks file metadata and shape, hashes again, compares both digests, and publishes only on success. Existing component APIs unchanged. Required native unsigned rejection, hash mismatch before injected observer, same-handle test, hardlink rejection and output preservation. Optional native positive signed fixture selected by independent PowerShell signature/hash (SKIP explicit if unavailable); copied binary not executed or certificate stores modified. Exact-head CI NOT RUN at commit.
-
-Observations only: no claim of provider internals exclusively using handle, immutable mapping/metadata, signer pin, trust store integrity, online revocation, trusted installation root/ACL, signed package or process identity, actual Chromium build/runtime. No actual product files or broker access, registration changes or launch approval. Legacy WebView2, Rust, broker, installer and security gates unchanged.
