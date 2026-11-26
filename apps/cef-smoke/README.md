@@ -52,3 +52,15 @@ The full-response case starts with a scripted click on a known link in the loopb
 ### Redirect rejection regression (pending Windows execution)
 
 The owned GET fixture now also attempts a zero-body HTTP 302 to a distinct attachment route. The expected outcome is no request to the redirect target, zero bytes delivered to the vault, and no published encrypted object. All owned fixture URLs must match the current loopback page origin (including port). This is a fixture-level constraint, not a general browser network policy. Windows build and runtime results: NOT RUN at authoring time.
+
+## One-command local WPF/vault regression
+
+From a non-elevated interactive Windows x64 PowerShell session with Visual Studio 2026 C++ desktop tools, CMake, x64 .NET 10 SDK, Node 22 and Rust installed, download the pinned CEF archive listed above and run:
+
+```powershell
+.\scripts\test-cef-wpf.ps1 -CefArchive 'C:\Downloads\cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_windows64_minimal.tar.bz2'
+```
+
+The script verifies SHA-256 before extracting, builds the native host and managed fixture, builds the locked Rust vault binary, and runs the existing Node regression. Outputs are isolated under the git-ignored `.veil-dev/cef-smoke` directory. It does not download or compile Chromium source or require administrator access. To reuse the extracted package and incremental build cache on subsequent runs, pass `-ReuseExtractedCef` only if you trust that the cached extraction is unchanged; the archive hash does not independently authenticate extracted files. If the cache is suspect, remove or relocate it manually and extract the verified archive again.
+
+The wrapper itself has not yet been executed on Windows. A successful local fixture run is not a substitute for required GitHub CI or product release gates.
