@@ -40,7 +40,7 @@ internal sealed class WebView2BrowserEngine : IBrowserEngine
 }
 
 /// <summary>Transitional adapter. No navigation occurs in the constructor or controller initialization.</summary>
-internal sealed class WebView2EngineView(CoreWebView2Environment environment, string? privateProfileName = null) : IBrowserEngineView, IEngineSiteDataReader
+internal sealed class WebView2EngineView(CoreWebView2Environment environment, string? privateProfileName = null) : IBrowserEngineView, IEngineSiteDataReader, IEngineSiteDataWriter
 {
     internal WebView2 NativeView { get; } = new() { Visibility = Visibility.Hidden };
     public FrameworkElement Element => NativeView;
@@ -104,6 +104,54 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
             usage.ValueKind == System.Text.Json.JsonValueKind.Number &&
             usage.TryGetDouble(out double bytes) && double.IsFinite(bytes) && bytes >= 0
                 ? bytes : null;
+    }
+
+    public async Task<int?> DeleteCookieDomainAsync(string domain, Func<bool> stillAuthorized)
+    {
+        if (!SiteDataPolicy.ValidDomain(domain))
+            throw new ArgumentException("An exact cookie domain is required.", nameof(domain));
+        if (!stillAuthorized()) return null;
+        var core = RequireStandardSiteDataCore();
+        var fresh = await core.CookieManager.GetCookiesAsync("");
+        if (!stillAuthorized()) return null;
+        if (!ReferenceEquals(core, RequireStandardSiteDataCore()))
+            throw new InvalidOperationException("The site data profile changed.");
+        int requested = 0;
+        // No await or scope expansion between the final check and mutation.
+        foreach (var cookie in fresh)
+        {
+            if (!SiteDataPolicy.SameCookieDomain(cookie.Domain, domain)) continue;
+            core.CookieManager.DeleteCookie(cookie);
+            requested++;
+        }
+        return requested;
+    }
+
+    public async Task<bool> ClearOriginStorageAsync(string origin, Func<bool> stillAuthorized)
+    {
+        if (string.IsNullOrEmpty(origin) || SiteDataPolicy.Origin(origin) != origin)
+            throw new ArgumentException("A canonical HTTP(S) origin is required.", nameof(origin));
+        if (!stillAuthorized()) return false;
+        var core = RequireStandardSiteDataCore();
+        await core.CallDevToolsProtocolMethodAsync("Storage.clearDataForOrigin",
+            System.Text.Json.JsonSerializer.Serialize(new { origin, storageTypes = SiteDataPolicy.OriginStorageTypes }));
+        return true;
+    }
+
+    public async Task<bool> ClearProfileDataAsync(EngineProfileDataKinds kinds, Func<bool> stillAuthorized)
+    {
+        const EngineProfileDataKinds allowed = EngineProfileDataKinds.Cookies |
+            EngineProfileDataKinds.DomStorage | EngineProfileDataKinds.DiskCache;
+        if (kinds == EngineProfileDataKinds.None || (kinds & ~allowed) != 0)
+            throw new ArgumentException("Explicit supported profile data kinds are required.", nameof(kinds));
+        if (!stillAuthorized()) return false;
+        var core = RequireStandardSiteDataCore();
+        CoreWebView2BrowsingDataKinds nativeKinds = 0;
+        if ((kinds & EngineProfileDataKinds.Cookies) != 0) nativeKinds |= CoreWebView2BrowsingDataKinds.Cookies;
+        if ((kinds & EngineProfileDataKinds.DomStorage) != 0) nativeKinds |= CoreWebView2BrowsingDataKinds.AllDomStorage;
+        if ((kinds & EngineProfileDataKinds.DiskCache) != 0) nativeKinds |= CoreWebView2BrowsingDataKinds.DiskCache;
+        await core.Profile.ClearBrowsingDataAsync(nativeKinds);
+        return true;
     }
 
     public string Source => Core.Source;
