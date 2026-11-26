@@ -191,8 +191,33 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         finally { CefNative.VeilCefEndCookieDomainScan(id); }
     }
 
-    // Storage usage needs a separately verified implementation.
-    public Task<double?> GetOriginStorageUsageAsync(string origin) => Task.FromResult<double?>(null);
+    public async Task<double?> GetOriginStorageUsageAsync(string origin)
+    {
+        Dispatcher.VerifyAccess();
+        if (string.IsNullOrEmpty(origin) || SiteDataPolicy.Origin(origin) != origin)
+            throw new ArgumentException("A canonical HTTP(S) origin is required.", nameof(origin));
+        RequireView();
+        ulong id = NativeHandle;
+        if (CefNative.VeilCefStartStorageUsage(id, origin) == 0)
+            throw new InvalidOperationException("The fixture storage usage scan is unavailable or outside its scope.");
+        try
+        {
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            int status;
+            while ((status = CefNative.VeilCefStorageUsageStatus(id)) == 0)
+            {
+                if (deadline.Elapsed > TimeSpan.FromSeconds(5))
+                    throw new TimeoutException("Storage usage scan did not complete.");
+                await Task.Delay(10);
+                RequireView();
+                if (NativeHandle != id) throw new InvalidOperationException("The CEF view changed.");
+            }
+            if (status != 1) return null;
+            double bytes = CefNative.VeilCefStorageUsageBytes(id);
+            return double.IsFinite(bytes) && bytes >= 0 ? bytes : null;
+        }
+        finally { CefNative.VeilCefEndStorageUsage(id); }
+    }
 
     public Task<int?> DeleteCookieDomainAsync(string domain, Func<bool> stillAuthorized)
     {
@@ -401,6 +426,11 @@ internal static class CefNative
     [DllImport(Module)] internal static extern int VeilCefCookieDeleteStatus(ulong id);
     [DllImport(Module)] internal static extern int VeilCefCookieDeleteCount(ulong id);
     [DllImport(Module)] internal static extern void VeilCefEndCookieDelete(ulong id);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern int VeilCefStartStorageUsage(ulong id, string origin);
+    [DllImport(Module)] internal static extern int VeilCefStorageUsageStatus(ulong id);
+    [DllImport(Module)] internal static extern double VeilCefStorageUsageBytes(ulong id);
+    [DllImport(Module)] internal static extern void VeilCefEndStorageUsage(ulong id);
     [DllImport(Module)] internal static extern int VeilCefClosed(ulong id);
     [DllImport(Module)] internal static extern uint VeilCefViewLimit();
     [DllImport(Module)] internal static extern uint VeilCefLiveViewCount();

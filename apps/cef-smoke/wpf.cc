@@ -3,6 +3,8 @@
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
 #include "include/cef_cookie.h"
+#include "include/cef_devtools_message_observer.h"
+#include "include/cef_values.h"
 #include "include/cef_task.h"
 #include "include/cef_request_context.h"
 #include "include/cef_parser.h"
@@ -18,6 +20,8 @@
 #include <iterator>
 #include <atomic>
 #include <cstring>
+#include <cmath>
+#include <string>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
@@ -99,6 +103,40 @@ struct CookieDeleteScan {
   std::atomic<bool> done{false};
 };
 
+// Only a single numeric observation is retained, never a raw CDP response.
+struct StorageUsageScan {
+  int message_id = 0;
+  int status = 0;
+  double bytes = 0;
+};
+class StorageUsageObserver final : public CefDevToolsMessageObserver {
+ public:
+  explicit StorageUsageObserver(std::shared_ptr<StorageUsageScan> scan) : scan_(std::move(scan)) {}
+  void OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int message_id, bool success,
+                             const void* result, size_t result_size) override {
+    if (scan_->status != 0 || scan_->message_id <= 0 || message_id != scan_->message_id) return;
+    scan_->status = -1;
+    if (!success || !result || result_size == 0 || result_size > 65536) return;
+    const auto value = CefParseJSON(CefString(std::string(static_cast<const char*>(result), result_size)),
+                                    JSON_PARSER_RFC);
+    if (!value || value->GetType() != VTYPE_DICTIONARY) return;
+    const auto dict = value->GetDictionary();
+    if (!dict) return;
+    const auto type = dict->GetType("usage");
+    if (type != VTYPE_INT && type != VTYPE_DOUBLE) return;
+    const double bytes = type == VTYPE_INT ? dict->GetInt("usage") : dict->GetDouble("usage");
+    if (!std::isfinite(bytes) || bytes < 0) return;
+    scan_->bytes = bytes;
+    scan_->status = 1;
+  }
+  void OnDevToolsAgentDetached(CefRefPtr<CefBrowser>) override {
+    if (scan_->status == 0) scan_->status = -1;
+  }
+ private:
+  const std::shared_ptr<StorageUsageScan> scan_;
+  IMPLEMENT_REFCOUNTING(StorageUsageObserver);
+};
+
 // Owned by the CEF client; accessed on the browser UI thread only.
 // Registration belongs to the same view lifetime as its metadata.
 struct ViewState {
@@ -113,6 +151,8 @@ struct ViewState {
     page_state_changed = nullptr;
     render_process_failed = nullptr;
     cookie_delete.reset();
+    storage_usage_registration = nullptr;
+    storage_usage.reset();
   }
 
   const uint64_t id;
@@ -141,6 +181,8 @@ struct ViewState {
   std::shared_ptr<OwnedTransfer> owned_transfer;
   std::shared_ptr<CookieDomainScan> cookie_scan;
   std::shared_ptr<CookieDeleteScan> cookie_delete;
+  std::shared_ptr<StorageUsageScan> storage_usage;
+  CefRefPtr<CefRegistration> storage_usage_registration;
 };
 
 // Registry is browser-UI-thread confined. Keep one view until fixture-wide
@@ -841,6 +883,54 @@ extern "C" __declspec(dllexport) int VeilCefCookieDeleteCount(uint64_t id) {
 extern "C" __declspec(dllexport) void VeilCefEndCookieDelete(uint64_t id) {
   const auto state = LookupView(id);
   if (state) state->cookie_delete.reset();
+}
+
+// Derive the only permitted origins from the synthetic runner's HTTP port.
+// No arbitrary hosts, ports, paths, commands or CDP parameters cross the ABI.
+static bool IsFixtureStorageOrigin(const std::wstring& origin) {
+  if (!fixture_enabled || !tabbed_development_enabled) return false;
+  wchar_t fixture_url[2048]{};
+  const DWORD length = GetEnvironmentVariableW(L"VEIL_CEF_WPF_TEST_URL", fixture_url, 2048);
+  if (length == 0 || length >= 2048) return false;
+  CefURLParts parts;
+  if (!CefParseURL(CefString(fixture_url), parts) ||
+      CefString(&parts.scheme) != "http" || CefString(&parts.host) != "127.0.0.1") return false;
+  const auto port = CefString(&parts.port).ToWString();
+  if (port.empty() || port.find_first_not_of(L"0123456789") != std::wstring::npos) return false;
+  return origin == L"http://127.0.0.1:" + port || origin == L"http://localhost:" + port;
+}
+extern "C" __declspec(dllexport) int VeilCefStartStorageUsage(uint64_t id, const wchar_t* origin) {
+  if (!CefCurrentlyOn(TID_UI) || !origin || !IsFixtureStorageOrigin(origin)) return 0;
+  const auto state = LookupView(id);
+  const auto browser = LookupBrowser(id);
+  if (!state || !browser || state->closing || state->storage_usage) return 0;
+  const auto host = browser->GetHost();
+  const auto scan = std::make_shared<StorageUsageScan>();
+  state->storage_usage = scan;
+  state->storage_usage_registration = host->AddDevToolsMessageObserver(new StorageUsageObserver(scan));
+  if (state->storage_usage_registration) {
+    const auto parameters = CefDictionaryValue::Create();
+    parameters->SetString("origin", CefString(origin));
+    scan->message_id = host->ExecuteDevToolsMethod(0, "Storage.getUsageAndQuota", parameters);
+    if (scan->message_id > 0) return 1;
+  }
+  state->storage_usage_registration = nullptr;
+  state->storage_usage.reset();
+  return 0;
+}
+extern "C" __declspec(dllexport) int VeilCefStorageUsageStatus(uint64_t id) {
+  const auto state = LookupView(id);
+  return !state || state->closing || !state->storage_usage ? -1 : state->storage_usage->status;
+}
+extern "C" __declspec(dllexport) double VeilCefStorageUsageBytes(uint64_t id) {
+  return VeilCefStorageUsageStatus(id) == 1 ? LookupView(id)->storage_usage->bytes : -1;
+}
+extern "C" __declspec(dllexport) void VeilCefEndStorageUsage(uint64_t id) {
+  const auto state = LookupView(id);
+  if (state) {
+    state->storage_usage_registration = nullptr;
+    state->storage_usage.reset();
+  }
 }
 
 extern "C" __declspec(dllexport) int VeilCefClosed(uint64_t id) { return LookupView(id) ? 0 : 1; }

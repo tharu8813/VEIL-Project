@@ -27,8 +27,11 @@ const server = http.createServer((request, response) => {
   let script = 'document.title=' + title + ';';
   if (route === '/tabs-first' || route === '/tabs-second') {
     const marker = JSON.stringify(route === '/tabs-first' ? 'first' : 'second');
-    script = 'localStorage.setItem("veil-fixture-marker",' + marker + ');' +
-      'if(localStorage.getItem("veil-fixture-marker")===' + marker + '){' + script + '}';
+    const size = route === '/tabs-first' ? 65536 : 1048576;
+    script = '(async()=>{localStorage.setItem("veil-fixture-marker",' + marker + ');' +
+      'const cache=await caches.open("veil-fixture-usage");' +
+      'await cache.put("/fixture-cache-entry",new Response(new Uint8Array(' + size + ')));' +
+      'if(localStorage.getItem("veil-fixture-marker")===' + marker + '){' + script + '}})();';
   } else if (['/tabs-reseed', '/tabs-cleared-first', '/tabs-cleared-second'].includes(route)) {
     const marker = JSON.stringify(route === '/tabs-cleared-second' ? 'second' : 'first');
     script = 'if(localStorage.getItem("veil-fixture-marker")===' + marker + '){' + script + '}';
@@ -49,7 +52,7 @@ const timer = setTimeout(() => {
   timedOut = true;
   if (child.pid && child.exitCode === null)
     spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
-}, 40000);
+}, 50000);
 try {
   const [code] = await once(child, 'exit');
   const evidence = await readFile(join(fixtureTemp, 'veil-cef-wpf-profile-' + child.pid, 'tabs.log'), 'utf8').catch(() => '');
@@ -65,7 +68,8 @@ try {
   assert.match(evidence, /Revoked cookie deletion left both domains untouched[\s\S]*Exact domain deletion preserved the other domain[\s\S]*Preserved domain HTTP check completed/);
   assert.match(evidence, /Fresh fixture cookie scan returned an empty list[\s\S]*Both views returned only the two synthetic cookie domains[\s\S]*Closed view cookie scan identity rejected/);
   assert.match(evidence, /Tab selection preserved both native identities and active address[\s\S]*Closing active tab preserved surviving view and navigation[\s\S]*Tabbed host registry drained/);
-  console.log('PASS: same-window tab selection and independent close');
+  assert.match(evidence, /Storage usage rejected an unapproved origin and observed first fixture cache[\s\S]*Distinct fixture origins returned distinct finite storage usage/);
+  console.log('PASS: same-window tab selection, cookie scopes and storage usage');
 } finally {
   clearTimeout(timer);
   server.close();
