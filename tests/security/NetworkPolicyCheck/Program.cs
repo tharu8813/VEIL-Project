@@ -332,6 +332,35 @@ foreach (var selection in new SiteDataSelection[] {
     Check(!SiteDataPolicy.ValidSelection(selection), "ambiguous site-data scope accepted");
 Console.WriteLine("PASS: exclusive site-data deletion and inspection scopes");
 
+var productSupport = SiteDataCapabilities.StandardWebView2;
+var fixtureSupport = SiteDataCapabilities.CefTabFixture;
+var absentSupport = SiteDataCapabilities.Unavailable;
+Check(productSupport.Scope == SiteDataScope.Product &&
+    fixtureSupport.Scope == SiteDataScope.SyntheticFixture, "fixture advertised as product");
+for (int flags = 0; flags <= 15; flags++)
+{
+    var kinds = (EngineProfileDataKinds)flags;
+    Check(productSupport.SupportsProfile(kinds) == (flags >= 1 && flags <= 7),
+        "WebView2 profile flags mismatch");
+    Check(fixtureSupport.SupportsProfile(kinds) == (flags is 1 or 4),
+        "CEF fixture accepted unsupported or mixed flags");
+    Check(!absentSupport.SupportsProfile(kinds), "unavailable profile capability accepted");
+}
+Check(!productSupport.SupportsProfile((EngineProfileDataKinds)(-1)), "unknown negative flags accepted");
+Check(fixtureSupport.Supports(new("http://localhost:1234", null, false, false, false)),
+    "fixture origin operation not described");
+Check(!fixtureSupport.Supports(new(null, null, false, true, false)),
+    "fixture falsely advertised all DOM storage");
+Check(!fixtureSupport.Supports(new(null, null, true, false, true)),
+    "fixture accepted mixed profile scope");
+Check(!absentSupport.Supports(new("https://example.test", null, false, false, false, true)),
+    "unavailable engine accepted inspection");
+Check(!productSupport.Supports(new("https://example.test/path", null, false, false, false)),
+    "capability bypassed canonical origin");
+Check(!(productSupport with { ReadCookieDomains = false }).Supports(new(null, ".example.test", false, false, false)),
+    "cookie deletion accepted without metadata");
+Console.WriteLine("PASS: engine site-data capabilities and supported flag combinations");
+
 
 // A failed diagnostic sink must not interrupt a lock/unlock operation's caller.
 var previousOutput = Console.Out;

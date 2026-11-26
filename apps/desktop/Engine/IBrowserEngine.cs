@@ -71,13 +71,11 @@ internal interface IEngineSiteDataReader
     Task<double?> GetOriginStorageUsageAsync(string origin);
 }
 
-[Flags]
-internal enum EngineProfileDataKinds
+// Descriptive support information, not an authorization or security guarantee.
+// An engine without this contract is unavailable to the product site-data UI.
+internal interface IEngineSiteDataCapabilities
 {
-    None = 0,
-    Cookies = 1,
-    DomStorage = 2,
-    DiskCache = 4,
+    SiteDataCapabilities SiteDataSupport { get; }
 }
 
 // Optional destructive capability for trusted host code only. Recheck authorization

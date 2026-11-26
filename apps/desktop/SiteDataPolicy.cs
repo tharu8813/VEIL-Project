@@ -4,6 +4,50 @@ internal sealed record CookieDomainSummary(string Domain, int Count);
 internal sealed record SiteDataSelection(string? Origin, string? CookieDomain, bool ClearAllCookies,
     bool ClearAllStorage, bool ClearDiskCache, bool InspectUsage = false);
 
+[Flags]
+internal enum EngineProfileDataKinds
+{
+    None = 0,
+    Cookies = 1,
+    DomStorage = 2,
+    DiskCache = 4,
+}
+
+internal enum SiteDataScope { Unavailable, Product, SyntheticFixture }
+
+// A conservative capability description. Native profile and authorization
+// checks are still required at dispatch, even for an advertised operation.
+internal sealed record SiteDataCapabilities(SiteDataScope Scope,
+    bool ReadCookieDomains, bool DeleteCookieDomain, bool InspectOrigin, bool ClearOrigin,
+    EngineProfileDataKinds ProfileKinds, bool AllowMixedProfileKinds)
+{
+    internal static readonly SiteDataCapabilities Unavailable = new(SiteDataScope.Unavailable,
+        false, false, false, false, EngineProfileDataKinds.None, false);
+    internal static readonly SiteDataCapabilities StandardWebView2 = new(SiteDataScope.Product,
+        true, true, true, true, EngineProfileDataKinds.Cookies | EngineProfileDataKinds.DomStorage |
+        EngineProfileDataKinds.DiskCache, true);
+    internal static readonly SiteDataCapabilities CefTabFixture = new(SiteDataScope.SyntheticFixture,
+        true, true, true, true, EngineProfileDataKinds.Cookies | EngineProfileDataKinds.DiskCache, false);
+
+    internal bool SupportsProfile(EngineProfileDataKinds kinds)
+    {
+        const EngineProfileDataKinds known = EngineProfileDataKinds.Cookies |
+            EngineProfileDataKinds.DomStorage | EngineProfileDataKinds.DiskCache;
+        if (Scope == SiteDataScope.Unavailable || kinds == EngineProfileDataKinds.None ||
+            (kinds & ~known) != 0 || (kinds & ~ProfileKinds) != 0) return false;
+        return AllowMixedProfileKinds || kinds is EngineProfileDataKinds.Cookies or
+            EngineProfileDataKinds.DomStorage or EngineProfileDataKinds.DiskCache;
+    }
+
+    internal bool Supports(SiteDataSelection selection)
+    {
+        if (Scope == SiteDataScope.Unavailable || !SiteDataPolicy.ValidSelection(selection)) return false;
+        if (selection.CookieDomain is not null) return ReadCookieDomains && DeleteCookieDomain;
+        if (selection.Origin is not null) return selection.InspectUsage ? InspectOrigin : ClearOrigin;
+        return SupportsProfile(SiteDataPolicy.ProfileKinds(selection));
+    }
+}
+
 /// <summary>Separate cookie domain and storage origin scopes. No suffix/wildcard matching.</summary>
 internal static class SiteDataPolicy
 {
@@ -32,6 +76,11 @@ internal static class SiteDataPolicy
             return Origin(origin) == origin && !all;
         return all && !selection.InspectUsage;
     }
+
+    internal static EngineProfileDataKinds ProfileKinds(SiteDataSelection selection) =>
+        (selection.ClearAllCookies ? EngineProfileDataKinds.Cookies : EngineProfileDataKinds.None) |
+        (selection.ClearAllStorage ? EngineProfileDataKinds.DomStorage : EngineProfileDataKinds.None) |
+        (selection.ClearDiskCache ? EngineProfileDataKinds.DiskCache : EngineProfileDataKinds.None);
 
     internal static bool SameCookieDomain(string stored, string selected) =>
         string.Equals(stored, selected, StringComparison.OrdinalIgnoreCase);

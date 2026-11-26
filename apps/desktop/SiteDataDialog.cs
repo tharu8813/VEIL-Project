@@ -9,7 +9,7 @@ internal sealed class SiteDataDialog : VeilDialog
     internal SiteDataSelection? Result { get; private set; }
 
     internal SiteDataDialog(Window owner, IReadOnlyList<CookieDomainSummary> domains,
-        IReadOnlyList<string> origins, string? currentOrigin)
+        IReadOnlyList<string> origins, string? currentOrigin, SiteDataCapabilities support)
         : base(owner, "쿠키 및 사이트 데이터", "", 760, 650)
     {
         MinWidth = 600;
@@ -29,6 +29,7 @@ internal sealed class SiteDataDialog : VeilDialog
         }
         void Choose(SiteDataSelection value, string message)
         {
+            if (!support.Supports(value)) return;
             if (!value.InspectUsage && !UserPrompts.Confirm(PromptOwner, message, "사이트 데이터 삭제")) return;
             Result = value;
             Complete(true);
@@ -49,7 +50,10 @@ internal sealed class SiteDataDialog : VeilDialog
                 $"{selected.Domain}에 저장된 쿠키를 삭제할까요? 공유 도메인은 여러 사이트에서 로그아웃될 수 있습니다. 다른 저장 도메인은 선택하지 않습니다.");
         });
         deleteCookies.IsEnabled = false;
-        cookies.SelectionChanged += (_, _) => deleteCookies.IsEnabled = cookies.SelectedItem is ListBoxItem;
+        cookies.SelectionChanged += (_, _) => deleteCookies.IsEnabled =
+            support.ReadCookieDomains && support.DeleteCookieDomain && cookies.SelectedItem is ListBoxItem;
+        if (!support.ReadCookieDomains || !support.DeleteCookieDomain)
+            body.Children.Add(Note("현재 엔진은 선택 도메인 쿠키 삭제를 지원하지 않습니다."));
         body.Children.Add(deleteCookies);
         body.Children.Add(Heading("사이트 저장소"));
         body.Children.Add(Note("열린 탭·방문 기록·북마크에서 확인한 출처입니다. 실제 모든 저장소의 목록이 아니며, 스킴과 포트를 구분합니다."));
@@ -68,7 +72,13 @@ internal sealed class SiteDataDialog : VeilDialog
                 $"{origin}의 LocalStorage, IndexedDB, CacheStorage, Service Worker 등 지원 저장소를 삭제할까요? 쿠키는 별도로 관리됩니다. 열린 페이지는 데이터를 다시 만들 수 있습니다.");
         });
         usage.IsEnabled = clearSite.IsEnabled = false;
-        sites.SelectionChanged += (_, _) => usage.IsEnabled = clearSite.IsEnabled = sites.SelectedItem is ListBoxItem;
+        sites.SelectionChanged += (_, _) =>
+        {
+            usage.IsEnabled = support.InspectOrigin && sites.SelectedItem is ListBoxItem;
+            clearSite.IsEnabled = support.ClearOrigin && sites.SelectedItem is ListBoxItem;
+        };
+        if (!support.InspectOrigin || !support.ClearOrigin)
+            body.Children.Add(Note("현재 엔진에서 지원하지 않는 출처 작업은 비활성화됩니다."));
         var actions = new WrapPanel { Children = { usage, clearSite } };
         usage.Margin = new Thickness(0, 4, 8, 4);
         body.Children.Add(actions);
@@ -97,16 +107,23 @@ internal sealed class SiteDataDialog : VeilDialog
         var allCookies = new CheckBox { Content = "모든 쿠키", Foreground = Res("TextBrush") };
         var allStorage = new CheckBox { Content = "모든 사이트 DOM 저장소", Foreground = Res("TextBrush"), Margin = new Thickness(0, 8, 0, 0) };
         var cache = new CheckBox { Content = "디스크 캐시", Foreground = Res("TextBrush"), Margin = new Thickness(0, 8, 0, 0) };
+        allCookies.IsEnabled = support.SupportsProfile(EngineProfileDataKinds.Cookies);
+        allStorage.IsEnabled = support.SupportsProfile(EngineProfileDataKinds.DomStorage);
+        cache.IsEnabled = support.SupportsProfile(EngineProfileDataKinds.DiskCache);
         body.Children.Add(allCookies);
         body.Children.Add(allStorage);
         body.Children.Add(cache);
+        if (!allCookies.IsEnabled || !allStorage.IsEnabled || !cache.IsEnabled)
+            body.Children.Add(Note("현재 엔진에서 지원하지 않는 삭제 유형은 선택할 수 없습니다."));
+        if (!support.AllowMixedProfileKinds)
+            body.Children.Add(Note("현재 엔진은 한 번에 하나의 프로필 삭제 유형만 지원합니다."));
         body.Children.Add(Note("삭제하기 전에 관련 사이트의 탭을 닫는 것을 권장합니다. 삭제는 디스크 복구 흔적의 완전 제거를 보장하지 않습니다."));
         SetBody(new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
         AddFooterButton("닫기", Dismiss);
         var clearAll = AddFooterButton("선택 유형 전체 삭제", () =>
         {
             var value = new SiteDataSelection(null, null, allCookies.IsChecked == true, allStorage.IsChecked == true, cache.IsChecked == true);
-            if (!value.ClearAllCookies && !value.ClearAllStorage && !value.ClearDiskCache) return;
+            if (!support.Supports(value)) return;
             var names = new List<string>();
             if (value.ClearAllCookies) names.Add("모든 쿠키");
             if (value.ClearAllStorage) names.Add("모든 사이트 DOM 저장소");
@@ -115,7 +132,8 @@ internal sealed class SiteDataDialog : VeilDialog
                 "\n다른 창에도 적용되며 되돌릴 수 없습니다.");
         }, primary: true);
         clearAll.IsEnabled = false;
-        void Sync() => clearAll.IsEnabled = allCookies.IsChecked == true || allStorage.IsChecked == true || cache.IsChecked == true;
+        void Sync() => clearAll.IsEnabled = support.Supports(new SiteDataSelection(null, null,
+            allCookies.IsChecked == true, allStorage.IsChecked == true, cache.IsChecked == true));
         foreach (var check in new[] { allCookies, allStorage, cache })
         {
             check.Checked += (_, _) => Sync();

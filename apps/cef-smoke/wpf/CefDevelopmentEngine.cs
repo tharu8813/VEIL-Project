@@ -45,8 +45,16 @@ internal sealed class CefDevelopmentEngine : IBrowserEngine
     }
 }
 
-internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngineSiteDataReader, IEngineSiteDataWriter
+internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngineSiteDataReader, IEngineSiteDataWriter, IEngineSiteDataCapabilities
 {
+    // Conservative metadata only: the native fixture checks remain authoritative.
+    public SiteDataCapabilities SiteDataSupport =>
+        !disposed && NativeHandle != 0 && CefNative.VeilCefClosed(NativeHandle) == 0 &&
+        Environment.GetEnvironmentVariable("VEIL_CEF_WPF_TABS") == "1" &&
+        Uri.TryCreate(Environment.GetEnvironmentVariable("VEIL_CEF_WPF_TEST_URL"), UriKind.Absolute, out var fixture) &&
+        fixture.Scheme == Uri.UriSchemeHttp && fixture.Host == "127.0.0.1" &&
+        !fixture.IsDefaultPort && fixture.UserInfo.Length == 0
+            ? SiteDataCapabilities.CefTabFixture : SiteDataCapabilities.Unavailable;
     // Process-lifetime delegate: a native visitor can outlive its initiating Task.
     // Only a current per-view authorization can permit a cookie deletion.
     private static readonly Dictionary<ulong, Func<bool>> cookieDeleteAuthorizations = new();

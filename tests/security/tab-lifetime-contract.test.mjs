@@ -118,7 +118,7 @@ test('site-data commands require original live regular WebView and exclusive sel
     assert.match(siteData, /bool SourceStillValid\(\) => SiteDataReady\(\) && IsActive && Active == source && CanUseTab\(source\.Item\) &&\s*source\.NavigationEpoch == epoch && ReferenceEquals\(source\.View\.CoreWebView2, web\) &&\s*!web\.Profile\.IsInPrivateModeEnabled;/);
     assert.match(siteData, /SiteDataPolicy\.Summarize\(await reader\.GetCookieDomainsAsync\(\)\);\s*if \(!SourceStillValid\(\) \|\| permissionSelectionEpoch != selectionEpoch/);
     assert.match(siteData, /!SourceStillValid\(\) \|\| session\.ActiveDownloads\.Count != 0 \|\| !SiteDataPolicy\.ValidSelection\(selection\)/);
-    assert.match(siteData, /bool StillAuthorized\(\) => SourceStillValid\(\) && permissionSelectionEpoch == confirmedSelectionEpoch &&\s*session\.ActiveDownloads\.Count == 0;/);
+    assert.match(siteData, /bool StillAuthorized\(\) => SourceStillValid\(\) && permissionSelectionEpoch == confirmedSelectionEpoch &&\s*session\.ActiveDownloads\.Count == 0 && capability\.SiteDataSupport == support && support\.Supports\(selection\);/);
     assert.match(siteData, /await writer\.DeleteCookieDomainAsync\(domain, StillAuthorized\);\s*if \(requested is null\) return;/);
 });
 
@@ -434,7 +434,7 @@ test('site data inspection exposes only narrow read-only capability and refuses 
     assert.match(webView2, /usage\.ValueKind == System\.Text\.Json\.JsonValueKind\.Number &&\s*usage\.TryGetDouble\(out double bytes\) && double\.IsFinite\(bytes\) && bytes >= 0\s*\? bytes : null;/);
     assert.match(cefView, /: HwndHost, IBrowserEngineView, IEngineSiteDataReader/);
     assert.match(siteData, /source\.EngineView is not IEngineSiteDataReader reader \|\|\s*source\.EngineView is not IEngineSiteDataWriter writer \|\|\s*source\.View\.CoreWebView2 is not \{ \} web \|\| web\.Profile\.IsInPrivateModeEnabled/);
-    assert.match(siteData, /await reader\.GetOriginStorageUsageAsync\(origin\);\s*if \(!SourceStillValid\(\) \|\| permissionSelectionEpoch != confirmedSelectionEpoch\) return;/);
+    assert.match(siteData, /await reader\.GetOriginStorageUsageAsync\(origin\);\s*if \(!SourceStillValid\(\) \|\| permissionSelectionEpoch != confirmedSelectionEpoch \|\|\s*capability\.SiteDataSupport != support\) return;/);
     assert.doesNotMatch(siteData, /Storage\.getUsageAndQuota|cookie\.Value/);
     assert.doesNotMatch(siteData, /CookieManager|CallDevToolsProtocolMethodAsync|ClearBrowsingDataAsync/);
 });
@@ -552,4 +552,20 @@ test('CEF known-origin batch never claims profile-wide DOM storage coverage and 
     assert.match(cefTabbed, /knownOriginClear\.Result != 1/);
     assert.match(cefTabbed, /knownOriginClear\.Result != 2/);
     assert.match(cefTabbed, /Known-origin batch cleared both fixture origins without claiming full profile clear/);
+});
+
+
+test('site-data capability metadata gates UI and does not promote CEF fixture to product', async () => {
+    const dialog = await readFile('apps/desktop/SiteDataDialog.cs', 'utf8');
+    const policy = await readFile('apps/desktop/SiteDataPolicy.cs', 'utf8');
+    assert.match(engineContract, /internal interface IEngineSiteDataCapabilities\s*\{\s*SiteDataCapabilities SiteDataSupport \{ get; \}/);
+    assert.match(webView2, /!disposed && NativeView\.CoreWebView2 is \{ \} core && !core\.Profile\.IsInPrivateModeEnabled\s*\? SiteDataCapabilities\.StandardWebView2 : SiteDataCapabilities\.Unavailable/);
+    assert.match(cefView, /SiteDataCapabilities\.CefTabFixture : SiteDataCapabilities\.Unavailable/);
+    assert.match(policy, /CefTabFixture = new\(SiteDataScope\.SyntheticFixture,\s*true, true, true, true, EngineProfileDataKinds\.Cookies \| EngineProfileDataKinds\.DiskCache, false\)/);
+    assert.match(siteData, /support\.Scope != SiteDataScope\.Product \|\| !support\.ReadCookieDomains/);
+    assert.match(siteData, /if \(capability\.SiteDataSupport != support \|\| !support\.Supports\(selection\)\) return;/);
+    assert.match(siteData, /if \(!support\.SupportsProfile\(kinds\)\) return;/);
+    assert.match(dialog, /if \(!support\.Supports\(value\)\) return;/);
+    assert.match(dialog, /allStorage\.IsEnabled = support\.SupportsProfile\(EngineProfileDataKinds\.DomStorage\)/);
+    assert.match(dialog, /void Sync\(\) => clearAll\.IsEnabled = support\.Supports\(new SiteDataSelection/);
 });

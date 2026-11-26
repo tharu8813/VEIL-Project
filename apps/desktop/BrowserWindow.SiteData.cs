@@ -21,6 +21,10 @@ public partial class BrowserWindow
             source.EngineView is not IEngineSiteDataReader reader ||
             source.EngineView is not IEngineSiteDataWriter writer ||
             source.View.CoreWebView2 is not { } web || web.Profile.IsInPrivateModeEnabled) return;
+        if (source.EngineView is not IEngineSiteDataCapabilities capability) return;
+        var support = capability.SiteDataSupport;
+        // Never treat development fixture support as product authorization.
+        if (support.Scope != SiteDataScope.Product || !support.ReadCookieDomains) return;
         long epoch = source.NavigationEpoch;
         long selectionEpoch = permissionSelectionEpoch;
         bool SourceStillValid() => SiteDataReady() && IsActive && Active == source && CanUseTab(source.Item) &&
@@ -40,12 +44,14 @@ public partial class BrowserWindow
                 .Concat(data.Bookmarks.Select(entry => entry.Url))
                 .Concat(data.History.Select(entry => entry.Url));
             var origins = SiteDataPolicy.Origins(urls);
-            var dialog = new SiteDataDialog(this, domains, origins, initialOrigin);
+            if (capability.SiteDataSupport != support) return;
+            var dialog = new SiteDataDialog(this, domains, origins, initialOrigin, support);
             if (await ShowManagementPageAsync("veil://settings/site-data", dialog) != true || dialog.Result is not { } selection ||
                 !SourceStillValid() || session.ActiveDownloads.Count != 0 || !SiteDataPolicy.ValidSelection(selection)) return;
+            if (capability.SiteDataSupport != support || !support.Supports(selection)) return;
             long confirmedSelectionEpoch = permissionSelectionEpoch;
             bool StillAuthorized() => SourceStillValid() && permissionSelectionEpoch == confirmedSelectionEpoch &&
-                session.ActiveDownloads.Count == 0;
+                session.ActiveDownloads.Count == 0 && capability.SiteDataSupport == support && support.Supports(selection);
 
             // The manager never accepts arbitrary commands, URLs, scripts, cookie values or file paths.
             // Recheck the selected scope against the native snapshot before acting.
@@ -74,7 +80,8 @@ public partial class BrowserWindow
                 if (selection.InspectUsage)
                 {
                     double? observedUsage = await reader.GetOriginStorageUsageAsync(origin);
-                    if (!SourceStillValid() || permissionSelectionEpoch != confirmedSelectionEpoch) return;
+                    if (!SourceStillValid() || permissionSelectionEpoch != confirmedSelectionEpoch ||
+                        capability.SiteDataSupport != support) return;
                     if (observedUsage is double bytes && double.IsFinite(bytes) && bytes >= 0)
                         UserPrompts.Notice(this, $"{origin}\n엔진 보고 저장소 사용량: {bytes:N0}바이트\n쿠키 및 모든 저장 유형의 총량을 의미하지 않습니다.",
                             "사이트 저장소 사용량", MessageBoxImage.Information);
@@ -86,11 +93,8 @@ public partial class BrowserWindow
                 return;
             }
             // Explicit profile-wide types only. Never use AllProfile or Settings.
-            EngineProfileDataKinds kinds = EngineProfileDataKinds.None;
-            if (selection.ClearAllCookies) kinds |= EngineProfileDataKinds.Cookies;
-            if (selection.ClearAllStorage) kinds |= EngineProfileDataKinds.DomStorage;
-            if (selection.ClearDiskCache) kinds |= EngineProfileDataKinds.DiskCache;
-            if (kinds == EngineProfileDataKinds.None) return;
+            EngineProfileDataKinds kinds = SiteDataPolicy.ProfileKinds(selection);
+            if (!support.SupportsProfile(kinds)) return;
             if (!await writer.ClearProfileDataAsync(kinds, StillAuthorized)) return;
             if (StillAuthorized()) Status.Text = "선택한 프로필 데이터의 삭제 요청을 완료했습니다. 열린 페이지에서 다시 생성될 수 있습니다.";
         }
