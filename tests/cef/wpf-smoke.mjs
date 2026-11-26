@@ -100,9 +100,10 @@ const server = http.createServer((request, response) => {
     writeChunk();
     return;
   }
-  if (request.url === '/wpf-isolation') {
+  if (request.url === '/wpf-isolation' || request.url === '/wpf-isolation-reopened') {
     response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
-    response.end('<!doctype html><title>VEIL_CEF_WPF_ISOLATION</title>');
+    const title = request.url === '/wpf-isolation' ? 'ISOLATION' : 'REOPENED';
+    response.end(`<!doctype html><title>VEIL_CEF_WPF_${title}</title>`);
     return;
   }
   if (request.url !== '/wpf-first' && request.url !== '/wpf-second') {
@@ -150,6 +151,9 @@ try {
   assert.ok(!requests.includes('/wpf-denied'), 'Canceled navigation contacted the server');
   assert.ok(requests.includes('/wpf-second'), 'The second address did not navigate');
   assert.equal(requests.filter(request => request === '/wpf-isolation').length, 1, 'Secondary view must navigate once');
+  assert.equal(requests.filter(request => request === '/wpf-isolation-reopened').length, 1, 'Reopened view must navigate once');
+  assert.ok(!requests.includes('/wpf-stale-handle'), 'Retired identity must not navigate');
+  assert.match(evidence, /CEF view slot reused with a fresh identity and clean state[\s\S]*Repeated secondary view close preserved primary view/);
   assert.match(evidence, /Observed two independent CEF views with distinct source, title, history and mute state[\s\S]*Secondary CEF view closed; stale handle rejected; primary remains live[\s\S]*Observed matched redirect, completion, and back and forward navigation/);
   assert.ok(requests.includes('/wpf-error'), 'The failed address did not navigate');
   assert.ok(requests.includes('/wpf-policy'), 'The permission fixture did not navigate');
