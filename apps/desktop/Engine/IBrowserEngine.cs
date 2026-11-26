@@ -71,6 +71,26 @@ internal interface IEngineSiteDataReader
     Task<double?> GetOriginStorageUsageAsync(string origin);
 }
 
+[Flags]
+internal enum EngineProfileDataKinds
+{
+    None = 0,
+    Cookies = 1,
+    DomStorage = 2,
+    DiskCache = 4,
+}
+
+// Optional destructive capability for trusted host code only. Recheck authorization
+// after any asynchronous preparation and before issuing a native mutation.
+// No arbitrary storage types, commands, scripts, cookie objects or file paths.
+internal interface IEngineSiteDataWriter
+{
+    // Null means authorization expired before deletion; zero is a valid request count.
+    Task<int?> DeleteCookieDomainAsync(string domain, Func<bool> stillAuthorized);
+    Task<bool> ClearOriginStorageAsync(string origin, Func<bool> stillAuthorized);
+    Task<bool> ClearProfileDataAsync(EngineProfileDataKinds kinds, Func<bool> stillAuthorized);
+}
+
 // The adapter applies Cancel synchronously before the engine commits navigation.
 internal sealed class EngineNavigationStartingEventArgs(string uri, ulong navigationId, bool isRedirected)
 {
