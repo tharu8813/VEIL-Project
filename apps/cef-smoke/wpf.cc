@@ -19,6 +19,7 @@
 #include <memory>
 #include <limits>
 #include <utility>
+#include <unordered_map>
 
 namespace {
 using PageStateChanged = void (*)(int);
@@ -52,16 +53,29 @@ struct ViewState {
   RenderProcessFailed render_process_failed;
 };
 
-// Transitional one-view host; fixture-wide request probes remain separate.
-CefRefPtr<CefBrowser> active_browser;
-std::shared_ptr<ViewState> active_view;
+// Registry is browser-UI-thread confined. Keep one view until fixture-wide
+// download state and managed multi-window shutdown are separated.
+struct ViewEntry {
+  std::shared_ptr<ViewState> state;
+  CefRefPtr<CefBrowser> browser;
+};
+std::unordered_map<uint64_t, ViewEntry> views;
+constexpr size_t kDevelopmentViewLimit = 1;
 uint64_t last_view_id = 0;
 
 std::shared_ptr<ViewState> LookupView(uint64_t id) {
-  return id != 0 && active_view && active_view->id == id ? active_view : nullptr;
+  const auto entry = views.find(id);
+  return entry == views.end() ? nullptr : entry->second.state;
 }
 CefRefPtr<CefBrowser> LookupBrowser(uint64_t id) {
-  return LookupView(id) ? active_browser : nullptr;
+  const auto entry = views.find(id);
+  return entry == views.end() ? nullptr : entry->second.browser;
+}
+void RemoveView(const std::shared_ptr<ViewState>& state) {
+  state->DetachCallbacks();
+  const auto entry = views.find(state->id);
+  if (entry != views.end() && entry->second.state == state)
+    views.erase(entry);
 }
 std::wstring profile_root;
 unsigned popups_blocked = 0;
@@ -335,11 +349,7 @@ class Client final : public CefClient,
   // report its own abrupt termination through this in-process callback.
   void OnBeforeClose(CefRefPtr<CefBrowser>) override {
     state_->page_fullscreen = false;
-    state_->DetachCallbacks();
-    if (active_view == state_) {
-      active_browser = nullptr;
-      active_view.reset();
-    }
+    RemoveView(state_);
   }
 
  private:
@@ -461,21 +471,24 @@ extern "C" __declspec(dllexport) int VeilCefOwnedAttachmentResult() { return own
 extern "C" __declspec(dllexport) uint64_t VeilCefOpen(
     HWND parent, BeforeBrowse starting, NavigationComplete completed,
     PageStateChanged changed, RenderProcessFailed failed) {
-  if (active_browser || active_view || !parent || !starting || !completed || !changed || !failed ||
+  if (views.size() >= kDevelopmentViewLimit || !parent || !starting || !completed || !changed || !failed ||
       last_view_id == (std::numeric_limits<uint64_t>::max)())
     return 0;
   auto state = std::make_shared<ViewState>(++last_view_id, parent, starting, completed, changed, failed);
-  active_view = state;
+  views.emplace(state->id, ViewEntry{state, nullptr});
   CefWindowInfo window;
   window.SetAsChild(parent, CefRect(0, 0, 1, 1));
   window.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
-  active_browser = CefBrowserHost::CreateBrowserSync(window, new Client(state), "about:blank",
+  const auto created = CefBrowserHost::CreateBrowserSync(window, new Client(state), "about:blank",
       CefBrowserSettings(), nullptr, nullptr);
-  if (!active_browser) {
-    state->DetachCallbacks();
-    if (active_view == state) active_view.reset();
+  // Synchronous creation may re-enter client callbacks; never retain an iterator
+  // across that call or republish a view already removed by OnBeforeClose.
+  const auto entry = views.find(state->id);
+  if (!created || entry == views.end() || entry->second.state != state) {
+    RemoveView(state);
     return 0;
   }
+  entry->second.browser = created;
   return state->id;
 }
 
