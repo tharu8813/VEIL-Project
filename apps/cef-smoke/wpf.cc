@@ -86,9 +86,11 @@ class CookieDomainVisitor final : public CefCookieVisitor {
   IMPLEMENT_REFCOUNTING(CookieDomainVisitor);
 };
 
+enum class CookieDeleteScope { ExactDomain, FixtureProfile };
 struct CookieDeleteScan {
-  explicit CookieDeleteScan(std::wstring exact_domain, CookieDeleteAuthorization callback)
-      : domain(std::move(exact_domain)), authorize(callback) {}
+  CookieDeleteScan(CookieDeleteScope delete_scope, std::wstring exact_domain, CookieDeleteAuthorization callback)
+      : scope(delete_scope), domain(std::move(exact_domain)), authorize(callback) {}
+  const CookieDeleteScope scope;
   const std::wstring domain;
   const CookieDeleteAuthorization authorize;
   int requested = 0;
@@ -181,7 +183,8 @@ class ExactCookieDeleteVisitor final : public CefCookieVisitor {
       scan_->denied = true;
       return false;
     }
-    if (CefString(&cookie.domain).ToWString() != scan_->domain) return true;
+    if (scan_->scope == CookieDeleteScope::ExactDomain &&
+        CefString(&cookie.domain).ToWString() != scan_->domain) return true;
     // Check the host immediately before each mutation, including after a
     // callback that might re-enter the registry and close the view.
     if (!scan_->authorize(id_) || state->closing || LookupView(id_) != state ||
@@ -787,26 +790,39 @@ extern "C" __declspec(dllexport) void VeilCefEndCookieDomainScan(uint64_t id) {
   if (state) state->cookie_scan.reset();
 }
 
-// Exact host-only cookie deletion is deliberately limited to the two
-// synthetic loopback domains. No URL-based bulk deletion or wildcard.
-extern "C" __declspec(dllexport) int VeilCefStartCookieDelete(
-    uint64_t id, const wchar_t* domain, CookieDeleteAuthorization authorize) {
+// Both explicit scopes share the same visitor and per-cookie authorization.
+static int StartCookieDelete(uint64_t id, CookieDeleteScope scope, const std::wstring& exact,
+                             CookieDeleteAuthorization authorize) {
+  if (!CefCurrentlyOn(TID_UI)) return 0;
   const auto state = LookupView(id);
   const auto browser = LookupBrowser(id);
   if (!fixture_enabled || !state || !browser || state->closing || state->cookie_delete ||
-      !domain || !authorize || !CefCurrentlyOn(TID_UI)) return 0;
-  const std::wstring exact(domain);
-  if (exact != L"127.0.0.1" && exact != L"localhost") return 0;
+      !authorize) return 0;
+  if (scope == CookieDeleteScope::ExactDomain) {
+    if (exact != L"127.0.0.1" && exact != L"localhost") return 0;
+  } else if (scope != CookieDeleteScope::FixtureProfile || !tabbed_development_enabled || !exact.empty()) {
+    return 0;
+  }
   const auto context = browser->GetHost()->GetRequestContext();
   const auto manager = context ? context->GetCookieManager(nullptr) : nullptr;
   if (!manager) return 0;
-  const auto scan = std::make_shared<CookieDeleteScan>(exact, authorize);
+  const auto scan = std::make_shared<CookieDeleteScan>(scope, exact, authorize);
   state->cookie_delete = scan;
   if (!manager->VisitAllCookies(new ExactCookieDeleteVisitor(id, scan))) {
     state->cookie_delete.reset();
     return 0;
   }
   return 1;
+}
+// Separate entry points: an empty or wildcard domain never means all cookies.
+extern "C" __declspec(dllexport) int VeilCefStartCookieDelete(
+    uint64_t id, const wchar_t* domain, CookieDeleteAuthorization authorize) {
+  if (!domain) return 0;
+  return StartCookieDelete(id, CookieDeleteScope::ExactDomain, domain, authorize);
+}
+extern "C" __declspec(dllexport) int VeilCefStartProfileCookieDelete(
+    uint64_t id, CookieDeleteAuthorization authorize) {
+  return StartCookieDelete(id, CookieDeleteScope::FixtureProfile, L"", authorize);
 }
 extern "C" __declspec(dllexport) int VeilCefCookieDeleteStatus(uint64_t id) {
   const auto state = LookupView(id);

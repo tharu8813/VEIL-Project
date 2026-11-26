@@ -474,13 +474,26 @@ test('CEF cookie domain enumeration is a bounded read-only fixture operation tie
 
 test('CEF exact synthetic cookie deletion rechecks per-cookie authorization and rejects stale scans', () => {
     assert.match(cefNative, /class ExactCookieDeleteVisitor final : public CefCookieVisitor[\s\S]*?delete_cookie = false;\s*if \(!CefCurrentlyOn\(TID_UI\) \|\| total > 4096\)/);
-    assert.match(cefNative, /if \(CefString\(&cookie\.domain\)\.ToWString\(\) != scan_->domain\) return true;[\s\S]*?if \(!scan_->authorize\(id_\) \|\| state->closing \|\| LookupView\(id_\) != state \|\|\s*state->cookie_delete != scan_\)[\s\S]*?delete_cookie = true;/);
+    assert.match(cefNative, /if \(scan_->scope == CookieDeleteScope::ExactDomain &&\s*CefString\(&cookie\.domain\)\.ToWString\(\) != scan_->domain\) return true;[\s\S]*?if \(!scan_->authorize\(id_\) \|\| state->closing \|\| LookupView\(id_\) != state \|\|\s*state->cookie_delete != scan_\)[\s\S]*?delete_cookie = true;/);
     assert.match(cefNative, /if \(exact != L"127\.0\.0\.1" && exact != L"localhost"\) return 0;/);
     assert.match(cefNative, /if \(scan->denied\) return scan->requested == 0 \? -2 : -1;/);
     assert.match(cefView, /private static readonly CefNative\.CookieDeleteAuthorization cookieDeleteAuthorization = AuthorizeCookieDelete;/);
     assert.match(cefView, /cookieDeleteAuthorizations\.TryAdd\(id,[\s\S]*?NativeHandle == id &&[\s\S]*?stillAuthorized\(\)/);
     assert.match(cefView, /if \(started\) CefNative\.VeilCefEndCookieDelete\(id\);\s*cookieDeleteAuthorizations\.Remove\(id\);/);
-    assert.match(cefView, /ClearOriginStorageAsync[\s\S]*?throw new NotSupportedException[\s\S]*?ClearProfileDataAsync[\s\S]*?throw new NotSupportedException/);
+    assert.match(cefView, /ClearOriginStorageAsync[\s\S]*?throw new NotSupportedException[\s\S]*?ClearProfileDataAsync[\s\S]*?if \(kinds != EngineProfileDataKinds\.Cookies\)\s*throw new NotSupportedException/);
     assert.match(cefTabbed, /cookieDeletion\.Result is not null \|\|\s*deletionAuthorizationChecks < 2/);
     assert.match(cefTabbed, /firstDomains\.Result\.Count != 1 \|\| firstDomains\.Result\[0\] != "localhost"/);
+});
+
+
+test('CEF fixture profile cookie clear requires explicit cookie-only scope and preserves storage', () => {
+    assert.match(cefNative, /enum class CookieDeleteScope \{ ExactDomain, FixtureProfile \};/);
+    assert.match(cefNative, /else if \(scope != CookieDeleteScope::FixtureProfile \|\| !tabbed_development_enabled \|\| !exact\.empty\(\)\)/);
+    assert.match(cefNative, /VeilCefStartCookieDelete\([\s\S]*?if \(!domain\) return 0;\s*return StartCookieDelete\(id, CookieDeleteScope::ExactDomain, domain, authorize\);/);
+    assert.match(cefNative, /VeilCefStartProfileCookieDelete\([\s\S]*?return StartCookieDelete\(id, CookieDeleteScope::FixtureProfile, L"", authorize\);/);
+    assert.match(cefView, /if \(kinds != EngineProfileDataKinds\.Cookies\)\s*throw new NotSupportedException[\s\S]*?return await DeleteCookiesAsync\(null, stillAuthorized\) is not null;/);
+    assert.match(cefTabbed, /EngineProfileDataKinds\.Cookies \| EngineProfileDataKinds\.DomStorage, \(\) => true/);
+    assert.match(cefTabbed, /EngineProfileDataKinds\.Cookies, \(\) => false/);
+    assert.match(cefTabbed, /Explicit profile cookie clear returned an empty cookie scan/);
+    assert.match(cefTabbed, /Profile cookie clear preserved both origin localStorage markers/);
 });

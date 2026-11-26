@@ -43,6 +43,7 @@ internal sealed class TabbedDevelopmentHost
     private ulong firstId, secondId;
     private Task<IReadOnlyList<string>>? emptyDomains, firstDomains, secondDomains;
     private Task<int?>? cookieDeletion;
+    private Task<bool>? profileCookieDeletion;
     private int deletionAuthorizationChecks;
     private int phase, result;
     private bool shuttingDown, windowClosed, allowWindowClose;
@@ -243,7 +244,7 @@ internal sealed class TabbedDevelopmentHost
 
     private void RunFixture()
     {
-        if (elapsed.Elapsed > TimeSpan.FromSeconds(15))
+        if (elapsed.Elapsed > TimeSpan.FromSeconds(25))
         {
             Log($"Tabbed fixture timeout at phase {phase}");
             BeginShutdown();
@@ -252,7 +253,7 @@ internal sealed class TabbedDevelopmentHost
         string Url(string path)
         {
             var url = new Uri(new Uri(fixture!), path);
-            return path is "/tabs-second" or "/tabs-preserved"
+            return path is "/tabs-second" or "/tabs-preserved" or "/tabs-cleared-second"
                 ? new UriBuilder(url) { Host = "localhost" }.Uri.AbsoluteUri : url.AbsoluteUri;
         }
         void Fail() { result = 42; Log($"Tabbed fixture failed at phase {phase}"); BeginShutdown(); }
@@ -376,6 +377,77 @@ internal sealed class TabbedDevelopmentHost
         {
             if (first.View.NativeHandle != firstId || first.View.Source != Url("/tabs-preserved")) { Fail(); return; }
             Log("Preserved domain HTTP check completed");
+            address.Text = Url("/tabs-reseed");
+            NavigateAddress();
+            phase = 6;
+        }
+        else if (phase == 6 && first?.View.DocumentTitle == "TAB_RESEEDED")
+        {
+            firstDomains = ((IEngineSiteDataReader)first.View).GetCookieDomainsAsync();
+            phase = 16;
+        }
+        else if (phase == 16 && firstDomains is { IsCompleted: true })
+        {
+            if (!firstDomains.IsCompletedSuccessfully || firstDomains.Result.Count != 2 ||
+                firstDomains.Result.Count(domain => domain == "127.0.0.1") != 1 ||
+                firstDomains.Result.Count(domain => domain == "localhost") != 1) { Fail(); return; }
+            profileCookieDeletion = ((IEngineSiteDataWriter)first!.View).ClearProfileDataAsync(
+                EngineProfileDataKinds.Cookies | EngineProfileDataKinds.DomStorage, () => true);
+            phase = 17;
+        }
+        else if (phase == 17 && profileCookieDeletion is { IsCompleted: true })
+        {
+            if (profileCookieDeletion.Exception?.GetBaseException() is not NotSupportedException) { Fail(); return; }
+            profileCookieDeletion = ((IEngineSiteDataWriter)first!.View).ClearProfileDataAsync(
+                EngineProfileDataKinds.Cookies, () => false);
+            phase = 18;
+        }
+        else if (phase == 18 && profileCookieDeletion is { IsCompleted: true })
+        {
+            if (!profileCookieDeletion.IsCompletedSuccessfully || profileCookieDeletion.Result) { Fail(); return; }
+            firstDomains = ((IEngineSiteDataReader)first!.View).GetCookieDomainsAsync();
+            phase = 19;
+        }
+        else if (phase == 19 && firstDomains is { IsCompleted: true })
+        {
+            if (!firstDomains.IsCompletedSuccessfully || firstDomains.Result.Count != 2 ||
+                firstDomains.Result.Count(domain => domain == "127.0.0.1") != 1 ||
+                firstDomains.Result.Count(domain => domain == "localhost") != 1) { Fail(); return; }
+            Log("Unsupported mixed scope and denied profile clear preserved both cookies");
+            profileCookieDeletion = ((IEngineSiteDataWriter)first!.View).ClearProfileDataAsync(
+                EngineProfileDataKinds.Cookies, () => active == first && !first.Closing && !shuttingDown);
+            phase = 20;
+        }
+        else if (phase == 20 && profileCookieDeletion is { IsCompleted: true })
+        {
+            if (!profileCookieDeletion.IsCompletedSuccessfully || !profileCookieDeletion.Result) { Fail(); return; }
+            firstDomains = ((IEngineSiteDataReader)first!.View).GetCookieDomainsAsync();
+            phase = 21;
+        }
+        else if (phase == 21 && firstDomains is { IsCompleted: true })
+        {
+            if (!firstDomains.IsCompletedSuccessfully) { Fail(); return; }
+            if (firstDomains.Result.Count != 0)
+            {
+                firstDomains = ((IEngineSiteDataReader)first!.View).GetCookieDomainsAsync();
+                return;
+            }
+            Log("Explicit profile cookie clear returned an empty cookie scan");
+            address.Text = Url("/tabs-cleared-first");
+            NavigateAddress();
+            phase = 7;
+        }
+        else if (phase == 7 && first?.View.DocumentTitle == "TAB_CLEARED_FIRST")
+        {
+            if (first.View.Source != Url("/tabs-cleared-first")) { Fail(); return; }
+            address.Text = Url("/tabs-cleared-second");
+            NavigateAddress();
+            phase = 8;
+        }
+        else if (phase == 8 && first?.View.DocumentTitle == "TAB_CLEARED_SECOND")
+        {
+            if (first.View.Source != Url("/tabs-cleared-second") || first.View.NativeHandle != firstId) { Fail(); return; }
+            Log("Profile cookie clear preserved both origin localStorage markers");
             result = 0;
             BeginShutdown();
         }

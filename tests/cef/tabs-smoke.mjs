@@ -12,17 +12,28 @@ assert.equal(process.argv.length, 3, 'Pass the built veil-cef-wpf.exe');
 const executable = resolve(process.argv[2]);
 const requests = [];
 const cookieChecks = new Map();
-const titles = new Map([['/tabs-first', 'TAB_FIRST'], ['/tabs-second', 'TAB_SECOND'], ['/tabs-after-close', 'TAB_AFTER_CLOSE'], ['/tabs-preserved', 'TAB_PRESERVED']]);
+const titles = new Map([['/tabs-first', 'TAB_FIRST'], ['/tabs-second', 'TAB_SECOND'], ['/tabs-after-close', 'TAB_AFTER_CLOSE'], ['/tabs-preserved', 'TAB_PRESERVED'], ['/tabs-reseed', 'TAB_RESEEDED'], ['/tabs-cleared-first', 'TAB_CLEARED_FIRST'], ['/tabs-cleared-second', 'TAB_CLEARED_SECOND']]);
 const server = http.createServer((request, response) => {
   requests.push(request.url);
-  if (request.url === '/tabs-after-close' || request.url === '/tabs-preserved')
+  if (['/tabs-after-close', '/tabs-preserved', '/tabs-cleared-first', '/tabs-cleared-second'].includes(request.url))
     cookieChecks.set(request.url, request.headers.cookie ?? '');
   if (!titles.has(request.url)) { response.writeHead(404).end(); return; }
   const headers = { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' };
-  if (request.url === '/tabs-first') headers['Set-Cookie'] = 'fixture_first=synthetic-one; Path=/; HttpOnly; SameSite=Lax';
+  if (request.url === '/tabs-first' || request.url === '/tabs-reseed') headers['Set-Cookie'] = 'fixture_first=synthetic-one; Path=/; HttpOnly; SameSite=Lax';
   if (request.url === '/tabs-second') headers['Set-Cookie'] = 'fixture_second=synthetic-two; Path=/; HttpOnly; SameSite=Lax';
   response.writeHead(200, headers);
-  response.end('<!doctype html><title>' + titles.get(request.url) + '</title>');
+  const route = request.url;
+  const title = JSON.stringify(titles.get(route));
+  let script = 'document.title=' + title + ';';
+  if (route === '/tabs-first' || route === '/tabs-second') {
+    const marker = JSON.stringify(route === '/tabs-first' ? 'first' : 'second');
+    script = 'localStorage.setItem("veil-fixture-marker",' + marker + ');' +
+      'if(localStorage.getItem("veil-fixture-marker")===' + marker + '){' + script + '}';
+  } else if (['/tabs-reseed', '/tabs-cleared-first', '/tabs-cleared-second'].includes(route)) {
+    const marker = JSON.stringify(route === '/tabs-cleared-second' ? 'second' : 'first');
+    script = 'if(localStorage.getItem("veil-fixture-marker")===' + marker + '){' + script + '}';
+  }
+  response.end('<!doctype html><title>WAITING</title><script>' + script + '</script>');
 });
 server.listen(0, '127.0.0.1');
 await once(server, 'listening');
@@ -38,7 +49,7 @@ const timer = setTimeout(() => {
   timedOut = true;
   if (child.pid && child.exitCode === null)
     spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
-}, 25000);
+}, 40000);
 try {
   const [code] = await once(child, 'exit');
   const evidence = await readFile(join(fixtureTemp, 'veil-cef-wpf-profile-' + child.pid, 'tabs.log'), 'utf8').catch(() => '');
@@ -48,6 +59,9 @@ try {
   assert.ok(!requests.includes('/tabs-stale'));
   assert.equal(cookieChecks.get('/tabs-after-close'), '', 'Deleted domain must not send its cookie');
   assert.equal(cookieChecks.get('/tabs-preserved'), 'fixture_second=synthetic-two', 'Other domain must retain its synthetic cookie');
+  assert.equal(cookieChecks.get('/tabs-cleared-first'), '', 'Profile cookie clear must remove first domain cookie');
+  assert.equal(cookieChecks.get('/tabs-cleared-second'), '', 'Profile cookie clear must remove second domain cookie');
+  assert.match(evidence, /Unsupported mixed scope and denied profile clear preserved both cookies[\s\S]*Explicit profile cookie clear returned an empty cookie scan[\s\S]*Profile cookie clear preserved both origin localStorage markers/);
   assert.match(evidence, /Revoked cookie deletion left both domains untouched[\s\S]*Exact domain deletion preserved the other domain[\s\S]*Preserved domain HTTP check completed/);
   assert.match(evidence, /Fresh fixture cookie scan returned an empty list[\s\S]*Both views returned only the two synthetic cookie domains[\s\S]*Closed view cookie scan identity rejected/);
   assert.match(evidence, /Tab selection preserved both native identities and active address[\s\S]*Closing active tab preserved surviving view and navigation[\s\S]*Tabbed host registry drained/);
