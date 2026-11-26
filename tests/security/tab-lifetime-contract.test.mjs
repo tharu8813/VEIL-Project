@@ -465,7 +465,7 @@ test('CEF cookie domain enumeration is a bounded read-only fixture operation tie
     assert.match(cefNative, /if \(!scan->done\.load\(std::memory_order_acquire\)\) return 0;/);
     assert.match(cefView, /ulong id = NativeHandle;[\s\S]*?VeilCefStartCookieDomainScan\(id\)[\s\S]*?if \(NativeHandle != id\) throw new InvalidOperationException/);
     assert.match(cefView, /finally \{ CefNative\.VeilCefEndCookieDomainScan\(id\); \}/);
-    assert.match(cefView, /GetOriginStorageUsageAsync\(string origin\) => Task\.FromResult<double\?>\(null\);/);
+    assert.match(cefView, /GetOriginStorageUsageAsync\(string origin\)[\s\S]*?finally \{ CefNative\.VeilCefEndStorageUsage\(id\); \}/);
     assert.match(cefTabbed, /emptyDomains\.Result\.Count != 0/);
     assert.match(cefTabbed, /firstDomains\.Result\.Count != 2 \|\| secondDomains\.Result\.Count != 2/);
     assert.match(cefTabbed, /VeilCefCookieDomainScanStatus\(secondId\) != -1/);
@@ -496,4 +496,21 @@ test('CEF fixture profile cookie clear requires explicit cookie-only scope and p
     assert.match(cefTabbed, /EngineProfileDataKinds\.Cookies, \(\) => false/);
     assert.match(cefTabbed, /Explicit profile cookie clear returned an empty cookie scan/);
     assert.match(cefTabbed, /Profile cookie clear preserved both origin localStorage markers/);
+});
+
+
+test('CEF storage usage exposes only a fixed numeric observation for fixture origins', () => {
+    assert.match(cefNative, /if \(!fixture_enabled \|\| !tabbed_development_enabled\) return false;/);
+    assert.match(cefNative, /return origin == L"http:\/\/127\.0\.0\.1:" \+ port \|\| origin == L"http:\/\/localhost:" \+ port;/);
+    assert.match(cefNative, /if \(!CefCurrentlyOn\(TID_UI\) \|\| !origin \|\| !IsFixtureStorageOrigin\(origin\)\) return 0;/);
+    assert.match(cefNative, /message_id != scan_->message_id\) return;/);
+    assert.match(cefNative, /result_size > 65536\) return;/);
+    assert.match(cefNative, /if \(type != VTYPE_INT && type != VTYPE_DOUBLE\) return;/);
+    assert.match(cefNative, /if \(!std::isfinite\(bytes\) \|\| bytes < 0\) return;/);
+    assert.match(cefNative, /ExecuteDevToolsMethod\(0, "Storage\.getUsageAndQuota", parameters\)/);
+    assert.match(cefNative, /storage_usage_registration = nullptr;\s*storage_usage\.reset\(\);/);
+    assert.match(cefView, /SiteDataPolicy\.Origin\(origin\) != origin[\s\S]*?VeilCefStartStorageUsage\(id, origin\)/);
+    assert.match(cefView, /return double\.IsFinite\(bytes\) && bytes >= 0 \? bytes : null;/);
+    assert.match(cefTabbed, /rejectedUsage\.Exception\?\.GetBaseException\(\) is not InvalidOperationException/);
+    assert.match(cefTabbed, /Distinct fixture origins returned distinct finite storage usage/);
 });

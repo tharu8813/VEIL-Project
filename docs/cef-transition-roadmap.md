@@ -113,3 +113,7 @@ WebView2와 CEF의 네이티브 오류 코드를 엔진 종류와 함께 저장�
 ### 추가 구현: CEF 합성 프로필 쿠키 전체 삭제 (검증 대기)
 
 기존 exact-domain 삭제와 별도 명시적 FixtureProfile 범위/네이티브 진입점을 추가한다. 합성 fixture와 opt-in 탭 모드 모두 활성화된 임시 프로필에서만 사용하며, 관리 계약은 Cookies 단독 플래그만 허용하고 혼합/미지원 플래그는 변경 전에 거부한다. 기존 per-cookie 권한·뷰·작업 수명 검증을 공유하며 빈 도메인이나 wildcard를 전체 삭제로 해석하지 않는다. 회귀 fixture는 두 출처의 합성 쿠키 재생성, 혼합 범위 거부, 권한 철회, 전체 삭제 후 빈 조회/HTTP 쿠키 부재, 양쪽 LocalStorage 표식 보존을 검사한다. 실제 Windows 실행 NOT RUN. DOM 저장소·디스크 캐시 삭제 및 제품 보안 프로필 연결은 미지원 상태 유지.
+
+### 추가 구현: CEF 합성 출처 저장소 사용량 조회 (검증 대기)
+
+합성 HTTP fixture + opt-in 탭 모드의 실행 포트에 해당하는 127.0.0.1/localhost 정규 출처만 허용한다. 브라우저 UI 스레드의 CefDevToolsMessageObserver/ExecuteDevToolsMethod로 고정 Storage.getUsageAndQuota 한 가지 명령을 실행하고 요청 ID·응답 크기·JSON 숫자 타입·유한한 음이 아닌 사용량을 검사한다. 임의 명령·원본 JSON·저장값은 관리 코드에 전달하지 않으며 observer 등록은 뷰/조회 종료 시 해제한다. 관리 계약의 timeout과 ID 검증 유지. 합성 CacheStorage 64 KiB/1 MiB를 생성하여 출처별 사용량 차이 및 외부 출처 거부를 검사한다. 실제 Windows 실행 NOT RUN. 엔진 보고 사용량은 쿠키나 모든 저장 유형의 총량이 아니며 삭제 및 제품 프로필 연결은 미지원.

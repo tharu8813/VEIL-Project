@@ -44,6 +44,7 @@ internal sealed class TabbedDevelopmentHost
     private Task<IReadOnlyList<string>>? emptyDomains, firstDomains, secondDomains;
     private Task<int?>? cookieDeletion;
     private Task<bool>? profileCookieDeletion;
+    private Task<double?>? firstUsage, secondUsage, rejectedUsage;
     private int deletionAuthorizationChecks;
     private int phase, result;
     private bool shuttingDown, windowClosed, allowWindowClose;
@@ -244,7 +245,7 @@ internal sealed class TabbedDevelopmentHost
 
     private void RunFixture()
     {
-        if (elapsed.Elapsed > TimeSpan.FromSeconds(25))
+        if (elapsed.Elapsed > TimeSpan.FromSeconds(35))
         {
             Log($"Tabbed fixture timeout at phase {phase}");
             BeginShutdown();
@@ -448,6 +449,26 @@ internal sealed class TabbedDevelopmentHost
         {
             if (first.View.Source != Url("/tabs-cleared-second") || first.View.NativeHandle != firstId) { Fail(); return; }
             Log("Profile cookie clear preserved both origin localStorage markers");
+            var reader = (IEngineSiteDataReader)first.View;
+            rejectedUsage = reader.GetOriginStorageUsageAsync("http://example.invalid");
+            firstUsage = reader.GetOriginStorageUsageAsync(new Uri(Url("/tabs-first")).GetLeftPart(UriPartial.Authority));
+            phase = 22;
+        }
+        else if (phase == 22 && firstUsage is { IsCompleted: true } && rejectedUsage is { IsCompleted: true })
+        {
+            if (rejectedUsage.Exception?.GetBaseException() is not InvalidOperationException ||
+                !firstUsage.IsCompletedSuccessfully || firstUsage.Result is not double bytes ||
+                !double.IsFinite(bytes) || bytes < 65536) { Fail(); return; }
+            Log("Storage usage rejected an unapproved origin and observed first fixture cache");
+            secondUsage = ((IEngineSiteDataReader)first!.View).GetOriginStorageUsageAsync(
+                new Uri(Url("/tabs-second")).GetLeftPart(UriPartial.Authority));
+            phase = 23;
+        }
+        else if (phase == 23 && secondUsage is { IsCompleted: true })
+        {
+            if (!secondUsage.IsCompletedSuccessfully || secondUsage.Result is not double bytes ||
+                !double.IsFinite(bytes) || bytes < 524288 || bytes <= firstUsage!.Result!.Value) { Fail(); return; }
+            Log("Distinct fixture origins returned distinct finite storage usage");
             result = 0;
             BeginShutdown();
         }
