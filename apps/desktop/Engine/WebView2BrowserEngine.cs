@@ -40,8 +40,11 @@ internal sealed class WebView2BrowserEngine : IBrowserEngine
 }
 
 /// <summary>Transitional adapter. No navigation occurs in the constructor or controller initialization.</summary>
-internal sealed class WebView2EngineView(CoreWebView2Environment environment, string? privateProfileName = null) : IBrowserEngineView, IEngineSiteDataReader, IEngineSiteDataWriter
+internal sealed class WebView2EngineView(CoreWebView2Environment environment, string? privateProfileName = null) : IBrowserEngineView, IEngineSiteDataReader, IEngineSiteDataWriter, IEngineSiteDataCapabilities
 {
+    public SiteDataCapabilities SiteDataSupport =>
+        !disposed && NativeView.CoreWebView2 is { } core && !core.Profile.IsInPrivateModeEnabled
+            ? SiteDataCapabilities.StandardWebView2 : SiteDataCapabilities.Unavailable;
     internal WebView2 NativeView { get; } = new() { Visibility = Visibility.Hidden };
     public FrameworkElement Element => NativeView;
     public event EventHandler<EngineNavigationStartingEventArgs>? NavigationStarting;

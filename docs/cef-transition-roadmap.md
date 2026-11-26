@@ -129,3 +129,7 @@ WebView2와 CEF의 네이티브 오류 코드를 엔진 종류와 함께 저장�
 ### 추가 구현: CEF 알려진 합성 출처 일괄 삭제 (검증 대기)
 
 CEF 공개 CefRequestContext API에는 HTTP 캐시 삭제가 있으나 WebView2 AllDomStorage와 동일한 전체 저장소 삭제 계약은 확인되지 않았다. CDP Storage.clearDataForOrigin은 지정 출처만 대상으로 하므로 방문 기록/열린 탭으로 전체 프로필을 추정하지 않는다. 제품 DomStorage 플래그와 혼합 범위는 미지원 유지. 별도 내부 fixture helper가 실행 포트의 두 명시적 출처를 순차 삭제하고 매 명령마다 원래 뷰와 권한을 확인한다. 권한 철회 시 이미 응답 성공한 요청 수(0/1/2)를 반환하며 오류 시 일부 적용 가능성을 포함해 실패한다. LocalStorage/CacheStorage의 두 출처 삭제 및 중도 철회, 쿠키 보존을 확인하는 테스트 추가. 실제 Windows 실행 NOT RUN. 전체 저장소 키/파티션 열거 및 삭제 보장은 별도 출시 차단 조건. 참고: https://cef-builds.spotifycdn.com/docs/154.0/classCefRequestContext.html 및 https://chromedevtools.github.io/devtools-protocol/tot/Storage/#method-clearDataForOrigin.
+
+### 추가 구현: 엔진별 사이트 데이터 지원 범위 및 UI 가드 (검증 대기)
+
+SiteDataCapabilities로 제품 WebView2, 합성 CEF fixture, 미지원 상태를 분리한다. WebView2는 기존 3가지 프로필 삭제 유형 및 조합을 지원하고 CEF 탭 fixture는 Cookies/DiskCache 단독만 광고한다. CEF의 전체 DomStorage 및 혼합 범위는 미지원, 제품 UI 진입 자체도 미허용 유지. 제품 UI의 기존 네이티브 프로필 동일성·사설 모드·다운로드·탭/선택 수명 가드를 보존하며, 지원 정보가 바뀌거나 미지원 선택이면 실행하지 않는다. 대화상자 버튼/체크박스와 확인 동작에도 지원 정보를 적용한다. 순수 .NET 테스트에서 플래그 조합, 미지원, fixture 구분 및 유효 범위를 검사하고 정적 회귀 추가. 실제 Windows UI/CEF 실행 NOT RUN; 지원 정보는 권한 또는 실제 보안 검증을 대체하지 않는다.
