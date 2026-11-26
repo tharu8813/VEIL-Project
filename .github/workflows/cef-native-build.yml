@@ -1,0 +1,38 @@
+name: CEF native compile (Windows x64)
+
+on:
+  pull_request:
+    paths:
+      - 'apps/cef-smoke/**'
+      - 'apps/desktop/Engine/**'
+      - 'apps/desktop/NetworkPolicy.cs'
+      - 'scripts/build-cef-smoke.ps1'
+      - '.github/workflows/cef-native-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cef-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-compile:
+    name: CEF native and managed compile (not runtime)
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build pinned CEF smoke hosts
+        shell: pwsh
+        run: |
+          ./scripts/build-cef-smoke.ps1 -WorkRoot (Join-Path $env:RUNNER_TEMP "veil-cef-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT")
+      - name: Record validation scope
+        if: always()
+        shell: pwsh
+        run: |
+          'CEF compile-only job. No browser was launched; runtime security and product release gates are NOT RUN.' >> $env:GITHUB_STEP_SUMMARY
