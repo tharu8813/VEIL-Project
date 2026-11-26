@@ -313,9 +313,48 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
     {
         Dispatcher.VerifyAccess();
         // Reject mixed and unknown flags before any mutation; never silently clear a subset.
-        if (kinds != EngineProfileDataKinds.Cookies)
-            throw new NotSupportedException("Only fixture profile cookie clearing is supported.");
-        return await DeleteCookiesAsync(null, stillAuthorized) is not null;
+        if (kinds == EngineProfileDataKinds.Cookies)
+            return await DeleteCookiesAsync(null, stillAuthorized) is not null;
+        if (kinds == EngineProfileDataKinds.DiskCache)
+            return await ClearHttpCacheAsync(stillAuthorized);
+        throw new NotSupportedException("Only individual fixture cookie or HTTP cache clearing is supported.");
+    }
+
+    private async Task<bool> ClearHttpCacheAsync(Func<bool> stillAuthorized)
+    {
+        Dispatcher.VerifyAccess();
+        if (!stillAuthorized()) return false;
+        RequireView();
+        ulong id = NativeHandle;
+        if (!cookieDeleteAuthorizations.TryAdd(id,
+            () => Dispatcher.CheckAccess() && !disposed && NativeHandle == id &&
+                CefNative.VeilCefClosed(id) == 0 && stillAuthorized()))
+            throw new InvalidOperationException("A site data mutation is already active.");
+        bool started = false;
+        try
+        {
+            int start = CefNative.VeilCefStartHttpCacheClear(id, cookieDeleteAuthorization);
+            if (start == -2) return false;
+            started = start == 1;
+            if (!started) throw new InvalidOperationException("The fixture HTTP cache clear is unavailable.");
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            int status;
+            while ((status = CefNative.VeilCefStorageClearStatus(id)) == 0)
+            {
+                if (deadline.Elapsed > TimeSpan.FromSeconds(5))
+                    throw new TimeoutException("HTTP cache clear did not complete; changes may already have been applied.");
+                await Task.Delay(10);
+                RequireView();
+                if (NativeHandle != id) throw new InvalidOperationException("The CEF view changed.");
+            }
+            if (status != 1) throw new InvalidOperationException("HTTP cache clear failed; changes may already have been applied.");
+            return true;
+        }
+        finally
+        {
+            if (started) CefNative.VeilCefEndStorageClear(id);
+            cookieDeleteAuthorizations.Remove(id);
+        }
     }
 
     public FrameworkElement Element => this;
@@ -470,6 +509,7 @@ internal static class CefNative
     [DllImport(Module)] internal static extern void VeilCefEndStorageUsage(ulong id);
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
     internal static extern int VeilCefStartStorageClear(ulong id, string origin, CookieDeleteAuthorization authorize);
+    [DllImport(Module)] internal static extern int VeilCefStartHttpCacheClear(ulong id, CookieDeleteAuthorization authorize);
     [DllImport(Module)] internal static extern int VeilCefStorageClearStatus(ulong id);
     [DllImport(Module)] internal static extern void VeilCefEndStorageClear(ulong id);
     [DllImport(Module)] internal static extern int VeilCefClosed(ulong id);

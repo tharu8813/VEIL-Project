@@ -45,7 +45,7 @@ internal sealed class TabbedDevelopmentHost
     private Task<int?>? cookieDeletion;
     private Task<bool>? profileCookieDeletion;
     private Task<double?>? firstUsage, secondUsage, rejectedUsage;
-    private Task<bool>? storageClear;
+    private Task<bool>? storageClear, httpCacheClear;
     private int deletionAuthorizationChecks;
     private int phase, result;
     private bool shuttingDown, windowClosed, allowWindowClose;
@@ -246,7 +246,7 @@ internal sealed class TabbedDevelopmentHost
 
     private void RunFixture()
     {
-        if (elapsed.Elapsed > TimeSpan.FromSeconds(45))
+        if (elapsed.Elapsed > TimeSpan.FromSeconds(55))
         {
             Log($"Tabbed fixture timeout at phase {phase}");
             BeginShutdown();
@@ -255,7 +255,7 @@ internal sealed class TabbedDevelopmentHost
         string Url(string path)
         {
             var url = new Uri(new Uri(fixture!), path);
-            return path is "/tabs-second" or "/tabs-preserved" or "/tabs-cleared-second" or "/tabs-storage-kept"
+            return path is "/tabs-second" or "/tabs-preserved" or "/tabs-cleared-second" or "/tabs-storage-kept" or "/tabs-http-cache-first" or "/tabs-http-cache-reused" or "/tabs-http-cache-cleared"
                 ? new UriBuilder(url) { Host = "localhost" }.Uri.AbsoluteUri : url.AbsoluteUri;
         }
         void Fail() { result = 42; Log($"Tabbed fixture failed at phase {phase}"); BeginShutdown(); }
@@ -522,6 +522,57 @@ internal sealed class TabbedDevelopmentHost
         {
             if (first.View.NativeHandle != firstId || first.View.Source != Url("/tabs-storage-kept")) { Fail(); return; }
             Log("Exact origin storage clear preserved the other origin and cookie scope");
+            address.Text = Url("/tabs-http-cache-first");
+            NavigateAddress();
+            phase = 31;
+        }
+        else if (phase == 31 && first?.View.DocumentTitle == "TAB_HTTP_CACHE_FIRST")
+        {
+            httpCacheClear = ((IEngineSiteDataWriter)first.View).ClearProfileDataAsync(
+                EngineProfileDataKinds.Cookies | EngineProfileDataKinds.DiskCache, () => true);
+            phase = 32;
+        }
+        else if (phase == 32 && httpCacheClear is { IsCompleted: true })
+        {
+            if (httpCacheClear.Exception?.GetBaseException() is not NotSupportedException) { Fail(); return; }
+            deletionAuthorizationChecks = 0;
+            httpCacheClear = ((IEngineSiteDataWriter)first!.View).ClearProfileDataAsync(
+                EngineProfileDataKinds.DiskCache, () => ++deletionAuthorizationChecks == 1);
+            phase = 33;
+        }
+        else if (phase == 33 && httpCacheClear is { IsCompleted: true })
+        {
+            if (!httpCacheClear.IsCompletedSuccessfully || httpCacheClear.Result ||
+                deletionAuthorizationChecks < 2) { Fail(); return; }
+            address.Text = Url("/tabs-http-cache-reused");
+            NavigateAddress();
+            phase = 34;
+        }
+        else if (phase == 34 && first?.View.DocumentTitle == "TAB_HTTP_CACHE_REUSED")
+        {
+            Log("Denied and mixed cache scopes preserved cached HTTP response");
+            httpCacheClear = ((IEngineSiteDataWriter)first.View).ClearProfileDataAsync(
+                EngineProfileDataKinds.DiskCache, () => active == first && !first.Closing && !shuttingDown);
+            phase = 35;
+        }
+        else if (phase == 35 && httpCacheClear is { IsCompleted: true })
+        {
+            if (!httpCacheClear.IsCompletedSuccessfully || !httpCacheClear.Result) { Fail(); return; }
+            address.Text = Url("/tabs-http-cache-cleared");
+            NavigateAddress();
+            phase = 36;
+        }
+        else if (phase == 36 && first?.View.DocumentTitle == "TAB_HTTP_CACHE_CLEARED")
+        {
+            if (first.View.NativeHandle != firstId || first.View.Source != Url("/tabs-http-cache-cleared")) { Fail(); return; }
+            Log("HTTP cache clear refetched resource and preserved origin storage");
+            address.Text = Url("/tabs-http-cache-cookie");
+            NavigateAddress();
+            phase = 37;
+        }
+        else if (phase == 37 && first?.View.DocumentTitle == "TAB_HTTP_CACHE_COOKIE")
+        {
+            Log("HTTP cache clear cookie preservation probe completed");
             result = 0;
             BeginShutdown();
         }

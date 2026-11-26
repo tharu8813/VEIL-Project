@@ -480,7 +480,7 @@ test('CEF exact synthetic cookie deletion rechecks per-cookie authorization and 
     assert.match(cefView, /private static readonly CefNative\.CookieDeleteAuthorization cookieDeleteAuthorization = AuthorizeCookieDelete;/);
     assert.match(cefView, /cookieDeleteAuthorizations\.TryAdd\(id,[\s\S]*?NativeHandle == id &&[\s\S]*?stillAuthorized\(\)/);
     assert.match(cefView, /if \(started\) CefNative\.VeilCefEndCookieDelete\(id\);\s*cookieDeleteAuthorizations\.Remove\(id\);/);
-    assert.match(cefView, /ClearProfileDataAsync[\s\S]*?if \(kinds != EngineProfileDataKinds\.Cookies\)\s*throw new NotSupportedException/);
+    assert.match(cefView, /ClearProfileDataAsync[\s\S]*?if \(kinds == EngineProfileDataKinds\.Cookies\)[\s\S]*?if \(kinds == EngineProfileDataKinds\.DiskCache\)[\s\S]*?throw new NotSupportedException/);
     assert.match(cefTabbed, /cookieDeletion\.Result is not null \|\|\s*deletionAuthorizationChecks < 2/);
     assert.match(cefTabbed, /firstDomains\.Result\.Count != 1 \|\| firstDomains\.Result\[0\] != "localhost"/);
 });
@@ -491,7 +491,7 @@ test('CEF fixture profile cookie clear requires explicit cookie-only scope and p
     assert.match(cefNative, /else if \(scope != CookieDeleteScope::FixtureProfile \|\| !tabbed_development_enabled \|\| !exact\.empty\(\)\)/);
     assert.match(cefNative, /VeilCefStartCookieDelete\([\s\S]*?if \(!domain\) return 0;\s*return StartCookieDelete\(id, CookieDeleteScope::ExactDomain, domain, authorize\);/);
     assert.match(cefNative, /VeilCefStartProfileCookieDelete\([\s\S]*?return StartCookieDelete\(id, CookieDeleteScope::FixtureProfile, L"", authorize\);/);
-    assert.match(cefView, /if \(kinds != EngineProfileDataKinds\.Cookies\)\s*throw new NotSupportedException[\s\S]*?return await DeleteCookiesAsync\(null, stillAuthorized\) is not null;/);
+    assert.match(cefView, /if \(kinds == EngineProfileDataKinds\.Cookies\)\s*return await DeleteCookiesAsync\(null, stillAuthorized\) is not null;/);
     assert.match(cefTabbed, /EngineProfileDataKinds\.Cookies \| EngineProfileDataKinds\.DomStorage, \(\) => true/);
     assert.match(cefTabbed, /EngineProfileDataKinds\.Cookies, \(\) => false/);
     assert.match(cefTabbed, /Explicit profile cookie clear returned an empty cookie scan/);
@@ -526,4 +526,16 @@ test('CEF origin storage clear has a fixed allowlist and authorization before di
     assert.match(cefView, /if \(started\) CefNative\.VeilCefEndStorageClear\(id\);\s*cookieDeleteAuthorizations\.Remove\(id\);/);
     assert.match(cefTabbed, /storageClear\.Result \|\|\s*deletionAuthorizationChecks < 2/);
     assert.match(cefTabbed, /Exact origin storage clear preserved the other origin and cookie scope/);
+});
+
+
+test('CEF HTTP cache clear is confined to the explicit disk-backed synthetic fixture and fixed command', () => {
+    assert.match(cefNative, /if \(fixture_enabled && tabbed_development_enabled\)\s*CefString\(&settings\.cache_path\) = \(profile \/ L"tab-fixture-cache"\)\.wstring\(\);/);
+    assert.match(cefNative, /VeilCefStartHttpCacheClear\([\s\S]*?if \(!CefCurrentlyOn\(TID_UI\) \|\| !fixture_enabled \|\| !tabbed_development_enabled \|\| !authorize\) return 0;/);
+    assert.match(cefNative, /context->GetCachePath\(\)\.ToWString\(\) != \(std::filesystem::path\(profile_root\) \/ L"tab-fixture-cache"\)\.wstring\(\)/);
+    assert.match(cefNative, /const bool allowed = authorize\(id\) != 0;\s*if \(allowed && LookupView\(id\) == state && !state->closing && state->storage_clear == request\)\s*\{\s*request->message_id = host->ExecuteDevToolsMethod\(0, "Network\.clearBrowserCache", nullptr\);/);
+    assert.match(cefView, /if \(kinds == EngineProfileDataKinds\.DiskCache\)\s*return await ClearHttpCacheAsync\(stillAuthorized\);\s*throw new NotSupportedException/);
+    assert.match(cefView, /int start = CefNative\.VeilCefStartHttpCacheClear\(id, cookieDeleteAuthorization\);\s*if \(start == -2\) return false;/);
+    assert.match(cefTabbed, /EngineProfileDataKinds\.Cookies \| EngineProfileDataKinds\.DiskCache, \(\) => true/);
+    assert.match(cefTabbed, /HTTP cache clear refetched resource and preserved origin storage/);
 });

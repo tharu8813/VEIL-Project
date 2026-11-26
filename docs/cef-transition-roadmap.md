@@ -121,3 +121,7 @@ WebView2와 CEF의 네이티브 오류 코드를 엔진 종류와 함께 저장�
 ### 추가 구현: CEF 합성 출처 저장소 삭제 (검증 대기)
 
 합성 HTTP fixture + opt-in 탭 모드의 두 정규 출처에 한해 고정 Storage.clearDataForOrigin 명령을 실행한다. 기존 SiteDataPolicy.OriginStorageTypes와 같은 local_storage,indexeddb,cache_storage,service_workers,websql,file_systems 허용 목록만 사용하며 cookies/all/프로필 전체 삭제는 제외한다. 명령 직전 관리 권한 및 뷰·작업 객체를 다시 검사하고 CDP 응답 ID와 성공 상태를 확인한다. 이미 전달된 명령은 observer 해제로 되돌릴 수 없으므로 timeout/오류는 부분 적용 가능성을 유지한다. 합성 회귀는 외부 출처 및 권한 만료 거부, LocalStorage/CacheStorage 삭제와 다른 출처 보존, HTTP 쿠키 보존을 검사한다. 나머지 허용 저장 유형의 개별 실제 삭제 검증은 후속. Windows 실행 NOT RUN, 제품 엔진 및 보호 프로필 유지.
+
+### 추가 구현: CEF 합성 HTTP 캐시 삭제 (검증 대기)
+
+새 임시 프로필의 opt-in 탭 fixture에서만 별도 tab-fixture-cache 경로를 설정하고 요청 컨텍스트의 캐시 경로가 일치할 때 고정 Network.clearBrowserCache 명령을 허용한다. 일반 개발 및 다운로드 fixture의 설정은 유지한다. 공통 프로필 계약의 Cookies 단독 또는 DiskCache 단독 범위만 허용하며 혼합/DOM 저장소/미지원 플래그를 변경 전에 거부한다. 기존 CDP 삭제 슬롯·권한 재확인·응답 ID·타임아웃을 사용한다. 합성 HTTP 캐시 응답의 재사용 및 삭제 후 서버 재요청 횟수, 권한 철회와 혼합 범위 거부, 쿠키·LocalStorage·CacheStorage 보존을 검사한다. HTTP 캐시의 실제 디스크 파일 소거/보안 삭제를 주장하지 않는다. Windows 실행 NOT RUN, 제품 보안 프로필 및 전체 DOM 저장소 삭제 미지원.
