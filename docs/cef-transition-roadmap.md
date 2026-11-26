@@ -139,3 +139,7 @@ SiteDataCapabilities로 제품 WebView2, 합성 CEF fixture, 미지원 상태를
 첫 탭 fixture 종료 직전에 지속 합성 쿠키 및 LocalStorage/CacheStorage 표식을 생성한다. 동일 HTTP 출처의 두 번째 프로세스를 별도 mkdtemp 루트에서 시작해 이전 프로필이 디스크에 존재하는 동안 쿠키/표식 부재를 확인한다. CEF 테스트 실행 파일의 부모 PID·명령줄 루트에 따른 프로세스 잔존 검사 후 성공한 runner 소유 루트만 정리하고 실패 시 진단 경로 보존. 단일 다운로드 fixture의 탭 모드 환경 상속 차단. Windows 실행 NOT RUN; 프로세스 검사 범위는 지정 테스트와 연관된 프로세스이며 일반 파일 제거이지 보안 소거 또는 제품 암호화 프로필 격리 입증이 아니다.
 
 #212 자체 리뷰 보완: spawn 환경 변수는 env 객체 안에 배치하고 Windows의 대소문자 비구분 환경 변수 중복을 제거한 뒤 명시적으로 설정한다. 실행 경로를 읽을 수 없는 연관 프로세스도 이름·PID/명령줄 범위에서 보수적으로 검사한다. 새 head CI 및 Windows 런타임 확인 필요.
+
+### 추가 구현: 로그인 양식 공통 capability 및 WebView2 어댑터 분리 (검증 대기)
+
+IEngineLoginForms는 고정 probe/read/fill만 노출하며 공통 SavedLogin 레코드의 로그 문자열 redaction을 유지한다. 제품 BrowserWindow는 기존 사용자 명령, 마스터 인증, 출처·탭·선택 epoch, 보호 세션 검사에 원래 어댑터 동일성을 추가한다. WebView2 구현은 dispatcher, 정확한 HTTPS 페이지·정규 출처·일반 프로필 및 권한을 실행 전후 검사하며 기존 LoginFormPolicy의 최상위 가시적 동일 출처 폼 규칙과 미제출 정책을 유지한다. CEF에는 계약 파일만 링크하고 구현하지 않으며 실제 계정 전달 경로는 열지 않는다. PasswordStore/Rust 암호화 형식 및 인증/백업/복원 유지. 정적 계약 테스트 추가, 실제 Windows 로그인 폼 검증 NOT RUN. 기존 페이지 스크립트 환경의 한계 및 이미 실행된 채우기의 롤백 불가를 보안 검증 완료로 간주하지 않는다.

@@ -40,7 +40,7 @@ internal sealed class WebView2BrowserEngine : IBrowserEngine
 }
 
 /// <summary>Transitional adapter. No navigation occurs in the constructor or controller initialization.</summary>
-internal sealed class WebView2EngineView(CoreWebView2Environment environment, string? privateProfileName = null) : IBrowserEngineView, IEngineSiteDataReader, IEngineSiteDataWriter, IEngineSiteDataCapabilities
+internal sealed class WebView2EngineView(CoreWebView2Environment environment, string? privateProfileName = null) : IBrowserEngineView, IEngineSiteDataReader, IEngineSiteDataWriter, IEngineSiteDataCapabilities, IEngineLoginForms
 {
     public SiteDataCapabilities SiteDataSupport =>
         !disposed && NativeView.CoreWebView2 is { } core && !core.Profile.IsInPrivateModeEnabled
@@ -74,6 +74,45 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
         return string.IsNullOrEmpty(core.FaviconUri) ? null :
             await core.GetFaviconAsync(CoreWebView2FaviconImageFormat.Png);
     }
+    // Native identity and exact HTTPS page checks supplement the host's
+    // navigation/selection epoch and protected-session checks.
+    private CoreWebView2? LoginCore(string origin, string page, Func<bool> stillAuthorized)
+    {
+        NativeView.Dispatcher.VerifyAccess();
+        if (disposed || SitePermissionPolicy.Origin(origin) != origin ||
+            SitePermissionPolicy.Origin(page) != origin || !stillAuthorized()) return null;
+        return !disposed && NativeView.CoreWebView2 is { } core &&
+            !core.Profile.IsInPrivateModeEnabled &&
+            string.Equals(core.Source, page, StringComparison.Ordinal) ? core : null;
+    }
+
+    public async Task<bool> ProbeLoginFormAsync(string origin, string page, Func<bool> stillAuthorized)
+    {
+        var core = LoginCore(origin, page, stillAuthorized);
+        if (core is null) return false;
+        string result = await core.ExecuteScriptAsync(LoginFormPolicy.Probe(origin, page));
+        return ReferenceEquals(core, LoginCore(origin, page, stillAuthorized)) && result == "true";
+    }
+
+    public async Task<SavedLogin?> ReadLoginFormAsync(string origin, string page, Func<bool> stillAuthorized)
+    {
+        var core = LoginCore(origin, page, stillAuthorized);
+        if (core is null) return null;
+        string json = await core.ExecuteScriptAsync(LoginFormPolicy.Read(origin, page));
+        if (!ReferenceEquals(core, LoginCore(origin, page, stillAuthorized))) return null;
+        return LoginFormPolicy.Decode(origin, json);
+    }
+
+    public async Task<bool> FillLoginFormAsync(SavedLogin login, string page, Func<bool> stillAuthorized)
+    {
+        var core = LoginCore(login.Origin, page, stillAuthorized);
+        if (core is null || login.UserName is not { Length: > 0 and <= 512 } ||
+            string.IsNullOrWhiteSpace(login.UserName) || login.UserName.Any(char.IsControl) ||
+            login.Password is not { Length: > 0 and <= 2048 }) return false;
+        string result = await core.ExecuteScriptAsync(LoginFormPolicy.Fill(login, page));
+        return ReferenceEquals(core, LoginCore(login.Origin, page, stillAuthorized)) && result == "true";
+    }
+
     private CoreWebView2 RequireStandardSiteDataCore()
     {
         var core = Core;

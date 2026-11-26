@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../desktop/Engine/IBrowserEngine.cs" Link="Contracts/IBrowserEngine.cs" />
+    <Compile Include="../../desktop/Engine/IEngineLoginForms.cs" Link="Contracts/IEngineLoginForms.cs" />
     <Compile Include="../../desktop/NetworkPolicy.cs" Link="Contracts/NetworkPolicy.cs" />
     <Compile Include="../../desktop/SiteDataPolicy.cs" Link="Contracts/SiteDataPolicy.cs" />
   </ItemGroup>
