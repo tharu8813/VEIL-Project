@@ -25,3 +25,7 @@
 공식 CEF Windows Sandbox 문서는 M138부터 사전 빌드된 bootstrap 실행 파일로 클라이언트 DLL을 로드하고, 같은 실행 파일이 브라우저·자식 프로세스를 담당하는 구성을 설명한다. 이 구성을 1단계에서 먼저 실측한다. CefSharp는 WPF 연동 사례가 있지만 프로젝트 문서가 CEF 샌드박스 미지원으로 명시하므로, VEIL 제품의 기본 어댑터로 선정하지 않는다. [CEF Windows 샌드박스 문서](https://github.com/chromiumembedded/cef/blob/master/docs/sandbox_setup.md) · [CefSharp 배포 안내](https://github.com/cefsharp/CefSharp/blob/master/NuGet/Readme.txt)
 
 브라우저 컨트롤의 렌더링만으로 보안 통과를 판정하지 않는다. 사용자 데이터는 2단계 합성 검증에 사용하지 않는다. 현재 Windows x64 배포 버전은 1단계 시작 시 확인한다. [CEF 공식 문서](https://github.com/chromiumembedded/cef/blob/master/docs/README.md) · [VEIL 출시 게이트](11-security-release-gates.md)
+
+### 추가 구현: 탭 파비콘 및 오디오 경계 (검증 대기)
+
+공통 뷰 계약에 엔진이 제공하는 파비콘 PNG, 음소거 상태/설정 및 재생 상태를 추가했다. WebView2는 기존 엔진 API를 사용하고, 비동기 파비콘 결과는 탭 소유자·탐색 epoch·요청 번호가 일치하는 경우만 표시한다. 개발용 CEF는 네이티브 SetAudioMuted/IsAudioMuted를 연결하지만 실제 재생 감지 및 캐시 파비콘 추출은 미지원(null)으로 유지한다. 별도 파비콘 URL 재요청 또는 오디오 캡처는 추가하지 않았다. CEF 네이티브 빌드/실행은 NOT RUN이며 제품 엔진 전환 조건은 그대로 유지한다.

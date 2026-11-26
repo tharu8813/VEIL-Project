@@ -114,6 +114,22 @@ public static class WpfSmoke
             window.Loaded += async (_, _) =>
             {
                 await browser.InitializeAsync();
+                int muteEvents = 0;
+                EventHandler audioChanged = (_, _) => muteEvents++;
+                browser.AudioStateChanged += audioChanged;
+                browser.SetMuted(true);
+                bool muted = browser.IsMuted == true;
+                browser.SetMuted(false);
+                browser.AudioStateChanged -= audioChanged;
+                using var unsupportedFavicon = await browser.GetFaviconPngAsync();
+                if (!muted || browser.IsMuted != false || muteEvents != 2 ||
+                    browser.IsDocumentPlayingAudio is not null || unsupportedFavicon is not null)
+                {
+                    Trace("Shared audio/unsupported favicon contract failed");
+                    window.Close();
+                    return;
+                }
+                Trace("Observed shared mute state round trip; playback and favicon unavailable");
                 if (!Rejects(() => engine.InitializeAsync("C:\\unexpected-profile", NetworkSettings.Standard)) ||
                     !Rejects(() => engine.InitializeAsync(CefDevelopmentEngine.FixtureProfile,
                         new NetworkSettings(NetworkMode.Proxy, "http", "127.0.0.1", 3128))) ||

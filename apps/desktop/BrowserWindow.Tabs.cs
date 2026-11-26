@@ -220,7 +220,8 @@ public partial class BrowserWindow
         Separate();
         Add("새로고침", "", () => { if (IsWebUrl(tab.Url)) tab.EngineView.Reload(); }, IsWebUrl(tab.Url));
         Add("탭 복제", "", () => { if (IsWebUrl(tab.Url)) _ = OpenTab(tab.Url, index: Tabs.Items.IndexOf(item) + 1); }, IsWebUrl(tab.Url));
-        Add(tab.View.CoreWebView2?.IsMuted == true ? "탭 음소거 해제" : "탭 음소거", "", () => ToggleMute(tab));
+        Add(tab.EngineView.IsMuted == true ? "탭 음소거 해제" : "탭 음소거", "",
+            () => ToggleMute(tab), tab.EngineView.IsMuted.HasValue);
         Add(tab.Pinned ? "탭 고정 해제" : "탭 고정", "", () => SetTabPinned(item, !tab.Pinned));
         if (!session.IsPrivate)
         {
@@ -485,7 +486,7 @@ public partial class BrowserWindow
         foreach (TabItem other in Tabs.Items)
             ((BrowserTab)other.Tag).EngineView.Element.Visibility =
                 other == item && (IsWebUrl(tab.Url) || IsInternalUrl(tab.Url)) ? Visibility.Visible : Visibility.Hidden;
-        if (tab.View.CoreWebView2 is not null) UpdateAudio(tab);
+        UpdateAudio(tab);
         RefreshChrome();
         SyncProgress();
         SaveTabs();

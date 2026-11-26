@@ -406,30 +406,30 @@ public partial class BrowserWindow
         }
     }
 
-    private async Task UpdateFavicon(BrowserTab tab, CoreWebView2 web)
+    private async Task UpdateFavicon(BrowserTab tab)
     {
+        if (!AcceptTabEvents(tab)) return;
+        long epoch = tab.NavigationEpoch;
+        long request = ++tab.FaviconRequest;
         ImageSource? source = null;
         try
         {
-            if (!string.IsNullOrEmpty(web.FaviconUri))
+            using var stream = await tab.EngineView.GetFaviconPngAsync();
+            if (stream is { Length: > 0 })
             {
-                using var stream = await web.GetFaviconAsync(CoreWebView2FaviconImageFormat.Png);
-                if (stream is { Length: > 0 })
-                {
-                    var image = new BitmapImage();
-                    image.BeginInit();
-                    image.CacheOption = BitmapCacheOption.OnLoad;
-                    image.StreamSource = stream;
-                    image.EndInit();
-                    if (image.CanFreeze) image.Freeze();
-                    source = image;
-                }
+                var image = new BitmapImage();
+                image.BeginInit();
+                image.CacheOption = BitmapCacheOption.OnLoad;
+                image.StreamSource = stream;
+                image.EndInit();
+                if (image.CanFreeze) image.Freeze();
+                source = image;
             }
         }
         catch (Exception error) when (RecoverableFailure.Is(error)) { }
-        if (tab.Owner.closing) return;
+        if (!AcceptTabEvents(tab) || tab.NavigationEpoch != epoch || tab.FaviconRequest != request) return;
         tab.Header.Favicon.Source = source;
-        tab.Owner.SetTabLoading(tab, tab.Loading);
+        SetTabLoading(tab, tab.Loading);
     }
 
     private void TabHostSizeChanged(object sender, SizeChangedEventArgs args) => LayoutTabs(animate: false);
