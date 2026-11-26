@@ -194,11 +194,18 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
     // Storage usage needs a separately verified implementation.
     public Task<double?> GetOriginStorageUsageAsync(string origin) => Task.FromResult<double?>(null);
 
-    public async Task<int?> DeleteCookieDomainAsync(string domain, Func<bool> stillAuthorized)
+    public Task<int?> DeleteCookieDomainAsync(string domain, Func<bool> stillAuthorized)
     {
         Dispatcher.VerifyAccess();
         if (!SiteDataPolicy.ValidDomain(domain) || domain is not ("127.0.0.1" or "localhost"))
             throw new ArgumentException("An exact synthetic loopback domain is required.", nameof(domain));
+        return DeleteCookiesAsync(domain, stillAuthorized);
+    }
+
+    // Null is an internal explicit profile scope, never accepted by the public domain method.
+    private async Task<int?> DeleteCookiesAsync(string? exactDomain, Func<bool> stillAuthorized)
+    {
+        Dispatcher.VerifyAccess();
         if (!stillAuthorized()) return null;
         RequireView();
         ulong id = NativeHandle;
@@ -209,7 +216,9 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         bool started = false;
         try
         {
-            started = CefNative.VeilCefStartCookieDelete(id, domain, cookieDeleteAuthorization) != 0;
+            started = (exactDomain is null
+                ? CefNative.VeilCefStartProfileCookieDelete(id, cookieDeleteAuthorization)
+                : CefNative.VeilCefStartCookieDelete(id, exactDomain, cookieDeleteAuthorization)) != 0;
             if (!started) throw new InvalidOperationException("The fixture cookie deletion is unavailable.");
             var deadline = System.Diagnostics.Stopwatch.StartNew();
             int status;
@@ -238,8 +247,14 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
 
     public Task<bool> ClearOriginStorageAsync(string origin, Func<bool> stillAuthorized) =>
         throw new NotSupportedException("CEF origin storage clearing is not verified.");
-    public Task<bool> ClearProfileDataAsync(EngineProfileDataKinds kinds, Func<bool> stillAuthorized) =>
-        throw new NotSupportedException("CEF profile data clearing is not verified.");
+    public async Task<bool> ClearProfileDataAsync(EngineProfileDataKinds kinds, Func<bool> stillAuthorized)
+    {
+        Dispatcher.VerifyAccess();
+        // Reject mixed and unknown flags before any mutation; never silently clear a subset.
+        if (kinds != EngineProfileDataKinds.Cookies)
+            throw new NotSupportedException("Only fixture profile cookie clearing is supported.");
+        return await DeleteCookiesAsync(null, stillAuthorized) is not null;
+    }
 
     public FrameworkElement Element => this;
     public string Source => hwnd == 0 ? "" : Marshal.PtrToStringUni(CefNative.VeilCefSource(NativeHandle)) ?? "";
@@ -382,6 +397,7 @@ internal static class CefNative
     internal delegate int CookieDeleteAuthorization(ulong id);
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
     internal static extern int VeilCefStartCookieDelete(ulong id, string domain, CookieDeleteAuthorization authorize);
+    [DllImport(Module)] internal static extern int VeilCefStartProfileCookieDelete(ulong id, CookieDeleteAuthorization authorize);
     [DllImport(Module)] internal static extern int VeilCefCookieDeleteStatus(ulong id);
     [DllImport(Module)] internal static extern int VeilCefCookieDeleteCount(ulong id);
     [DllImport(Module)] internal static extern void VeilCefEndCookieDelete(ulong id);
