@@ -308,6 +308,8 @@ public partial class BrowserWindow : Window
             engineView.FaviconChanged += async (_, _) => await tab.Owner.UpdateFavicon(tab);
             engineView.AudioStateChanged += (_, _) => tab.Owner.UpdateAudio(tab);
             engineView.ProcessFailed += (_, args) => tab.Owner.OnProcessFailed(tab, args);
+            engineView.NewWindowRequested += request => tab.Owner.OnNewWindowRequested(tab, request);
+            engineView.WindowCloseRequested += (_, _) => tab.Owner.OnWindowCloseRequested(tab);
             ConfigureWebView2Tab(tab);
             // SelectionChanged can synchronously save the session. Publish an internal route
             // before inserting the item, since native pages may never navigate the WebView.
@@ -817,10 +819,8 @@ public partial class BrowserWindow : Window
         }
     }
 
-    private async void OnNewWindowRequested(BrowserTab opener, CoreWebView2NewWindowRequestedEventArgs args)
+    private async Task OnNewWindowRequested(BrowserTab opener, EngineNewWindowRequest args)
     {
-        using var deferral = args.GetDeferral();
-        args.Handled = true;
         if (!CanUseTab(opener.Item) || (args.Uri != "about:blank" && !IsWebUrl(args.Uri))) return;
         long epoch = opener.NavigationEpoch;
         try
@@ -828,12 +828,29 @@ public partial class BrowserWindow : Window
             // Like other browsers, tabs opened from a page appear right after their opener.
             var popup = await OpenTab(null, args.IsUserInitiated, Tabs.Items.IndexOf(opener.Item) + 1);
             if (popup is null) return;
-            if (CanUseTab(opener.Item) && opener.NavigationEpoch == epoch && CanUseTab(popup.Item))
-                args.NewWindow = popup.View.CoreWebView2;
-            else if (!closing && CanUseTab(popup.Item))
-                await CloseTabAsync(popup.Item);
+            bool attached = false;
+            try
+            {
+                if (CanUseTab(opener.Item) && opener.NavigationEpoch == epoch && CanUseTab(popup.Item))
+                    attached = args.TryAttach(popup.EngineView);
+            }
+            finally
+            {
+                if (!attached && !closing && CanUseTab(popup.Item))
+                    await CloseTabAsync(popup.Item);
+            }
         }
         catch (Exception error) when (RecoverableFailure.Is(error)) { if (!closing) Status.Text = "새 창 요청을 열지 못했습니다."; }
+    }
+
+    private void OnWindowCloseRequested(BrowserTab tab)
+    {
+        if (!CanUseTab(tab.Item)) return;
+        long epoch = tab.NavigationEpoch;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (CanUseTab(tab.Item) && tab.NavigationEpoch == epoch) CloseTab(tab.Item);
+        });
     }
 
     private void UpdateAudio(BrowserTab tab)

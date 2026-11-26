@@ -30,6 +30,7 @@ using BeforeBrowse = int (*)(const wchar_t*, uint64_t, int);
 using NavigationComplete = void (*)(uint64_t, int, int, int);
 BeforeBrowse before_browse = nullptr;
 NavigationComplete navigation_complete = nullptr;
+unsigned popups_blocked = 0;
 unsigned downloads_blocked = 0;
 unsigned blob_downloads_blocked = 0;
 unsigned permissions_denied = 0;
@@ -154,7 +155,12 @@ class FixtureApp final : public CefApp {
  public:
   void OnBeforeCommandLineProcessing(const CefString& type,
                                     CefRefPtr<CefCommandLine> command_line) override {
-    if (type.empty()) command_line->AppendSwitch("use-fake-device-for-media-stream");
+    if (type.empty()) {
+      command_line->AppendSwitch("use-fake-device-for-media-stream");
+      // Only the synthetic fixture bypasses Chromium's early popup blocker to
+      // exercise the mandatory host denial below. No popup is allowed.
+      command_line->AppendSwitch("disable-popup-blocking");
+    }
   }
 
  private:
@@ -171,6 +177,14 @@ class Client final : public CefClient,
  public:
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
+  bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, int,
+                     const CefString&, const CefString&, WindowOpenDisposition,
+                     bool, const CefPopupFeatures&, CefWindowInfo&,
+                     CefRefPtr<CefClient>&, CefBrowserSettings&,
+                     CefRefPtr<CefDictionaryValue>&, bool*) override {
+    ++popups_blocked;
+    return true;
+  }
   CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
   CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
@@ -455,6 +469,7 @@ extern "C" __declspec(dllexport) void VeilCefSetPageStateCallback(PageStateChang
 extern "C" __declspec(dllexport) void VeilCefSetRenderProcessFailedCallback(RenderProcessFailed callback) {
   render_process_failed = callback;
 }
+extern "C" __declspec(dllexport) unsigned VeilCefPopupsBlocked() { return popups_blocked; }
 extern "C" __declspec(dllexport) const wchar_t* VeilCefSource() { return page_source.c_str(); }
 extern "C" __declspec(dllexport) const wchar_t* VeilCefTitle() { return title.c_str(); }
 extern "C" __declspec(dllexport) int VeilCefClosed() { return browser ? 0 : 1; }

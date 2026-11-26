@@ -23,9 +23,10 @@ test('closing tab invalidates engine events and native actions before animation'
     assert.match(motion, /finally \{ closingTabs\.Remove\(item\); \}/);
 });
 test('popup handoff requires the original live opener and navigation epoch', () => {
-    const popup = browser.slice(browser.indexOf('private async void OnNewWindowRequested'), browser.indexOf('private void UpdateAudio'));
-    assert.match(popup, /long epoch = opener\.NavigationEpoch;[\s\S]*?await OpenTab\([\s\S]*?if \(CanUseTab\(opener\.Item\) && opener\.NavigationEpoch == epoch && CanUseTab\(popup\.Item\)\)\s*args\.NewWindow = popup\.View\.CoreWebView2;/);
-    assert.match(popup, /else if \(!closing && CanUseTab\(popup\.Item\)\)\s*await CloseTabAsync\(popup\.Item\);/);
+    const popup = browser.slice(browser.indexOf('private async Task OnNewWindowRequested'), browser.indexOf('private void UpdateAudio'));
+    assert.match(popup, /long epoch = opener\.NavigationEpoch;[\s\S]*?await OpenTab\([\s\S]*?if \(CanUseTab\(opener\.Item\) && opener\.NavigationEpoch == epoch && CanUseTab\(popup\.Item\)\)\s*attached = args\.TryAttach\(popup\.EngineView\);/);
+    assert.match(popup, /finally\s*\{\s*if \(!attached && !closing && CanUseTab\(popup\.Item\)\)\s*await CloseTabAsync\(popup\.Item\);/);
+    assert.match(popup, /if \(CanUseTab\(tab\.Item\) && tab\.NavigationEpoch == epoch\) CloseTab\(tab\.Item\);/);
 });
 
 
@@ -226,4 +227,18 @@ test('process failure distinguishes page loss from shared session shutdown', () 
     assert.match(failed, /session\.EngineLost = true;[\s\S]*?session\.MainSession\.Save\(\)[\s\S]*?session\.IsEnding = true;[\s\S]*?session\.AllWindows\.ToList\(\)\) window\.Close\(\);/);
     assert.match(cefView, /new EngineProcessFailedEventArgs\(EngineFailureScope\.PageOrChildProcess, code\)/);
     assert.match(cefView, /DestroyWindowCore[\s\S]*?VeilCefSetRenderProcessFailedCallback\(null\);[\s\S]*?DestroyWindow\(window\.Handle\)/);
+});
+
+
+const engineContract = await readFile('apps/desktop/Engine/IBrowserEngine.cs', 'utf8');
+const cefNative = await readFile('apps/cef-smoke/wpf.cc', 'utf8');
+test('popup adoption is one-shot, same-engine and profile-bound; CEF denies unsupported popups', () => {
+    assert.match(webView2, /using var deferral = args\.GetDeferral\(\);\s*args\.Handled = true;/);
+    assert.match(webView2, /handler\.GetInvocationList\(\)\.Length != 1/);
+    assert.match(webView2, /!ReferenceEquals\(view\.environmentForPopup, environment\)[\s\S]*?!string\.Equals\(view\.privateProfileForPopup, privateProfileName[\s\S]*?args\.NewWindow = destination;/);
+    assert.match(webView2, /finally \{ request\.Complete\(\); \}/);
+    assert.match(engineContract, /var callback = pending;\s*pending = null;\s*return callback\?\.Invoke\(target\) == true;/);
+    assert.doesNotMatch(webView2Window, /web\.(?:NewWindowRequested|WindowCloseRequested) \+=/);
+    assert.match(cefNative, /bool OnBeforePopup\([\s\S]*?\+\+popups_blocked;\s*return true;/);
+    assert.match(cefView, /NewWindowRequested \{ add \{ \} remove \{ \} \}/);
 });

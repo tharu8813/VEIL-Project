@@ -241,6 +241,7 @@ public static class WpfSmoke
             }
             else if (phase == 5 && title == "VEIL_CEF_RESPONSE_AND_PERMISSIONS_OK" &&
                      CefNative.VeilCefResponseMatches() == 1 && CefNative.VeilCefAttachmentFilteredBytes() >= 0 &&
+                     CefNative.VeilCefPopupsBlocked() != 0 &&
                      CefNative.VeilCefPermissionsDenied() != 0 &&
                      CefNative.VeilCefMediaPermissionsDenied() != 0 &&
                      CefNative.VeilCefBlobDownloadsBlocked() != 0 &&
@@ -248,6 +249,7 @@ public static class WpfSmoke
             {
                 phase = 6;
                 Trace("Observed rejected HTTP and Blob downloads, geolocation and media permissions");
+                Trace("Observed mandatory native popup denial");
                 Trace($"Verified 98304 response bytes in memory. Blocked attachment passed {CefNative.VeilCefAttachmentFilteredBytes()} bytes to the filter.");
                 if (fixtureVault is null)
                 {
