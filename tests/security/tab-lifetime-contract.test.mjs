@@ -367,7 +367,7 @@ test('WPF fixture retains the original closing identity and waits for the vault 
 
 test('CEF permits two views only in the synthetic fixture and proves independent close', () => {
     assert.match(cefNative, /constexpr unsigned kFixtureViewLimit = 2;/);
-    assert.match(cefNative, /unsigned ViewLimit\(\) \{ return fixture_enabled \? kFixtureViewLimit : kDevelopmentViewLimit; \}/);
+    assert.match(cefNative, /unsigned ViewLimit\(\) \{ return \(fixture_enabled \|\| tabbed_development_enabled\) \? kFixtureViewLimit : kDevelopmentViewLimit; \}/);
     assert.match(cefNative, /if \(views\.size\(\) >= ViewLimit\(\)/);
     assert.match(cefView, /privateProfileName is not null \|\| views\.Count >= CefNative\.VeilCefViewLimit\(\)/);
     assert.match(cefSmoke, /var second = \(CefDevelopmentView\)engine\.CreateView\(\);/);
@@ -397,4 +397,16 @@ test('CEF parallel fixture cancels only its own stream and waits for both vault 
     assert.match(cefSmoke, /canceledByteCount = parallelCancel\.ReceivedBytes;\s*CefNative\.VeilCefCancelOwnedAttachment\(secondaryHandle\);\s*parallelCancel\.Complete\(false\);/);
     assert.match(cefSmoke, /parallelKeep!\.Complete\(true\);/);
     assert.match(cefSmoke, /kept\.ReceivedBytes != FixtureVault\.BodySize \|\| canceled\.ReceivedBytes != canceledByteCount/);
+});
+
+
+const cefTabbed = await readFile('apps/cef-smoke/wpf/TabbedDevelopmentHost.cs', 'utf8');
+test('CEF opt-in tab shell keeps native views parented and routes commands to the selected view', () => {
+    assert.match(cefSmoke, /GetEnvironmentVariable\("VEIL_CEF_WPF_TABS"\) == "1"/);
+    assert.match(cefNative, /tabbed_development_enabled =\s*GetEnvironmentVariableW\(L"VEIL_CEF_WPF_TABS", tabs_mode, 2\) == 1 && tabs_mode\[0\] == L'1';/);
+    assert.match(cefTabbed, /pages\.Children\.Add\(view\.Element\);\s*Select\(tab\);/);
+    assert.match(cefTabbed, /ReferenceEquals\(item, active\) \? Visibility\.Visible : Visibility\.Hidden/);
+    assert.match(cefTabbed, /private void NavigateAddress\(\) => WithActive\(view => view\.Navigate\(address\.Text\)\);/);
+    assert.match(cefTabbed, /tab\.Closing && CefNative\.VeilCefReadyToClose\(tab\.ClosingId\) != 0[\s\S]*?tab\.View\.Dispose\(\);[\s\S]*?pages\.Children\.Remove/);
+    assert.match(cefTabbed, /shuttingDown && tabs\.Count == 0 && retired\.Count == 0 && CefNative\.VeilCefLiveViewCount\(\) == 0/);
 });
