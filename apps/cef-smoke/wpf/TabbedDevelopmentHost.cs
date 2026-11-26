@@ -46,6 +46,7 @@ internal sealed class TabbedDevelopmentHost
     private Task<bool>? profileCookieDeletion;
     private Task<double?>? firstUsage, secondUsage, rejectedUsage;
     private Task<bool>? storageClear, httpCacheClear;
+    private Task<int>? knownOriginClear;
     private int deletionAuthorizationChecks;
     private int phase, result;
     private bool shuttingDown, windowClosed, allowWindowClose;
@@ -246,7 +247,7 @@ internal sealed class TabbedDevelopmentHost
 
     private void RunFixture()
     {
-        if (elapsed.Elapsed > TimeSpan.FromSeconds(55))
+        if (elapsed.Elapsed > TimeSpan.FromSeconds(75))
         {
             Log($"Tabbed fixture timeout at phase {phase}");
             BeginShutdown();
@@ -255,7 +256,7 @@ internal sealed class TabbedDevelopmentHost
         string Url(string path)
         {
             var url = new Uri(new Uri(fixture!), path);
-            return path is "/tabs-second" or "/tabs-preserved" or "/tabs-cleared-second" or "/tabs-storage-kept" or "/tabs-http-cache-first" or "/tabs-http-cache-reused" or "/tabs-http-cache-cleared"
+            return path is "/tabs-second" or "/tabs-preserved" or "/tabs-cleared-second" or "/tabs-storage-kept" or "/tabs-http-cache-first" or "/tabs-http-cache-reused" or "/tabs-http-cache-cleared" or "/tabs-batch-kept" or "/tabs-batch-second-deleted"
                 ? new UriBuilder(url) { Host = "localhost" }.Uri.AbsoluteUri : url.AbsoluteUri;
         }
         void Fail() { result = 42; Log($"Tabbed fixture failed at phase {phase}"); BeginShutdown(); }
@@ -573,6 +574,79 @@ internal sealed class TabbedDevelopmentHost
         else if (phase == 37 && first?.View.DocumentTitle == "TAB_HTTP_CACHE_COOKIE")
         {
             Log("HTTP cache clear cookie preservation probe completed");
+            address.Text = Url("/tabs-batch-seed-first");
+            NavigateAddress();
+            phase = 38;
+        }
+        else if (phase == 38 && first?.View.DocumentTitle == "TAB_BATCH_SEED_FIRST")
+        {
+            storageClear = ((IEngineSiteDataWriter)first.View).ClearProfileDataAsync(
+                EngineProfileDataKinds.DomStorage, () => true);
+            phase = 39;
+        }
+        else if (phase == 39 && storageClear is { IsCompleted: true })
+        {
+            if (storageClear.Exception?.GetBaseException() is not NotSupportedException) { Fail(); return; }
+            knownOriginClear = first!.View.ClearKnownFixtureOriginsAsync(() => false);
+            phase = 40;
+        }
+        else if (phase == 40 && knownOriginClear is { IsCompleted: true })
+        {
+            if (!knownOriginClear.IsCompletedSuccessfully || knownOriginClear.Result != 0) { Fail(); return; }
+            address.Text = Url("/tabs-batch-denied");
+            NavigateAddress();
+            phase = 41;
+        }
+        else if (phase == 41 && first?.View.DocumentTitle == "TAB_BATCH_DENIED")
+        {
+            deletionAuthorizationChecks = 0;
+            knownOriginClear = first.View.ClearKnownFixtureOriginsAsync(() => ++deletionAuthorizationChecks <= 2);
+            phase = 42;
+        }
+        else if (phase == 42 && knownOriginClear is { IsCompleted: true })
+        {
+            if (!knownOriginClear.IsCompletedSuccessfully || knownOriginClear.Result != 1 ||
+                deletionAuthorizationChecks < 3) { Fail(); return; }
+            address.Text = Url("/tabs-batch-first-deleted");
+            NavigateAddress();
+            phase = 43;
+        }
+        else if (phase == 43 && first?.View.DocumentTitle == "TAB_BATCH_FIRST_DELETED")
+        {
+            address.Text = Url("/tabs-batch-kept");
+            NavigateAddress();
+            phase = 44;
+        }
+        else if (phase == 44 && first?.View.DocumentTitle == "TAB_BATCH_KEPT")
+        {
+            Log("Known-origin batch revocation acknowledged one clear and preserved second origin");
+            address.Text = Url("/tabs-batch-reseed-first");
+            NavigateAddress();
+            phase = 45;
+        }
+        else if (phase == 45 && first?.View.DocumentTitle == "TAB_BATCH_RESEED_FIRST")
+        {
+            knownOriginClear = first.View.ClearKnownFixtureOriginsAsync(
+                () => active == first && !first.Closing && !shuttingDown);
+            phase = 46;
+        }
+        else if (phase == 46 && knownOriginClear is { IsCompleted: true })
+        {
+            if (!knownOriginClear.IsCompletedSuccessfully || knownOriginClear.Result != 2) { Fail(); return; }
+            address.Text = Url("/tabs-batch-final-first");
+            NavigateAddress();
+            phase = 47;
+        }
+        else if (phase == 47 && first?.View.DocumentTitle == "TAB_BATCH_FINAL_FIRST")
+        {
+            address.Text = Url("/tabs-batch-second-deleted");
+            NavigateAddress();
+            phase = 48;
+        }
+        else if (phase == 48 && first?.View.DocumentTitle == "TAB_BATCH_SECOND_DELETED")
+        {
+            if (first.View.NativeHandle != firstId || first.View.Source != Url("/tabs-batch-second-deleted")) { Fail(); return; }
+            Log("Known-origin batch cleared both fixture origins without claiming full profile clear");
             result = 0;
             BeginShutdown();
         }

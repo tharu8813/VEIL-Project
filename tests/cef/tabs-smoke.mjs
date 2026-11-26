@@ -13,7 +13,7 @@ const executable = resolve(process.argv[2]);
 const requests = [];
 const cookieChecks = new Map();
 let httpCacheRequests = 0;
-const titles = new Map([['/tabs-first', 'TAB_FIRST'], ['/tabs-second', 'TAB_SECOND'], ['/tabs-after-close', 'TAB_AFTER_CLOSE'], ['/tabs-preserved', 'TAB_PRESERVED'], ['/tabs-reseed', 'TAB_RESEEDED'], ['/tabs-cleared-first', 'TAB_CLEARED_FIRST'], ['/tabs-cleared-second', 'TAB_CLEARED_SECOND'], ['/tabs-storage-reseed', 'TAB_STORAGE_RESEEDED'], ['/tabs-storage-denied', 'TAB_STORAGE_DENIED'], ['/tabs-storage-deleted', 'TAB_STORAGE_DELETED'], ['/tabs-storage-kept', 'TAB_STORAGE_KEPT'], ['/tabs-http-cache-first', 'TAB_HTTP_CACHE_FIRST'], ['/tabs-http-cache-reused', 'TAB_HTTP_CACHE_REUSED'], ['/tabs-http-cache-cleared', 'TAB_HTTP_CACHE_CLEARED'], ['/tabs-http-cache-cookie', 'TAB_HTTP_CACHE_COOKIE']]);
+const titles = new Map([['/tabs-first', 'TAB_FIRST'], ['/tabs-second', 'TAB_SECOND'], ['/tabs-after-close', 'TAB_AFTER_CLOSE'], ['/tabs-preserved', 'TAB_PRESERVED'], ['/tabs-reseed', 'TAB_RESEEDED'], ['/tabs-cleared-first', 'TAB_CLEARED_FIRST'], ['/tabs-cleared-second', 'TAB_CLEARED_SECOND'], ['/tabs-storage-reseed', 'TAB_STORAGE_RESEEDED'], ['/tabs-storage-denied', 'TAB_STORAGE_DENIED'], ['/tabs-storage-deleted', 'TAB_STORAGE_DELETED'], ['/tabs-storage-kept', 'TAB_STORAGE_KEPT'], ['/tabs-http-cache-first', 'TAB_HTTP_CACHE_FIRST'], ['/tabs-http-cache-reused', 'TAB_HTTP_CACHE_REUSED'], ['/tabs-http-cache-cleared', 'TAB_HTTP_CACHE_CLEARED'], ['/tabs-http-cache-cookie', 'TAB_HTTP_CACHE_COOKIE'], ['/tabs-batch-seed-first', 'TAB_BATCH_SEED_FIRST'], ['/tabs-batch-denied', 'TAB_BATCH_DENIED'], ['/tabs-batch-first-deleted', 'TAB_BATCH_FIRST_DELETED'], ['/tabs-batch-kept', 'TAB_BATCH_KEPT'], ['/tabs-batch-reseed-first', 'TAB_BATCH_RESEED_FIRST'], ['/tabs-batch-final-first', 'TAB_BATCH_FINAL_FIRST'], ['/tabs-batch-second-deleted', 'TAB_BATCH_SECOND_DELETED']]);
 const server = http.createServer((request, response) => {
   requests.push(request.url);
   if (request.url === '/fixture-http-cache-resource') {
@@ -22,7 +22,7 @@ const server = http.createServer((request, response) => {
     response.end('fixture-cache-' + httpCacheRequests);
     return;
   }
-  if (['/tabs-after-close', '/tabs-preserved', '/tabs-cleared-first', '/tabs-cleared-second', '/tabs-storage-denied', '/tabs-storage-deleted', '/tabs-storage-kept', '/tabs-http-cache-cookie'].includes(request.url))
+  if (['/tabs-after-close', '/tabs-preserved', '/tabs-cleared-first', '/tabs-cleared-second', '/tabs-storage-denied', '/tabs-storage-deleted', '/tabs-storage-kept', '/tabs-http-cache-cookie', '/tabs-batch-denied', '/tabs-batch-first-deleted', '/tabs-batch-kept', '/tabs-batch-final-first', '/tabs-batch-second-deleted'].includes(request.url))
     cookieChecks.set(request.url, request.headers.cookie ?? '');
   if (!titles.has(request.url)) { response.writeHead(404).end(); return; }
   const headers = { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' };
@@ -61,6 +61,21 @@ const server = http.createServer((request, response) => {
       '&&localStorage.getItem("veil-fixture-marker")==="second"&&await caches.has("veil-fixture-usage")' +
       '&&(await (await caches.open("veil-fixture-usage")).match("/fixture-cache-entry"))){' + script + '}})();';
   }
+  if (['/tabs-batch-seed-first', '/tabs-batch-reseed-first'].includes(route)) {
+    script = '(async()=>{localStorage.setItem("veil-fixture-marker","first");' +
+      'const cache=await caches.open("veil-fixture-usage");' +
+      'await cache.put("/fixture-cache-entry",new Response("batch-marker"));' +
+      'if(localStorage.getItem("veil-fixture-marker")==="first"){' + script + '}})();';
+  } else if (route.startsWith('/tabs-batch-')) {
+    const deleted = ['/tabs-batch-first-deleted', '/tabs-batch-final-first', '/tabs-batch-second-deleted'].includes(route);
+    const marker = JSON.stringify(route === '/tabs-batch-kept' ? 'second' : 'first');
+    script = '(async()=>{const has=await caches.has("veil-fixture-usage");' +
+      (deleted
+        ? 'if(!has&&localStorage.getItem("veil-fixture-marker")===null){'
+        : 'if(has&&localStorage.getItem("veil-fixture-marker")===' + marker +
+          '&&(await (await caches.open("veil-fixture-usage")).match("/fixture-cache-entry"))){') +
+      script + '}})();';
+  }
   response.end('<!doctype html><title>WAITING</title><script>' + script + '</script>');
 });
 server.listen(0, '127.0.0.1');
@@ -77,7 +92,7 @@ const timer = setTimeout(() => {
   timedOut = true;
   if (child.pid && child.exitCode === null)
     spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
-}, 70000);
+}, 90000);
 try {
   const [code] = await once(child, 'exit');
   const evidence = await readFile(join(fixtureTemp, 'veil-cef-wpf-profile-' + child.pid, 'tabs.log'), 'utf8').catch(() => '');
@@ -101,7 +116,12 @@ try {
   assert.equal(httpCacheRequests, 2, 'HTTP cache must be reused before clear and refetched after clear');
   assert.equal(cookieChecks.get('/tabs-http-cache-cookie'), 'fixture_first=synthetic-one', 'HTTP cache clear must retain cookies');
   assert.match(evidence, /Denied and mixed cache scopes preserved cached HTTP response[\s\S]*HTTP cache clear refetched resource and preserved origin storage[\s\S]*HTTP cache clear cookie preservation probe completed/);
-  console.log('PASS: same-window tabs, cookie scopes, storage usage, origin and HTTP cache clearing');
+  for (const route of ['/tabs-batch-denied', '/tabs-batch-first-deleted', '/tabs-batch-final-first'])
+    assert.equal(cookieChecks.get(route), 'fixture_first=synthetic-one', 'Known-origin batch must retain cookie: ' + route);
+  for (const route of ['/tabs-batch-kept', '/tabs-batch-second-deleted'])
+    assert.equal(cookieChecks.get(route), '', 'Second origin cookie scope must be unchanged: ' + route);
+  assert.match(evidence, /Known-origin batch revocation acknowledged one clear and preserved second origin[\s\S]*Known-origin batch cleared both fixture origins without claiming full profile clear/);
+  console.log('PASS: same-window tabs, cookie scopes, storage usage, origin, HTTP cache and known-origin batch clearing');
 } finally {
   clearTimeout(timer);
   server.closeAllConnections();

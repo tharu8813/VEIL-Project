@@ -309,6 +309,43 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
             cookieDeleteAuthorizations.Remove(id);
         }
     }
+    // This is deliberately not ClearProfileDataAsync(DomStorage). The two known
+    // test origins are not a complete inventory of Chromium storage keys.
+    internal async Task<int> ClearKnownFixtureOriginsAsync(Func<bool> stillAuthorized)
+    {
+        Dispatcher.VerifyAccess();
+        RequireView();
+        if (Environment.GetEnvironmentVariable("VEIL_CEF_WPF_TABS") != "1" ||
+            !Uri.TryCreate(Environment.GetEnvironmentVariable("VEIL_CEF_WPF_TEST_URL"), UriKind.Absolute, out var fixture) ||
+            fixture.Scheme != Uri.UriSchemeHttp || fixture.Host != "127.0.0.1" ||
+            fixture.IsDefaultPort || fixture.UserInfo.Length != 0)
+            throw new InvalidOperationException("Known origin clearing requires the synthetic tab fixture.");
+        string[] origins = [
+            fixture.GetLeftPart(UriPartial.Authority),
+            new UriBuilder(fixture) { Host = "localhost" }.Uri.GetLeftPart(UriPartial.Authority)
+        ];
+        ulong id = NativeHandle;
+        int completed = 0;
+        foreach (string origin in origins)
+        {
+            try
+            {
+                RequireView();
+                if (NativeHandle != id) throw new InvalidOperationException("The CEF view changed.");
+                // Native scope checks and authorization immediately before dispatch
+                // remain mandatory for each separate operation.
+                if (!await ClearOriginStorageAsync(origin, stillAuthorized)) return completed;
+                completed++;
+            }
+            catch (Exception error)
+            {
+                throw new InvalidOperationException(
+                    $"Known-origin clear acknowledged {completed} of {origins.Length} requests; other changes may have been applied.", error);
+            }
+        }
+        return completed;
+    }
+
     public async Task<bool> ClearProfileDataAsync(EngineProfileDataKinds kinds, Func<bool> stillAuthorized)
     {
         Dispatcher.VerifyAccess();

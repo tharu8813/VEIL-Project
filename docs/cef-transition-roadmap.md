@@ -125,3 +125,7 @@ WebView2와 CEF의 네이티브 오류 코드를 엔진 종류와 함께 저장�
 ### 추가 구현: CEF 합성 HTTP 캐시 삭제 (검증 대기)
 
 새 임시 프로필의 opt-in 탭 fixture에서만 별도 tab-fixture-cache 경로를 설정하고 요청 컨텍스트의 캐시 경로가 일치할 때 고정 Network.clearBrowserCache 명령을 허용한다. 일반 개발 및 다운로드 fixture의 설정은 유지한다. 공통 프로필 계약의 Cookies 단독 또는 DiskCache 단독 범위만 허용하며 혼합/DOM 저장소/미지원 플래그를 변경 전에 거부한다. 기존 CDP 삭제 슬롯·권한 재확인·응답 ID·타임아웃을 사용한다. 합성 HTTP 캐시 응답의 재사용 및 삭제 후 서버 재요청 횟수, 권한 철회와 혼합 범위 거부, 쿠키·LocalStorage·CacheStorage 보존을 검사한다. HTTP 캐시의 실제 디스크 파일 소거/보안 삭제를 주장하지 않는다. Windows 실행 NOT RUN, 제품 보안 프로필 및 전체 DOM 저장소 삭제 미지원.
+
+### 추가 구현: CEF 알려진 합성 출처 일괄 삭제 (검증 대기)
+
+CEF 공개 CefRequestContext API에는 HTTP 캐시 삭제가 있으나 WebView2 AllDomStorage와 동일한 전체 저장소 삭제 계약은 확인되지 않았다. CDP Storage.clearDataForOrigin은 지정 출처만 대상으로 하므로 방문 기록/열린 탭으로 전체 프로필을 추정하지 않는다. 제품 DomStorage 플래그와 혼합 범위는 미지원 유지. 별도 내부 fixture helper가 실행 포트의 두 명시적 출처를 순차 삭제하고 매 명령마다 원래 뷰와 권한을 확인한다. 권한 철회 시 이미 응답 성공한 요청 수(0/1/2)를 반환하며 오류 시 일부 적용 가능성을 포함해 실패한다. LocalStorage/CacheStorage의 두 출처 삭제 및 중도 철회, 쿠키 보존을 확인하는 테스트 추가. 실제 Windows 실행 NOT RUN. 전체 저장소 키/파티션 열거 및 삭제 보장은 별도 출시 차단 조건. 참고: https://cef-builds.spotifycdn.com/docs/154.0/classCefRequestContext.html 및 https://chromedevtools.github.io/devtools-protocol/tot/Storage/#method-clearDataForOrigin.
