@@ -301,6 +301,9 @@ public partial class BrowserWindow : Window
             }
             engineView.NavigationStarting += (_, args) => tab.Owner.OnNavigationStarting(tab, args);
             engineView.NavigationCompleted += (_, args) => tab.Owner.OnNavigationCompleted(tab, args);
+            engineView.SourceChanged += (_, _) => tab.Owner.OnSourceChanged(tab);
+            engineView.TitleChanged += (_, _) => tab.Owner.OnTitleChanged(tab);
+            engineView.HistoryChanged += (_, _) => tab.Owner.OnHistoryChanged(tab);
             ConfigureWebView2Tab(tab);
             // SelectionChanged can synchronously save the session. Publish an internal route
             // before inserting the item, since native pages may never navigate the WebView.
@@ -385,15 +388,19 @@ public partial class BrowserWindow : Window
     private void OnSourceChanged(BrowserTab tab)
     {
         if (!AcceptTabEvents(tab) || IsInternalUrl(tab.Url)) return;
-        tab.Url = tab.View.CoreWebView2.Source;
+        tab.Url = tab.EngineView.Source;
         UpdateTabToolTip(tab);
         if (Active == tab) RefreshChrome();
+    }
+
+    private void OnHistoryChanged(BrowserTab tab)
+    {
+        if (AcceptTabEvents(tab) && Active == tab) UpdateNavigationButtons();
     }
 
     private void OnTitleChanged(BrowserTab tab)
     {
         if (!AcceptTabEvents(tab)) return;
-        var web = tab.View.CoreWebView2;
         if (IsInternalUrl(tab.Url))
         {
             tab.Title = InternalTitle(tab.Url);
@@ -401,7 +408,8 @@ public partial class BrowserWindow : Window
             tab.Header.Label.Text = tab.Title;
             return;
         }
-        tab.Title = tab.Url == "about:blank" ? "새 탭" : string.IsNullOrWhiteSpace(web.DocumentTitle) ? tab.Url : web.DocumentTitle;
+        string title = tab.EngineView.DocumentTitle;
+        tab.Title = tab.Url == "about:blank" ? "새 탭" : string.IsNullOrWhiteSpace(title) ? tab.Url : title;
         UpdateTabToolTip(tab);
         var label = tab.Header.Label;
         if (label.Text == tab.Title) return;

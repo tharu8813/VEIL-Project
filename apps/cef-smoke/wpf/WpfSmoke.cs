@@ -71,6 +71,16 @@ public static class WpfSmoke
         FixtureVault? vaultStream = null;
         var vaultScenario = VaultScenario.Truncated;
         string? lastTitle = null;
+        var observedSources = new HashSet<string>();
+        var observedTitles = new HashSet<string>();
+        int historyChanges = 0;
+        browser.SourceChanged += (_, _) => observedSources.Add(browser.Source);
+        browser.TitleChanged += (_, _) => observedTitles.Add(browser.DocumentTitle);
+        browser.HistoryChanged += (_, _) => historyChanges++;
+        bool PageStateMatches(string path, string expectedTitle) =>
+            Uri.TryCreate(browser.Source, UriKind.Absolute, out var source) &&
+            source.AbsolutePath == path && observedSources.Contains(browser.Source) &&
+            observedTitles.Contains(expectedTitle) && browser.DocumentTitle == expectedTitle;
         var result = fixture is null ? 0 : 30;
         browser.NavigationStarting += (_, request) =>
         {
@@ -158,7 +168,7 @@ public static class WpfSmoke
                 return;
             }
 
-            var title = Marshal.PtrToStringUni(CefNative.VeilCefTitle());
+            var title = browser.DocumentTitle;
             if (!string.IsNullOrEmpty(title) && title != lastTitle)
             {
                 lastTitle = title;
@@ -172,29 +182,30 @@ public static class WpfSmoke
                 address.Text = fixture;
                 go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             }
-            else if (phase == 0 && title == "VEIL_CEF_WPF_OK" && redirectMatched && completedRequests.Remove("/wpf-first"))
+            else if (phase == 0 && PageStateMatches("/wpf-first", "VEIL_CEF_WPF_OK") && redirectMatched && completedRequests.Remove("/wpf-first"))
             {
                 phase = 1;
                 Trace("Observed JavaScript title");
                 address.Text = new Uri(new Uri(fixture), "/wpf-second").AbsoluteUri;
                 go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             }
-            else if (phase == 1 && title == "VEIL_CEF_WPF_SECOND" && browser.CanGoBack &&
+            else if (phase == 1 && PageStateMatches("/wpf-second", "VEIL_CEF_WPF_SECOND") && browser.CanGoBack && historyChanges > 0 &&
                      completedRequests.Remove("/wpf-second"))
             {
                 phase = 2;
                 browser.GoBack();
             }
             // A restored history entry may update the title without load callbacks.
-            else if (phase == 2 && title == "VEIL_CEF_WPF_OK" && browser.CanGoForward)
+            else if (phase == 2 && PageStateMatches("/wpf-first", "VEIL_CEF_WPF_OK") && browser.CanGoForward)
             {
                 phase = 3;
                 browser.GoForward();
             }
-            else if (phase == 3 && title == "VEIL_CEF_WPF_SECOND")
+            else if (phase == 3 && PageStateMatches("/wpf-second", "VEIL_CEF_WPF_SECOND"))
             {
                 phase = 4;
                 Trace("Observed matched redirect, completion, and back and forward navigation");
+                Trace("Observed shared engine source, title and history events");
                 address.Text = new Uri(new Uri(fixture), "/wpf-error").AbsoluteUri;
                 go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             }
