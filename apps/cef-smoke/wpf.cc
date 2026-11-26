@@ -991,6 +991,39 @@ extern "C" __declspec(dllexport) int VeilCefStartStorageClear(
   }
   return 0;
 }
+// Cache-only command, sharing the per-view CDP mutation slot with origin clearing.
+// The disk-backed context exists only in the fresh opt-in tab fixture.
+extern "C" __declspec(dllexport) int VeilCefStartHttpCacheClear(
+    uint64_t id, CookieDeleteAuthorization authorize) {
+  if (!CefCurrentlyOn(TID_UI) || !fixture_enabled || !tabbed_development_enabled || !authorize) return 0;
+  const auto state = LookupView(id);
+  const auto browser = LookupBrowser(id);
+  if (!state || !browser || state->closing || state->storage_clear || state->storage_usage ||
+      state->cookie_delete) return 0;
+  const auto host = browser->GetHost();
+  const auto context = host->GetRequestContext();
+  if (!context || profile_root.empty() ||
+      context->GetCachePath().ToWString() != (std::filesystem::path(profile_root) / L"tab-fixture-cache").wstring())
+    return 0;
+  const auto request = std::make_shared<StorageClearRequest>();
+  state->storage_clear = request;
+  state->storage_clear_registration = host->AddDevToolsMessageObserver(new StorageClearObserver(request));
+  if (state->storage_clear_registration) {
+    const bool allowed = authorize(id) != 0;
+    if (allowed && LookupView(id) == state && !state->closing && state->storage_clear == request) {
+      request->message_id = host->ExecuteDevToolsMethod(0, "Network.clearBrowserCache", nullptr);
+      if (request->message_id > 0) return 1;
+    }
+    if (state->storage_clear == request) {
+      state->storage_clear_registration = nullptr;
+      state->storage_clear.reset();
+    }
+    if (!allowed) return -2;
+  } else {
+    state->storage_clear.reset();
+  }
+  return 0;
+}
 extern "C" __declspec(dllexport) int VeilCefStorageClearStatus(uint64_t id) {
   const auto state = LookupView(id);
   return !state || state->closing || !state->storage_clear ? -1 : state->storage_clear->status;
@@ -1049,6 +1082,10 @@ int RunWinMain(HINSTANCE instance, LPWSTR, int, void* sandbox_info, cef_version_
   wchar_t tabs_mode[2]{};
   tabbed_development_enabled =
       GetEnvironmentVariableW(L"VEIL_CEF_WPF_TABS", tabs_mode, 2) == 1 && tabs_mode[0] == L'1';
+  // Never enable persistent storage for the ordinary development host or the
+  // download fixture. The tab runner uses a freshly created synthetic root.
+  if (fixture_enabled && tabbed_development_enabled)
+    CefString(&settings.cache_path) = (profile / L"tab-fixture-cache").wstring();
   if (fixture_enabled)
     app = new FixtureApp();
   if (!CefInitialize(args, settings, app, sandbox_info)) {
