@@ -151,7 +151,7 @@ test('deferred keyboard commands preserve the original page and leave compositio
 test('page find ignores old requests after tab, query or navigation changes', () => {
     assert.match(browser, /long request = \+\+findRequestEpoch;/);
     assert.match(browser, /bool Current\(\) => request == findRequestEpoch && IsActive && Active == tab && CanUseTab\(tab\.Item\) &&\s*tab\.NavigationEpoch == navigation && permissionSelectionEpoch == selection && FindText\.Text == query;/);
-    assert.match(browser, /if \(Current\(\)\) Status\.Text = result == "true" \? "일치하는 텍스트를 찾았습니다."/);
+    assert.match(browser, /bool\? result = await tab\.EngineView\.FindTextAsync\(query, backwards\);\s*if \(Current\(\)\) Status\.Text = result switch\s*\{\s*true => "일치하는 텍스트를 찾았습니다\."/);
     assert.match(browser, /private void FindCloseClick[\s\S]*?findRequestEpoch\+\+;\s*ShowFindBar\(false\);/);
 });
 
@@ -264,4 +264,19 @@ test('navigation errors retain their native engine domain and never reinterpret 
     assert.match(browser, /var errorStatus = args\.Error;\s*tab\.LastNavigationError = errorStatus;/);
     assert.doesNotMatch(browser, /\(CoreWebView2WebErrorStatus\)args\.NativeErrorCode/);
     assert.match(browser, /if \(tab\.UpgradedFrom is \{ \} plain && tab\.ExpectedUpgrade is null\)[\s\S]*?if \(!args\.IsSuccess\)\s*\{\s*ShowHttpsWarning/);
+});
+
+
+test('hard reload and find use narrow engine operations with stale result guards', () => {
+    const hardReload = browser.slice(browser.indexOf('private async void HardReload()'), browser.indexOf('private void StopLoading()'));
+    assert.match(hardReload, /await tab\.EngineView\.ReloadIgnoringCacheAsync\(\)/);
+    assert.match(hardReload, /bool Current\(\) => Active == tab && CanUseTab\(tab\.Item\) &&\s*tab\.NavigationEpoch == navigation && permissionSelectionEpoch == selection;/);
+    assert.match(hardReload, /if \(!Current\(\)\) return;\s*try \{ tab\.EngineView\.Reload\(\); \}/);
+    assert.doesNotMatch(hardReload, /CoreWebView2|CallDevToolsProtocolMethodAsync/);
+    assert.match(webView2, /CallDevToolsProtocolMethodAsync\("Page\.reload", "\{\\"ignoreCache\\":true\}"\)/);
+    assert.match(webView2, /JsonSerializer\.Serialize\(query\)[\s\S]*?Core\.ExecuteScriptAsync\(\$"window\.find\(\{text\}, false, \{reverse\}, true\)"\)/);
+    assert.match(cefView, /RequireView\(\);\s*CefNative\.VeilCefReloadIgnoringCache\(\)/);
+    assert.match(cefNative, /VeilCefReloadIgnoringCache\(\) \{\s*if \(browser\) browser->ReloadIgnoreCache\(\);/);
+    assert.match(cefView, /FindTextAsync\(string query, bool backwards\) => Task\.FromResult<bool\?>\(null\)/);
+    assert.match(browser, /null => "현재 엔진에서는 페이지 검색을 지원하지 않습니다."/);
 });

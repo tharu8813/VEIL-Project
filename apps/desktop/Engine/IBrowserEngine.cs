@@ -54,6 +54,9 @@ internal interface IBrowserEngineView : IDisposable
     void GoBack();
     void GoForward();
     void Reload();
+    Task ReloadIgnoringCacheAsync();
+    // Null means the engine cannot report a search result yet.
+    Task<bool?> FindTextAsync(string query, bool backwards);
     void Stop();
 }
 

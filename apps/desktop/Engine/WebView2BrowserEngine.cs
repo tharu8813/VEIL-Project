@@ -195,6 +195,16 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
     public void GoBack() => NativeView.GoBack();
     public void GoForward() => NativeView.GoForward();
     public void Reload() => NativeView.Reload();
+    public async Task ReloadIgnoringCacheAsync() =>
+        await Core.CallDevToolsProtocolMethodAsync("Page.reload", "{\"ignoreCache\":true}");
+
+    public async Task<bool?> FindTextAsync(string query, bool backwards)
+    {
+        string text = System.Text.Json.JsonSerializer.Serialize(query);
+        string reverse = backwards ? "true" : "false";
+        string result = await Core.ExecuteScriptAsync($"window.find({text}, false, {reverse}, true)");
+        return result == "true";
+    }
     public void Stop() => Core.Stop();
 
     public void Dispose()

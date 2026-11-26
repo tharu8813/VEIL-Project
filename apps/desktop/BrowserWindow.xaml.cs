@@ -1246,13 +1246,17 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
 
     private async void HardReload()
     {
-        if (Active is not { } tab || !IsWebUrl(tab.Url)) return;
+        if (Active is not { } tab || !CanUseTab(tab.Item) || !IsWebUrl(tab.Url)) return;
+        long navigation = tab.NavigationEpoch, selection = permissionSelectionEpoch;
+        bool Current() => Active == tab && CanUseTab(tab.Item) &&
+            tab.NavigationEpoch == navigation && permissionSelectionEpoch == selection;
         Motion.Spin((System.Windows.Media.RotateTransform)ReloadGlyph.RenderTransform);
-        try { await tab.View.CoreWebView2.CallDevToolsProtocolMethodAsync("Page.reload", "{\"ignoreCache\":true}"); }
+        try { await tab.EngineView.ReloadIgnoringCacheAsync(); }
         catch (Exception error) when (RecoverableFailure.Is(error))
         {
+            if (!Current()) return;
             try { tab.EngineView.Reload(); }
-            catch (Exception again) when (RecoverableFailure.Is(again)) { if (!closing) Status.Text = "페이지를 새로 고치지 못했습니다."; }
+            catch (Exception again) when (RecoverableFailure.Is(again)) { if (Current()) Status.Text = "페이지를 새로 고치지 못했습니다."; }
         }
     }
 
@@ -1444,12 +1448,15 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         long navigation = tab.NavigationEpoch, selection = permissionSelectionEpoch;
         bool Current() => request == findRequestEpoch && IsActive && Active == tab && CanUseTab(tab.Item) &&
             tab.NavigationEpoch == navigation && permissionSelectionEpoch == selection && FindText.Text == query;
-        string text = System.Text.Json.JsonSerializer.Serialize(query);
-        string reverse = backwards ? "true" : "false";
         try
         {
-            string result = await tab.View.ExecuteScriptAsync($"window.find({text}, false, {reverse}, true)");
-            if (Current()) Status.Text = result == "true" ? "일치하는 텍스트를 찾았습니다." : "일치하는 텍스트가 없습니다.";
+            bool? result = await tab.EngineView.FindTextAsync(query, backwards);
+            if (Current()) Status.Text = result switch
+            {
+                true => "일치하는 텍스트를 찾았습니다.",
+                false => "일치하는 텍스트가 없습니다.",
+                null => "현재 엔진에서는 페이지 검색을 지원하지 않습니다.",
+            };
         }
         catch (Exception error) when (RecoverableFailure.Is(error)) { if (Current()) Status.Text = "페이지에서 검색할 수 없습니다."; }
     }

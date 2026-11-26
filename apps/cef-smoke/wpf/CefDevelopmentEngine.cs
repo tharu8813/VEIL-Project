@@ -170,6 +170,15 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView
     public void GoBack() => CefNative.VeilCefGoBack();
     public void GoForward() => CefNative.VeilCefGoForward();
     public void Reload() => CefNative.VeilCefReload();
+    public Task ReloadIgnoringCacheAsync()
+    {
+        RequireView();
+        CefNative.VeilCefReloadIgnoringCache();
+        return Task.CompletedTask;
+    }
+
+    // Native find callbacks and request lifetime have not yet been verified.
+    public Task<bool?> FindTextAsync(string query, bool backwards) => Task.FromResult<bool?>(null);
     public void Stop() => CefNative.VeilCefStop();
 
     private void RequireView()
@@ -266,6 +275,7 @@ internal static class CefNative
     [DllImport(Module)] internal static extern void VeilCefGoBack();
     [DllImport(Module)] internal static extern void VeilCefGoForward();
     [DllImport(Module)] internal static extern void VeilCefReload();
+    [DllImport(Module)] internal static extern void VeilCefReloadIgnoringCache();
     [DllImport(Module)] internal static extern void VeilCefStop();
     [DllImport(Module)] internal static extern double VeilCefZoomLevel();
     [DllImport(Module)] internal static extern void VeilCefSetZoomLevel(double level);
