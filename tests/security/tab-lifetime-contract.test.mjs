@@ -285,10 +285,10 @@ test('hard reload and find use narrow engine operations with stale result guards
 test('CEF client owns view metadata and callback registration as one lifetime', () => {
     assert.match(cefNative, /struct ViewState \{[\s\S]*?const HWND parent;[\s\S]*?std::wstring title;[\s\S]*?std::wstring page_source[\s\S]*?BeforeBrowse before_browse;/);
     assert.match(cefNative, /explicit Client\(std::shared_ptr<ViewState> state\) : state_\(std::move\(state\)\)/);
-    assert.match(cefNative, /if \(browser \|\| active_view \|\| !parent \|\| !starting \|\| !completed \|\| !changed \|\| !failed \|\|[\s\S]*?\)\s*return 0;/);
-    assert.match(cefNative, /if \(!browser\) \{\s*state->DetachCallbacks\(\);\s*if \(active_view == state\) active_view\.reset\(\);/);
+    assert.match(cefNative, /if \(active_browser \|\| active_view \|\| !parent \|\| !starting \|\| !completed \|\| !changed \|\| !failed \|\|[\s\S]*?\)\s*return 0;/);
+    assert.match(cefNative, /if \(!active_browser\) \{\s*state->DetachCallbacks\(\);\s*if \(active_view == state\) active_view\.reset\(\);/);
     assert.match(cefNative, /void VeilCefDetachCallbacks\(uint64_t id, HWND parent\) \{\s*const auto state = LookupView\(id\);\s*if \(state && state->parent == parent\)\s*state->DetachCallbacks\(\);/);
-    assert.match(cefNative, /void OnBeforeClose\([\s\S]*?state_->DetachCallbacks\(\);\s*if \(active_view == state_\) \{\s*browser = nullptr;\s*active_view\.reset\(\);/);
+    assert.match(cefNative, /void OnBeforeClose\([\s\S]*?state_->DetachCallbacks\(\);\s*if \(active_view == state_\) \{\s*active_browser = nullptr;\s*active_view\.reset\(\);/);
     assert.match(cefView, /VeilCefOpen\(hwnd, onStarting, onCompleted, onPageStateChanged, onRenderProcessFailed\)/);
     assert.doesNotMatch(cefView, /VeilCefSet(?:NavigationCallbacks|PageStateCallback|RenderProcessFailedCallback)/);
 });

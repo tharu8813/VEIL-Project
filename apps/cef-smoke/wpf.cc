@@ -53,7 +53,7 @@ struct ViewState {
 };
 
 // Transitional one-view host; fixture-wide request probes remain separate.
-CefRefPtr<CefBrowser> browser;
+CefRefPtr<CefBrowser> active_browser;
 std::shared_ptr<ViewState> active_view;
 uint64_t last_view_id = 0;
 
@@ -61,7 +61,7 @@ std::shared_ptr<ViewState> LookupView(uint64_t id) {
   return id != 0 && active_view && active_view->id == id ? active_view : nullptr;
 }
 CefRefPtr<CefBrowser> LookupBrowser(uint64_t id) {
-  return LookupView(id) ? browser : nullptr;
+  return LookupView(id) ? active_browser : nullptr;
 }
 std::wstring profile_root;
 unsigned popups_blocked = 0;
@@ -337,7 +337,7 @@ class Client final : public CefClient,
     state_->page_fullscreen = false;
     state_->DetachCallbacks();
     if (active_view == state_) {
-      browser = nullptr;
+      active_browser = nullptr;
       active_view.reset();
     }
   }
@@ -461,7 +461,7 @@ extern "C" __declspec(dllexport) int VeilCefOwnedAttachmentResult() { return own
 extern "C" __declspec(dllexport) uint64_t VeilCefOpen(
     HWND parent, BeforeBrowse starting, NavigationComplete completed,
     PageStateChanged changed, RenderProcessFailed failed) {
-  if (browser || active_view || !parent || !starting || !completed || !changed || !failed ||
+  if (active_browser || active_view || !parent || !starting || !completed || !changed || !failed ||
       last_view_id == (std::numeric_limits<uint64_t>::max)())
     return 0;
   auto state = std::make_shared<ViewState>(++last_view_id, parent, starting, completed, changed, failed);
@@ -469,9 +469,9 @@ extern "C" __declspec(dllexport) uint64_t VeilCefOpen(
   CefWindowInfo window;
   window.SetAsChild(parent, CefRect(0, 0, 1, 1));
   window.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
-  browser = CefBrowserHost::CreateBrowserSync(window, new Client(state), "about:blank",
+  active_browser = CefBrowserHost::CreateBrowserSync(window, new Client(state), "about:blank",
       CefBrowserSettings(), nullptr, nullptr);
-  if (!browser) {
+  if (!active_browser) {
     state->DetachCallbacks();
     if (active_view == state) active_view.reset();
     return 0;
