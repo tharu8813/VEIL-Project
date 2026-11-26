@@ -137,6 +137,27 @@ class StorageUsageObserver final : public CefDevToolsMessageObserver {
   IMPLEMENT_REFCOUNTING(StorageUsageObserver);
 };
 
+struct StorageClearRequest {
+  int message_id = 0;
+  int status = 0;
+};
+class StorageClearObserver final : public CefDevToolsMessageObserver {
+ public:
+  explicit StorageClearObserver(std::shared_ptr<StorageClearRequest> request)
+      : request_(std::move(request)) {}
+  void OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int message_id, bool success,
+                             const void*, size_t result_size) override {
+    if (request_->status != 0 || request_->message_id <= 0 || message_id != request_->message_id) return;
+    request_->status = success && result_size <= 65536 ? 1 : -1;
+  }
+  void OnDevToolsAgentDetached(CefRefPtr<CefBrowser>) override {
+    if (request_->status == 0) request_->status = -1;
+  }
+ private:
+  const std::shared_ptr<StorageClearRequest> request_;
+  IMPLEMENT_REFCOUNTING(StorageClearObserver);
+};
+
 // Owned by the CEF client; accessed on the browser UI thread only.
 // Registration belongs to the same view lifetime as its metadata.
 struct ViewState {
@@ -153,6 +174,8 @@ struct ViewState {
     cookie_delete.reset();
     storage_usage_registration = nullptr;
     storage_usage.reset();
+    storage_clear_registration = nullptr;
+    storage_clear.reset();
   }
 
   const uint64_t id;
@@ -183,6 +206,8 @@ struct ViewState {
   std::shared_ptr<CookieDeleteScan> cookie_delete;
   std::shared_ptr<StorageUsageScan> storage_usage;
   CefRefPtr<CefRegistration> storage_usage_registration;
+  std::shared_ptr<StorageClearRequest> storage_clear;
+  CefRefPtr<CefRegistration> storage_clear_registration;
 };
 
 // Registry is browser-UI-thread confined. Keep one view until fixture-wide
@@ -903,7 +928,7 @@ extern "C" __declspec(dllexport) int VeilCefStartStorageUsage(uint64_t id, const
   if (!CefCurrentlyOn(TID_UI) || !origin || !IsFixtureStorageOrigin(origin)) return 0;
   const auto state = LookupView(id);
   const auto browser = LookupBrowser(id);
-  if (!state || !browser || state->closing || state->storage_usage) return 0;
+  if (!state || !browser || state->closing || state->storage_usage || state->storage_clear) return 0;
   const auto host = browser->GetHost();
   const auto scan = std::make_shared<StorageUsageScan>();
   state->storage_usage = scan;
@@ -930,6 +955,51 @@ extern "C" __declspec(dllexport) void VeilCefEndStorageUsage(uint64_t id) {
   if (state) {
     state->storage_usage_registration = nullptr;
     state->storage_usage.reset();
+  }
+}
+
+// The fixed allowlist matches SiteDataPolicy.OriginStorageTypes. In particular,
+// cookies, all, session storage and profile-wide data are not requested.
+extern "C" __declspec(dllexport) int VeilCefStartStorageClear(
+    uint64_t id, const wchar_t* origin, CookieDeleteAuthorization authorize) {
+  if (!CefCurrentlyOn(TID_UI) || !origin || !IsFixtureStorageOrigin(origin) || !authorize) return 0;
+  const auto state = LookupView(id);
+  const auto browser = LookupBrowser(id);
+  if (!state || !browser || state->closing || state->storage_clear || state->storage_usage) return 0;
+  const auto host = browser->GetHost();
+  const auto request = std::make_shared<StorageClearRequest>();
+  state->storage_clear = request;
+  state->storage_clear_registration = host->AddDevToolsMessageObserver(new StorageClearObserver(request));
+  if (state->storage_clear_registration) {
+    const auto parameters = CefDictionaryValue::Create();
+    parameters->SetString("origin", CefString(origin));
+    parameters->SetString("storageTypes", "local_storage,indexeddb,cache_storage,service_workers,websql,file_systems");
+    // Recheck after preparing the command. An issued CDP command cannot be
+    // canceled by dropping the observer, so never report revocation as rollback.
+    const bool allowed = authorize(id) != 0;
+    if (allowed && LookupView(id) == state && !state->closing && state->storage_clear == request) {
+      request->message_id = host->ExecuteDevToolsMethod(0, "Storage.clearDataForOrigin", parameters);
+      if (request->message_id > 0) return 1;
+    }
+    if (state->storage_clear == request) {
+      state->storage_clear_registration = nullptr;
+      state->storage_clear.reset();
+    }
+    if (!allowed) return -2;
+  } else {
+    state->storage_clear.reset();
+  }
+  return 0;
+}
+extern "C" __declspec(dllexport) int VeilCefStorageClearStatus(uint64_t id) {
+  const auto state = LookupView(id);
+  return !state || state->closing || !state->storage_clear ? -1 : state->storage_clear->status;
+}
+extern "C" __declspec(dllexport) void VeilCefEndStorageClear(uint64_t id) {
+  const auto state = LookupView(id);
+  if (state) {
+    state->storage_clear_registration = nullptr;
+    state->storage_clear.reset();
   }
 }
 

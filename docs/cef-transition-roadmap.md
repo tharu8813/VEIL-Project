@@ -117,3 +117,7 @@ WebView2와 CEF의 네이티브 오류 코드를 엔진 종류와 함께 저장�
 ### 추가 구현: CEF 합성 출처 저장소 사용량 조회 (검증 대기)
 
 합성 HTTP fixture + opt-in 탭 모드의 실행 포트에 해당하는 127.0.0.1/localhost 정규 출처만 허용한다. 브라우저 UI 스레드의 CefDevToolsMessageObserver/ExecuteDevToolsMethod로 고정 Storage.getUsageAndQuota 한 가지 명령을 실행하고 요청 ID·응답 크기·JSON 숫자 타입·유한한 음이 아닌 사용량을 검사한다. 임의 명령·원본 JSON·저장값은 관리 코드에 전달하지 않으며 observer 등록은 뷰/조회 종료 시 해제한다. 관리 계약의 timeout과 ID 검증 유지. 합성 CacheStorage 64 KiB/1 MiB를 생성하여 출처별 사용량 차이 및 외부 출처 거부를 검사한다. 실제 Windows 실행 NOT RUN. 엔진 보고 사용량은 쿠키나 모든 저장 유형의 총량이 아니며 삭제 및 제품 프로필 연결은 미지원.
+
+### 추가 구현: CEF 합성 출처 저장소 삭제 (검증 대기)
+
+합성 HTTP fixture + opt-in 탭 모드의 두 정규 출처에 한해 고정 Storage.clearDataForOrigin 명령을 실행한다. 기존 SiteDataPolicy.OriginStorageTypes와 같은 local_storage,indexeddb,cache_storage,service_workers,websql,file_systems 허용 목록만 사용하며 cookies/all/프로필 전체 삭제는 제외한다. 명령 직전 관리 권한 및 뷰·작업 객체를 다시 검사하고 CDP 응답 ID와 성공 상태를 확인한다. 이미 전달된 명령은 observer 해제로 되돌릴 수 없으므로 timeout/오류는 부분 적용 가능성을 유지한다. 합성 회귀는 외부 출처 및 권한 만료 거부, LocalStorage/CacheStorage 삭제와 다른 출처 보존, HTTP 쿠키 보존을 검사한다. 나머지 허용 저장 유형의 개별 실제 삭제 검증은 후속. Windows 실행 NOT RUN, 제품 엔진 및 보호 프로필 유지.

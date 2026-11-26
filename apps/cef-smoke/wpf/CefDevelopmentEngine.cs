@@ -270,8 +270,45 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         }
     }
 
-    public Task<bool> ClearOriginStorageAsync(string origin, Func<bool> stillAuthorized) =>
-        throw new NotSupportedException("CEF origin storage clearing is not verified.");
+    public async Task<bool> ClearOriginStorageAsync(string origin, Func<bool> stillAuthorized)
+    {
+        Dispatcher.VerifyAccess();
+        if (string.IsNullOrEmpty(origin) || SiteDataPolicy.Origin(origin) != origin)
+            throw new ArgumentException("A canonical HTTP(S) origin is required.", nameof(origin));
+        if (!stillAuthorized()) return false;
+        RequireView();
+        ulong id = NativeHandle;
+        // Shared per-view mutation authorization prevents overlapping writes.
+        if (!cookieDeleteAuthorizations.TryAdd(id,
+            () => Dispatcher.CheckAccess() && !disposed && NativeHandle == id &&
+                CefNative.VeilCefClosed(id) == 0 && stillAuthorized()))
+            throw new InvalidOperationException("A site data mutation is already active.");
+        bool started = false;
+        try
+        {
+            int start = CefNative.VeilCefStartStorageClear(id, origin, cookieDeleteAuthorization);
+            if (start == -2) return false;
+            started = start == 1;
+            if (!started) throw new InvalidOperationException("The fixture storage clear is unavailable or outside its scope.");
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            int status;
+            while ((status = CefNative.VeilCefStorageClearStatus(id)) == 0)
+            {
+                if (deadline.Elapsed > TimeSpan.FromSeconds(5))
+                    throw new TimeoutException("Storage clear did not complete; changes may already have been applied.");
+                await Task.Delay(10);
+                RequireView();
+                if (NativeHandle != id) throw new InvalidOperationException("The CEF view changed.");
+            }
+            if (status != 1) throw new InvalidOperationException("Storage clear failed; changes may already have been applied.");
+            return true;
+        }
+        finally
+        {
+            if (started) CefNative.VeilCefEndStorageClear(id);
+            cookieDeleteAuthorizations.Remove(id);
+        }
+    }
     public async Task<bool> ClearProfileDataAsync(EngineProfileDataKinds kinds, Func<bool> stillAuthorized)
     {
         Dispatcher.VerifyAccess();
@@ -431,6 +468,10 @@ internal static class CefNative
     [DllImport(Module)] internal static extern int VeilCefStorageUsageStatus(ulong id);
     [DllImport(Module)] internal static extern double VeilCefStorageUsageBytes(ulong id);
     [DllImport(Module)] internal static extern void VeilCefEndStorageUsage(ulong id);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern int VeilCefStartStorageClear(ulong id, string origin, CookieDeleteAuthorization authorize);
+    [DllImport(Module)] internal static extern int VeilCefStorageClearStatus(ulong id);
+    [DllImport(Module)] internal static extern void VeilCefEndStorageClear(ulong id);
     [DllImport(Module)] internal static extern int VeilCefClosed(ulong id);
     [DllImport(Module)] internal static extern uint VeilCefViewLimit();
     [DllImport(Module)] internal static extern uint VeilCefLiveViewCount();
