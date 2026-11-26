@@ -870,7 +870,7 @@ public partial class BrowserWindow : Window
             session.RememberClosedTab(new ClosedTab(tab.Url, tab.Pinned));
             ClearManagement(tab);
             Tabs.Items.Remove(item);
-            Pages.Children.Remove(tab.View);
+            Pages.Children.Remove(tab.EngineView.Element);
             tab.EngineView.Dispose();
             LayoutTabs();
             if (Tabs.Items.Count == 0)
@@ -1125,15 +1125,15 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
             tab.Url = url.OriginalString;
             tab.Title = InternalTitle(tab.Url);
             tab.Header.Label.Text = tab.Title;
-            tab.View.Visibility = Visibility.Visible;
+            tab.EngineView.Element.Visibility = Visibility.Visible;
             tab.EngineView.ShowInternalHtml(BuildInternalPage(tab.Url));
             RefreshChrome();
             UpdateTabToolTip(tab);
             return;
         }
         tab.Url = url.AbsoluteUri;
-        tab.View.Visibility = Visibility.Visible;
-        tab.View.Focus();
+        tab.EngineView.Element.Visibility = Visibility.Visible;
+        tab.EngineView.Element.Focus();
         tab.EngineView.Navigate(url.AbsoluteUri);
     }
 

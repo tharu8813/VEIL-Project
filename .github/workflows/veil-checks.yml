@@ -54,6 +54,11 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
+      # Compile-only: the native CEF package and interactive WPF runtime are not exercised here.
+      - name: Compile CEF managed smoke adapter
+        shell: pwsh
+        run: dotnet build apps/cef-smoke/wpf/Veil.Cef.WpfSmoke.csproj -c Release --nologo
+
       - name: Validate Node test syntax
         shell: pwsh
         run: |
