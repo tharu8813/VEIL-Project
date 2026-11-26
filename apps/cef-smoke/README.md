@@ -78,3 +78,5 @@ node tests/cef/tabs-smoke.mjs "$build/Release/veil-cef-wpf.exe"
 ```
 
 Actual Windows execution is pending; compilation is not evidence of HWND visibility, focus or tab lifecycle behavior.
+
+The tab regression now seeds a persistent synthetic cookie and storage markers, starts a second process with a new runner-owned temporary root at the same HTTP origin, and requires empty cookie and marker observations. The first profile is retained until the second process exits. On success only, the runner checks for associated remaining CEF processes and removes its own temporary directory; failures preserve diagnostic paths. This is ordinary fixture cleanup, not secure erasure or proof of product profile isolation. Windows execution remains pending.
