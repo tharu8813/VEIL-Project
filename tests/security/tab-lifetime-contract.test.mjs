@@ -199,7 +199,7 @@ test('page metadata and history availability route through the live engine view'
     assert.match(webView2, /core\.HistoryChanged \+= OnHistoryChanged;/);
     const dispose = webView2.slice(webView2.indexOf('public void Dispose()'));
     assert.match(dispose, /core\.SourceChanged -= OnSourceChanged;[\s\S]*?core\.DocumentTitleChanged -= OnTitleChanged;[\s\S]*?core\.HistoryChanged -= OnHistoryChanged;/);
-    assert.match(cefView, /DestroyWindowCore[\s\S]*?VeilCefDetachCallbacks\(window\.Handle\);[\s\S]*?DestroyWindow\(window\.Handle\)/);
+    assert.match(cefView, /DestroyWindowCore[\s\S]*?VeilCefDetachCallbacks\(NativeHandle, window\.Handle\);[\s\S]*?DestroyWindow\(window\.Handle\)/);
 });
 
 
@@ -212,7 +212,7 @@ test('tab audio and favicon data use the engine boundary without external icon f
     assert.match(webView2, /await core\.GetFaviconAsync\(CoreWebView2FaviconImageFormat\.Png\)/);
     assert.match(cefView, /IsDocumentPlayingAudio => null;/);
     assert.match(cefView, /GetFaviconPngAsync\(\) => Task\.FromResult<Stream\?>\(null\)/);
-    assert.match(cefView, /VeilCefSetMuted\(muted \? 1 : 0\);/);
+    assert.match(cefView, /VeilCefSetMuted\(NativeHandle, muted \? 1 : 0\);/);
 });
 
 
@@ -226,7 +226,7 @@ test('process failure distinguishes page loss from shared session shutdown', () 
     assert.match(failed, /if \(args\.Scope != EngineFailureScope\.BrowserSession\)[\s\S]*?AcceptTabEvents\(tab\) && Active == tab[\s\S]*?return;[\s\S]*?if \(closing \|\| session\.EngineLost\) return;\s*session\.EngineLost = true;/);
     assert.match(failed, /session\.EngineLost = true;[\s\S]*?session\.MainSession\.Save\(\)[\s\S]*?session\.IsEnding = true;[\s\S]*?session\.AllWindows\.ToList\(\)\) window\.Close\(\);/);
     assert.match(cefView, /new EngineProcessFailedEventArgs\(EngineFailureScope\.PageOrChildProcess, code\)/);
-    assert.match(cefView, /DestroyWindowCore[\s\S]*?VeilCefDetachCallbacks\(window\.Handle\);[\s\S]*?DestroyWindow\(window\.Handle\)/);
+    assert.match(cefView, /DestroyWindowCore[\s\S]*?VeilCefDetachCallbacks\(NativeHandle, window\.Handle\);[\s\S]*?DestroyWindow\(window\.Handle\)/);
 });
 
 
@@ -275,8 +275,8 @@ test('hard reload and find use narrow engine operations with stale result guards
     assert.doesNotMatch(hardReload, /CoreWebView2|CallDevToolsProtocolMethodAsync/);
     assert.match(webView2, /CallDevToolsProtocolMethodAsync\("Page\.reload", "\{\\"ignoreCache\\":true\}"\)/);
     assert.match(webView2, /JsonSerializer\.Serialize\(query\)[\s\S]*?Core\.ExecuteScriptAsync\(\$"window\.find\(\{text\}, false, \{reverse\}, true\)"\)/);
-    assert.match(cefView, /RequireView\(\);\s*CefNative\.VeilCefReloadIgnoringCache\(\)/);
-    assert.match(cefNative, /VeilCefReloadIgnoringCache\(\) \{\s*if \(browser\) browser->ReloadIgnoreCache\(\);/);
+    assert.match(cefView, /RequireView\(\);\s*CefNative\.VeilCefReloadIgnoringCache\(NativeHandle\)/);
+    assert.match(cefNative, /VeilCefReloadIgnoringCache\(uint64_t id\) \{\s*const auto browser = LookupBrowser\(id\);\s*if \(browser\) browser->ReloadIgnoreCache\(\);/);
     assert.match(cefView, /FindTextAsync\(string query, bool backwards\) => Task\.FromResult<bool\?>\(null\)/);
     assert.match(browser, /null => "현재 엔진에서는 페이지 검색을 지원하지 않습니다."/);
 });
@@ -285,10 +285,23 @@ test('hard reload and find use narrow engine operations with stale result guards
 test('CEF client owns view metadata and callback registration as one lifetime', () => {
     assert.match(cefNative, /struct ViewState \{[\s\S]*?const HWND parent;[\s\S]*?std::wstring title;[\s\S]*?std::wstring page_source[\s\S]*?BeforeBrowse before_browse;/);
     assert.match(cefNative, /explicit Client\(std::shared_ptr<ViewState> state\) : state_\(std::move\(state\)\)/);
-    assert.match(cefNative, /if \(browser \|\| active_view \|\| !parent \|\| !starting \|\| !completed \|\| !changed \|\| !failed\)\s*return 0;/);
-    assert.match(cefNative, /if \(!browser\) \{\s*state->DetachCallbacks\(\);\s*if \(active_view == state\) active_view\.reset\(\);/);
-    assert.match(cefNative, /void VeilCefDetachCallbacks\(HWND parent\) \{\s*if \(active_view && active_view->parent == parent\)\s*active_view->DetachCallbacks\(\);/);
-    assert.match(cefNative, /void OnBeforeClose\([\s\S]*?state_->DetachCallbacks\(\);\s*if \(active_view == state_\) \{\s*browser = nullptr;\s*active_view\.reset\(\);/);
+    assert.match(cefNative, /if \(active_browser \|\| active_view \|\| !parent \|\| !starting \|\| !completed \|\| !changed \|\| !failed \|\|[\s\S]*?\)\s*return 0;/);
+    assert.match(cefNative, /if \(!active_browser\) \{\s*state->DetachCallbacks\(\);\s*if \(active_view == state\) active_view\.reset\(\);/);
+    assert.match(cefNative, /void VeilCefDetachCallbacks\(uint64_t id, HWND parent\) \{\s*const auto state = LookupView\(id\);\s*if \(state && state->parent == parent\)\s*state->DetachCallbacks\(\);/);
+    assert.match(cefNative, /void OnBeforeClose\([\s\S]*?state_->DetachCallbacks\(\);\s*if \(active_view == state_\) \{\s*active_browser = nullptr;\s*active_view\.reset\(\);/);
     assert.match(cefView, /VeilCefOpen\(hwnd, onStarting, onCompleted, onPageStateChanged, onRenderProcessFailed\)/);
     assert.doesNotMatch(cefView, /VeilCefSet(?:NavigationCallbacks|PageStateCallback|RenderProcessFailedCallback)/);
+});
+
+
+test('CEF view operations require a nonzero matching monotonic identity', () => {
+    assert.match(cefNative, /LookupView\(uint64_t id\) \{\s*return id != 0 && active_view && active_view->id == id \? active_view : nullptr;/);
+    assert.match(cefNative, /std::make_shared<ViewState>\(\+\+last_view_id, parent,/);
+    assert.match(cefNative, /return state->id;/);
+    assert.match(cefNative, /VeilCefResize\(uint64_t id, HWND parent\)[\s\S]*?state->parent == parent && browser/);
+    assert.match(cefView, /NativeHandle = CefNative\.VeilCefOpen\(hwnd,/);
+    assert.match(cefView, /VeilCefDetachCallbacks\(NativeHandle, window\.Handle\);\s*NativeHandle = 0;/);
+    for (const name of ['Navigate','SetMuted','GoBack','GoForward','Reload','ReloadIgnoringCache','Stop','SetZoomLevel','TryClose','StartOwnedAttachment','ClickFixtureAttachment']) {
+        assert.match(cefNative, new RegExp('VeilCef' + name + '\\(uint64_t id[^)]*\\) \\{\\s*const auto browser = LookupBrowser\\(id\\);'));
+    }
 });

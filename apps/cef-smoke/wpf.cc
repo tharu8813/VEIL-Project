@@ -17,6 +17,7 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -28,9 +29,9 @@ using NavigationComplete = void (*)(uint64_t, int, int, int);
 // Owned by the CEF client; accessed on the browser UI thread only.
 // Registration belongs to the same view lifetime as its metadata.
 struct ViewState {
-  explicit ViewState(HWND owner, BeforeBrowse starting, NavigationComplete completed,
+  explicit ViewState(uint64_t handle, HWND owner, BeforeBrowse starting, NavigationComplete completed,
                      PageStateChanged changed, RenderProcessFailed failed)
-      : parent(owner), before_browse(starting), navigation_complete(completed),
+      : id(handle), parent(owner), before_browse(starting), navigation_complete(completed),
         page_state_changed(changed), render_process_failed(failed) {}
 
   void DetachCallbacks() {
@@ -40,6 +41,7 @@ struct ViewState {
     render_process_failed = nullptr;
   }
 
+  const uint64_t id;
   const HWND parent;
   std::wstring title;
   std::wstring page_source = L"about:blank";
@@ -51,8 +53,16 @@ struct ViewState {
 };
 
 // Transitional one-view host; fixture-wide request probes remain separate.
-CefRefPtr<CefBrowser> browser;
+CefRefPtr<CefBrowser> active_browser;
 std::shared_ptr<ViewState> active_view;
+uint64_t last_view_id = 0;
+
+std::shared_ptr<ViewState> LookupView(uint64_t id) {
+  return id != 0 && active_view && active_view->id == id ? active_view : nullptr;
+}
+CefRefPtr<CefBrowser> LookupBrowser(uint64_t id) {
+  return LookupView(id) ? active_browser : nullptr;
+}
 std::wstring profile_root;
 unsigned popups_blocked = 0;
 unsigned downloads_blocked = 0;
@@ -327,7 +337,7 @@ class Client final : public CefClient,
     state_->page_fullscreen = false;
     state_->DetachCallbacks();
     if (active_view == state_) {
-      browser = nullptr;
+      active_browser = nullptr;
       active_view.reset();
     }
   }
@@ -382,9 +392,10 @@ int RunManagedWindow() {
 }
 }  // namespace
 
-extern "C" __declspec(dllexport) void VeilCefDetachCallbacks(HWND parent) {
-  if (active_view && active_view->parent == parent)
-    active_view->DetachCallbacks();
+extern "C" __declspec(dllexport) void VeilCefDetachCallbacks(uint64_t id, HWND parent) {
+  const auto state = LookupView(id);
+  if (state && state->parent == parent)
+    state->DetachCallbacks();
 }
 
 extern "C" __declspec(dllexport) unsigned VeilCefDownloadsBlocked() { return downloads_blocked; }
@@ -393,7 +404,8 @@ extern "C" __declspec(dllexport) unsigned VeilCefPermissionsDenied() { return pe
 extern "C" __declspec(dllexport) unsigned VeilCefMediaPermissionsDenied() { return media_permissions_denied; }
 extern "C" __declspec(dllexport) int VeilCefResponseMatches() { return response_matches.load(); }
 extern "C" __declspec(dllexport) int VeilCefAttachmentFilteredBytes() { return attachment_filtered_bytes.load(); }
-extern "C" __declspec(dllexport) int VeilCefClickFixtureAttachment(const wchar_t* address) {
+extern "C" __declspec(dllexport) int VeilCefClickFixtureAttachment(uint64_t id, const wchar_t* address) {
+  const auto browser = LookupBrowser(id);
   if (!fixture_enabled || !browser || !armed_page_attachment.empty()) return 0;
   const auto frame = browser->GetMainFrame();
   const auto source = frame->GetURL();
@@ -414,8 +426,9 @@ extern "C" __declspec(dllexport) int VeilCefClickFixtureAttachment(const wchar_t
 extern "C" __declspec(dllexport) int VeilCefPageAttachmentIntercepted() {
   return page_attachment_intercepted ? 1 : 0;
 }
-extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(const wchar_t* address,
+extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(uint64_t id, const wchar_t* address,
                                                                  OwnedChunk chunk) {
+  const auto browser = LookupBrowser(id);
   if (!fixture_enabled || !browser || owned_request || !chunk) return 0;
   CefString url(address);
   CefURLParts parts;
@@ -445,84 +458,110 @@ extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(const wchar_t* 
 }
 extern "C" __declspec(dllexport) int VeilCefOwnedAttachmentResult() { return owned_result; }
 
-extern "C" __declspec(dllexport) int VeilCefOpen(
+extern "C" __declspec(dllexport) uint64_t VeilCefOpen(
     HWND parent, BeforeBrowse starting, NavigationComplete completed,
     PageStateChanged changed, RenderProcessFailed failed) {
-  if (browser || active_view || !parent || !starting || !completed || !changed || !failed)
+  if (active_browser || active_view || !parent || !starting || !completed || !changed || !failed ||
+      last_view_id == (std::numeric_limits<uint64_t>::max)())
     return 0;
-  auto state = std::make_shared<ViewState>(parent, starting, completed, changed, failed);
+  auto state = std::make_shared<ViewState>(++last_view_id, parent, starting, completed, changed, failed);
   active_view = state;
   CefWindowInfo window;
   window.SetAsChild(parent, CefRect(0, 0, 1, 1));
   window.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
-  browser = CefBrowserHost::CreateBrowserSync(window, new Client(state), "about:blank",
+  active_browser = CefBrowserHost::CreateBrowserSync(window, new Client(state), "about:blank",
       CefBrowserSettings(), nullptr, nullptr);
-  if (!browser) {
+  if (!active_browser) {
     state->DetachCallbacks();
     if (active_view == state) active_view.reset();
     return 0;
   }
-  return 1;
+  return state->id;
 }
 
-extern "C" __declspec(dllexport) void VeilCefResize(HWND parent) {
+extern "C" __declspec(dllexport) void VeilCefResize(uint64_t id, HWND parent) {
+  const auto state = LookupView(id);
+  const auto browser = LookupBrowser(id);
   RECT bounds{};
-  if (browser && GetClientRect(parent, &bounds))
+  if (state && state->parent == parent && browser && GetClientRect(parent, &bounds))
     SetWindowPos(browser->GetHost()->GetWindowHandle(), nullptr, 0, 0,
                  bounds.right, bounds.bottom, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-extern "C" __declspec(dllexport) void VeilCefNavigate(const wchar_t* url) {
+extern "C" __declspec(dllexport) void VeilCefNavigate(uint64_t id, const wchar_t* url) {
+  const auto browser = LookupBrowser(id);
   if (browser) browser->GetMainFrame()->LoadURL(url);
 }
 
 extern "C" __declspec(dllexport) const wchar_t* VeilCefProfile() {
   return profile_root.c_str();
 }
-extern "C" __declspec(dllexport) int VeilCefIsMuted() {
+extern "C" __declspec(dllexport) int VeilCefIsMuted(uint64_t id) {
+  const auto browser = LookupBrowser(id);
   return browser && browser->GetHost()->IsAudioMuted();
 }
-extern "C" __declspec(dllexport) void VeilCefSetMuted(int muted) {
+extern "C" __declspec(dllexport) void VeilCefSetMuted(uint64_t id, int muted) {
+  const auto browser = LookupBrowser(id);
   if (browser) browser->GetHost()->SetAudioMuted(muted != 0);
 }
-extern "C" __declspec(dllexport) int VeilCefCanGoBack() {
+extern "C" __declspec(dllexport) int VeilCefCanGoBack(uint64_t id) {
+  const auto browser = LookupBrowser(id);
   return browser && browser->CanGoBack();
 }
-extern "C" __declspec(dllexport) int VeilCefCanGoForward() {
+extern "C" __declspec(dllexport) int VeilCefCanGoForward(uint64_t id) {
+  const auto browser = LookupBrowser(id);
   return browser && browser->CanGoForward();
 }
-extern "C" __declspec(dllexport) void VeilCefGoBack() {
+extern "C" __declspec(dllexport) void VeilCefGoBack(uint64_t id) {
+  const auto browser = LookupBrowser(id);
   if (browser && browser->CanGoBack()) browser->GoBack();
 }
-extern "C" __declspec(dllexport) void VeilCefGoForward() {
+extern "C" __declspec(dllexport) void VeilCefGoForward(uint64_t id) {
+  const auto browser = LookupBrowser(id);
   if (browser && browser->CanGoForward()) browser->GoForward();
 }
-extern "C" __declspec(dllexport) void VeilCefReload() {
+extern "C" __declspec(dllexport) void VeilCefReload(uint64_t id) {
+  const auto browser = LookupBrowser(id);
   if (browser) browser->Reload();
 }
-extern "C" __declspec(dllexport) void VeilCefReloadIgnoringCache() {
+extern "C" __declspec(dllexport) void VeilCefReloadIgnoringCache(uint64_t id) {
+  const auto browser = LookupBrowser(id);
   if (browser) browser->ReloadIgnoreCache();
 }
-extern "C" __declspec(dllexport) void VeilCefStop() {
+extern "C" __declspec(dllexport) void VeilCefStop(uint64_t id) {
+  const auto browser = LookupBrowser(id);
   if (browser) browser->StopLoad();
 }
-extern "C" __declspec(dllexport) double VeilCefZoomLevel() {
+extern "C" __declspec(dllexport) double VeilCefZoomLevel(uint64_t id) {
+  const auto browser = LookupBrowser(id);
   return browser ? browser->GetHost()->GetZoomLevel() : 0.0;
 }
-extern "C" __declspec(dllexport) void VeilCefSetZoomLevel(double level) {
+extern "C" __declspec(dllexport) void VeilCefSetZoomLevel(uint64_t id, double level) {
+  const auto browser = LookupBrowser(id);
   if (browser) browser->GetHost()->SetZoomLevel(level);
 }
 
 extern "C" __declspec(dllexport) unsigned VeilCefPopupsBlocked() { return popups_blocked; }
-extern "C" __declspec(dllexport) int VeilCefIsPageFullScreen() { return active_view && active_view->page_fullscreen ? 1 : 0; }
-extern "C" __declspec(dllexport) const wchar_t* VeilCefSource() { return active_view ? active_view->page_source.c_str() : L""; }
-extern "C" __declspec(dllexport) const wchar_t* VeilCefTitle() { return active_view ? active_view->title.c_str() : L""; }
-extern "C" __declspec(dllexport) int VeilCefClosed() { return browser ? 0 : 1; }
-extern "C" __declspec(dllexport) int VeilCefReadyToClose() {
+extern "C" __declspec(dllexport) int VeilCefIsPageFullScreen(uint64_t id) {
+  const auto state = LookupView(id);
+  return state && state->page_fullscreen ? 1 : 0;
+}
+extern "C" __declspec(dllexport) const wchar_t* VeilCefSource(uint64_t id) {
+  const auto state = LookupView(id);
+  return state ? state->page_source.c_str() : L"";
+}
+extern "C" __declspec(dllexport) const wchar_t* VeilCefTitle(uint64_t id) {
+  const auto state = LookupView(id);
+  return state ? state->title.c_str() : L"";
+}
+extern "C" __declspec(dllexport) int VeilCefClosed(uint64_t id) { return LookupBrowser(id) ? 0 : 1; }
+extern "C" __declspec(dllexport) int VeilCefReadyToClose(uint64_t id) {
+  const auto browser = LookupBrowser(id);
   return !browser || browser->GetHost()->IsReadyToBeClosed();
 }
 extern "C" __declspec(dllexport) void VeilCefPump() { CefDoMessageLoopWork(); }
-extern "C" __declspec(dllexport) int VeilCefTryClose() {
+extern "C" __declspec(dllexport) int VeilCefTryClose(uint64_t id) {
+  const auto browser = LookupBrowser(id);
   return !browser || browser->GetHost()->TryCloseBrowser();
 }
 
