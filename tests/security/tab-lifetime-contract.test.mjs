@@ -285,17 +285,17 @@ test('hard reload and find use narrow engine operations with stale result guards
 test('CEF client owns view metadata and callback registration as one lifetime', () => {
     assert.match(cefNative, /struct ViewState \{[\s\S]*?const HWND parent;[\s\S]*?std::wstring title;[\s\S]*?std::wstring page_source[\s\S]*?BeforeBrowse before_browse;/);
     assert.match(cefNative, /explicit Client\(std::shared_ptr<ViewState> state\) : state_\(std::move\(state\)\)/);
-    assert.match(cefNative, /if \(active_browser \|\| active_view \|\| !parent \|\| !starting \|\| !completed \|\| !changed \|\| !failed \|\|[\s\S]*?\)\s*return 0;/);
-    assert.match(cefNative, /if \(!active_browser\) \{\s*state->DetachCallbacks\(\);\s*if \(active_view == state\) active_view\.reset\(\);/);
+    assert.match(cefNative, /if \(views\.size\(\) >= kDevelopmentViewLimit \|\| !parent \|\| !starting \|\| !completed \|\| !changed \|\| !failed \|\|[\s\S]*?\)\s*return 0;/);
+    assert.match(cefNative, /if \(!created \|\| entry == views\.end\(\) \|\| entry->second\.state != state\) \{\s*RemoveView\(state\);\s*return 0;/);
     assert.match(cefNative, /void VeilCefDetachCallbacks\(uint64_t id, HWND parent\) \{\s*const auto state = LookupView\(id\);\s*if \(state && state->parent == parent\)\s*state->DetachCallbacks\(\);/);
-    assert.match(cefNative, /void OnBeforeClose\([\s\S]*?state_->DetachCallbacks\(\);\s*if \(active_view == state_\) \{\s*active_browser = nullptr;\s*active_view\.reset\(\);/);
+    assert.match(cefNative, /void OnBeforeClose\([\s\S]*?RemoveView\(state_\);/);
     assert.match(cefView, /VeilCefOpen\(hwnd, onStarting, onCompleted, onPageStateChanged, onRenderProcessFailed\)/);
     assert.doesNotMatch(cefView, /VeilCefSet(?:NavigationCallbacks|PageStateCallback|RenderProcessFailedCallback)/);
 });
 
 
 test('CEF view operations require a nonzero matching monotonic identity', () => {
-    assert.match(cefNative, /LookupView\(uint64_t id\) \{\s*return id != 0 && active_view && active_view->id == id \? active_view : nullptr;/);
+    assert.match(cefNative, /LookupView\(uint64_t id\) \{\s*const auto entry = views\.find\(id\);\s*return entry == views\.end\(\) \? nullptr : entry->second\.state;/);
     assert.match(cefNative, /std::make_shared<ViewState>\(\+\+last_view_id, parent,/);
     assert.match(cefNative, /return state->id;/);
     assert.match(cefNative, /VeilCefResize\(uint64_t id, HWND parent\)[\s\S]*?state->parent == parent && browser/);
@@ -304,4 +304,14 @@ test('CEF view operations require a nonzero matching monotonic identity', () => 
     for (const name of ['Navigate','SetMuted','GoBack','GoForward','Reload','ReloadIgnoringCache','Stop','SetZoomLevel','TryClose','StartOwnedAttachment','ClickFixtureAttachment']) {
         assert.match(cefNative, new RegExp('VeilCef' + name + '\\(uint64_t id[^)]*\\) \\{\\s*const auto browser = LookupBrowser\\(id\\);'));
     }
+});
+
+
+test('CEF native registry reserves identities before creation and erases only the matching view', () => {
+    assert.match(cefNative, /std::unordered_map<uint64_t, ViewEntry> views;/);
+    assert.match(cefNative, /constexpr size_t kDevelopmentViewLimit = 1;/);
+    assert.match(cefNative, /views\.emplace\(state->id, ViewEntry\{state, nullptr\}\);[\s\S]*?CreateBrowserSync\([\s\S]*?const auto entry = views\.find\(state->id\);[\s\S]*?entry->second\.browser = created;/);
+    assert.match(cefNative, /void RemoveView\(const std::shared_ptr<ViewState>& state\) \{\s*state->DetachCallbacks\(\);\s*const auto entry = views\.find\(state->id\);\s*if \(entry != views\.end\(\) && entry->second\.state == state\)\s*views\.erase\(entry\);/);
+    assert.match(cefNative, /LookupBrowser\(uint64_t id\) \{\s*const auto entry = views\.find\(id\);\s*return entry == views\.end\(\) \? nullptr : entry->second\.browser;/);
+    assert.doesNotMatch(cefNative, /CefRefPtr<CefBrowser> active_browser;|std::shared_ptr<ViewState> active_view;/);
 });
