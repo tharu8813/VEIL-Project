@@ -41,7 +41,7 @@ public partial class BrowserWindow : Window
         /// <summary>The address the VEIL threat warning page blocked (ADR-0008).</summary>
         internal Uri? PendingThreat { get; set; }
         /// <summary>Result of the last completed navigation (diagnostics and tests).</summary>
-        internal CoreWebView2WebErrorStatus? LastNavigationError { get; set; }
+        internal EngineNavigationError? LastNavigationError { get; set; }
     }
 
     private readonly BrowserSession session;
@@ -429,8 +429,8 @@ public partial class BrowserWindow : Window
         if (!AcceptTabEvents(tab) || tab.NavigationId != args.NavigationId) return;
         SetTabLoading(tab, false);
         if (args.IsCanceled) return;
-        var errorStatus = (CoreWebView2WebErrorStatus)args.NativeErrorCode;
-        tab.LastNavigationError = args.IsSuccess ? null : errorStatus;
+        var errorStatus = args.Error;
+        tab.LastNavigationError = errorStatus;
         if (tab.UpgradedFrom is { } plain && tab.ExpectedUpgrade is null)
         {
             tab.UpgradedFrom = null;

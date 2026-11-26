@@ -254,3 +254,14 @@ test('page fullscreen is an observed engine state scoped to the active live tab'
     assert.match(cefNative, /void OnFullscreenModeChange\([\s\S]*?page_fullscreen = fullscreen;\s*if \(page_state_changed\) page_state_changed\(4\);/);
     assert.match(cefView, /case 4: FullScreenChanged\?\.Invoke\(this, EventArgs\.Empty\); break;/);
 });
+
+
+test('navigation errors retain their native engine domain and never reinterpret CEF as WebView2', () => {
+    assert.match(engineContract, /enum EngineErrorDomain \{ WebView2, Cef \}/);
+    assert.match(engineContract, /Error => IsSuccess \|\| IsCanceled \? null : NativeResult;/);
+    assert.match(webView2, /new EngineNavigationError\(EngineErrorDomain\.WebView2, \(int\)args\.WebErrorStatus,\s*args\.WebErrorStatus\.ToString\(\)\)/);
+    assert.match(cefView, /new EngineNavigationError\(EngineErrorDomain\.Cef, code,/);
+    assert.match(browser, /var errorStatus = args\.Error;\s*tab\.LastNavigationError = errorStatus;/);
+    assert.doesNotMatch(browser, /\(CoreWebView2WebErrorStatus\)args\.NativeErrorCode/);
+    assert.match(browser, /if \(tab\.UpgradedFrom is \{ \} plain && tab\.ExpectedUpgrade is null\)[\s\S]*?if \(!args\.IsSuccess\)\s*\{\s*ShowHttpsWarning/);
+});

@@ -1411,7 +1411,7 @@ public partial class BrowserWindow
                         Check(list is { Present: true, Valid: false }, $"damaged list reported ({list.Detail})");
                         Check(NetworkIndicator.Text.Contains("위협 목록 오류"), $"status shows list error: {NetworkIndicator.Text}");
                         await Open(local);
-                        Check(Active!.Url != ThreatWarningUrl && Active.LastNavigationError is null or Microsoft.Web.WebView2.Core.CoreWebView2WebErrorStatus.Unknown,
+                        Check(Active!.Url != ThreatWarningUrl && (Active.LastNavigationError is null or { Domain: EngineErrorDomain.WebView2, NativeCode: (int)Microsoft.Web.WebView2.Core.CoreWebView2WebErrorStatus.Unknown }),
                             $"fail-open: page still opens ({Active.Url})");
                         Check(LastThreatNotice?.Contains("위협 검사를 할 수 없어") == true, $"navigation notice explains the skipped check: {LastThreatNotice}");
                     }

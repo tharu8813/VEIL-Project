@@ -129,7 +129,8 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args) =>
         NavigationCompleted?.Invoke(this, new EngineNavigationCompletedEventArgs(args.NavigationId,
             args.IsSuccess, args.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled,
-            (int)args.WebErrorStatus));
+            new EngineNavigationError(EngineErrorDomain.WebView2, (int)args.WebErrorStatus,
+                args.WebErrorStatus.ToString())));
 
     private void OnSourceChanged(object? sender, CoreWebView2SourceChangedEventArgs args) =>
         SourceChanged?.Invoke(this, EventArgs.Empty);
