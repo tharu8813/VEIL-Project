@@ -23,6 +23,10 @@ foreach ($name in @('cef-preflight-staging.ps1','cef-registration-plan.ps1')) {
 }
 . (Join-Path $dir 'cef-registration-plan.ps1')
 . ([scriptblock]::Create($registration))
+$publication = [IO.File]::ReadAllText((Join-Path $dir 'cef-preflight-publication.ps1'))
+$import = ". (Join-Path " + '$PSScriptRoot' + " 'cef-preflight-registration.ps1')"
+if (-not $publication.Contains($import)) { throw 'Publication import changed.' }
+. ([scriptblock]::Create($publication.Replace($import,'')))
 function New-VeilRestrictedDirectory([string]$Path) {
     if (Test-Path -LiteralPath $Path) { throw 'Already exists.' }
     [void][IO.Directory]::CreateDirectory($Path)
@@ -176,6 +180,42 @@ try {
     [void](Inspect-Draft $destination)
     if ((Get-FileHash -LiteralPath $journalPath).Hash -ne $journalHash) { throw 'Inspection changed preparation.' }
     Write-Host 'PASS: exact registration reconstruction, independent inputs, forged journal and partial file refusal'
+    # Real temporary-directory copies and same-parent renames; no OS service
+    # or BitLocker. The registration binds to the temporary destination.
+    $publishedBin = Join-Path $work 'published-bin'
+    $publishedData = Join-Path $work 'published-data'
+    $transaction = Join-Path $work 'publication'
+    $publishPrepared = Join-Path $work 'publication-prepared'
+    $publishDraft = New-VeilPreflightRegistrationDraft $plan $publishedBin $image $profile $volumeGuid $primary $recovery $sid 'synthetic'
+    [void](Write-VeilPreflightRegistrationDraft $publishPrepared $publishDraft $plan)
+    $final = Publish-VeilPreflightFiles $stage $publishPrepared $publishedBin $publishedData $transaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {}
+    if ($final.state -cne 'files-published-only' -or $final.serviceCreated -or $final.startupEnabled -or
+        @(Get-ChildItem -LiteralPath $transaction -Force).Count -ne 4 -or
+        (Test-Path -LiteralPath ($publishedBin + '.cef-preflight-pending')) -or
+        (Test-Path -LiteralPath ($publishedData + '.cef-preflight-pending'))) { throw 'Publication boundary mismatch.' }
+    [void](Read-VeilPreflightPackageEvidence $publishedBin (Join-Path $stage 'cef-evidence') (Join-Path $stage 'package-evidence') $cert.Thumbprint $commit)
+    [void](Read-VeilPreflightRegistrationDraft $publishedData $plan $publishedBin $image $profile $volumeGuid $primary $recovery $sid)
+    [void](Read-VeilPreflightRegistrationDraft $publishPrepared $plan $publishedBin $image $profile $volumeGuid $primary $recovery $sid)
+    Reject { Publish-VeilPreflightFiles $stage $publishPrepared $publishedBin $publishedData $transaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} }
+    # Inject refusal at the boundary after binaries are published but before
+    # registration is moved. Both sources and partial transaction must survive.
+    $interruptedBin = Join-Path $work 'interrupted-bin'
+    $interruptedData = Join-Path $work 'interrupted-data'
+    $interruptedTransaction = Join-Path $work 'interrupted-publication'
+    $interruptedPrepared = Join-Path $work 'interrupted-prepared'
+    $interruptedDraft = New-VeilPreflightRegistrationDraft $plan $interruptedBin $image $profile $volumeGuid $primary $recovery $sid 'synthetic'
+    [void](Write-VeilPreflightRegistrationDraft $interruptedPrepared $interruptedDraft $plan)
+    $script:publicationChecks = 0
+    $interrupt = { $script:publicationChecks++; if ($script:publicationChecks -eq 3) { throw 'Synthetic publication interruption.' } }
+    Reject { Publish-VeilPreflightFiles $stage $interruptedPrepared $interruptedBin $interruptedData $interruptedTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid $interrupt }
+    if (-not (Test-Path -LiteralPath $interruptedBin) -or (Test-Path -LiteralPath $interruptedData) -or
+        -not (Test-Path -LiteralPath ($interruptedData + '.cef-preflight-pending')) -or
+        -not (Test-Path -LiteralPath (Join-Path $interruptedTransaction '03-binaries-published.json')) -or
+        (Test-Path -LiteralPath (Join-Path $interruptedTransaction '04-files-published.json'))) {
+        throw 'Interrupted publication state not preserved.'
+    }
+    Reject { Publish-VeilPreflightFiles $stage $interruptedPrepared $interruptedBin $interruptedData $interruptedTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} }
+    Write-Host 'PASS: verified publication copies, journal boundaries and interrupted publication preservation'
     # Inject a deterministic file creation conflict after creating a fresh
     # preparation directory. No complete marker may follow the failed write.
     $partial = Join-Path $work 'partial-registration'

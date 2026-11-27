@@ -78,11 +78,21 @@ $stagePlan = .\scripts\stage-cef-preflight-package.ps1 -PayloadRoot $payload -Ce
 
 검증된 staging과 독립 입력으로 세 등록 JSON의 원래 바이트를 재구성하고 preparation.json의 정확한 파일 목록·해시·상태를 대조한다. 추가·누락·변조된 파일, 다른 독립 입력, 새 해시를 붙인 잘못된 등록, 설치 흔적, 연결된 시험 볼륨은 모두 거부한다. 부분 초안은 자동 수정·삭제하지 않는다. 이 결과는 읽기 전용 일관성 검사이며, 저널은 서명된 증거 또는 복구 자격 증명 검증의 독립 증명이 아니다. 실제 게시 직전에는 시험 볼륨과 복구 자격 증명을 다시 검증해야 한다.
 
-## 8. 등록 전 차단점
+## 8. 검증 전용 파일 게시
 
-전체 설치 트리의 서명 인벤토리 검증 도구는 마련했지만 CefPreflight 데스크톱의 pin, 브로커 pin 및 CEF 런타임 계획을 안전하게 함께 게시하는 전용 설치/복구 트랜잭션이 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
+기존 설치와 서비스가 전혀 없는 폐기용 VM에서만 명시적으로 실행한다. 실제 복구 자격 증명 및 보호기 확인, 재잠금·분리 이후 별도 pending 디렉터리에 전체 파일을 복사하고 재검증한다. 기존 스테이징과 등록 초안을 보존한다.
 
-후속 구현은 깨끗한 폐기용 VM에서만 기존 설치 부재, 전체 서명 증거, 관리자 ACL, 단일 등록 사용자/볼륨, VHDX 분리, 실패 복구 및 정상 분리 확인을 갖춘 전용 설치 트랜잭션을 마련해야 한다. 그 뒤에만 고정 설치 경로의 일반 사용자 검증 명령을 실행한다.
+~~~powershell
+.\scripts\publish-cef-preflight-package.ps1 -DisposableVm -SignerThumbprint $pin -SourceCommit $commit -ImagePath $testImage -ProfilePath $testProfile -VolumeGuid $volumeGuid -ProtectorId $primaryId -RecoveryProtectorId $recoveryId -UserSid $testUserSid
+~~~
+
+Program Files와 ProgramData의 각각 동일 부모 안에서 pending 디렉터리를 최종 VEIL 경로로 이동한다. 두 이동은 하나의 원자적 작업이 아니다. 별도 Program Files\VEIL.cef-preflight-publication 에 01-intent, 02-copies-verified, 03-binaries-published, 04-files-published 저널을 순서대로 기록한다. 마지막 상태는 files-published-only이며 서비스 등록/시작을 뜻하지 않는다. 실패 또는 기존 경로 발견 시 자동 삭제·덮어쓰기·재시도를 금지하고 증거를 보존한다. 실제 Windows ACL, 전원 차단, 경합 및 이동 내구성은 NOT RUN이다.
+
+## 9. 서비스 등록 전 차단점
+
+전용 파일 게시 코드는 마련했지만 실제 게시 상태의 독립 복구 검증과 서비스 등록/시작 트랜잭션은 아직 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
+
+후속 구현은 게시 저널과 현재 파일 상태를 다시 확인하고, 실패 복구와 서비스 등록/시작을 별도 처리해야 한다. 그 뒤에만 고정 설치 경로의 일반 사용자 검증 명령을 실행한다.
 
 ~~~powershell
 # 전용 등록 절차 완료 후에만 실행. 현재 실행하지 않는다.

@@ -389,3 +389,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: 준비 저널 및 독립 등록 입력 재검증
 
 정확한 head 9b15df5 일반 CI 45952554083 PASS, native CI 확인 시 진행 중. 읽기 전용 check-cef-preflight-registration.ps1은 고정 staging/준비 디렉터리, 설치 부재, 분리된 시험 VHDX 및 독립 운영자 입력을 사용한다. 등록 JSON에서 생성된 opaque volume ID만 읽고 나머지는 서명 검증 stage와 독립 입력으로 재구성한다. 바이트 수준 정확한 writer 형식 및 파일별 해시, prepared-only journal 대조; 누락/추가/변조/재해시된 잘못된 정책/다른 SID/보호기/프로필 거부. 부분 준비와 실제 설치 흔적을 구분하여 보존, 자동 복구 없음. 저널은 서명 또는 실제 복구 검증 증명이 아니며 TOCTOU를 제거하는 보유 핸들도 아니다. 합성 회귀 추가, 신규 CI 및 실제 VM/독립 리뷰 NOT RUN. 실제 게시 및 서비스 등록/장애 복구 상태 기계는 미구현.
+
+### 추가 구현: 검증 전용 설치 파일 게시 (서비스 미등록)
+
+정확한 head 61de04f 일반 CI 45953063242 PASS, native CI 확인 시 진행 중. 명시적인 폐기용 VM 옵션으로 기존 설치·서비스·pending·transaction 부재 및 복구 자격 증명 재확인/분리 후, 서명 검증 stage/등록 초안을 별도 제한 pending에 복사하고 원본/복사본을 재검증한다. 별도 intent 및 단계별 create-new 저널 후 동일 부모 디렉터리 이동으로 실제 Program Files/ProgramData VEIL 파일을 게시한다. 두 경로 이동은 각각 별개이며 서비스 생성/시작, 자동 복구/삭제 없음. 합성 실제 파일 복사/이동 및 중간 거부 테스트 추가. 실제 서명/ACL/BitLocker/서비스/전원 차단, 신규 CI, 독립 리뷰 NOT RUN. 게시 상태 재검증·복구 및 서비스 등록은 후속. 제품 CEF 비활성 유지.
