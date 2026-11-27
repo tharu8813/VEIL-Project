@@ -71,3 +71,37 @@ test('reports retained handle corroboration separately from Job notification gap
     assert.deepEqual(result.unmatched.outer.osExitsWithoutJob, [101]);
     assert.equal(result.status, 'INCOMPLETE_OR_MISMATCHED_CAPTURE');
 });
+
+test('rejects malformed lifecycle rows even when both Job PID sets still agree', () => {
+    for (const [row, reason] of [
+        [{ ...create('veil-cef-smoke.exe', 101, 999), Detail: 'unparseable child' }, 'malformed-create'],
+        [{ ...create('veil-cef-smoke.exe', 101, 999), Path: '' }, 'malformed-create'],
+        [create('unrelated.exe', 101, 999), 'process-name-mismatch'],
+        [exit(101, ''), 'process-name-mismatch'],
+        [{ ...exit(101), Result: 'ACCESS DENIED' }, 'unsuccessful-exit'],
+    ]) {
+        const f = fixture();
+        f.events.splice(3, 0, row);
+        const result = compare(f);
+        assert.equal(result.status, 'INCOMPLETE_OR_MISMATCHED_CAPTURE');
+        assert.deepEqual(result.invalidTreeEvents, [{ row: 4, pid: 101, reason }]);
+        assert.deepEqual(result.unmatched.inner.osStartsWithoutJob, []);
+        assert.deepEqual(result.unmatched.inner.osExitsWithoutJob, []);
+    }
+});
+
+test('ignores unrelated malformed lifecycle rows outside the tracked tree', () => {
+    const f = fixture();
+    f.events.splice(3, 0, { ...create('unrelated.exe', 77, 999), Detail: 'unparseable' });
+    assert.equal(compare(f).status, 'MATCHED_CAPTURE');
+});
+
+test('retained handle exit missing from the trace cannot be a matched capture', () => {
+    const f = fixture();
+    f.sample.schema = 5;
+    f.sample.handleExits = [{ Pid: 100, ExitCode: 0 }, { Pid: 101, ExitCode: 0 },
+        { Pid: 999, ExitCode: 0 }];
+    const result = compare(f);
+    assert.deepEqual(result.retainedHandleExitsWithoutTrace, [999]);
+    assert.equal(result.status, 'INCOMPLETE_OR_MISMATCHED_CAPTURE');
+});
