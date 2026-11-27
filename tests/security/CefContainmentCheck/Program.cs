@@ -174,15 +174,23 @@ try
                 Check(int.TryParse(result, out int descendantPid) && descendantPid > 0,
                     "Multiprocess fixture descendant not observed.");
                 using var descendant = Process.GetProcessById(descendantPid);
-                _ = descendant.SafeHandle;
-                Check(!descendant.HasExited && brokerJob.ContainsFixtureRoot(binding.Identity, retained) &&
+                var descendantHandle = descendant.SafeHandle;
+                var descendantIdentity = Native.ObserveProcess(descendantHandle);
+                Check(brokerJob.ContainsFixturePair(binding.Identity, retained, descendantIdentity, descendantHandle) &&
                     !brokerJob.ContainsVerifiedCandidate(binding.Identity, retained),
-                    "Fixture root or descendant missing, or disabled admission confused.");
+                    "Fixture pair membership/identity missing, or disabled admission confused.");
+                Check(!brokerJob.ContainsFixturePair(binding.Identity, retained, identity, owner.SafeHandle),
+                    "Outside process accepted as fixture descendant.");
+                Check(!brokerJob.ContainsFixturePair(binding.Identity, retained, binding.Identity, retained),
+                    "Root accepted as its own descendant.");
+                Check(!brokerJob.ContainsFixturePair(binding.Identity, retained,
+                    descendantIdentity with { CreatedFileTime = descendantIdentity.CreatedFileTime + 1 }, descendantHandle),
+                    "Altered descendant identity accepted.");
                 if (mode == 1) brokerJob.Dispose();
                 else candidate.Dispose();
                 Check(descendant.WaitForExit(10000), "Descendant survived closing a containing job.");
                 Check(rootObserver.WaitForExit(10000), "Root survived closing a containing job.");
-                if (mode == 2) Check(brokerJob.HasNoActiveProcesses(), "Broker fixture job did not drain.");
+                if (mode == 2) Check(SpinWait.SpinUntil(brokerJob.HasNoActiveProcesses, TimeSpan.FromSeconds(5)), "Broker fixture job did not drain.");
             }
             File.Delete(markerPath);
             if (File.Exists(markerPath + ".descendant")) File.Delete(markerPath + ".descendant");

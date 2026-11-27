@@ -39,10 +39,33 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         var state = Accounting();
         return state.ActiveProcesses is >= 1 and <= 2;
     }
+
+    // Stable synthetic pair only. Retain handles and verify identities on
+    // either side of accounting; a PID in a marker is not membership proof.
+    internal bool ContainsFixturePair(ClientIdentity root, SafeProcessHandle rootHandle,
+        ClientIdentity descendant, SafeProcessHandle descendantHandle)
+    {
+        if (!ContainsFixtureRoot(root, rootHandle) || root.ProcessId == descendant.ProcessId ||
+            root.SessionId != descendant.SessionId || root.UserSid != descendant.UserSid ||
+            !string.Equals(root.ImagePath, descendant.ImagePath, StringComparison.OrdinalIgnoreCase) ||
+            descendant.CreatedFileTime < root.CreatedFileTime ||
+            !Native.IsRunning(descendantHandle) || Native.ObserveProcess(descendantHandle) != descendant ||
+            !IsProcessInJob(descendantHandle, job, out bool inside) || !inside) return false;
+        var state = Accounting();
+        return state.ActiveProcesses == 2 && state.TotalProcesses == 2 &&
+            ContainsFixtureRoot(root, rootHandle) && Native.IsRunning(descendantHandle) &&
+            Native.ObserveProcess(descendantHandle) == descendant &&
+            IsProcessInJob(descendantHandle, job, out inside) && inside;
+    }
 #endif
 
     private static CefBrokerOwnedJob Create(uint activeLimit)
     {
+#if VEIL_CEF_CONTAINMENT_TEST
+        if (activeLimit != 1 && activeLimit != 2) throw new ArgumentOutOfRangeException(nameof(activeLimit));
+#else
+        if (activeLimit != 1) throw new ArgumentOutOfRangeException(nameof(activeLimit));
+#endif
         var handle = CreateJobObjectW(IntPtr.Zero, null);
         if (handle.IsInvalid) { handle.Dispose(); throw new Win32Exception(); }
         try

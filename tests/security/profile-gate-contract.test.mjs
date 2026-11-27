@@ -496,7 +496,9 @@ test('future broker-owned disabled job is created internally and never accepts c
     const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
     const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
     const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
-    assert.match(job, /CreateJobObjectW\(IntPtr.Zero, null\)[\s\S]*?limits.Basic.Flags = 0x00000008 \| 0x00002000;[\s\S]*?limits.Basic.ActiveLimit = 1/);
+    assert.match(job, /CreateDisabledCandidate\(\) => Create\(1\);/);
+    assert.match(job, /#else\s*if \(activeLimit != 1\) throw new ArgumentOutOfRangeException\(nameof\(activeLimit\)\);\s*#endif/);
+    assert.match(job, /CreateJobObjectW\(IntPtr.Zero, null\)[\s\S]*?limits.Basic.Flags = 0x00000008 \| 0x00002000;[\s\S]*?limits.Basic.ActiveLimit = activeLimit/);
     assert.match(job, /assignmentIssued = true;[\s\S]*?Native.DuplicateCefJobAssignment\(job, owner, observedOwner\)/);
     assert.match(native, /DuplicateJobHandle\(new IntPtr\(-1\), job, destination, out IntPtr remote, 0x0001 \| 0x0004, false, 0\)/);
     assert.match(job, /!IsProcessInJob\(ownerHandle, job, out bool ownerInside\) \|\| ownerInside[\s\S]*?!IsProcessInJob\(childHandle, job, out bool childInside\) \|\| !childInside[\s\S]*?state.TotalProcesses != 1 \|\| state.ActiveProcesses != 1/);
@@ -537,7 +539,16 @@ test('nested CEF runtime experiment remains isolated from production admission',
     assert.match(fixture, /exit != 0 \|\| !outerEmpty \|\| !innerEmpty \|\| !restricted/);
     assert.match(runner, /Invoke-Stage 'nestedWin32'[\s\S]*?Invoke-Bounded 'nested-win32'/);
     assert.match(workflow, /dotnet build tests\/cef\/CefNestedSmoke\/CefNestedSmoke.csproj -c Release/);
-    assert.match(job, /limits.Basic.ActiveLimit = 1/);
+    const brokerProject = await readFile('apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj', 'utf8');
+    const testProject = await readFile('tests/security/CefContainmentCheck/CefContainmentCheck.csproj', 'utf8');
+    const integration = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    assert.match(job, /CreateDisabledCandidate\(\) => Create\(1\);/);
+    assert.match(job, /#if VEIL_CEF_CONTAINMENT_TEST[\s\S]*?CreateMultiprocessFixture\(\) => Create\(2\);[\s\S]*?#endif/);
+    assert.match(job, /ContainsVerifiedCandidate[\s\S]*?if \(activeLimit != 1 \|\| !bound/);
+    assert.match(job, /ContainsFixturePair[\s\S]*?Native.ObserveProcess\(descendantHandle\) != descendant[\s\S]*?IsProcessInJob\(descendantHandle, job,[\s\S]*?state.ActiveProcesses == 2 && state.TotalProcesses == 2/);
+    assert.match(integration, /ContainsFixturePair\(binding.Identity, retained, identity, owner.SafeHandle\)/);
+    assert.doesNotMatch(brokerProject, /VEIL_CEF_CONTAINMENT_TEST/);
+    assert.match(testProject, /<DefineConstants>[^<]*VEIL_CEF_CONTAINMENT_TEST<\/DefineConstants>/);
     assert.doesNotMatch(startup, /CefNestedSmoke|FixtureJob/);
 });
 
