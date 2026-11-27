@@ -116,6 +116,17 @@ try
         child.SafeHandle.DangerousGetHandle());
     using var retained = binding.Handle;
     Check(binding.Identity == expected && Native.IsRunning(retained), "Child identity not retained.");
+    var tokenObservation = CefProcessTokenObserver.Observe(retained, expected);
+    Check(tokenObservation.Identity == expected &&
+        tokenObservation.ElevationType is >= 1 and <= 3, "Retained token observation invalid.");
+    Check(tokenObservation == CefProcessTokenObserver.Observe(child.SafeHandle, expected),
+        "Independent handles to the same process did not observe the same token fields.");
+    Reject(() => CefProcessTokenObserver.Observe(owner.SafeHandle, expected));
+    Reject(() => CefProcessTokenObserver.Observe(retained,
+        expected with { CreatedFileTime = expected.CreatedFileTime + 1 }));
+    Reject(() => CefProcessTokenObserver.Observe(retained,
+        expected with { SessionId = expected.SessionId + 1 }));
+    Console.WriteLine("PASS: retained process token snapshot and wrong-object refusal");
     Check(Native.SameLiveProcess(retained, child.SafeHandle), "Different handles to the same child did not match.");
     Check(!Native.SameLiveProcess(retained, owner.SafeHandle), "Different process objects matched.");
     using (var watch = Native.OpenForWait(identity, owner.SafeHandle))
@@ -139,6 +150,7 @@ try
     await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
     Check(child.ExitCode == 0, $"Synthetic child returned unexpected exit code {child.ExitCode}.");
     Check(!Native.IsRunning(retained), "Signaled retained child still considered live.");
+    Reject(() => CefProcessTokenObserver.Observe(retained, expected));
     Check(!Native.SameLiveProcess(retained, child.SafeHandle), "Exited process objects matched as live.");
     Reject(() => Native.SnapshotModulePaths(retained, expected));
     Check(Native.MatchesExitedNomination(identity, owner.SafeHandle, child.SafeHandle.DangerousGetHandle().ToInt64(), retained, 0), "Exited nominated object did not match.");

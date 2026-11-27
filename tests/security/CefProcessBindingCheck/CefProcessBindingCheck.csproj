@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/Native.cs" Link="Native.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs" Link="CefProcessTokenObserver.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs" Link="CefBrokerOwnedJob.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/ClientIdentity.cs" Link="ClientIdentity.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/Protocol.cs" Link="Protocol.cs" />
