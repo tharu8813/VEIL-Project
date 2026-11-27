@@ -211,3 +211,7 @@ CheckCefChild 명령은 기존 인증 및 allowlist를 통과한 실제 unlock o
 ### 추가 구현: 단일 대기 CEF 위임 자원 (검증 대기)
 
 StageCefChild는 별도 제품 pin이 등록된 실제 unlock owner만 호출할 수 있다. 기존 CheckCefChild와 별도 명령으로 child handle/image handle 및 CefChildAdmission을 하나의 broker pending slot에 보존한다. 중복 staging 거부, 15초 단조 정책 및 serialized timeout, lock/detach 요청, owner 종료, service cleanup, 보호 상태 상실 시 철회/자원 정리. 반환은 기존 status이며 grant token 또는 child pipe 권한은 없다. 실제 redemption/launch authorization, child exit containment/relock, installer 등록 및 native 연동은 미완료. 순수 resource lifecycle, 실제 parser, 소스 계약 및 fake broker 거부 테스트 추가. 최신 CI와 production Windows/BitLocker 실행 결과 대기. WebView2 유지.
+
+### 추가 구현: CEF child 일회성 검증 응답 (검증 대기)
+
+RedeemCefChild는 기존 client allowlist의 image 거부 중 별도 admin pin과 경로가 일치하는 production 후보만 전용 분기로 들어가며 다른 모든 명령은 ClientRejected. 기존 desktop owner도 이 명령을 사용할 수 없다. pipe에서 관측한 실제 child identity와 pending generation이 일치해야 slot을 소비하고, owner/child retained handles, 실행 파일 canonical path/서명/hash, 등록 보호 상태를 재확인한 뒤 one-shot 정책을 적용한다. 성공은 최소 boolean cefChildVerified 응답뿐이며 실패·예외·lost reply 모두 재사용 불가. 현재 installer 및 CEF bootstrap에 연결하지 않았으며 실행 허가나 보호 볼륨 접근권 자체를 발급하지 않는다. child lifespan/containment/relock 및 원본 pipe identity handle 수명 강화, 전체 install trust, 실제 signed client/service/BitLocker 검증 필요. 기존 WebView2 유지. 실제 parser와 순수 slot 회귀 및 source contract 추가.

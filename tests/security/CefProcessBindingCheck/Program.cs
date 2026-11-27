@@ -16,7 +16,13 @@ using (var parsed = Protocol.Parse("""{"command":"CheckCefChild","volumeId":"syn
 }
 using (var staged = Protocol.Parse("""{"command":"StageCefChild","volumeId":"synthetic","childHandle":"123"}"""u8))
     Check(staged.Command == BrokerCommand.StageCefChild && staged.ChildHandle == 123, "Stage request rejected.");
+using (var redeemed = Protocol.Parse("""{"command":"RedeemCefChild","volumeId":"synthetic"}"""u8))
+    Check(redeemed.Command == BrokerCommand.RedeemCefChild && redeemed.ChildHandle is null &&
+        redeemed.Secret is null, "Redemption request rejected.");
 foreach (string bad in new[] {
+    """{"command":"RedeemCefChild","volumeId":"synthetic","childHandle":"123"}""",
+    """{"command":"RedeemCefChild","volumeId":"synthetic","secret":"synthetic"}""",
+    """{"command":"RedeemCefChild","volumeId":"synthetic","pid":"123"}""",
     """{"command":"StageCefChild","volumeId":"synthetic"}""",
     """{"command":"StageCefChild","volumeId":"synthetic","childHandle":"1","secret":"synthetic"}""",
     """{"command":"CheckCefChild","volumeId":"synthetic"}""",

@@ -568,6 +568,22 @@ Check(throwingProcess.Disposals == 1 && throwingImage.Disposals == 1,
     "image disposal failure leaked the process resource");
 Console.WriteLine("PASS: pending CEF child resource ownership and retirement");
 
+// The scoped slot can be redeemed only by the designated generation.
+var redeemProcess = new SyntheticRetainedResource();
+var redeemImage = new SyntheticRetainedResource();
+using (var redemptionSlot = new Veil.VolumeBroker.CefPendingChild(Grant(), redeemProcess, redeemImage))
+{
+    Check(!redemptionSlot.MatchesChild(childIdentity with { CreatedFileTime = 3000 }) &&
+        redemptionSlot.MatchesChild(childIdentity), "wrong child consumed or matched a pending slot");
+    Check(redemptionSlot.TryRedeem(ownerIdentity, childIdentity, unlockGeneration, true, true, true, true),
+        "valid pending child redemption rejected");
+    Check(!redemptionSlot.MatchesChild(childIdentity) &&
+        !redemptionSlot.TryRedeem(ownerIdentity, childIdentity, unlockGeneration, true, true, true, true),
+        "pending child redeemed twice");
+}
+Check(redeemProcess.Disposals == 1 && redeemImage.Disposals == 1, "redeemed slot leaked resources");
+Console.WriteLine("PASS: scoped pending child redemption and replay rejection");
+
 file sealed class SyntheticRetainedResource : IDisposable
 {
     internal int Disposals { get; private set; }

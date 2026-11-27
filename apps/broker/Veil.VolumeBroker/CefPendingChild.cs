@@ -19,6 +19,17 @@ internal sealed class CefPendingChild : IDisposable
 
     internal bool IsExpired => disposed || admission.IsExpired;
 
+    internal bool MatchesChild(ClientIdentity child) => !disposed && !IsExpired && admission.MatchesChild(child);
+
+    // These resources remain owned by this object, never transferred to the client.
+    internal IDisposable ProcessResource => process;
+    internal IDisposable ImageResource => image;
+
+    internal bool TryRedeem(ClientIdentity owner, ClientIdentity child, object generation,
+        bool ownerAlive, bool childAlive, bool imageVerified, bool volumeProtected) =>
+        !disposed && admission.TryRedeem(owner, child, generation, ownerAlive, childAlive,
+            imageVerified, volumeProtected);
+
     public void Dispose()
     {
         if (disposed) return;

@@ -166,15 +166,14 @@ test('CEF preparation rechecks the live broker owner around path validation and 
 });
 
 
-test('broker process generation binds the crash watcher and child admission stays disconnected', async () => {
+test('broker process generation binds the crash watcher without exposing general child commands', async () => {
     const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
     const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
     const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
     assert.match(native, /GetProcessTimes\(process, out long created, out _, out _, out _\)[\s\S]*?new ClientIdentity\([\s\S]*?, created\)/);
     assert.match(native, /OpenForWait\(ClientIdentity client\)[\s\S]*?created == client\.CreatedFileTime && IsRunning\(process\)/);
     assert.match(broker, /var ownerHandle = Native\.OpenForWait\(client\);\s*if \(ownerHandle\.IsInvalid\)/);
-    assert.doesNotMatch(protocol, /RedeemChild|GrantChild/);
-    assert.doesNotMatch(protocol, /CefChildAdmission|RedeemChild|GrantChild/);
+    assert.doesNotMatch(protocol, /CefChildAdmission|GrantChild/);
 });
 
 
@@ -242,5 +241,23 @@ test('CEF staged child is bounded to one pending slot and retired on lock and ti
     assert.match(broker, /if \(ReferenceEquals\(pendingCefChild, expected\)\) RevokePendingCefChild\(\)/);
     assert.match(preflight, /return new CefPendingChild\(new CefChildAdmission/);
     assert.match(pending, /admission\.Revoke\(\);\s*try \{ image\.Dispose\(\); \}\s*finally \{ process\.Dispose\(\); \}/);
-    assert.doesNotMatch(broker, /TryRedeem\(/);
+    assert.doesNotMatch(stage, /TryRedeem\(/);
+});
+
+
+test('CEF redemption has a dedicated route and never reaches ordinary broker commands', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const pending = await readFile('apps/broker/Veil.VolumeBroker/CefPendingChild.cs', 'utf8');
+    const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
+    const preflight = await readFile('apps/broker/Veil.VolumeBroker/CefChildPreflight.cs', 'utf8');
+    const redeem = broker.slice(broker.indexOf('private byte[] RedeemCefChild('), broker.indexOf('private async Task<byte[]> Execute'));
+    assert.match(broker, /bool redemptionCandidate = reason == "image" && !config\.Development/);
+    assert.match(broker, /if \(redemptionCandidate\)\s*response = request\.Command == BrokerCommand\.RedeemCefChild\s*\? RedeemCefChild\(request, client\) : Protocol\.Error\("ClientRejected"\);\s*else if \(request\.Command == BrokerCommand\.RedeemCefChild\)\s*response = Protocol\.Error\("ClientRejected"\);\s*else\s*response = await Execute/);
+    assert.match(redeem, /!pending\.MatchesChild\(client\)[\s\S]*?pendingCefChild = null;\s*using \(pending\)/);
+    assert.match(redeem, /!Protected\(backend\.Status\(\)\) \|\|\s*!CefChildPreflight\.VerifyRedemption[\s\S]*?!Protected\(backend\.Status\(\)\)[\s\S]*?!pending\.TryRedeem/);
+    assert.doesNotMatch(redeem, /backend\.(Attach|Unlock|Lock|Detach)\(|Protocol\.Ok\(/);
+    assert.match(preflight, /using var rechecked = CefPinnedImage\.OpenVerified\(child, process,/);
+    assert.match(pending, /!disposed && admission\.TryRedeem/);
+    assert.match(protocol, /new \{ ok = true, cefChildVerified = true \}/);
+    assert.doesNotMatch(startup, /RedeemCefChild|cefChildVerified/);
 });

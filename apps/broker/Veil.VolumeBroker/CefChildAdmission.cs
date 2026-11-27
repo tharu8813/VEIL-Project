@@ -61,5 +61,7 @@ internal sealed class CefChildAdmission
     internal bool IsExpired => clock.GetElapsedTime(issuedAt) is var elapsed &&
         (elapsed < TimeSpan.Zero || elapsed >= Lifetime);
 
+    internal bool MatchesChild(ClientIdentity observed) => !retired && child == observed;
+
     internal void Revoke() => retired = true;
 }

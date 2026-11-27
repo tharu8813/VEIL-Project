@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Veil.VolumeBroker;
 
-internal enum BrokerCommand { Status, Attach, Unlock, Lock, Detach, AuthenticatedOwner, CheckCefChild, StageCefChild }
+internal enum BrokerCommand { Status, Attach, Unlock, Lock, Detach, AuthenticatedOwner, CheckCefChild, StageCefChild, RedeemCefChild }
 
 /// <summary>One parsed request. The secret is held in a clearable buffer, never in a string.</summary>
 internal sealed class BrokerRequest : IDisposable
@@ -89,6 +89,10 @@ internal static class Protocol
 
     internal static byte[] Error(string code) =>
         JsonSerializer.SerializeToUtf8Bytes(new { ok = false, error = code });
+
+    // Snapshot only, not permission to initialize CEF or manipulate the volume.
+    internal static byte[] CefChildVerified() =>
+        JsonSerializer.SerializeToUtf8Bytes(new { ok = true, cefChildVerified = true });
 
     internal static byte[] Ok(BackendStatus status) => JsonSerializer.SerializeToUtf8Bytes(new
     {

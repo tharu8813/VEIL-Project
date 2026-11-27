@@ -81,7 +81,13 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             try { client = Native.Identify(pipe); }
             catch (Exception) { log.Write("client-rejected", new { reason = "identity" }); await Reply(pipe, Protocol.Error("ClientRejected")); return; }
             string? reason = Reject(client);
-            if (reason is not null)
+            // A separately pinned image may reach ONLY the redemption parser,
+            // never the ordinary command dispatcher. Actual identity is checked
+            // against the retained child under serial, not just its path.
+            bool redemptionCandidate = reason == "image" && !config.Development &&
+                config.CefChildImage is { } pinnedChild &&
+                string.Equals(client.ImagePath, pinnedChild, StringComparison.OrdinalIgnoreCase);
+            if (reason is not null && !redemptionCandidate)
             {
                 log.Write("client-rejected", new { client.ProcessId, reason });
                 await Reply(pipe, Protocol.Error("ClientRejected"));
@@ -111,7 +117,13 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 try
                 {
                     stop.ThrowIfCancellationRequested();
-                    response = await Execute(request, client);
+                    if (redemptionCandidate)
+                        response = request.Command == BrokerCommand.RedeemCefChild
+                            ? RedeemCefChild(request, client) : Protocol.Error("ClientRejected");
+                    else if (request.Command == BrokerCommand.RedeemCefChild)
+                        response = Protocol.Error("ClientRejected");
+                    else
+                        response = await Execute(request, client);
                 }
                 finally { serial.Release(); }
             }
@@ -134,6 +146,49 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             (!Native.IsSigned(client.ImagePath) || (!config.Development &&
                 !Native.MatchesSha256(client.ImagePath, config.ClientSha256!)))) return "signature";
         return null;
+    }
+
+    // Called only for separately pinned child candidates, while holding serial.
+    // The response is a one-shot verification receipt; product startup remains disabled.
+    private byte[] RedeemCefChild(BrokerRequest request, ClientIdentity client)
+    {
+        if (request.VolumeId != config.VolumeId ||
+            pendingCefChild is not { } pending || !pending.MatchesChild(client))
+            return Protocol.Error("CefChildRejected");
+
+        // Only the designated generation can consume the slot. Once it tries,
+        // success, refusal, exception or a lost reply cannot make it reusable.
+        pendingCefChild = null;
+        using (pending)
+        {
+            try
+            {
+                if (config.Development || config.CefChildImage is not { } path ||
+                    config.CefChildSha256 is not { } hash ||
+                    authenticatedOwner is not { } owner || unlockOwner is not { } generation ||
+                    authenticatedOwnerHandle is not { } ownerHandle || !Native.IsRunning(ownerHandle))
+                    return Protocol.Error("CefChildRejected");
+
+                bool Protected(BackendStatus state) => state.Attached && state.Unlocked &&
+                    state.FullyEncrypted && state.ProtectionOn && state.ProtectorPresent &&
+                    string.Equals(state.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase);
+                if (!Protected(backend.Status()) ||
+                    !CefChildPreflight.VerifyRedemption(pending, owner, ownerHandle, client, path, hash) ||
+                    !Protected(backend.Status()) ||
+                    pending.ProcessResource is not SafeProcessHandle childHandle ||
+                    Native.ObserveProcess(ownerHandle) != owner ||
+                    Native.ObserveProcess(childHandle) != client ||
+                    !pending.TryRedeem(owner, client, generation,
+                        Native.IsRunning(ownerHandle), Native.IsRunning(childHandle), true, true))
+                    return Protocol.Error("CefChildRejected");
+                return Protocol.CefChildVerified();
+            }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                log.Write("cef-child-rejected", new { type = error.GetType().Name });
+                return Protocol.Error("CefChildRejected");
+            }
+        }
     }
 
     private async Task<byte[]> Execute(BrokerRequest request, ClientIdentity client)
