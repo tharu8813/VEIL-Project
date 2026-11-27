@@ -91,3 +91,19 @@ test('future CEF protected profile preflight is read-only and refuses unverified
     assert.match(session, /EngineHost \{ get; \} = new WebView2BrowserEngine\(\);/);
     assert.doesNotMatch(startup, /CefProtectedProfilePreflight|CefDevelopmentEngine/);
 });
+
+
+test('CEF preparation lease is bound to a fresh authenticated registered volume and owns its exclusive lock', async () => {
+    const session = await readFile('apps/desktop/ProtectedProfileSession.cs', 'utf8');
+    const broker = await readFile('apps/desktop/BrokerClient.cs', 'utf8');
+    assert.match(broker, /RegisteredProductProfilePath =>\s*!config\.Development && config\.RequireWindowsService/);
+    assert.match(session, /if \(broker\.Unlock\(secret\)\)[\s\S]*?FullyEncrypted: true, ProtectionOn: true, Unlocked: true, ProtectorPresent: true[\s\S]*?authenticatedVolumeGuid = state\.VolumeGuid;/);
+    assert.match(session, /Environment\.CurrentManagedThreadId != ownerThread \|\|\s*disposed \|\| notifications\.LockRequested \|\| authenticatedVolumeGuid is null/);
+    assert.match(session, /ProfileGate\.Verify\(root, broker, requireProtected: true\);[\s\S]*?location\.VolumeGuid, authenticatedVolumeGuid, StringComparison\.OrdinalIgnoreCase/);
+    assert.match(session, /session\.RequireCefPreparationAuthority\(root\);\s*ProfileGate\.RejectRedirectedChildren\(root\);\s*session\.RequireCefPreparationAuthority\(root\);\s*var handle = new FileStream\(Path\.Combine\(root, "profile\.lock"\), FileMode\.OpenOrCreate,\s*FileAccess\.ReadWrite, FileShare\.None\);\s*try\s*\{\s*session\.RequireCefPreparationAuthority\(root\);/);
+    assert.match(session, /private CefPreparationLease\(/);
+    assert.match(session, /released \|\|\s*handle\.SafeFileHandle\.IsClosed \|\| handle\.SafeFileHandle\.IsInvalid\)\s*return false;\s*session\.RequireCefPreparationAuthority\(ProductRoot\);/);
+    assert.match(session, /released = true;\s*handle\.Dispose\(\);/);
+    assert.match(session, /disposed = true;\s*authenticatedVolumeGuid = null;/);
+    assert.doesNotMatch(startup, /AcquireCefPreparationLease|CefPreparationLease/);
+});

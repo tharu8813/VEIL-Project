@@ -54,6 +54,13 @@ internal sealed record BrokerClientConfig
 /// <summary>Queries the volume broker's Status over its named pipe (ADR-0003). Any failure stops startup.</summary>
 internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolumeBroker
 {
+    // Only the administrator-controlled installed-product configuration is
+    // eligible for future CEF preparation; development broker paths are not.
+    internal string? RegisteredProductProfilePath =>
+        !config.Development && config.RequireWindowsService &&
+        config.ProfilePath is { } path && Path.IsPathFullyQualified(path)
+            ? Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)) : null;
+
     public VolumeStatus? QueryRegisteredVolume()
     {
         try

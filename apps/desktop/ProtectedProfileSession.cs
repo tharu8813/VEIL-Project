@@ -1,3 +1,4 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Windows;
@@ -15,6 +16,8 @@ internal sealed class ProtectedProfileSession : IDisposable
     private bool attachedHere;
     private bool unlockAttempted;
     private bool disposed;
+    private string? authenticatedVolumeGuid;
+    private readonly int ownerThread = Environment.CurrentManagedThreadId;
 
     private ProtectedProfileSession(NamedPipeVolumeBroker broker, ProtectedSessionNotifications notifications)
     {
@@ -70,6 +73,9 @@ internal sealed class ProtectedProfileSession : IDisposable
                     state = broker.QueryRegisteredVolume();
                     if (state is not { FullyEncrypted: true, ProtectionOn: true, Unlocked: true, ProtectorPresent: true })
                         throw new ProfileLocationException("The volume lost protected status during unlock.");
+                    if (string.IsNullOrWhiteSpace(state.VolumeGuid))
+                        throw new ProfileLocationException("The authenticated volume identity is missing.");
+                    authenticatedVolumeGuid = state.VolumeGuid;
                     var accepted = secret;
                     secret = null; // Transfer ownership to the startup caller for vault unlock.
                     return accepted;
@@ -86,6 +92,80 @@ internal sealed class ProtectedProfileSession : IDisposable
         throw new ProfileLocationException("Too many failed unlock attempts.");
     }
 
+    // Only a future CEF preparation caller uses this. Existing WebView2 startup
+    // is unchanged; call instead of opening a second product profile.lock.
+    internal CefPreparationLease AcquireCefPreparationLease()
+        => CefPreparationLease.Acquire(this);
+
+    private void RequireCefPreparationAuthority(string root)
+    {
+        if (Environment.CurrentManagedThreadId != ownerThread ||
+            disposed || notifications.LockRequested || authenticatedVolumeGuid is null)
+            throw new ProfileLocationException("The authenticated CEF preparation session is unavailable.");
+        var location = ProfileGate.Verify(root, broker, requireProtected: true);
+        if (!string.Equals(location.VolumeGuid, authenticatedVolumeGuid, StringComparison.OrdinalIgnoreCase) ||
+            disposed || notifications.LockRequested)
+            throw new ProfileLocationException("The authenticated CEF volume or session changed.");
+    }
+
+    // Owns the exclusive file handle. Same dispatcher thread only.
+    // Dispose before disposing the parent session. This is not launch authority.
+    internal sealed class CefPreparationLease : IDisposable
+    {
+        private readonly ProtectedProfileSession session;
+        private readonly FileStream handle;
+        private bool released;
+
+        internal string ProductRoot { get; }
+
+        internal static CefPreparationLease Acquire(ProtectedProfileSession session)
+        {
+            var root = session.broker.RegisteredProductProfilePath ??
+                throw new ProfileLocationException("CEF requires a registered product profile.");
+            ProfileGate.RejectElevated();
+            session.RequireCefPreparationAuthority(root);
+            ProfileGate.RejectRedirectedChildren(root);
+            session.RequireCefPreparationAuthority(root);
+            var handle = new FileStream(Path.Combine(root, "profile.lock"), FileMode.OpenOrCreate,
+                FileAccess.ReadWrite, FileShare.None);
+            try
+            {
+                session.RequireCefPreparationAuthority(root);
+                return new CefPreparationLease(session, root, handle);
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+
+        private CefPreparationLease(ProtectedProfileSession session, string root, FileStream handle)
+        {
+            this.session = session;
+            ProductRoot = root;
+            this.handle = handle;
+        }
+
+        internal bool StillAuthorized()
+        {
+            if (Environment.CurrentManagedThreadId != session.ownerThread || released ||
+                handle.SafeFileHandle.IsClosed || handle.SafeFileHandle.IsInvalid)
+                return false;
+            session.RequireCefPreparationAuthority(ProductRoot);
+            return true;
+        }
+
+        public void Dispose()
+        {
+            if (Environment.CurrentManagedThreadId != session.ownerThread)
+                throw new InvalidOperationException("Release the CEF preparation lease on its owning thread.");
+            if (released) return;
+            released = true;
+            handle.Dispose();
+        }
+    }
+
     internal static void ClearPassword(char[]? password) =>
         CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(password.AsSpan()));
 
@@ -94,6 +174,7 @@ internal sealed class ProtectedProfileSession : IDisposable
     {
         if (disposed) return;
         disposed = true;
+        authenticatedVolumeGuid = null;
         if (!attachedHere && !unlockAttempted) return;
         try
         {
