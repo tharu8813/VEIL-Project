@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MPL-2.0
-# Disabled service registration only; no start, stop, deletion or CEF activation.
+# Disabled registration and isolated service lifecycle probe; no CEF activation.
 . (Join-Path $PSScriptRoot 'cef-preflight-publication.ps1')
 
 $script:VeilPreflightServiceName = 'Veil.VolumeBroker'
@@ -63,5 +63,112 @@ function Register-VeilDisabledPreflightService([string]$JournalRoot,[string]$Com
         serviceCreated=$true;startupEnabled=$false
     }
     [void](Write-VeilPreflightDraftFile (Join-Path $JournalRoot '02-service-registered.json') $final)
+    return $final
+}
+
+
+function Read-VeilPreflightServiceRegistration([string]$JournalRoot,[string]$Command,
+    [scriptblock]$VerifyPublication,[scriptblock]$ReadService,[scriptblock]$ReadDacl) {
+    Assert-VeilAdminPath $JournalRoot
+    $items = @(Get-ChildItem -LiteralPath $JournalRoot -Force)
+    if ($items.Count -ne 2 -or @($items | Where-Object {
+        $_.PSIsContainer -or $_.Name -cnotin @('01-service-intent.json','02-service-registered.json')
+    }).Count -ne 0) { throw 'Incomplete service registration; preserve state.' }
+    Assert-VeilDisabledPreflightService (& $ReadService) $Command
+    Assert-VeilPreflightServiceDacl (& $ReadDacl)
+    $publication = & $VerifyPublication
+    if ($publication.state -cne 'files-published-only' -or $publication.startupEnabled -isnot [bool] -or
+        $publication.startupEnabled -or $publication.serviceCreated -isnot [bool] -or $publication.serviceCreated -or
+        $publication.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or $publication.intentSha256 -cnotmatch '\A[0-9a-f]{64}\z') {
+        throw 'Fully verified file publication required.'
+    }
+    $intent = [ordered]@{
+        kind='cef-preflight-service';format=1;state='registration-intent'
+        sourceCommit=$publication.sourceCommit;publicationIntentSha256=$publication.intentSha256
+        serviceName=$script:VeilPreflightServiceName;command=$Command;startupEnabled=$false
+    }
+    $intentHash = Assert-VeilPreflightDraftBytes (Read-VeilPreflightDraftBytes (Join-Path $JournalRoot '01-service-intent.json')) $intent
+    $final = [ordered]@{
+        kind='cef-preflight-service';format=1;state='registered-disabled'
+        sourceCommit=$publication.sourceCommit;intentSha256=$intentHash
+        serviceCreated=$true;startupEnabled=$false
+    }
+    $finalHash = Assert-VeilPreflightDraftBytes (Read-VeilPreflightDraftBytes (Join-Path $JournalRoot '02-service-registered.json')) $final
+    Assert-VeilDisabledPreflightService (& $ReadService) $Command
+    Assert-VeilPreflightServiceDacl (& $ReadDacl)
+    return [pscustomobject]@{state='registered-disabled';sourceCommit=$publication.sourceCommit;registrationSha256=$finalHash;startupEnabled=$false}
+}
+
+function Assert-VeilPreflightServiceIdentity($Service,[string]$Command) {
+    if ($null -eq $Service -or @($Service).Count -ne 1 -or
+        $Service.Name -cne $script:VeilPreflightServiceName -or $Service.PathName -cne $Command -or
+        $Service.StartName -ne 'LocalSystem' -or $Service.ServiceType -ne 'Own Process') {
+        throw 'Unexpected service identity; do not modify it.'
+    }
+}
+
+function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
+    [scriptblock]$VerifyRegistration,[scriptblock]$ReadService,[scriptblock]$ReadDacl,
+    [scriptblock]$SetManual,[scriptblock]$Start,[scriptblock]$Disable,[scriptblock]$Stop,[scriptblock]$RequireDetached) {
+    if (Test-Path -LiteralPath $ProbeRoot) { throw 'Existing or interrupted probe must be preserved.' }
+    $registrationEvidence = & $VerifyRegistration
+    if ($registrationEvidence.state -cne 'registered-disabled' -or $registrationEvidence.startupEnabled -isnot [bool] -or
+        $registrationEvidence.startupEnabled -or $registrationEvidence.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or
+        $registrationEvidence.registrationSha256 -cnotmatch '\A[0-9a-f]{64}\z') { throw 'Verified disabled registration required.' }
+    & $RequireDetached
+    Assert-VeilAdminPath (Split-Path -Parent $ProbeRoot)
+    New-VeilRestrictedDirectory $ProbeRoot
+    $intent = [ordered]@{
+        kind='cef-preflight-service-probe';format=1;state='probe-intent'
+        sourceCommit=$registrationEvidence.sourceCommit;registrationSha256=$registrationEvidence.registrationSha256
+        startupEnabled=$false
+    }
+    $intentHash = Write-VeilPreflightDraftFile (Join-Path $ProbeRoot '01-probe-intent.json') $intent
+    Assert-VeilPreflightPublicationEqual (& $VerifyRegistration) $registrationEvidence
+    & $RequireDetached
+    # Once mutation is attempted, always try to disable and stop the exact
+    # service, including when the start call itself reports an error.
+    try {
+        & $SetManual
+        $current = & $ReadService
+        Assert-VeilPreflightServiceIdentity $current $Command
+        Assert-VeilPreflightServiceDacl (& $ReadDacl)
+        if ($current.StartMode -ne 'Manual' -or $current.State -ne 'Stopped' -or $current.ProcessId -ne 0) {
+            throw 'Expected manual stopped broker immediately before start.'
+        }
+        & $RequireDetached
+        & $Start
+        $running = & $ReadService
+        Assert-VeilPreflightServiceIdentity $running $Command
+        Assert-VeilPreflightServiceDacl (& $ReadDacl)
+        if ($running.State -ne 'Running' -or $running.StartMode -ne 'Manual' -or $running.ProcessId -le 0) {
+            throw 'Broker did not reach expected running state.'
+        }
+        & $RequireDetached
+        [void](Write-VeilPreflightDraftFile (Join-Path $ProbeRoot '02-running-observed.json') ([ordered]@{
+            state='running-observed';intentSha256=$intentHash;startupEnabled=$false
+        }))
+    }
+    finally {
+        $current = & $ReadService
+        Assert-VeilPreflightServiceIdentity $current $Command
+        Assert-VeilPreflightServiceDacl (& $ReadDacl)
+        # Disable first to prevent another normal SCM start. Stop is graceful
+        # only; never force-kill the broker or force-dismount a volume.
+        & $Disable
+        $current = & $ReadService
+        Assert-VeilPreflightServiceIdentity $current $Command
+        if ($current.StartMode -ne 'Disabled') { throw 'Could not disable broker.' }
+        if ($current.State -ne 'Stopped') { & $Stop }
+        Assert-VeilDisabledPreflightService (& $ReadService) $Command
+        Assert-VeilPreflightServiceDacl (& $ReadDacl)
+        & $RequireDetached
+    }
+    Assert-VeilPreflightPublicationEqual (& $VerifyRegistration) $registrationEvidence
+    $final = [ordered]@{
+        kind='cef-preflight-service-probe';format=1;state='running-then-stopped'
+        intentSha256=$intentHash;sourceCommit=$registrationEvidence.sourceCommit;startupEnabled=$false
+    }
+    [void](Write-VeilPreflightDraftFile (Join-Path $ProbeRoot '03-stopped-verified.json') $final)
     return $final
 }

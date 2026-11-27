@@ -238,6 +238,36 @@ try {
         Reject { Assert-VeilDisabledPreflightService $script:fakeService $command }
         $script:fakeService.($pair.name) = $old
     }
+    $verifyService = {
+        Read-VeilPreflightServiceRegistration $serviceJournal $command $verifyPublished $readService $readDacl
+    }
+    $observed = & $verifyService
+    if ($observed.state -cne 'registered-disabled' -or $observed.startupEnabled) { throw 'Registered service verification failed.' }
+    $record = Join-Path $serviceJournal '02-service-registered.json'
+    $saved = [IO.File]::ReadAllBytes($record)
+    [IO.File]::AppendAllText($record,' ')
+    Reject { & $verifyService }
+    [IO.File]::WriteAllBytes($record,$saved)
+    $script:fakeDacl = 'D:(A;;RPWP;;;AU)'
+    Reject { & $verifyService }
+    $script:fakeDacl = $script:VeilPreflightServiceDacl
+    $manual = { $script:fakeService.StartMode = 'Manual' }
+    $disabled = { $script:fakeService.StartMode = 'Disabled' }
+    $startProbe = { $script:fakeService.State = 'Running'; $script:fakeService.ProcessId = 100 }
+    $stopProbe = { $script:fakeService.State = 'Stopped'; $script:fakeService.ProcessId = 0 }
+    $probeRoot = Join-Path $work 'service-probe'
+    $probeResult = Invoke-VeilPreflightServiceProbe $probeRoot $command $verifyService $readService $readDacl $manual $startProbe $disabled $stopProbe {}
+    if ($probeResult.state -cne 'running-then-stopped' -or $probeResult.startupEnabled -or
+        @(Get-ChildItem -LiteralPath $probeRoot -Force).Count -ne 3) { throw 'Service probe did not complete.' }
+    Assert-VeilDisabledPreflightService $script:fakeService $command
+    Reject { Invoke-VeilPreflightServiceProbe $probeRoot $command $verifyService $readService $readDacl $manual $startProbe $disabled $stopProbe {} }
+    $failedProbe = Join-Path $work 'failed-service-probe'
+    $failStart = { & $startProbe; throw 'Synthetic start reply failure.' }
+    Reject { Invoke-VeilPreflightServiceProbe $failedProbe $command $verifyService $readService $readDacl $manual $failStart $disabled $stopProbe {} }
+    Assert-VeilDisabledPreflightService $script:fakeService $command
+    if (-not (Test-Path -LiteralPath (Join-Path $failedProbe '01-probe-intent.json')) -or
+        (Test-Path -LiteralPath (Join-Path $failedProbe '03-stopped-verified.json'))) { throw 'Failed probe incorrectly completed.' }
+    Write-Host 'PASS: service journal revalidation and synthetic start/stop/failure cleanup'
     $script:fakeService = $null
     $badPublication = { [pscustomobject]@{state='publish-registration';startupEnabled=$false;serviceCreated=$false} }
     Reject { Register-VeilDisabledPreflightService $badServiceJournal $command $badPublication $readService $createService $setDacl $readDacl }

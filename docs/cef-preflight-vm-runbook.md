@@ -112,11 +112,21 @@ files-published-only 상태에서만 폐기용 VM 확인 옵션과 별도 확인
 
 SCM에 고정 경로의 Veil.VolumeBroker를 LocalSystem / Disabled / Stopped 상태로 생성하고 SYSTEM·Administrators 관리 및 인증 사용자 조회 전용 DACL을 설정·재조회한다. 별도 Program Files\VEIL.cef-preflight-service 에 등록 intent와 registered-disabled 기록을 남긴다. 등록 중 실패 시 서비스나 파일을 삭제하지 않으며 기존/불명확한 SCM 등록을 재사용하지 않는다. 실제 SCM DACL roundtrip, Windows 서비스 등록 및 권한 시험은 NOT RUN. 등록 완료 기록은 서비스를 시작할 권한이나 CEF 실행 성공을 의미하지 않는다.
 
-## 11. 서비스 시작 전 차단점
+## 11. 비활성 등록 확인 및 일회성 서비스 시작/정지 시험
 
-전용 파일 게시, 제한된 재개 및 비활성 서비스 등록 코드는 마련했지만 서비스 등록 중단 상태 검사 및 서비스 시작 트랜잭션은 아직 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
+동일 독립 입력으로 등록 저널의 정확한 바이트, 게시 증거, 서비스 경로·계정·상태·DACL을 읽기 전용 확인한다.
 
-후속 구현은 실제 SCM 상태와 등록 기록을 재검증하고 제한된 서비스 시작 및 실패 처리를 별도 수행해야 한다. 그 뒤에만 고정 설치 경로의 일반 사용자 검증 명령을 실행한다.
+~~~powershell
+.\scripts\test-cef-preflight-service.ps1 -DisposableVm -SignerThumbprint $pin -SourceCommit $commit -ImagePath $testImage -ProfilePath $testProfile -VolumeGuid $volumeGuid -ProtectorId $primaryId -RecoveryProtectorId $recoveryId -UserSid $testUserSid
+~~~
+
+명시적 -RunProbe를 추가하면 복구 자격 증명을 다시 확인한 뒤 서비스 probe intent를 만들고 Manual 전환, SCM Running 및 분리 상태를 확인한다. 정상·오류 모두 finally에서 정확한 서비스의 Disabled 전환 및 정상 Stop, 분리 상태를 확인한다. 모든 검증이 통과해야 running-then-stopped 기록을 남긴다. SCM Running 관측은 실제 일반 사용자 브라우저 연결 검증이 아니다. 프로세스 강제 종료 및 강제 볼륨 분리 금지. 전원 차단으로 finally를 실행하지 못하거나 서비스 정지/분리 확인 실패 시 기존 상태를 보존하고 관리자가 VM을 검사해야 한다. 자동 재개 없음. 실제 SCM/BitLocker 시험은 NOT RUN.
+
+## 12. 일반 사용자 사전 검사 전 차단점
+
+전용 파일 게시, 제한된 재개, 비활성 서비스 등록 및 일회성 시작/정지 시험 코드는 마련했지만 실제 VM 시험과 일반 사용자 사전 검사 세션 조정은 아직 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
+
+후속 구현은 실제 VM에서 SCM 상태와 일회성 시험을 검증하고 일반 사용자 보호 프로필 검사 세션을 별도 조정해야 한다. 그 뒤에만 고정 설치 경로의 일반 사용자 검증 명령을 실행한다.
 
 ~~~powershell
 # 전용 등록 절차 완료 후에만 실행. 현재 실행하지 않는다.

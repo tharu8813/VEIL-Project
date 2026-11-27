@@ -401,3 +401,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: 검증 전용 비활성 브로커 서비스 등록
 
 정확한 head 7eff11c 일반 CI 45954145871 PASS, native CI 확인 시 진행 중. 전체 files-published-only 상태 및 시험 볼륨 복구 자격 증명 재확인 후 별도 SCM 등록 intent를 작성하고 LocalSystem/Disabled/Stopped 서비스 생성, 시스템·관리자 관리/인증 사용자 조회 전용 DACL 설정 및 재확인한다. 고정 경로·서비스 상태·DACL·전체 게시 파일을 다시 대조한 뒤 registered-disabled 기록을 작성. 실패 시 기록·SCM 상태를 보존하고 기존 서비스 채택/시작/삭제 없음. 합성 SCM 콜백 및 실제 저널/SDDL 파싱 테스트 추가. 신규 CI 및 실제 SCM/DACL/BitLocker/VM/독립 리뷰 NOT RUN. 등록 중단 확인, 서비스 시작 및 CEF 초기화는 남아 있음.
+
+### 추가 구현: 서비스 등록 재검증 및 일회성 시작/정지 시험
+
+정확한 head 1f765d0 일반 CI 45954697017 PASS, native CI 확인 시 진행 중. 별도 등록 저널과 실제 Disabled/Stopped SCM identity/DACL 및 게시 증거 재검증. 명시적 RunProbe에만 복구 자격 증명 재확인 후 Manual 및 Running 관측, finally에서 Disabled/정상 Stop/분리 확인. 실패 기록 보존, 완료 기록은 정상 전체 시험에서만 생성. 실제 서비스와 볼륨은 실행하지 않았으며 강제 종료/분리 및 자동 재개 없음. 합성 시작/정지·시작 응답 실패 후 정리 테스트 추가. 신규 CI 및 실제 SCM/ACL/BitLocker/전원 차단/독립 리뷰 NOT RUN. 일반 사용자 사전 검사 세션 및 CEF 초기화는 남아 있음.
