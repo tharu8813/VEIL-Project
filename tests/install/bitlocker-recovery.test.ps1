@@ -5,6 +5,7 @@ $image = 'C:\Program Files\Synthetic Test\test.vhdx'
 $volumePath = '\\?\Volume{11111111-1111-1111-1111-111111111111}\'
 $primary = [guid]'22222222-2222-2222-2222-222222222222'
 $recovery = [guid]'33333333-3333-3333-3333-333333333333'
+$external = [guid]'55555555-5555-5555-5555-555555555555'
 $normalPassword = 'synthetic-passphrase'
 $recoveryPassword = '111111-111111-111111-111111-111111-111111-111111-111111'
 $otherPassword = '222222-222222-222222-222222-222222-222222-222222-222222'
@@ -78,7 +79,11 @@ function Invoke-CimMethod {
                 $result.VolumeKeyProtectorID = @($script:primary.ToString('B'))
                 if ($script:extraPassphrase) { $result.VolumeKeyProtectorID += '{44444444-4444-4444-4444-444444444444}' }
             }
+            # Win32_EncryptableVolume.GetKeyProtectors: 2 = external key, 3 = numerical password.
             elseif ($Arguments.KeyProtectorType -eq 2) {
+                $result.VolumeKeyProtectorID = @($script:external.ToString('B'))
+            }
+            elseif ($Arguments.KeyProtectorType -eq 3) {
                 $result.VolumeKeyProtectorID = @()
                 if ($script:recoveryPresent) { $result.VolumeKeyProtectorID = @($script:recovery.ToString('B')) }
             }
@@ -145,6 +150,11 @@ $secretInputs.Enqueue($normalPassword)
 Assert-Rejected { Register-VeilRecoveryBackup $image $volumePath $primary $primary } 'selected recovery protector is not on'
 if ($attached -or -not $locked -or $shown -ne 2 -or $generated -ne 1) { throw 'Unknown recovery ID was used.' }
 Write-Output 'PASS enrollment refuses an explicitly selected protector from outside the recovery list'
+
+$secretInputs.Enqueue($normalPassword)
+Assert-Rejected { Register-VeilRecoveryBackup $image $volumePath $primary $external } 'selected recovery protector is not on'
+if ($attached -or -not $locked -or $shown -ne 2 -or $generated -ne 1) { throw 'External key was treated as a numerical recovery password.' }
+Write-Output 'PASS external key protectors cannot be selected as numerical recovery passwords'
 
 $secretInputs.Enqueue($otherPassword)
 Assert-Rejected { Test-VeilRecoveryBackup $image $volumePath $recovery } 'does not match'
