@@ -219,7 +219,13 @@ test('CEF preflight command is owner-only, separately pinned and never grants ch
     assert.match(command, /authenticatedOwner != client[\s\S]*?code = "NotAuthenticatedOwner";[\s\S]*?config\.Development[\s\S]*?code = "CefUnavailable";[\s\S]*?CefChildPreflight\.Check/);
     assert.match(command, /status = backend\.Status\(\);[\s\S]*?!Native\.IsRunning\(preflightOwner\)/);
     assert.doesNotMatch(command, /backend\.(Attach|Unlock|Lock|Detach)\(|CefChildAdmission|GrantChild|RedeemChild/);
-    const reject = broker.slice(broker.indexOf('private string? Reject('), broker.indexOf('private async Task<byte[]> Execute'));
+    const rejectStart = broker.indexOf('private string? Reject(');
+    const redeemStart = broker.indexOf('private byte[] RedeemCefChild(');
+    assert.ok(rejectStart >= 0 && redeemStart > rejectStart, 'ordinary client rejection boundary missing');
+    const reject = broker.slice(rejectStart, redeemStart);
+    assert.match(reject, /config\.ClientImages\.Any\(/);
+    assert.match(reject, /Native\.IsSigned\(client\.ImagePath\)/);
+    assert.match(reject, /Native\.MatchesSha256\(client\.ImagePath, config\.ClientSha256!/);
     assert.doesNotMatch(reject, /CefChildImage|CefChildSha256|CheckCefChild/);
     assert.match(config, /if \(CefChildImage is not null \|\| CefChildSha256 is not null\)[\s\S]*?if \(development \|\|/);
     assert.match(protocol, /\(parsed is BrokerCommand\.CheckCefChild or BrokerCommand\.StageCefChild\) != childHandle\.HasValue/);
