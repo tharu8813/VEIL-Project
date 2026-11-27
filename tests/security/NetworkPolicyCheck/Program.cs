@@ -468,6 +468,66 @@ Check(ambiguousEnvironmentRejected, "Ambiguous unrelated environment accepted");
 Check(!Directory.Exists(layoutRoot), "Child environment plan created a profile");
 Console.WriteLine("PASS: isolated CEF child environment planning without launch or parent mutation");
 
+// Pure child admission model; no OS process, credential or volume access.
+var ownerIdentity = new Veil.VolumeBroker.ClientIdentity(100, 1, "S-1-synthetic", "owner.exe", 1000);
+var childIdentity = new Veil.VolumeBroker.ClientIdentity(101, 1, "S-1-synthetic", "child.exe", 2000);
+var unlockGeneration = new object();
+var admissionClock = new SyntheticAdmissionClock();
+Veil.VolumeBroker.CefChildAdmission Grant() => new(ownerIdentity, childIdentity, unlockGeneration, admissionClock);
+bool Redeem(Veil.VolumeBroker.CefChildAdmission grant,
+    Veil.VolumeBroker.ClientIdentity? observedOwner = null,
+    Veil.VolumeBroker.ClientIdentity? observedChild = null,
+    object? generation = null, bool ownerAlive = true, bool childAlive = true,
+    bool imageVerified = true, bool volumeProtected = true) =>
+    grant.TryRedeem(observedOwner ?? ownerIdentity, observedChild ?? childIdentity,
+        generation ?? unlockGeneration, ownerAlive, childAlive, imageVerified, volumeProtected);
+var admittedGrant = Grant();
+Check(Redeem(admittedGrant) && !Redeem(admittedGrant), "CEF admission replay accepted");
+foreach (var wrongChild in new[] {
+    childIdentity with { ProcessId = 102 }, childIdentity with { CreatedFileTime = 3000 },
+    childIdentity with { SessionId = 2 }, childIdentity with { UserSid = "other" },
+    childIdentity with { ImagePath = "other.exe" }
+})
+{
+    var denied = Grant();
+    Check(!Redeem(denied, observedChild: wrongChild) && !Redeem(denied),
+        "wrong CEF child accepted or failed grant reusable");
+}
+Check(!Redeem(Grant(), observedOwner: ownerIdentity with { CreatedFileTime = 3000 }),
+    "reused owner PID admitted");
+Check(!Redeem(Grant(), generation: new object()), "changed unlock generation admitted");
+Check(!Redeem(Grant(), ownerAlive: false) && !Redeem(Grant(), childAlive: false) &&
+    !Redeem(Grant(), imageVerified: false) && !Redeem(Grant(), volumeProtected: false),
+    "unverified CEF child admission accepted");
+var revoked = Grant();
+revoked.Revoke();
+Check(!Redeem(revoked), "revoked CEF grant admitted");
+var expired = Grant();
+admissionClock.Advance(TimeSpan.FromSeconds(15));
+Check(!Redeem(expired), "expired CEF grant admitted");
+var almostExpired = Grant();
+admissionClock.Advance(TimeSpan.FromSeconds(14));
+Check(Redeem(almostExpired), "live CEF grant unexpectedly rejected");
+foreach (var invalidChild in new[] {
+    childIdentity with { ProcessId = 100 }, childIdentity with { SessionId = 2 },
+    childIdentity with { UserSid = "other" }, childIdentity with { CreatedFileTime = 999 }
+})
+{
+    bool rejected = false;
+    try { _ = new Veil.VolumeBroker.CefChildAdmission(ownerIdentity, invalidChild, unlockGeneration, admissionClock); }
+    catch (ArgumentException) { rejected = true; }
+    Check(rejected, "invalid child binding accepted");
+}
+Console.WriteLine("PASS: CEF child one-shot admission policy, generation, expiry, revocation and identity");
+
+file sealed class SyntheticAdmissionClock : TimeProvider
+{
+    private long timestamp;
+    public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+    public override long GetTimestamp() => timestamp;
+    internal void Advance(TimeSpan duration) => timestamp += duration.Ticks;
+}
+
 file sealed class SyntheticLoginCapability : IEngineLoginForms
 {
     public LoginFormScope LoginScope { get; set; }

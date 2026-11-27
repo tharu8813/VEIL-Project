@@ -8,8 +8,6 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Veil.VolumeBroker;
 
-internal sealed record ClientIdentity(int ProcessId, int SessionId, string UserSid, string ImagePath);
-
 internal static class Native
 {
     private const uint PipeAccessDuplex = 0x3, FirstPipeInstance = 0x00080000, Overlapped = 0x40000000;
@@ -49,10 +47,31 @@ internal static class Native
         if (!OpenProcessToken(process, 0x8 /* TOKEN_QUERY */, out var token)) throw new Win32Exception();
         using (token)
         using (var identity = new WindowsIdentity(token.DangerousGetHandle()))
-            return new ClientIdentity((int)pid, (int)session, identity.User!.Value, image.ToString());
+        {
+            if (!GetProcessTimes(process, out long created, out _, out _, out _) ||
+                created <= 0 || !IsRunning(process))
+                throw new UnauthorizedAccessException("Client process identity is unavailable.");
+            return new ClientIdentity((int)pid, (int)session, identity.User!.Value, image.ToString(), created);
+        }
     }
 
-    internal static SafeProcessHandle OpenForWait(int pid) => OpenProcess(Synchronize, false, (uint)pid);
+    // Match the process generation observed on the pipe, not merely a PID
+    // that Windows could have reused while this request waited for serial.
+    internal static SafeProcessHandle OpenForWait(ClientIdentity client)
+    {
+        var process = OpenProcess(QueryLimitedInformation | Synchronize, false, (uint)client.ProcessId);
+        if (!process.IsInvalid &&
+            GetProcessTimes(process, out long created, out _, out _, out _) &&
+            created == client.CreatedFileTime && IsRunning(process))
+            return process;
+        process.Dispose();
+        return new SafeProcessHandle(IntPtr.Zero, ownsHandle: true);
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessTimes(SafeProcessHandle process, out long created,
+        out long exited, out long kernel, out long user);
 
     // The crash watcher may dispose the handle concurrently after process exit.
     // A closed, signaled, invalid or failed wait never attests a live owner.

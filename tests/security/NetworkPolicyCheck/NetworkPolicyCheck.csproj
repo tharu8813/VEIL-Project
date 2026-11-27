@@ -16,5 +16,7 @@
     <Compile Include="../../../apps/desktop/Engine/CefProfileLayout.cs" Link="CefProfileLayout.cs" />
     <Compile Include="../../../apps/desktop/Engine/CefChildEnvironmentPlan.cs" Link="CefChildEnvironmentPlan.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/BrokerLog.cs" Link="BrokerLog.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/ClientIdentity.cs" Link="ClientIdentity.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefChildAdmission.cs" Link="CefChildAdmission.cs" />
   </ItemGroup>
 </Project>

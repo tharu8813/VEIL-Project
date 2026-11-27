@@ -164,3 +164,15 @@ test('CEF preparation rechecks the live broker owner around path validation and 
     assert.doesNotMatch(authority, /catch\s*\(|QueryRegisteredVolume\(|requireProtected:\s*false/);
     assert.doesNotMatch(startup, /QueryAuthenticatedOwner|PrepareChildEnvironment/);
 });
+
+
+test('broker process generation binds the crash watcher and child admission stays disconnected', async () => {
+    const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
+    assert.match(native, /GetProcessTimes\(process, out long created, out _, out _, out _\)[\s\S]*?new ClientIdentity\([\s\S]*?, created\)/);
+    assert.match(native, /OpenForWait\(ClientIdentity client\)[\s\S]*?created == client\.CreatedFileTime && IsRunning\(process\)/);
+    assert.match(broker, /var ownerHandle = Native\.OpenForWait\(client\);\s*if \(ownerHandle\.IsInvalid\)/);
+    assert.doesNotMatch(broker, /CefChildAdmission/);
+    assert.doesNotMatch(protocol, /CefChildAdmission|RedeemChild|GrantChild/);
+});

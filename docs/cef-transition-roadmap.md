@@ -191,3 +191,7 @@ main의 컴파일 전용 helper와 분리한 `scripts/test-cef-wpf.ps1`을 추�
 ### 추가 구현: 브로커 소유권 확인과 CEF 준비 통합 (검증 대기)
 
 #226에 #227의 정확한 head를 통합한다. CEF 준비 lease의 기존 thread/session/lock/volume 검증에 브로커 AuthenticatedOwner 조회를 연결하고, 파일 경로 검증 전후 모두 현재 소유권 및 보호 상태와 인증 GUID를 확인한다. 소유자 거부, 응답 오류, 잠금 요청 발생 시 준비 실패를 전파하며 일반 Status만으로 대체하지 않는다. #225 네이티브 검증은 별도 PR이다. 아직 자식 bootstrap이 실제 브로커 인증을 수행하지 않고 준비 API도 제품 startup에 연결되지 않는다. 별도 native client admission 및 인증 위임, 종료/재잠금, 실제 BitLocker 및 OS 쓰기 실측은 NOT RUN. WebView2 유지.
+
+### 추가 구현: 프로세스 세대 확인 및 CEF 자식 위임 정책 모델 (검증 대기)
+
+Named pipe에서 확인한 ClientIdentity에 OS GetProcessTimes의 생성 시각을 포함하고, unlock crash watcher handle을 열 때 PID와 생성 시각 및 생존 상태를 일치시킨다. 별도 순수 CefChildAdmission 모델은 인증된 owner/child의 전체 identity, 동일 SID/session, unlock 세대 객체, 15초 단조 시간, 단일 사용 및 명시 철회를 요구한다. 미래 broker가 직접 관측한 child image 검증·생존·보호 상태만 전달할 계약이며 현재 protocol/제품에는 연결되지 않는다. 실제 parent-child launch binding, 서명/해시 pin, 원본 handle 보유, pipe 인증, 자식 종료/relock, Windows/BitLocker 실측은 미완료. 기존 broker client allowlist와 WebView2 제품 시작을 유지한다. 순수 회귀 및 소스 계약 검사 추가.

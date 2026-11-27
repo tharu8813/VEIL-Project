@@ -184,7 +184,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 case BrokerCommand.Unlock:
                     // Acquire the crash-relock handle BEFORE opening protected data.
                     // If this process cannot be watched, no new unlock is allowed.
-                    var ownerHandle = Native.OpenForWait(client.ProcessId);
+                    var ownerHandle = Native.OpenForWait(client);
                     if (ownerHandle.IsInvalid)
                     {
                         ownerHandle.Dispose();
