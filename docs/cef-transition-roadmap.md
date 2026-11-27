@@ -187,3 +187,7 @@ main의 컴파일 전용 helper와 분리한 `scripts/test-cef-wpf.ps1`을 추�
 ### 추가 구현: 인증 세션 기반 CEF 준비 환경 통합 (검증 대기)
 
 #222~#224의 정확한 head를 합친 통합 브랜치에서 CefPreparationLease.PrepareChildEnvironment를 추가한다. 등록 제품 root와 같은 인증 broker를 사용하여 살아 있는 lease를 재확인하고, 보호 디렉터리 준비에 lease의 StillAuthorized를 직접 전달한다. 현재 프로세스 환경을 복사하여 CEF 전용 TEMP/TMP/cache/log 계획을 구성하고 반환 직전 권한을 다시 검증한다. 호출자에게 임의 root/broker/권한 콜백을 받지 않는다. 반환값은 환경 스냅샷이며 launch 권한이 아니다. 기존 제품 시작 경로 미호출, native broker 인증 및 보호 경로 검증 연결 미완료. #225 네이티브 경로 검증 PR은 별도. 실제 Windows/BitLocker/lock contention 및 프로세스 수명 검증 NOT RUN, 기존 WebView2와 release gate 유지.
+
+### 추가 구현: 브로커 소유권 확인과 CEF 준비 통합 (검증 대기)
+
+#226에 #227의 정확한 head를 통합한다. CEF 준비 lease의 기존 thread/session/lock/volume 검증에 브로커 AuthenticatedOwner 조회를 연결하고, 파일 경로 검증 전후 모두 현재 소유권 및 보호 상태와 인증 GUID를 확인한다. 소유자 거부, 응답 오류, 잠금 요청 발생 시 준비 실패를 전파하며 일반 Status만으로 대체하지 않는다. #225 네이티브 검증은 별도 PR이다. 아직 자식 bootstrap이 실제 브로커 인증을 수행하지 않고 준비 API도 제품 startup에 연결되지 않는다. 별도 native client admission 및 인증 위임, 종료/재잠금, 실제 BitLocker 및 OS 쓰기 실측은 NOT RUN. WebView2 유지.

@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Veil.VolumeBroker;
 
-internal enum BrokerCommand { Status, Attach, Unlock, Lock, Detach }
+internal enum BrokerCommand { Status, Attach, Unlock, Lock, Detach, AuthenticatedOwner }
 
 /// <summary>One parsed request. The secret is held in a clearable buffer, never in a string.</summary>
 internal sealed class BrokerRequest : IDisposable

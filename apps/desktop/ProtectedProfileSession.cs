@@ -102,10 +102,24 @@ internal sealed class ProtectedProfileSession : IDisposable
         if (Environment.CurrentManagedThreadId != ownerThread ||
             disposed || notifications.LockRequested || authenticatedVolumeGuid is null)
             throw new ProfileLocationException("The authenticated CEF preparation session is unavailable.");
+        // Ordinary volume Status does not prove the requesting desktop owns
+        // the unlock. Require a live broker owner attestation on both sides
+        // of filesystem verification, without changing WebView2 startup.
+        RequireBrokerOwner();
         var location = ProfileGate.Verify(root, broker, requireProtected: true);
-        if (!string.Equals(location.VolumeGuid, authenticatedVolumeGuid, StringComparison.OrdinalIgnoreCase) ||
-            disposed || notifications.LockRequested)
-            throw new ProfileLocationException("The authenticated CEF volume or session changed.");
+        if (!string.Equals(location.VolumeGuid, authenticatedVolumeGuid, StringComparison.OrdinalIgnoreCase))
+            throw new ProfileLocationException("The authenticated CEF volume changed.");
+        RequireBrokerOwner();
+        if (disposed || notifications.LockRequested)
+            throw new ProfileLocationException("The authenticated CEF session changed.");
+    }
+
+    private void RequireBrokerOwner()
+    {
+        var owner = broker.QueryAuthenticatedOwner();
+        if (owner is not { FullyEncrypted: true, ProtectionOn: true, Unlocked: true, ProtectorPresent: true } ||
+            !string.Equals(owner.VolumeGuid, authenticatedVolumeGuid, StringComparison.OrdinalIgnoreCase))
+            throw new ProfileLocationException("The broker did not attest the authenticated CEF owner.");
     }
 
     // Owns the exclusive file handle. Same dispatcher thread only.

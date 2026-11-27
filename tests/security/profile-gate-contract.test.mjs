@@ -133,3 +133,34 @@ test('integrated CEF child environment is prepared only through the live owning 
     assert.doesNotMatch(plan, /Process\.Start|SetEnvironmentVariable|CefInitialize|UnmanagedDevelopmentVolume|Directory\.Delete|File\.Delete/);
     assert.doesNotMatch(startup, /PrepareChildEnvironment|AcquireCefPreparationLease/);
 });
+
+test('broker authenticated-owner snapshot is live, read-only and granted only after verified unlock', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
+    const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
+    const client = await readFile('apps/desktop/BrokerClient.cs', 'utf8');
+    const owner = broker.slice(broker.indexOf('case BrokerCommand.AuthenticatedOwner:'), broker.indexOf('case BrokerCommand.Attach'));
+    assert.match(owner, /!Registered\(status\) \|\| !status\.Unlocked \|\| !status\.FullyEncrypted/);
+    assert.match(owner, /!status\.ProtectionOn \|\| !status\.ProtectorPresent/);
+    assert.match(owner, /unlockOwner is null \|\| authenticatedOwner != client/);
+    assert.match(owner, /authenticatedOwnerHandle is not \{ \} liveHandle \|\| !Native\.IsRunning\(liveHandle\)/);
+    assert.doesNotMatch(owner, /backend\.(Attach|Unlock|Lock|Detach)\(/);
+    assert.match(broker, /if \(!Registered\(status\) \|\| !status\.Unlocked \|\| !status\.FullyEncrypted \|\|[\s\S]*?authenticatedOwner = client;/);
+    assert.match(broker, /private void Watch\(int pid, SafeProcessHandle handle\)\s*\{\s*ClearAuthenticatedOwner\(\);/);
+    assert.match(broker, /if \(!ReferenceEquals\(unlockOwner, ownership\)\) return;\s*ClearAuthenticatedOwner\(\);/);
+    assert.match(native, /WaitForSingleObject\(handle, 0\) == 0x102/);
+    assert.match(protocol, /\(parsed == BrokerCommand\.Unlock\) != \(secret is not null\)/);
+    assert.match(client, /QueryAuthenticatedOwner\(\) => QueryVolume\("AuthenticatedOwner"\)/);
+});
+
+
+test('CEF preparation rechecks the live broker owner around path validation and never falls back to Status alone', async () => {
+    const session = await readFile('apps/desktop/ProtectedProfileSession.cs', 'utf8');
+    const authority = session.slice(session.indexOf('private void RequireCefPreparationAuthority('),
+        session.indexOf('// Owns the exclusive file handle.'));
+    assert.match(authority, /RequireBrokerOwner\(\);\s*var location = ProfileGate\.Verify\(root, broker, requireProtected: true\);\s*if \(!string\.Equals\(location\.VolumeGuid, authenticatedVolumeGuid, StringComparison\.OrdinalIgnoreCase\)\)\s*throw new ProfileLocationException[\s\S]*?RequireBrokerOwner\(\);\s*if \(disposed \|\| notifications\.LockRequested\)/);
+    assert.equal((authority.match(/RequireBrokerOwner\(\);/g) ?? []).length, 2);
+    assert.match(authority, /var owner = broker\.QueryAuthenticatedOwner\(\);\s*if \(owner is not \{ FullyEncrypted: true, ProtectionOn: true, Unlocked: true, ProtectorPresent: true \} \|\|\s*!string\.Equals\(owner\.VolumeGuid, authenticatedVolumeGuid, StringComparison\.OrdinalIgnoreCase\)\)\s*throw new ProfileLocationException/);
+    assert.doesNotMatch(authority, /catch\s*\(|QueryRegisteredVolume\(|requireProtected:\s*false/);
+    assert.doesNotMatch(startup, /QueryAuthenticatedOwner|PrepareChildEnvironment/);
+});
