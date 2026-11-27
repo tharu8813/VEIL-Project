@@ -415,3 +415,5 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 직전 head 78589ea의 일반/native CI는 작업 시작 시 실행 중. Process.Start가 반환한 프로세스 핸들에서 Win32 GetProcessId/QueryFullProcessImageName/OpenProcessToken 및 TokenSessionId/ElevationType/Elevation/IntegrityLevel을 읽고, 등록 SID·고정 실행 경로·동일 대화형 세션·medium integrity·비상승/기본 토큰·관리자 그룹 부재를 요구한다. 동일 Process 객체 종료 코드 int 29와 tokenVerified/PID/세션 관측이 있어야 protected-preflight 기록 생성. 실제 CI 자체 프로세스 토큰 읽기 및 합성 잘못된 관측 거부 시험 추가. 시작 후 스냅샷으로 실행 전 suspended 검증이나 런타임 토큰 불변성 증명이 아니며 실제 별도 사용자/VM/BitLocker/CEF NOT RUN. 신규 CI 및 독립 리뷰 대기.
 
 후속 CI 조회: 78589ea 일반 CI 45955792334 FAIL (별도 preflight package 거부 테스트), Rust PASS. 로그는 공통 Reject에서 거부되지 않은 입력만 보여주므로 정확한 케이스는 미확정. 합성 서비스 객체가 같은 참조를 공유해 PID 교체가 이전 관측에도 반영되는 결함을 발견, scalar PID 스냅샷으로 수정하고 Reject 호출 위치 진단을 추가. 신규 CI로 재확인 필요.
+
+후속 CI: 4e2b607 일반 CI 45956408765 FAIL. Rust PASS 및 .NET 빌드 성공 후 Windows PowerShell 5.1 파서에서 cef-preflight-package.test.ps1의 정규식 삽입 중복/문자열 파손 확인. 이전 정상 파싱 파일(78589ea) 기준으로 토큰 관측 및 거부 케이스 구간을 재구성하고 중복 제거. PID scalar snapshot 수정은 유지. 테스트 내용의 검증 조건은 완화하지 않음. 새 CI 실행 결과 및 실제 VM 확인 전 완료 처리 금지.
