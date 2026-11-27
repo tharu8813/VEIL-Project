@@ -193,6 +193,30 @@ internal sealed class ProtectedProfileSession : IDisposable
             return plan;
         }
 
+        // Stage exactly one already-contained suspended child. This does not
+        // resume it or authorize CEF; the future product coordinator must
+        // bind image trust, redemption, runtime lifetime and shutdown.
+        internal void StageSuspendedChild(CefContainedProcess child)
+        {
+            ArgumentNullException.ThrowIfNull(child);
+            try
+            {
+                RequireCurrentPreparation();
+                long nominated = child.NominatedHandle;
+                session.broker.StageCefChild(nominated, session.authenticatedVolumeGuid!);
+                RequireCurrentPreparation();
+                if (child.NominatedHandle != nominated)
+                    throw new ProfileLocationException("The nominated CEF child changed.");
+            }
+            catch
+            {
+                // Ambiguous reply: never retry or resume. The broker's staged
+                // verification expires independently; close the child job now.
+                child.Dispose();
+                throw;
+            }
+        }
+
         private void RequireCurrentPreparation()
         {
             if (!StillAuthorized())

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 using System.Diagnostics;
 using Veil.VolumeBroker;
+using Veil.Desktop;
+using System.Text.Json;
 
 if (args is ["--child"])
 {
@@ -42,7 +44,40 @@ foreach (string bad in new[] {
     catch (ProtocolException error) { rejected = error.Code == "BadRequest"; }
     Check(rejected, "Malformed CEF preflight wire request accepted.");
 }
-Console.WriteLine("PASS: strict CEF preflight protocol parsing");
+// Real desktop request writer -> real broker parser, with a handle above
+// JavaScript's exact integer range. No service or installed profile involved.
+using (var buffer = new MemoryStream())
+{
+    using (var writer = new Utf8JsonWriter(buffer))
+        CefStageWire.WriteRequest(writer, "synthetic", 9007199254740993L);
+    using var roundtrip = Protocol.Parse(buffer.ToArray());
+    Check(roundtrip.Command == BrokerCommand.StageCefChild &&
+        roundtrip.VolumeId == "synthetic" && roundtrip.ChildHandle == 9007199254740993L,
+        "Desktop staging wire did not match broker parser.");
+}
+const string protectedReply = """{"ok":true,"status":{"attached":true,"volumeGuid":"synthetic-guid","fullyEncrypted":true,"protectionOn":true,"unlocked":true,"readyToUnlock":false,"protectorPresent":true}}""";
+using (var reply = JsonDocument.Parse(protectedReply))
+{
+    Check(CefStageWire.IsProtectedStageReply(reply.RootElement, "synthetic-guid"), "Valid staging response rejected.");
+    Check(!CefStageWire.IsProtectedStageReply(reply.RootElement, "other-guid"), "Wrong volume accepted.");
+}
+foreach (var invalidReply in new[] {
+    """{"ok":false,"error":"CefUnavailable"}""",
+    """{"ok":true,"cefChildVerified":true}""",
+    protectedReply.Replace("\"ok\":true", "\"ok\":false,\"ok\":true"),
+    protectedReply.Replace("\"attached\":true", "\"attached\":false"),
+    protectedReply.Replace("\"fullyEncrypted\":true", "\"fullyEncrypted\":false"),
+    protectedReply.Replace("\"protectionOn\":true", "\"protectionOn\":false"),
+    protectedReply.Replace("\"unlocked\":true", "\"unlocked\":false"),
+    protectedReply.Replace("\"protectorPresent\":true", "\"protectorPresent\":false"),
+    protectedReply.Replace("\"readyToUnlock\":false", "\"readyToUnlock\":\"false\""),
+    protectedReply.Replace("\"attached\":true", "\"attached\":true,\"extra\":true")
+})
+{
+    using var reply = JsonDocument.Parse(invalidReply);
+    Check(!CefStageWire.IsProtectedStageReply(reply.RootElement, "synthetic-guid"), "Invalid staging response accepted.");
+}
+Console.WriteLine("PASS: strict CEF preflight protocol parsing and desktop staging wire");
 
 using var owner = Process.GetCurrentProcess();
 var identity = Native.ObserveProcess(owner.SafeHandle);

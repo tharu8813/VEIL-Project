@@ -349,3 +349,17 @@ test('CEF containment primitive starts suspended and assigns a kill-on-close job
     assert.match(launch, /!verified\(\) \|\| !IsProcessInJob\(process, job, out bool contained\) \|\| !contained \|\|\s*ResumeThread\(thread\) != 1/);
     assert.doesNotMatch(startup, /CefContainedProcess/);
 });
+
+
+test('desktop stages a contained suspended child only under the existing owner lease', async () => {
+    const session = await readFile('apps/desktop/ProtectedProfileSession.cs', 'utf8');
+    const client = await readFile('apps/desktop/BrokerClient.cs', 'utf8');
+    const startup = await readFile('apps/desktop/Program.cs', 'utf8');
+    const stage = session.slice(session.indexOf('internal void StageSuspendedChild'), session.indexOf('private void RequireCurrentPreparation'));
+    assert.match(stage, /RequireCurrentPreparation\(\);[\s\S]*?long nominated = child\.NominatedHandle;[\s\S]*?session\.broker\.StageCefChild\(nominated, session\.authenticatedVolumeGuid!\);[\s\S]*?RequireCurrentPreparation\(\);[\s\S]*?child\.NominatedHandle != nominated/);
+    assert.match(stage, /catch\s*\{[\s\S]*?child\.Dispose\(\);[\s\S]*?throw;/);
+    assert.doesNotMatch(stage, /ResumeAfterVerification|CreateSuspended/);
+    assert.match(client, /CefStageWire\.WriteRequest\(writer, config\.VolumeId, handle\)/);
+    assert.match(client, /if \(command == "StageCefChild"\) VerifyServer\(pipe\);/);
+    assert.doesNotMatch(startup, /StageSuspendedChild|StageCefChild/);
+});
