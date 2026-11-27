@@ -10,6 +10,7 @@
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/Native.cs" Link="Native.cs" />
     <Compile Include="../../../apps/shared/AdminOnlyFile.cs" Link="AdminOnlyFile.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSystemModuleVerifier.cs" Link="CefSystemModuleVerifier.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSystemSignatureTrust.cs" Link="CefSystemSignatureTrust.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs" Link="CefProcessTokenObserver.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs" Link="CefSessionObservationPolicy.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefRoleTokenPolicy.cs" Link="CefRoleTokenPolicy.cs" />
