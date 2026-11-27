@@ -337,3 +337,7 @@ Prior exact head 743a263 passed general and native CI. Stage now transfers alrea
 
 ### 추가 구현: retain runtime pins across redemption and unresolved stop (검증 대기)
 Prior exact head af172b3 passed general and native CI. Pending admission now transfers image and runtime inventory pins alongside job/child resources to completion receipt or stop recovery, including initial assignment exception after verified handle acquisition. Only confirmed natural exit and empty job, or successful forced drain with observed process exit, releases all four resources. Failed stop retains them across bounded retries. Synthetic ownership transfer/double-detach and source contracts added. No actual installed service/BitLocker, OS termination refusal, or interactive CEF nested runtime tested. Disk pins are not a measurement of mapped bytes, nor durable across broker crash; same-user races remain unproven. Startup remains disabled and WebView2 unchanged.
+
+### 추가 구현: 잠금 요청 거부 시에도 CEF 인증 철회 (검증 대기)
+
+Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 먼저 CEF 인증 소유자와 자식 admission/receipt를 철회한다. 후보 정리 예외가 발생해도 인증은 먼저 제거되며 기존 unlockOwner crash-relock 감시 토큰은 보존한다. 비강제 잠금이 열린 핸들로 거부되어 볼륨이 아직 unlocked여도 새 CEF 준비는 재인증 전 거부한다. 가짜 backend 회귀에 Detach 거부/HandlesOpen, 새 unlock 후 권한 회복 및 재잠금 성공을 추가했다. 일반 Status 및 실제 잠금 오류 의미, 기존 WebView2 startup은 유지한다. 외부 OS 잠금/재잠금의 미관측 상태 전이, 실제 설치형 broker 및 BitLocker, CEF 실행은 별도 검증 필요. 작성 시 테스트 NOT RUN. 제품 startup disabled.

@@ -147,9 +147,21 @@ try {
     assert.deepEqual(await command(a, 'Unlock', { secret }), { ok: false, error: 'AlreadyUnlocked' },
         'an unlocked volume must not silently accept another Unlock');
     assert.deepEqual(await command(a, 'Detach'), { ok: false, error: 'MustBeLocked' });
+    assert.deepEqual(await command(a, 'AuthenticatedOwner'), { ok: false, error: 'NotAuthenticatedOwner' });
+    assert.deepEqual(await command(a, 'StageCefChild', { childHandle: '1' }),
+        { ok: false, error: 'NotAuthenticatedOwner' });
+    assert.equal((await command(a, 'Status')).status.unlocked, true, 'refused detach must not report locked');
+    assert.equal((await command(a, 'Lock')).status.unlocked, false);
+    assert.equal((await command(a, 'Unlock', { secret })).status.unlocked, true);
+    assert.equal((await command(a, 'AuthenticatedOwner')).status.unlocked, true, 'fresh unlock restores owner authority');
     await writeFile(marker, 'synthetic open handle');
     assert.deepEqual(await command(a, 'Lock'), { ok: false, error: 'HandlesOpen' });
     assert.equal((await command(a, 'Status')).status.unlocked, true, 'refused lock must not report locked');
+    assert.deepEqual(await command(a, 'AuthenticatedOwner'), { ok: false, error: 'NotAuthenticatedOwner' });
+    assert.deepEqual(await command(a, 'CheckCefChild', { childHandle: '1' }),
+        { ok: false, error: 'NotAuthenticatedOwner' });
+    assert.deepEqual(await command(a, 'StageCefChild', { childHandle: '1' }),
+        { ok: false, error: 'NotAuthenticatedOwner' });
     await rm(marker);
     assert.equal((await command(a, 'Lock')).status.unlocked, false);
     assert.deepEqual(await command(a, 'AuthenticatedOwner'), { ok: false, error: 'NotAuthenticatedOwner' });

@@ -242,8 +242,12 @@ test('CEF staged child is bounded to one pending slot and retired on lock and ti
     assert.match(stage, /authenticatedOwner != client[\s\S]*?config\.Development[\s\S]*?if \(pendingCefChild is not null \|\| completedPreflight is not null\)[\s\S]*?CefChildPreflight\.Stage/);
     assert.match(stage, /pendingCefChild = candidate;\s*_ = MonitorPendingCefChildAsync\(candidate, generation\);/);
     assert.match(stage, /if \(!ReferenceEquals\(pendingCefChild, candidate\)\)\s*\{\s*try \{ StopPendingChild\(candidate\); \}\s*finally \{ candidate\.Dispose\(\); \}/);
-    assert.match(broker, /request\.Command is BrokerCommand\.Lock or BrokerCommand\.Detach\)\s*RevokePendingCefChild\(\)/);
-    assert.match(broker, /private void ClearAuthenticatedOwner\(\)\s*\{\s*RevokePendingCefChild\(\)/);
+    assert.match(broker, /request\.Command is BrokerCommand\.Lock or BrokerCommand\.Detach\)\s*ClearAuthenticatedOwner\(\)/);
+    assert.match(broker, /private void ClearAuthenticatedOwner\(\)\s*\{[\s\S]*?authenticatedOwner = null;\s*authenticatedOwnerHandle = null;\s*RevokePendingCefChild\(\);/);
+    const clearOwner = broker.slice(broker.indexOf('private void ClearAuthenticatedOwner()'), broker.indexOf('private void RevokePendingCefChild()'));
+    assert.doesNotMatch(clearOwner, /unlockOwner\s*=/);
+    const secure = broker.slice(broker.indexOf('internal async Task SecureVolumeAsync()'), broker.indexOf('private async Task ServeAsync'));
+    assert.match(secure, /ClearAuthenticatedOwner\(\);[\s\S]*?var status = backend\.Status\(\)/);
     assert.match(broker, /if \(ReferenceEquals\(pendingCefChild, expected\)\) RevokePendingCefChild\(\)/);
     assert.match(preflight, /var pending = new CefPendingChild\(new CefChildAdmission[\s\S]*?return pending;/);
     assert.match(pending, /admission\.Revoke\(\);\s*try \{ runtime\?\.Dispose\(\); \}\s*finally\s*\{\s*try \{ image\?\.Dispose\(\); \}\s*finally\s*\{\s*try \{ job\?\.Dispose\(\); \}\s*finally \{ process\?\.Dispose\(\); \}/);
@@ -379,7 +383,7 @@ test('broker retains pipe-observed process objects and compares actual handles b
     assert.match(broker, /!Native.SameLiveProcess\(stagingOwner, pipeClient\)/);
     assert.match(broker, /!Native.SameLiveProcess\(nominated, pipeClient\)/);
     assert.match(broker, /!Native.SameLiveProcess\(childHandle, pipeClient\)/);
-    assert.match(broker, /if \(request.Command is BrokerCommand.Lock or BrokerCommand.Detach\)\s*RevokePendingCefChild\(\);[\s\S]*?var status = backend.Status\(\)/);
+    assert.match(broker, /if \(request.Command is BrokerCommand.Lock or BrokerCommand.Detach\)\s*ClearAuthenticatedOwner\(\);[\s\S]*?var status = backend.Status\(\)/);
 });
 
 

@@ -47,7 +47,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         await serial.WaitAsync();
         try
         {
-            RevokePendingCefChild();
+            ClearAuthenticatedOwner(); // Service cleanup retires CEF authority even if locking fails.
             RetryUnresolvedCefStops();
             var status = backend.Status();
             if (!status.Attached) return;
@@ -243,7 +243,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         try
         {
             if (request.Command is BrokerCommand.Lock or BrokerCommand.Detach)
-                RevokePendingCefChild(); // Retire before any backend call, including a failed status.
+                ClearAuthenticatedOwner(); // Retire CEF authority before any backend call, even on refusal.
             if (unresolvedCefStops.Count != 0 &&
                 request.Command is BrokerCommand.Lock or BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild)
                 RetryUnresolvedCefStops();
@@ -505,9 +505,11 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     /// <summary>Locks the volume when the client that unlocked it exits without locking.</summary>
     private void ClearAuthenticatedOwner()
     {
-        RevokePendingCefChild();
+        // Retire authorization before stopping candidates: cleanup can fail.
+        // Keep unlockOwner for the independent crash-relock watcher.
         authenticatedOwner = null;
         authenticatedOwnerHandle = null;
+        RevokePendingCefChild();
     }
 
     private void RevokePendingCefChild()
