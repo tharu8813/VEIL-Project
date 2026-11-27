@@ -38,9 +38,19 @@ $runtimePlan | ConvertFrom-Json | Select-Object kind,format,architecture,sourceC
 
 계획은 원본 서명 증거와 staging 파일을 다시 대조하며 startupEnabled=false인 JSON만 출력한다. 설치/등록 파일로 직접 리다이렉트하지 않는다. 계획 JSON은 자체 서명 증거가 아니며 원본 CMS 및 정확한 후보 파일을 계속 보존한다.
 
-## 4. 등록 전 차단점
+## 4. 전체 검증용 패키지 서명 증거
 
-현재는 전체 설치 트리의 서명된 정확한 인벤토리, CefPreflight 데스크톱의 pin, 브로커 pin 및 CEF 런타임 계획을 안전하게 함께 게시하는 전용 설치/복구 트랜잭션이 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
+별도 관리자 제한 ACL payload에 Desktop(CefPreflight 구성), Broker(Release 구성), Cef(서명된 후보)만 둔다. 각각의 EXE 및 VEIL DLL을 서명하고 CEF 후보의 원본 CMS 증거를 별도로 보존한다. 관리 DLL의 ProductName은 CefPreflight 전용 마커와 일치해야 한다. 이 마커는 빌드 혼입을 탐지하기 위한 것으로 바이너리 동작이나 빌드 출처의 독립 증명이 아니다.
+
+~~~powershell
+.\scripts\check-cef-preflight-package.ps1 -PayloadRoot $payload -CefEvidenceDirectory $evidence -PackageEvidenceDirectory $packageEvidence -SignerThumbprint $pin -SourceCommit $commit -Sign
+~~~
+
+새 별도 CMS 증거에는 전체 파일 크기 및 SHA-256이 포함된다. 기존 제품 manifest와 형식이 다르며 installable=false 및 startupEnabled=false만 허용한다. 패키지 검증은 파일을 실행하거나 설치하지 않는다. 전체 payload의 안전한 게시 및 복구 절차는 여전히 미구현이다.
+
+## 5. 등록 전 차단점
+
+전체 설치 트리의 서명 인벤토리 검증 도구는 마련했지만 CefPreflight 데스크톱의 pin, 브로커 pin 및 CEF 런타임 계획을 안전하게 함께 게시하는 전용 설치/복구 트랜잭션이 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
 
 후속 구현은 깨끗한 폐기용 VM에서만 기존 설치 부재, 전체 서명 증거, 관리자 ACL, 단일 등록 사용자/볼륨, VHDX 분리, 실패 복구 및 정상 분리 확인을 갖춘 전용 설치 트랜잭션을 마련해야 한다. 그 뒤에만 고정 설치 경로의 일반 사용자 검증 명령을 실행한다.
 

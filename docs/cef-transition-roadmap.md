@@ -373,3 +373,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: 서명 증거에서 비활성 런타임 핀 계획 생성
 
 정확한 head 38acf5b 일반 CI 45950466353 PASS, native CI 확인 시 진행 중. 기존 별도 CMS 서명·Authenticode·제한 ACL·정확한 후보 인벤토리 검증을 재사용해 C# runtime registration parser 계약의 JSON을 생성하는 읽기 전용 계획 도구를 추가한다. 고정 staging만 읽고 stdout에 계획만 반환; 설치 경로/ProgramData/서비스/볼륨 변경 없음. startupEnabled=false 유지, source commit·archive hash·파일별 길이/SHA-256 유지. 기존 evidence 합성 CI에 정상 계획 및 잘못된 signer/commit/파일/manifest 거부 추가. 폐기용 VM 준비 런북에 별도 Desktop 구성, 서명 및 후보 staging, 등록 계획 검토와 실제 게시 미구현 차단점을 명시. 신규 CI 및 실제 서명/서비스 등록/BitLocker NOT RUN; 제품 활성화 금지.
+
+### 추가 구현: 검증 전용 전체 패키지 서명 증거
+
+정확한 head 5a45daf 일반 CI 45950908056 PASS, native CI 확인 시 진행 중. 별도 cef-preflight-vm-package CMS 형식으로 Desktop/CefPreflight, Broker 및 Cef 후보의 모든 파일을 크기/SHA-256 인벤토리에 포함한다. 원래 CEF 후보 CMS 검증과 runtime pins 일치를 요구하고 VEIL EXE/DLL Authenticode 및 별도 CefPreflight ProductName 마커를 검사한다. 일반 Release와 마커 분리를 CI에서 확인한다. 마커와 서명은 실행 동작 또는 빌드 출처의 독립 attestation이 아니다. 설치 가능/제품 시작 플래그는 false만 허용, 기존 패키지 및 설치 스크립트 변경 없음. 합성 CMS/변조/누락/추가/마커 거부 테스트 추가, 실제 Authenticode 및 ACL은 합성 시험에서 mock. 신규 CI, 실제 서명/설치/BitLocker/CEF runtime 및 독립 리뷰 NOT RUN. 게시/복구 트랜잭션은 다음 단계.

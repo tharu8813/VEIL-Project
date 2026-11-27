@@ -16,6 +16,7 @@
        directory through the existing Configuration-specific OutputPath. -->
   <PropertyGroup Condition="'$(Configuration)' == 'CefPreflight'">
     <DefineConstants>$(DefineConstants);VEIL_CEF_PREFLIGHT_ONLY</DefineConstants>
+    <Product>VEIL CEF Preflight Validation Only</Product>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/veil.ico" />

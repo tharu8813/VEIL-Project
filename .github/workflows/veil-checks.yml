@@ -61,6 +61,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $fixture = Resolve-Path 'apps/desktop/bin/CefPreflight/net10.0-windows/Veil.Desktop.exe'
           $release = Resolve-Path 'apps/desktop/bin/Release/net10.0-windows/Veil.Desktop.exe'
+          $marker = 'VEIL CEF Preflight Validation Only'
+          $fixtureDll = Join-Path (Split-Path $fixture.Path) 'Veil.Desktop.dll'
+          $releaseDll = Join-Path (Split-Path $release.Path) 'Veil.Desktop.dll'
+          if ([Diagnostics.FileVersionInfo]::GetVersionInfo($fixtureDll).ProductName -cne $marker -or
+              [Diagnostics.FileVersionInfo]::GetVersionInfo($releaseDll).ProductName -ceq $marker) {
+            throw 'Preflight build marker mismatch.'
+          }
           foreach ($case in @(@{exe=$fixture; arg='--unknown'}, @{exe=$fixture; arg='--cef-protected-preflight'}, @{exe=$release; arg='--cef-protected-preflight'})) {
             $child = Start-Process -FilePath $case.exe.Path -ArgumentList $case.arg -PassThru
             try {
@@ -118,6 +125,10 @@ jobs:
       - name: Test signed CEF candidate evidence without installation
         shell: powershell
         run: .\tests\install\cef-candidate-evidence.test.ps1
+
+      - name: Test separate signed CEF preflight package inventory
+        shell: powershell
+        run: .\tests\install\cef-preflight-package.test.ps1
 
       - name: Test isolated CEF candidate staging
         shell: powershell
