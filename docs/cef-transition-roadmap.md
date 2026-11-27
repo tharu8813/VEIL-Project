@@ -357,3 +357,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 검증: disabled preflight와 양쪽 job 및 종료 객체 확인 통합 회귀
 
 정확한 head edff03c 일반 CI 45948372574 PASS, native CI 확인 시 진행 중. 기존 CefContainmentCheck에 실제 Windows synthetic apphost를 사용하여 desktop atomic job, broker-owned single candidate job, retained process handle, CefDisabledPreflight.Run 및 Native.MatchesExitedNomination을 하나의 순서로 묶는 두 시나리오를 추가했다. 정상 exit 29와 두 job 종료 확인 후에도 잘못된 owner handle을 nomination으로 제시하면 성공을 반환하지 않음을 요구한다. 확인 실패를 강제 종료로 성공 처리하지 않고 정확한 객체의 자연 종료를 유지한다. callback은 합성 broker dispatch이며 실제 pipe/service, signed runtime, BitLocker 또는 CEF 실행이 아니다. 최신 CI NOT RUN; product startup disabled, WebView2 unchanged.
+
+### 추가 구현: 별도 CefPreflight 빌드의 보호 프로필 사전 검사 진입점
+
+정확한 head ad8c946의 일반 CI 45948786981 및 native CI 45948786928 PASS. 제품 Debug/Release와 별개의 MSBuild Configuration=CefPreflight에서만 고정 --cef-protected-preflight 인자를 허용한다. 해당 구성은 일반 탐색 진입점을 컴파일에서 제외하고 설치된 고정 Desktop 경로, 관리자 아닌 실행, 사용자 단일 실행 mutex, 실제 등록 broker, 새 보호 볼륨 인증을 요구한다. 비밀번호 버퍼를 정리하고 기존 disabled coordinator를 호출한 뒤 session Dispose 및 등록 볼륨이 잠겼거나 분리되었는지 확인할 때만 exit 29 반환. CEF 브라우저 시작 없음, 평문 fallback 없음, 일반 제품 Debug/Release 동작 유지. CI에 별도 구성 빌드 및 설치되지 않은 경로/정상 Release 거부 검사 추가. 이 검증 빌드는 배포물/installer가 아니며 별도 격리 VM의 승인된 서명·등록 및 runtime pins 준비가 선행되어야 한다. 동기 owner thread 검사 중 WPF 잠금 알림 dispatch 지연 및 실제 Windows/BitLocker/CEF runtime은 미검증이며 제품 활성화 금지. 신규 CI NOT RUN, 독립 리뷰 대기.

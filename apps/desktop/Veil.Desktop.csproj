@@ -12,6 +12,11 @@
     <PlatformTarget>x64</PlatformTarget>
     <RestorePackagesWithLockFile Condition="'$(VeilWebView2Sdk)' == ''">true</RestorePackagesWithLockFile>
   </PropertyGroup>
+  <!-- Never set by the default Debug/Release builds or installer. Separate output
+       directory through the existing Configuration-specific OutputPath. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'CefPreflight'">
+    <DefineConstants>$(DefineConstants);VEIL_CEF_PREFLIGHT_ONLY</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/veil.ico" />
     <Compile Include="../shared/AdminOnlyFile.cs" Link="Shared/AdminOnlyFile.cs" />

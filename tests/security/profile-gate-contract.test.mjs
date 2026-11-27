@@ -578,3 +578,18 @@ test('broker retains executable and runtime pins until confirmed candidate exit'
     assert.match(broker, /if \(TryStopVerifiedChild\(candidate\)\)\s*\{\s*DisposeStoppedCandidate\(candidate\);[\s\S]*?unresolvedCefStops.Add\(candidate\)/);
     assert.match(broker, /DisposeStoppedCandidate\(CandidateStop candidate\)[\s\S]*?candidate.Runtime\?\.Dispose\(\)[\s\S]*?candidate.Image\?\.Dispose\(\)[\s\S]*?candidate.Job\?\.Dispose\(\)[\s\S]*?candidate.Child.Dispose\(\)/);
 });
+
+test('isolated CEF preflight entry is compile-time exclusive and never falls back to browsing', async () => {
+    const project = await readFile('apps/desktop/Veil.Desktop.csproj', 'utf8');
+    const program = await readFile('apps/desktop/Program.cs', 'utf8');
+    const entry = await readFile('apps/desktop/Engine/CefProtectedPreflightEntry.cs', 'utf8');
+    assert.match(project, /<PropertyGroup Condition="'\$\(Configuration\)' == 'CefPreflight'">[\s\S]*?VEIL_CEF_PREFLIGHT_ONLY/);
+    assert.match(program, /#if VEIL_CEF_PREFLIGHT_ONLY[\s\S]*?return CefProtectedPreflightEntry\.Run\(args\);\s*#else/);
+    assert.match(entry, /#if VEIL_CEF_PREFLIGHT_ONLY/);
+    assert.match(entry, /args is not \["--cef-protected-preflight"\] \|\| !ExternalAddress\.Installed/);
+    assert.match(entry, /ProfileGate\.RejectElevated\(\);[\s\S]*?new BrowserActivation\(\);[\s\S]*?!activation\.Primary/);
+    assert.match(entry, /BrokerClientConfig\.Load\(BrokerClientConfig\.ProductPath, development: false\)/);
+    assert.match(entry, /ProtectedProfileSession\.TryOpen[\s\S]*?ClearPassword\(password\);[\s\S]*?CefDisabledLaunchCoordinator\.RunPreflight/);
+    assert.match(entry, /session\?\.Dispose\(\);[\s\S]*?broker\.QueryRegisteredVolume\(\)[\s\S]*?VerifiedButDisabled/);
+    assert.doesNotMatch(entry, /new BrowserWindow|CreateEngine\(|UnmanagedDevelopmentVolume|activation\.Forward|activation\.Start|GetEnvironmentVariable/);
+});

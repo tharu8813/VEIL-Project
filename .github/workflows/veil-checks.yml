@@ -54,6 +54,24 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
+      - name: Compile isolated CEF preflight entry and verify refusal outside install
+        shell: pwsh
+        run: |
+          dotnet build apps/desktop/Veil.Desktop.csproj -c CefPreflight --no-restore --nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $fixture = Resolve-Path 'apps/desktop/bin/CefPreflight/net10.0-windows/Veil.Desktop.exe'
+          $release = Resolve-Path 'apps/desktop/bin/Release/net10.0-windows/Veil.Desktop.exe'
+          foreach ($case in @(@{exe=$fixture; arg='--unknown'}, @{exe=$fixture; arg='--cef-protected-preflight'}, @{exe=$release; arg='--cef-protected-preflight'})) {
+            $child = Start-Process -FilePath $case.exe.Path -ArgumentList $case.arg -PassThru
+            try {
+              if (-not $child.WaitForExit(10000)) {
+                $child.Kill()
+                throw 'Preflight refusal timed out.'
+              }
+              if ($child.ExitCode -ne 2) { throw "Expected refusal exit 2, got $($child.ExitCode)." }
+            } finally { $child.Dispose() }
+          }
+
       # Compile-only: the native CEF package and interactive WPF runtime are not exercised here.
       - name: Compile CEF managed smoke adapter
         shell: pwsh
