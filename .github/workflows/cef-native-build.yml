@@ -7,6 +7,9 @@ on:
       - 'apps/desktop/Engine/**'
       - 'apps/desktop/NetworkPolicy.cs'
       - 'scripts/build-cef-smoke.ps1'
+      - 'scripts/package-cef-nested-smoke.ps1'
+      - 'scripts/run-cef-nested-bundle.ps1'
+      - 'tests/cef/CefNestedSmoke/**'
       - '.github/workflows/cef-native-build.yml'
   workflow_dispatch:
 
@@ -64,6 +67,21 @@ jobs:
           $work = Join-Path $env:RUNNER_TEMP "veil-cef-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           & (Join-Path $work "build/Release/veil-cef-product-module-test.exe")
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare unsigned nested smoke test bundle (not a product package)
+        shell: pwsh
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP "veil-cef-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $runner = Join-Path $work 'nested-runner'
+          dotnet build tests/cef/CefNestedSmoke/CefNestedSmoke.csproj -c Release -o $runner
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/package-cef-nested-smoke.ps1 -BuildRoot $work -RunnerRoot $runner -OutputRoot (Join-Path $work 'nested-bundle') -SourceCommit $env:GITHUB_SHA
+      - name: Upload unsigned test-only runtime bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: cef-nested-smoke-${{ github.sha }}
+          path: ${{ runner.temp }}/veil-cef-${{ github.run_id }}-${{ github.run_attempt }}/nested-bundle/
+          if-no-files-found: error
+          retention-days: 7
       - name: Record validation scope
         if: always()
         shell: pwsh

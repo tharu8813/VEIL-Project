@@ -96,3 +96,13 @@ The new wrapper builds fresh pinned binaries and the locked Rust vault, then run
 
 ### Nested-job multi-process Win32 fixture
 The standard-user `scripts/test-cef-wpf.ps1` now includes `nestedBuild` and `nestedWin32`. The dedicated test-only runner launches the previously built Win32 smoke under two independent jobs and a fresh temp directory. It requires an observed restricted Low/Untrusted-integrity descendant, successful JavaScript smoke shutdown and empty jobs; stdout includes JSON evidence. Hosted CI compiles the runner only. No product profile, broker unlock or actual product engine activation is involved. Token sampling is not a complete subprocess role or site-isolation audit. Actual nested CEF runtime result: NOT RUN at implementation.
+
+
+### Run without rebuilding CEF locally
+After the native compile workflow succeeds, download its `cef-nested-smoke-<sha>` artifact for the exact tested checkout (on PR runs, GitHub's checkout SHA may be the synthetic merge commit, not the PR head). Extract it to a new directory. Use PowerShell 7 x64 with .NET 10 x64 runtime and required Windows/VC runtime dependencies, in a non-elevated interactive session:
+
+```powershell
+.\run-cef-nested-bundle.ps1 -ExpectedCommit '<exact artifact checkout SHA>'
+```
+
+Only run artifacts from the trusted repository/workflow and verified run; the unsigned manifest is a consistency check, not a publisher signature or independent provenance. The artifact contains only the Win32 smoke and nested runner, pinned CEF runtime/resources and licenses, not the product candidate or an installer. The script verifies inventory and produces result.json/stdout.json/stderr.log in a new evidence directory. Actual execution is still NOT RUN on hosted CI. Send the result files, not the temporary browser profile, for review.

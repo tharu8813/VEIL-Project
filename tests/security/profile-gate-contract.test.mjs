@@ -536,3 +536,16 @@ test('nested CEF runtime experiment remains isolated from production admission',
     assert.match(job, /limits.Basic.ActiveLimit = 1/);
     assert.doesNotMatch(startup, /CefNestedSmoke|FixtureJob/);
 });
+
+
+test('native CI publishes only a test runtime bundle and local runner verifies evidence', async () => {
+    const packaging = await readFile('scripts/package-cef-nested-smoke.ps1', 'utf8');
+    const runner = await readFile('scripts/run-cef-nested-bundle.ps1', 'utf8');
+    const workflow = await readFile('.github/workflows/cef-native-build.yml', 'utf8');
+    assert.match(packaging, /@\('veil-cef-smoke.exe', 'veil-cef-smoke.dll'\)/);
+    assert.match(packaging, /scope = 'unsigned-nested-cef-smoke-only'/);
+    assert.match(packaging, /runtimeStatus = 'NOT RUN'/);
+    assert.match(workflow, /uses: actions\/upload-artifact@v4/);
+    assert.match(runner, /Assert-Inventory[\s\S]*?Start-Process -FilePath \$program[\s\S]*?Assert-Inventory/);
+    assert.match(runner, /productReleaseGates = 'NOT RUN'/);
+});
