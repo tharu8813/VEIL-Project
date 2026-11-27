@@ -88,11 +88,25 @@ $stagePlan = .\scripts\stage-cef-preflight-package.ps1 -PayloadRoot $payload -Ce
 
 Program Files와 ProgramData의 각각 동일 부모 안에서 pending 디렉터리를 최종 VEIL 경로로 이동한다. 두 이동은 하나의 원자적 작업이 아니다. 별도 Program Files\VEIL.cef-preflight-publication 에 01-intent, 02-copies-verified, 03-binaries-published, 04-files-published 저널을 순서대로 기록한다. 마지막 상태는 files-published-only이며 서비스 등록/시작을 뜻하지 않는다. 실패 또는 기존 경로 발견 시 자동 삭제·덮어쓰기·재시도를 금지하고 증거를 보존한다. 실제 Windows ACL, 전원 차단, 경합 및 이동 내구성은 NOT RUN이다.
 
-## 9. 서비스 등록 전 차단점
+## 9. 게시 중단 상태 확인 및 명시적 재개
 
-전용 파일 게시 코드는 마련했지만 실제 게시 상태의 독립 복구 검증과 서비스 등록/시작 트랜잭션은 아직 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
+동일한 독립 입력과 폐기용 VM 확인 옵션으로 먼저 상태만 조회한다. 아래 명령은 서비스가 없고 시험 볼륨이 분리되어 있을 때만 동작한다.
 
-후속 구현은 게시 저널과 현재 파일 상태를 다시 확인하고, 실패 복구와 서비스 등록/시작을 별도 처리해야 한다. 그 뒤에만 고정 설치 경로의 일반 사용자 검증 명령을 실행한다.
+~~~powershell
+.\scripts\recover-cef-preflight-publication.ps1 -DisposableVm -SignerThumbprint $pin -SourceCommit $commit -ImagePath $testImage -ProfilePath $testProfile -VolumeGuid $volumeGuid -ProtectorId $primaryId -RecoveryProtectorId $recoveryId -UserSid $testUserSid
+~~~
+
+- incomplete-copies: 복사 검증 기록이 없다. 재개 금지, 원본 및 부분 상태를 보존하고 깨끗한 VM 스냅샷으로 복귀한다.
+- publish-binaries / record-binaries / publish-registration / record-completion: 정확한 저널 prefix, 서명된 인벤토리, 등록 초안, 실제 디렉터리 배치가 모두 일치할 때만 재개 가능.
+- files-published-only: 모든 게시 기록 및 실제 파일 일치. 서비스 등록이나 시작은 아직 하지 않는다.
+
+재개하려면 위 명령에 -Resume을 추가한다. 기존 복구 자격 증명과 재잠금/분리를 다시 확인하고 매 이동 또는 저널 기록 전에 전체 증거를 재검증한다. 알 수 없는 상태·변조·추가 기록·중복 디렉터리·서비스 존재·볼륨 연결은 거부한다. 파일이나 기록을 삭제/덮어쓰지 않는다. 한 명의 관리자가 다른 설치 도구와 동시에 실행하지 않는 폐기용 VM 절차이며, 전원 차단 및 동시성의 실제 내구성은 미검증이다.
+
+## 10. 서비스 등록 전 차단점
+
+전용 파일 게시 및 제한된 재개 코드는 마련했지만 서비스 등록/시작 트랜잭션은 아직 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
+
+후속 구현은 files-published-only를 다시 검증한 뒤 서비스 등록/시작 및 서비스 실패 처리를 별도 수행해야 한다. 그 뒤에만 고정 설치 경로의 일반 사용자 검증 명령을 실행한다.
 
 ~~~powershell
 # 전용 등록 절차 완료 후에만 실행. 현재 실행하지 않는다.

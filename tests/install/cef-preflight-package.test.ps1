@@ -215,6 +215,67 @@ try {
         throw 'Interrupted publication state not preserved.'
     }
     Reject { Publish-VeilPreflightFiles $stage $interruptedPrepared $interruptedBin $interruptedData $interruptedTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} }
+    function Inspect-Publication {
+        Get-VeilPreflightPublicationState $stage $interruptedPrepared $interruptedBin $interruptedData $interruptedTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {}
+    }
+    function Resume-Publication {
+        Resume-VeilPreflightPublication $stage $interruptedPrepared $interruptedBin $interruptedData $interruptedTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {}
+    }
+    function Require-PublicationState([string]$Expected) {
+        if ((Inspect-Publication).state -cne $Expected) { throw "Expected publication state $Expected." }
+    }
+    Require-PublicationState 'publish-registration'
+    $record3 = Join-Path $interruptedTransaction '03-binaries-published.json'
+    $record4 = Join-Path $interruptedTransaction '04-files-published.json'
+    $record2 = Join-Path $interruptedTransaction '02-copies-verified.json'
+    $record3Bytes = [IO.File]::ReadAllBytes($record3)
+    [IO.File]::AppendAllText($record3,' ')
+    Reject { Inspect-Publication }
+    Reject { Resume-Publication }
+    [IO.File]::WriteAllBytes($record3,$record3Bytes)
+    $pendingData = $interruptedData + '.cef-preflight-pending'
+    $pendingBin = $interruptedBin + '.cef-preflight-pending'
+    $pendingConfig = Join-Path $pendingData 'client.json'
+    $pendingBytes = [IO.File]::ReadAllBytes($pendingConfig)
+    [IO.File]::AppendAllText($pendingConfig,' ')
+    Reject { Resume-Publication }
+    if (Test-Path -LiteralPath $interruptedData) { throw 'Invalid registration was published.' }
+    [IO.File]::WriteAllBytes($pendingConfig,$pendingBytes)
+    [void][IO.Directory]::CreateDirectory($pendingBin)
+    Reject { Inspect-Publication }
+    Remove-Item -LiteralPath $pendingBin
+    # Synthesize a crash immediately after the first rename but before
+    # its journal record, then one before the rename. Test-only rewind.
+    Remove-Item -LiteralPath $record3
+    Require-PublicationState 'record-binaries'
+    [IO.Directory]::Move($interruptedBin,$pendingBin)
+    Require-PublicationState 'publish-binaries'
+    $extraRecord = Join-Path $interruptedTransaction '04-files-published.json'
+    [IO.File]::WriteAllText($extraRecord,'{}')
+    Reject { Inspect-Publication }
+    Remove-Item -LiteralPath $extraRecord
+    $resumed = Resume-Publication
+    if ($resumed.state -cne 'files-published-only' -or $resumed.startupEnabled -or $resumed.serviceCreated) {
+        throw 'Recovery did not finish verified file publication.'
+    }
+    Require-PublicationState 'files-published-only'
+    $completedHash = (Get-FileHash -LiteralPath $record4).Hash
+    [void](Resume-Publication)
+    if ((Get-FileHash -LiteralPath $record4).Hash -ne $completedHash) { throw 'Completed recovery was not idempotent.' }
+    Remove-Item -LiteralPath $record4
+    Require-PublicationState 'record-completion'
+    [void](Resume-Publication)
+    if ((Get-FileHash -LiteralPath $record4).Hash -ne $completedHash) { throw 'Completion record differs.' }
+    # No verified-copy record is never a resumable state, even if both
+    # temporary trees happen to be complete.
+    Remove-Item -LiteralPath $record4,$record3,$record2
+    [IO.Directory]::Move($interruptedData,$pendingData)
+    [IO.Directory]::Move($interruptedBin,$pendingBin)
+    Require-PublicationState 'incomplete-copies'
+    Reject { Resume-Publication }
+    if ((Test-Path -LiteralPath $interruptedBin) -or (Test-Path -LiteralPath $interruptedData) -or
+        -not (Test-Path -LiteralPath $pendingBin) -or -not (Test-Path -LiteralPath $pendingData)) { throw 'Unverified copies were modified.' }
+    Write-Host 'PASS: publication recovery at known boundaries, tamper refusal and incomplete-copy preservation'
     Write-Host 'PASS: verified publication copies, journal boundaries and interrupted publication preservation'
     # Inject a deterministic file creation conflict after creating a fresh
     # preparation directory. No complete marker may follow the failed write.
