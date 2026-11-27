@@ -9,6 +9,21 @@ if (Environment.GetEnvironmentVariable("VEIL_SYNTHETIC_CHILD_MARKER") is { } mar
     Thread.Sleep(Timeout.Infinite);
     return 0;
 }
+// The crash-owner mode leaves a suspended child in an atomic job. The
+// outer test kills this owner without managed disposal and observes child exit.
+if (args is ["--crash-owner", var crashMarker])
+{
+    var childEnv = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+    foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        if (entry.Key is string key && entry.Value is string value)
+            childEnv[key] = value;
+    childEnv["VEIL_SYNTHETIC_CHILD_MARKER"] = crashMarker;
+    using var suspended = CefContainedProcess.CreateSuspended(Environment.ProcessPath!, childEnv);
+    Console.WriteLine(GetProcessId(new IntPtr(suspended.NominatedHandle)));
+    Console.Out.Flush();
+    Thread.Sleep(Timeout.Infinite);
+    return 0;
+}
 static void Check(bool value, string message)
 {
     if (!value) throw new InvalidOperationException(message);
@@ -52,7 +67,33 @@ try
         child.Dispose();
         Check(observer.WaitForExit(10000), "Child survived job close.");
     }
-    Console.WriteLine("PASS: actual synthetic Windows suspended launch, denied resume and job-close termination");
+    File.Delete(markerPath);
+    var ownerInfo = new ProcessStartInfo(image)
+    {
+        UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true,
+        ArgumentList = { "--crash-owner", markerPath },
+    };
+    ownerInfo.Environment.Remove("VEIL_SYNTHETIC_CHILD_MARKER");
+    using (var crashOwner = Process.Start(ownerInfo) ?? throw new InvalidOperationException("Cannot start synthetic owner."))
+    {
+        try
+        {
+            string? line = await crashOwner.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            Check(int.TryParse(line, out int childPid) && childPid > 0, "Missing suspended child PID.");
+            using var observer = Process.GetProcessById(childPid);
+            _ = observer.SafeHandle;
+            Check(!observer.HasExited && !File.Exists(markerPath), "Crash-owner child was not suspended.");
+            crashOwner.Kill();
+            Check(crashOwner.WaitForExit(10000), "Synthetic owner did not terminate.");
+            Check(observer.WaitForExit(10000), "Suspended child survived abrupt owner death.");
+            Check(!File.Exists(markerPath), "Suspended child executed during owner death.");
+        }
+        finally
+        {
+            if (!crashOwner.HasExited) { crashOwner.Kill(); crashOwner.WaitForExit(10000); }
+        }
+    }
+    Console.WriteLine("PASS: actual synthetic Windows atomic job assignment, denied resume, job close and abrupt owner termination");
     return 0;
 }
 finally { Directory.Delete(work, recursive: true); }

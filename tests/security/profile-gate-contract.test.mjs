@@ -342,8 +342,10 @@ test('CEF containment primitive starts suspended and assigns a kill-on-close job
     const launch = await readFile('apps/desktop/Engine/CefContainedProcess.cs', 'utf8');
     const startup = await readFile('apps/desktop/Program.cs', 'utf8');
     assert.match(launch, /limits\.Basic\.LimitFlags = 0x00002000/);
-    assert.match(launch, /const uint flags = 0x00000004 \| 0x00000400/);
-    assert.match(launch, /CreateProcessW\(image, command, IntPtr\.Zero, IntPtr\.Zero, false, flags[\s\S]*?AssignProcessToJobObject\(job, process\)[\s\S]*?IsProcessInJob\(process, job/);
+    assert.match(launch, /const uint flags = 0x00000004 \| 0x00000400 \| 0x00080000/);
+    assert.match(launch, /using var attributes = new JobAttributeList\(job\)[\s\S]*?CreateProcessW\(image, command, IntPtr\.Zero, IntPtr\.Zero, false, flags[\s\S]*?IsProcessInJob\(process, job/);
+    assert.match(launch, /UpdateProcThreadAttribute\(list, 0, new UIntPtr\(0x0002000D\)/);
+    assert.doesNotMatch(launch, /AssignProcessToJobObject/);
     assert.match(launch, /!verified\(\) \|\| !IsProcessInJob\(process, job, out bool contained\) \|\| !contained \|\|\s*ResumeThread\(thread\) != 1/);
     assert.doesNotMatch(startup, /CefContainedProcess/);
 });

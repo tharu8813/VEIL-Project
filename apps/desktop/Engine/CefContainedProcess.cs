@@ -8,7 +8,7 @@ using Microsoft.Win32.SafeHandles;
 namespace Veil.Desktop;
 
 // Windows x64 process containment primitive, not a product launch permit.
-// A child starts suspended and cannot resume until job assignment succeeds.
+// A child is assigned to its job atomically at suspended process creation.
 // No breakaway, shell, inherited handles, or arbitrary command-line arguments.
 internal sealed class CefContainedProcess : IDisposable
 {
@@ -46,9 +46,18 @@ internal sealed class CefContainedProcess : IDisposable
             limits.Basic.LimitFlags = 0x00002000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf<ExtendedLimitInformation>()))
                 throw Failure("SetInformationJobObject");
-            var startup = new StartupInfo { Size = (uint)Marshal.SizeOf<StartupInfo>() };
+            // PROC_THREAD_ATTRIBUTE_JOB_LIST assigns the job during creation,
+            // rather than leaving an orphan window before a separate assignment.
+            // Windows 10+ supports this attribute; failure has no legacy fallback.
+            using var attributes = new JobAttributeList(job);
+            var startup = new StartupInfoEx
+            {
+                Startup = new StartupInfo { Size = (uint)Marshal.SizeOf<StartupInfoEx>() },
+                Attributes = attributes.Pointer,
+            };
             var command = new StringBuilder("\"" + image + "\"");
-            const uint flags = 0x00000004 | 0x00000400; // CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT
+            const uint flags = 0x00000004 | 0x00000400 | 0x00080000;
+            // CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT
             IntPtr env = Marshal.StringToHGlobalUni(block);
             ProcessInformation info;
             try
@@ -60,16 +69,14 @@ internal sealed class CefContainedProcess : IDisposable
             finally { Marshal.FreeHGlobal(env); }
             process = new SafeProcessHandle(info.Process, ownsHandle: true);
             thread = new SafeFileHandle(info.Thread, ownsHandle: true);
-            if (!AssignProcessToJobObject(job, process))
-                throw Failure("AssignProcessToJobObject");
             if (!IsProcessInJob(process, job, out bool contained) || !contained)
                 throw new InvalidOperationException("CEF child containment could not be confirmed.");
             return new CefContainedProcess(job, process, thread);
         }
         catch
         {
-            // The primary thread has never been resumed. If assignment failed,
-            // the job cannot clean up this process; terminate the owned handle.
+            // The primary thread has never been resumed. Explicit termination
+            // is defensive if post-create membership verification failed.
             if (process is { IsInvalid: false, IsClosed: false })
                 TerminateProcess(process, 29);
             thread?.Dispose();
@@ -187,6 +194,55 @@ internal sealed class CefContainedProcess : IDisposable
         public IntPtr Reserved2, StdInput, StdOutput, StdError;
     }
     [StructLayout(LayoutKind.Sequential)]
+    private struct StartupInfoEx
+    {
+        public StartupInfo Startup;
+        public IntPtr Attributes;
+    }
+
+    private sealed class JobAttributeList : IDisposable
+    {
+        private IntPtr list, value;
+        private bool initialized;
+        private readonly SafeFileHandle job;
+        private bool retained;
+        internal IntPtr Pointer => list;
+
+        internal JobAttributeList(SafeFileHandle job)
+        {
+            this.job = job;
+            try
+            {
+                job.DangerousAddRef(ref retained);
+                UIntPtr size = UIntPtr.Zero;
+                bool unexpected = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+                if (unexpected || Marshal.GetLastWin32Error() != 122 ||
+                    size.ToUInt64() == 0 || size.ToUInt64() > int.MaxValue)
+                    throw Failure("InitializeProcThreadAttributeList size");
+                list = Marshal.AllocHGlobal((int)size.ToUInt64());
+                if (!InitializeProcThreadAttributeList(list, 1, 0, ref size))
+                    throw Failure("InitializeProcThreadAttributeList");
+                initialized = true;
+                value = Marshal.AllocHGlobal(IntPtr.Size);
+                Marshal.WriteIntPtr(value, job.DangerousGetHandle());
+                // Attribute 13, input flag (0x20000): JOB_LIST.
+                if (!UpdateProcThreadAttribute(list, 0, new UIntPtr(0x0002000D),
+                    value, new UIntPtr((uint)IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
+                    throw Failure("UpdateProcThreadAttribute JOB_LIST");
+            }
+            catch { Dispose(); throw; }
+        }
+
+        public void Dispose()
+        {
+            if (initialized) { DeleteProcThreadAttributeList(list); initialized = false; }
+            if (list != IntPtr.Zero) { Marshal.FreeHGlobal(list); list = IntPtr.Zero; }
+            if (value != IntPtr.Zero) { Marshal.FreeHGlobal(value); value = IntPtr.Zero; }
+            if (retained) { job.DangerousRelease(); retained = false; }
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct ProcessInformation
     {
         public IntPtr Process, Thread;
@@ -203,10 +259,16 @@ internal sealed class CefContainedProcess : IDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CreateProcessW(string image, StringBuilder command, IntPtr processAttributes,
         IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint flags,
-        IntPtr environment, string currentDirectory, ref StartupInfo startup, out ProcessInformation info);
+        IntPtr environment, string currentDirectory, ref StartupInfoEx startup, out ProcessInformation info);
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool AssignProcessToJobObject(SafeFileHandle job, SafeProcessHandle process);
+    private static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, uint flags, ref UIntPtr size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, UIntPtr attribute,
+        IntPtr value, UIntPtr size, IntPtr previous, IntPtr returnSize);
+    [DllImport("kernel32.dll")]
+    private static extern void DeleteProcThreadAttributeList(IntPtr list);
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsProcessInJob(SafeProcessHandle process, SafeFileHandle job,
