@@ -971,9 +971,20 @@ bool IsFixtureLoginPage(const std::wstring& origin, const std::wstring& page) {
     if (page == origin + path) return true;
   return false;
 }
-extern "C" __declspec(dllexport) int VeilCefStartLoginProbe(
-    uint64_t id, const wchar_t* origin, const wchar_t* page) {
-  if (!CefCurrentlyOn(TID_UI) || !origin || !page || !IsFixtureLoginPage(origin, page)) return 0;
+// This separate test operation is restricted to three pages populated solely
+// with synthetic markers. It returns an equality observation, never field values.
+static bool IsFixtureLoginValuesPage(const std::wstring& origin, const std::wstring& page) {
+  if (!IsFixtureStorageOrigin(origin) || origin.rfind(L"http://127.0.0.1:", 0) != 0) return false;
+  return page == origin + L"/tabs-login-read" ||
+         page == origin + L"/tabs-login-read-empty" ||
+         page == origin + L"/tabs-login-read-mismatch";
+}
+
+static int StartFixtureLoginObservation(uint64_t id, const wchar_t* origin,
+    const wchar_t* page, bool check_values, CookieDeleteAuthorization authorize) {
+  if (!CefCurrentlyOn(TID_UI) || !origin || !page) return 0;
+  if (check_values ? (!authorize || !IsFixtureLoginValuesPage(origin, page)) :
+                     !IsFixtureLoginPage(origin, page)) return 0;
   const auto state = LookupView(id);
   const auto browser = LookupBrowser(id);
   if (!state || !browser || state->closing || state->login_probe || browser->IsLoading() ||
@@ -987,7 +998,7 @@ extern "C" __declspec(dllexport) int VeilCefStartLoginProbe(
   expected->SetList(expected_list);
   const auto quoted_page = CefWriteJSON(expected, JSON_WRITER_DEFAULT);
   if (quoted_page.empty()) return 0;
-  const std::string expression = "(()=>{try{if(window!==window.top||location.href!==(" +
+  std::string expression = "(()=>{try{if(window!==window.top||location.href!==(" +
       quoted_page.ToString() + R"JS()[0]||document.visibilityState!=='visible')return false;
       const visible=el=>{
         if(!el.isConnected||el.matches(':disabled')||el.readOnly||
@@ -1012,8 +1023,15 @@ extern "C" __declspec(dllexport) int VeilCefStartLoginProbe(
       const users=[...form.elements].filter(el=>el instanceof HTMLInputElement&&visible(el)&&
         ['text','email','tel'].includes(el.type)&&!token(el,'one-time-code'));
       const explicit=users.filter(el=>token(el,'username'));
-      return explicit.length===1||(explicit.length===0&&users.length===1);
-      }catch{return null;}})())JS";
+      const user=explicit.length===1?explicit[0]:explicit.length===0&&users.length===1?users[0]:null;
+      if(!user)return false;
+      )JS";
+  // Only the values fixture selects this fixed suffix; detection never reads
+  // input values. Even a hostile page result is accepted only as a boolean.
+  expression += check_values
+      ? "return user.value==='veil-synthetic-user'&&pass.value==='veil-synthetic-marker';"
+      : "return true;";
+  expression += "}catch{return null;}})()";
   const auto probe = std::make_shared<LoginProbe>();
   state->login_probe = probe;
   state->login_probe_registration = host->AddDevToolsMessageObserver(new LoginProbeObserver(probe));
@@ -1022,12 +1040,38 @@ extern "C" __declspec(dllexport) int VeilCefStartLoginProbe(
     parameters->SetString("expression", expression);
     parameters->SetBool("returnByValue", true);
     parameters->SetBool("silent", true);
-    probe->message_id = host->ExecuteDevToolsMethod(0, "Runtime.evaluate", parameters);
-    if (probe->message_id > 0) return 1;
+    // Authorize immediately before a value observation, and revalidate after
+    // the managed callback in case it re-enters the host.
+    const bool allowed = !check_values || authorize(id) != 0;
+    const auto current = LookupBrowser(id);
+    if (allowed && LookupView(id) == state && !state->closing &&
+        state->login_probe == probe && probe->status == 0 && current == browser &&
+        !browser->IsLoading() && state->page_source == page &&
+        browser->GetMainFrame()->GetURL().ToWString() == page) {
+      probe->message_id = host->ExecuteDevToolsMethod(0, "Runtime.evaluate", parameters);
+      if (probe->message_id > 0) return 1;
+    }
+    if (!allowed) {
+      if (state->login_probe == probe) {
+        state->login_probe_registration = nullptr;
+        state->login_probe.reset();
+      }
+      return -2;
+    }
   }
-  state->login_probe_registration = nullptr;
-  state->login_probe.reset();
+  if (state->login_probe == probe) {
+    state->login_probe_registration = nullptr;
+    state->login_probe.reset();
+  }
   return 0;
+}
+extern "C" __declspec(dllexport) int VeilCefStartLoginProbe(
+    uint64_t id, const wchar_t* origin, const wchar_t* page) {
+  return StartFixtureLoginObservation(id, origin, page, false, nullptr);
+}
+extern "C" __declspec(dllexport) int VeilCefStartLoginValuesCheck(
+    uint64_t id, const wchar_t* origin, const wchar_t* page, CookieDeleteAuthorization authorize) {
+  return StartFixtureLoginObservation(id, origin, page, true, authorize);
 }
 extern "C" __declspec(dllexport) int VeilCefFixtureLoading(uint64_t id) {
   if (!CefCurrentlyOn(TID_UI)) return 1;
