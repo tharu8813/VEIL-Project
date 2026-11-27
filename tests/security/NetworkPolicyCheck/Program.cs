@@ -389,3 +389,32 @@ finally
     Directory.Delete(logRoot, recursive: true);
 }
 Console.WriteLine("PASS: broker diagnostic sink failures do not escape and service output is disabled");
+
+// Metadata admission only. Do not dispatch operations or expose a real account.
+var loginCapability = new SyntheticLoginCapability();
+foreach (var scope in new[] { LoginFormScope.Unavailable, LoginFormScope.SyntheticFixture,
+    LoginFormScope.Product, (LoginFormScope)99 })
+{
+    loginCapability.LoginScope = scope;
+    Check(ReferenceEquals(LoginFormAccess.ProductForms(loginCapability, false), loginCapability) ==
+        (scope == LoginFormScope.Product), "login capability scope admitted incorrectly");
+    Check(LoginFormAccess.ProductForms(loginCapability, true) is null, "private credential capability admitted");
+}
+loginCapability.LoginScope = LoginFormScope.Product;
+Check(ReferenceEquals(LoginFormAccess.ProductForms(loginCapability, false), loginCapability), "product login capability unavailable");
+loginCapability.LoginScope = LoginFormScope.Unavailable;
+Check(LoginFormAccess.ProductForms(loginCapability, false) is null, "revoked capability remained admitted");
+Check(LoginFormAccess.ProductForms(new object(), false) is null &&
+    LoginFormAccess.ProductForms(null, false) is null, "missing login interface admitted");
+Console.WriteLine("PASS: product-only login scope admission and revocation");
+
+file sealed class SyntheticLoginCapability : IEngineLoginForms
+{
+    public LoginFormScope LoginScope { get; set; }
+    public Task<bool> ProbeLoginFormAsync(string origin, string page, Func<bool> stillAuthorized) =>
+        throw new InvalidOperationException("Admission must not dispatch");
+    public Task<SavedLogin?> ReadLoginFormAsync(string origin, string page, Func<bool> stillAuthorized) =>
+        throw new InvalidOperationException("Admission must not read");
+    public Task<bool> FillLoginFormAsync(SavedLogin login, string page, Func<bool> stillAuthorized) =>
+        throw new InvalidOperationException("Admission must not fill");
+}

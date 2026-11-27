@@ -45,6 +45,9 @@ internal sealed class WebView2EngineView(CoreWebView2Environment environment, st
     public SiteDataCapabilities SiteDataSupport =>
         !disposed && NativeView.CoreWebView2 is { } core && !core.Profile.IsInPrivateModeEnabled
             ? SiteDataCapabilities.StandardWebView2 : SiteDataCapabilities.Unavailable;
+    public LoginFormScope LoginScope =>
+        !disposed && NativeView.CoreWebView2 is { } core && !core.Profile.IsInPrivateModeEnabled
+            ? LoginFormScope.Product : LoginFormScope.Unavailable;
     internal WebView2 NativeView { get; } = new() { Visibility = Visibility.Hidden };
     public FrameworkElement Element => NativeView;
     public event EventHandler<EngineNavigationStartingEventArgs>? NavigationStarting;

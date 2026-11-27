@@ -167,3 +167,7 @@ CEF 제품 IEngineLoginForms 미구현 유지. 명시적 탭 fixture의 127.0.0.
 ### 추가 구현: CEF 합성 renderer 종료 및 복구 회귀 (검증 대기)
 
 명시적 tab fixture, 정확한 127.0.0.1 포트·전용 경로, registry 단일 뷰, pending 전용 observation 조건에서만 고정 CDP Runtime.evaluate(awaitPromise) 및 Page.crash 진단 명령을 허용한다(https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-crash). 임의 URL/스크립트/명령/계정 입력은 없음. renderer 종료 콜백에서 observation 실패 처리 및 renderer failed gate를 설정하고 성공한 최상위 navigation 전까지 새 로그인 observation을 거부한다. 실제 callback 1회, 이전 결과 null, 실패 중 재요청 거부, 명시적 새 페이지 탐색 후 동일 view ID와 빈 폼을 확인하는 fixture 추가. 다른 renderer 오류는 기존 실패 경로. 실제 Windows 실행 NOT RUN, Page.crash는 실험적 CDP 명령이므로 pinned CEF 지원 및 런타임 순서 확인 필요. 제품 credential capability/엔진 변경 없음.
+
+### 추가 구현: 제품 credential capability admission (검증 대기)
+
+IEngineLoginForms에 Unavailable/SyntheticFixture/Product 범위 선언을 추가한다. WebView2의 초기화된 일반 profile만 Product로 선언하며 CEF는 해당 인터페이스 미구현을 유지한다. BrowserWindow는 제품 범위에 한해 감지·명시적 페이지 저장·채우기를 시작하고 모든 기존 origin/탐색/선택/인증/동의 가드와 함께 매번 capability 및 adapter 동일성을 재검사한다. private/fixture/unknown/absent/revoked scope 및 admission 중 명령 미실행을 순수 .NET 회귀 테스트로 추가한다. 수동 암호화 저장소 관리·형식·백업/복원 변경 없음. 범위 metadata는 단독 authorization이나 제품 release 승인 아님. CEF 실제 비밀번호 전달, production profile 보호, 런타임 검증 완료 전 Product 선언 금지. 실제 Windows 실행 NOT RUN.

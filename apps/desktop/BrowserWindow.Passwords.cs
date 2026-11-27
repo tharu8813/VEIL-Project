@@ -187,21 +187,24 @@ public partial class BrowserWindow
         }
     }
 
+    private IEngineLoginForms? ProductLoginForms(BrowserTab tab) =>
+        LoginFormAccess.ProductForms(tab.EngineView, session.IsPrivate);
+
     private void UpdateLoginAction() =>
         LoginActionButton.Visibility = !session.IsPrivate && Active is { LoginFormDetected: true } tab && CanUseTab(tab.Item) &&
-            tab.EngineView is IEngineLoginForms && SitePermissionPolicy.Origin(tab.Url) is not null
+            ProductLoginForms(tab) is not null && SitePermissionPolicy.Origin(tab.Url) is not null
                 ? Visibility.Visible : Visibility.Collapsed;
 
     // Automatic detection returns only a boolean. Values are read only after an explicit native command.
     private async Task ProbeLoginFormAsync(BrowserTab tab)
     {
-        if (session.IsPrivate || tab.EngineView is not IEngineLoginForms forms) return;
+        if (ProductLoginForms(tab) is not { } forms) return;
         string page = tab.Url;
         string? origin = SitePermissionPolicy.Origin(page);
         long epoch = tab.NavigationEpoch;
         long selectionEpoch = permissionSelectionEpoch;
         if (origin is null) return;
-        bool Current() => tab.Url == page && ReferenceEquals(tab.EngineView, forms) &&
+        bool Current() => tab.Url == page && ReferenceEquals(ProductLoginForms(tab), forms) &&
             !session.IsPrivate && PermissionContextMatches(tab, origin, epoch, selectionEpoch);
         if (!Current()) return;
         try
@@ -227,12 +230,12 @@ public partial class BrowserWindow
     private async Task PageLoginAsync(bool save)
     {
         if (!PasswordWindowReady() || session.PasswordUiOpen || session.PermissionUiOpen || session.SettingsUiOpen ||
-            Active is not { } tab || tab.EngineView is not IEngineLoginForms forms ||
+            Active is not { } tab || ProductLoginForms(tab) is not { } forms ||
             SitePermissionPolicy.Origin(tab.Url) is not { } origin) return;
         long epoch = tab.NavigationEpoch;
         long selectionEpoch = permissionSelectionEpoch;
         string page = tab.Url;
-        bool Current() => PasswordWindowReady() && tab.Url == page && ReferenceEquals(tab.EngineView, forms) &&
+        bool Current() => PasswordWindowReady() && tab.Url == page && ReferenceEquals(ProductLoginForms(tab), forms) &&
             PermissionContextMatches(tab, origin, epoch, selectionEpoch);
         if (!Current()) return;
         session.PasswordUiOpen = true;
@@ -304,8 +307,8 @@ public partial class BrowserWindow
 
     private async Task FillLoginAsync(BrowserTab tab, SavedLogin login, string page, long epoch, long selectionEpoch)
     {
-        if (tab.EngineView is not IEngineLoginForms forms) return;
-        bool Current() => PasswordWindowReady() && tab.Url == page && ReferenceEquals(tab.EngineView, forms) &&
+        if (ProductLoginForms(tab) is not { } forms) return;
+        bool Current() => PasswordWindowReady() && tab.Url == page && ReferenceEquals(ProductLoginForms(tab), forms) &&
             PermissionContextMatches(tab, login.Origin, epoch, selectionEpoch);
         if (!Current()) return;
         bool filled = await forms.FillLoginFormAsync(login, page, Current);

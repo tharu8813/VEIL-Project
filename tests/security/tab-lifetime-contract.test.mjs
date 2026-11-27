@@ -131,7 +131,7 @@ test('login form probe, read and fill are bound to exact original URL in the scr
     assert.match(loginForm, /Number\(style\.opacity\) === 0 \|\| style\.contentVisibility === 'hidden'/);
     assert.match(passwordUi, /await forms\.ProbeLoginFormAsync\(origin, page, Current\);\s*if \(!Current\(\)\) return;/);
     assert.match(passwordUi, /await forms\.ReadLoginFormAsync\(origin, page, Current\);\s*if \(!Current\(\)\) return;\s*if \(login is not null && login\.Origin != origin\) return;/);
-    assert.match(passwordUi, /bool Current\(\) => PasswordWindowReady\(\) && tab\.Url == page && ReferenceEquals\(tab\.EngineView, forms\) &&\s*PermissionContextMatches\(tab, login\.Origin, epoch, selectionEpoch\);\s*if \(!Current\(\)\) return;\s*bool filled = await forms\.FillLoginFormAsync\(login, page, Current\);\s*if \(Current\(\)\)/);
+    assert.match(passwordUi, /bool Current\(\) => PasswordWindowReady\(\) && tab\.Url == page && ReferenceEquals\(ProductLoginForms\(tab\), forms\) &&\s*PermissionContextMatches\(tab, login\.Origin, epoch, selectionEpoch\);\s*if \(!Current\(\)\) return;\s*bool filled = await forms\.FillLoginFormAsync\(login, page, Current\);\s*if \(Current\(\)\)/);
     assert.doesNotMatch(passwordUi, /CoreWebView2|ExecuteScriptAsync|LoginFormPolicy\./);
     assert.doesNotMatch(loginForm, /\.submit\(|\.requestSubmit\(/);
 });
@@ -708,4 +708,19 @@ test('CEF login renderer fault is a single-view fixed fixture and requires expli
     assert.match(cefTabbed, /freshProfileProbe && expectLoginRendererFailure && phase == 81 && tab == first/);
     assert.match(cefTabbed, /CefNative\.VeilCefStartLoginRendererWait\(firstId, origin, page, allow\) != 0/);
     assert.match(runner, /Expected renderer failure invalidated the pending login observation[\s\S]*Failed renderer refused another login observation before recovery[\s\S]*Explicit recovery navigation restored login observation on the same view with empty form/);
+});
+
+
+test('only explicit product login capability can reach existing encrypted credential flow', async () => {
+    const contract = await readFile('apps/desktop/Engine/IEngineLoginForms.cs', 'utf8');
+    const passwordUi = await readFile('apps/desktop/BrowserWindow.Passwords.cs', 'utf8');
+    assert.match(contract, /enum LoginFormScope \{ Unavailable, SyntheticFixture, Product \}/);
+    assert.match(contract, /!isPrivate && view is IEngineLoginForms \{ LoginScope: LoginFormScope\.Product \} forms\s*\? forms : null;/);
+    assert.match(webView2, /public LoginFormScope LoginScope =>\s*!disposed && NativeView\.CoreWebView2 is \{ \} core && !core\.Profile\.IsInPrivateModeEnabled\s*\? LoginFormScope\.Product : LoginFormScope\.Unavailable;/);
+    assert.match(passwordUi, /LoginFormAccess\.ProductForms\(tab\.EngineView, session\.IsPrivate\);/);
+    assert.match(passwordUi, /ProductLoginForms\(tab\) is not null && SitePermissionPolicy\.Origin\(tab\.Url\) is not null/);
+    assert.equal((passwordUi.match(/ProductLoginForms\(tab\) is not \{ \} forms/g) ?? []).length, 3);
+    assert.equal((passwordUi.match(/ReferenceEquals\(ProductLoginForms\(tab\), forms\)/g) ?? []).length, 3);
+    assert.doesNotMatch(passwordUi, /tab\.EngineView is (?:not )?IEngineLoginForms/);
+    assert.doesNotMatch(cefView, /LoginFormScope\.Product|Task<SavedLogin\?>/);
 });
