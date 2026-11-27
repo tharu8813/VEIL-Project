@@ -171,3 +171,7 @@ CEF 제품 IEngineLoginForms 미구현 유지. 명시적 탭 fixture의 127.0.0.
 ### 추가 구현: 제품 credential capability admission (검증 대기)
 
 IEngineLoginForms에 Unavailable/SyntheticFixture/Product 범위 선언을 추가한다. WebView2의 초기화된 일반 profile만 Product로 선언하며 CEF는 해당 인터페이스 미구현을 유지한다. BrowserWindow는 제품 범위에 한해 감지·명시적 페이지 저장·채우기를 시작하고 모든 기존 origin/탐색/선택/인증/동의 가드와 함께 매번 capability 및 adapter 동일성을 재검사한다. private/fixture/unknown/absent/revoked scope 및 admission 중 명령 미실행을 순수 .NET 회귀 테스트로 추가한다. 수동 암호화 저장소 관리·형식·백업/복원 변경 없음. 범위 metadata는 단독 authorization이나 제품 release 승인 아님. CEF 실제 비밀번호 전달, production profile 보호, 런타임 검증 완료 전 Product 선언 금지. 실제 Windows 실행 NOT RUN.
+
+### 추가 구현: 표준 사용자 Windows 합성 통합 실행 스크립트 (검증 대기)
+
+main의 컴파일 전용 helper와 분리한 `scripts/test-cef-wpf.ps1`을 추가한다. clean commit, x64/non-elevated interactive session, 새 작업 폴더, 고정 CEF archive 해시 및 locked Rust build, fixture TEMP/TMP, 제한 시간, test executable 잔여 프로세스 확인을 요구한다. Win32 → 단일 WPF/금고 → 다중 탭/사이트 데이터/로그인 회귀를 순서대로 실행하고 commit·바이너리 SHA-256·단계별 결과·로그를 보존한다. 일반 사용자 실행의 필요조건만 확인하며 실제 desktop 활성 여부나 token sandbox 보안을 독립 측정하지 않는다. 통합 실행 NOT RUN. 보호 볼륨에서 CEF 데이터 보존, 볼륨 외 쓰기 추적, sandbox/site isolation, 네트워크 경로, 업데이트/패키징, Gate A~E는 별도 증거 필수. 제품 엔진 WebView2 유지.

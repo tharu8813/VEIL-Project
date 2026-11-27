@@ -80,3 +80,15 @@ node tests/cef/tabs-smoke.mjs "$build/Release/veil-cef-wpf.exe"
 Actual Windows execution is pending; compilation is not evidence of HWND visibility, focus or tab lifecycle behavior.
 
 The tab regression now seeds a persistent synthetic cookie and storage markers, starts a second process with a new runner-owned temporary root at the same HTTP origin, and requires empty cookie and marker observations. The first profile is retained until the second process exits. On success only, the runner checks for associated remaining CEF processes and removes its own temporary directory; failures preserve diagnostic paths. This is ordinary fixture cleanup, not secure erasure or proof of product profile isolation. Windows execution remains pending.
+
+## Standard-user runtime suite (separate from CI)
+
+Use a clean checkout, an interactive non-elevated Windows x64 terminal, Git, Node 22, Rust, CMake, Visual C++ x64 tools and .NET 10 x64 SDK. Prefer a disposable VM and use no real browsing data.
+
+```powershell
+.\scripts\test-cef-wpf.ps1
+# Optional existing pinned archive (the build helper verifies its SHA-256):
+.\scripts\test-cef-wpf.ps1 -Archive 'C:\Downloads\cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_windows64_minimal.tar.bz2'
+```
+
+The new wrapper builds fresh pinned binaries and the locked Rust vault, then runs Win32, WPF/vault and tab fixtures in order with separate outer timeouts. It refuses elevated/noninteractive execution and dirty source, checks for remaining test executable processes, isolates fixture TEMP/TMP, and retains its own work directory. Inspect `evidence/result.json`, stage stdout/stderr logs and retained fixture profiles. The report records the source commit, binary hashes and PASS/FAIL/NOT RUN per stage; it does not certify a product security gate. Do not upload local logs without reviewing them. A successful tab runner prints its synthetic observation log before removing its own temporary profiles. A successful run is not independent sandbox-token, site-isolation, protected-volume, outside-write, or release evidence. This wrapper has not yet been executed on standard-user Windows.
