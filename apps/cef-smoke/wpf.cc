@@ -979,12 +979,16 @@ extern "C" __declspec(dllexport) int VeilCefStartLoginProbe(
   if (!state || !browser || state->closing || state->login_probe || browser->IsLoading() ||
       state->page_source != page || browser->GetMainFrame()->GetURL().ToWString() != page) return 0;
   const auto host = browser->GetHost();
+  // CefWriteJSON documents a dictionary/list root. Encode as an array, not a
+  // primitive. The page has already passed the exact fixture route allowlist.
   const auto expected = CefValue::Create();
-  expected->SetString(CefString(page));
+  const auto expected_list = CefListValue::Create();
+  expected_list->SetString(0, CefString(page));
+  expected->SetList(expected_list);
   const auto quoted_page = CefWriteJSON(expected, JSON_WRITER_DEFAULT);
   if (quoted_page.empty()) return 0;
-  const std::string expression = "(()=>{try{if(window!==window.top||location.href!==" +
-      quoted_page.ToString() + R"JS(||document.visibilityState!=='visible')return false;
+  const std::string expression = "(()=>{try{if(window!==window.top||location.href!==(" +
+      quoted_page.ToString() + R"JS()[0]||document.visibilityState!=='visible')return false;
       const visible=el=>{
         if(!el.isConnected||el.matches(':disabled')||el.readOnly||
            el.closest('[hidden], [inert], [aria-hidden="true"]'))return false;
@@ -1009,7 +1013,7 @@ extern "C" __declspec(dllexport) int VeilCefStartLoginProbe(
         ['text','email','tel'].includes(el.type)&&!token(el,'one-time-code'));
       const explicit=users.filter(el=>token(el,'username'));
       return explicit.length===1||(explicit.length===0&&users.length===1);
-      }catch{return false;}})())JS";
+      }catch{return null;}})())JS";
   const auto probe = std::make_shared<LoginProbe>();
   state->login_probe = probe;
   state->login_probe_registration = host->AddDevToolsMessageObserver(new LoginProbeObserver(probe));
@@ -1026,16 +1030,19 @@ extern "C" __declspec(dllexport) int VeilCefStartLoginProbe(
   return 0;
 }
 extern "C" __declspec(dllexport) int VeilCefFixtureLoading(uint64_t id) {
+  if (!CefCurrentlyOn(TID_UI)) return 1;
   const auto browser = LookupBrowser(id);
-  return !CefCurrentlyOn(TID_UI) || !browser || browser->IsLoading() ? 1 : 0;
+  return !browser || browser->IsLoading() ? 1 : 0;
 }
 extern "C" __declspec(dllexport) int VeilCefLoginProbeStatus(uint64_t id) {
+  if (!CefCurrentlyOn(TID_UI)) return -1;
   const auto state = LookupView(id);
-  return !CefCurrentlyOn(TID_UI) || !state || state->closing || !state->login_probe ? -1 : state->login_probe->status;
+  return !state || state->closing || !state->login_probe ? -1 : state->login_probe->status;
 }
 extern "C" __declspec(dllexport) void VeilCefEndLoginProbe(uint64_t id) {
+  if (!CefCurrentlyOn(TID_UI)) return;
   const auto state = LookupView(id);
-  if (CefCurrentlyOn(TID_UI) && state) {
+  if (state) {
     state->login_probe_registration = nullptr;
     state->login_probe.reset();
   }

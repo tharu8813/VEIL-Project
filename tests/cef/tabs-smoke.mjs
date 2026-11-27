@@ -19,7 +19,7 @@ const loginFixtures = new Map([
   ['/tabs-login-hidden', '<form hidden><input><input type="password"></form>'],
   ['/tabs-login-ambiguous', '<form><input><input type="password"><input type="password"></form>'],
   ['/tabs-login-cross-origin', '<form action="http://example.invalid/"><input><input type="password"></form>'],
-  ['/tabs-login-iframe', '<iframe srcdoc="<form><input><input type=\'password\'></form>"></iframe>'],
+  ['/tabs-login-iframe', '<iframe id="fixture-frame" src="/tabs-login-frame-child"></iframe>'],
   ['/tabs-login-new', '<form><input><input type="password" autocomplete="new-password"></form>'],
 ]);
 const server = http.createServer((request, response) => {
@@ -40,10 +40,21 @@ const server = http.createServer((request, response) => {
       'document.title="TAB_FRESH_PROFILE";})();</script>');
     return;
   }
+  if (request.url === '/tabs-login-frame-child') {
+    response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+    response.end('<!doctype html><form><input><input type="password"></form>');
+    return;
+  }
   if (loginFixtures.has(request.url)) {
     const index = [...loginFixtures.keys()].indexOf(request.url);
     response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
-    response.end('<!doctype html><title>TAB_LOGIN_' + index + '</title>' + loginFixtures.get(request.url));
+    if (request.url === '/tabs-login-iframe') {
+      // Require the real same-origin child form to exist before reporting ready.
+      response.end('<!doctype html><title>WAITING</title><script>' +
+        'addEventListener("load",()=>{const f=document.getElementById("fixture-frame");' +
+        'if(f.contentDocument.querySelector(\'input[type="password"]\'))document.title="TAB_LOGIN_' + index + '";});' +
+        '</script>' + loginFixtures.get(request.url));
+    } else response.end('<!doctype html><title>TAB_LOGIN_' + index + '</title>' + loginFixtures.get(request.url));
     return;
   }
   if (!titles.has(request.url)) { response.writeHead(404).end(); return; }
@@ -212,6 +223,7 @@ try {
   assert.equal(cookieChecks.get('/tabs-fresh-probe'), '', 'Fresh profile leaked earlier cookies');
   assert.match(fresh.evidence, /Fresh fixture cookie scan returned an empty list[\s\S]*Fresh process saw no earlier LocalStorage or CacheStorage[\s\S]*Tabbed host registry drained/);
   for (const route of loginFixtures.keys()) assert.equal(requests.filter(x => x === route).length, 1, route);
+  assert.equal(requests.filter(x => x === '/tabs-login-frame-child').length, 1, 'Child form must actually load');
   assert.ok(!requests.includes('/unused-login'), 'Probe must never submit a form');
   assert.match(fresh.evidence, /Login probe discarded result after authorization expired[\s\S]*Boolean-only login probe accepted one form and rejected hidden, ambiguous, cross-origin, iframe and new-password forms/);
   assertNoFixtureProcesses();

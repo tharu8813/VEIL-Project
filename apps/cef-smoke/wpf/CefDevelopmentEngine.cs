@@ -170,7 +170,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
     // product credential capability. The native route allowlist is authoritative.
     internal bool IsFixtureLoading => NativeHandle == 0 || CefNative.VeilCefFixtureLoading(NativeHandle) != 0;
 
-    internal async Task<bool> ProbeFixtureLoginFormAsync(string origin, string page, Func<bool> stillAuthorized)
+    internal async Task<bool?> ProbeFixtureLoginFormAsync(string origin, string page, Func<bool> stillAuthorized)
     {
         Dispatcher.VerifyAccess();
         RequireView();
@@ -178,18 +178,19 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         bool Current() => !disposed && NativeHandle == id && CefNative.VeilCefClosed(id) == 0 &&
             SiteDataSupport.Scope == SiteDataScope.SyntheticFixture &&
             SiteDataPolicy.Origin(page) == origin && Source == page && stillAuthorized();
-        if (!Current()) return false;
-        if (CefNative.VeilCefStartLoginProbe(id, origin, page) != 1) return false;
+        if (!Current()) return null;
+        if (CefNative.VeilCefStartLoginProbe(id, origin, page) != 1) return null;
         try
         {
             var deadline = System.Diagnostics.Stopwatch.StartNew();
             int status;
             while ((status = CefNative.VeilCefLoginProbeStatus(id)) == 0)
             {
-                if (!Current() || deadline.Elapsed > TimeSpan.FromSeconds(5)) return false;
+                if (!Current() || deadline.Elapsed > TimeSpan.FromSeconds(5)) return null;
                 await Task.Delay(10);
             }
-            return Current() && status == 1;
+            if (!Current()) return null;
+            return status switch { 1 => true, 2 => false, _ => null };
         }
         finally { CefNative.VeilCefEndLoginProbe(id); }
     }

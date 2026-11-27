@@ -48,7 +48,7 @@ internal sealed class TabbedDevelopmentHost
     private Task<double?>? firstUsage, secondUsage, rejectedUsage;
     private Task<bool>? storageClear, httpCacheClear;
     private Task<int>? knownOriginClear;
-    private Task<bool>? loginProbe;
+    private Task<bool?>? loginProbe;
     private int loginProbeIndex;
     private static readonly string[] LoginProbePaths = ["/tabs-login-valid", "/tabs-login-hidden", "/tabs-login-ambiguous", "/tabs-login-cross-origin", "/tabs-login-iframe", "/tabs-login-new"];
     private int deletionAuthorizationChecks;
@@ -699,7 +699,8 @@ internal sealed class TabbedDevelopmentHost
         }
         else if (phase == 53 && loginProbe is { IsCompleted: true })
         {
-            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result != (loginProbeIndex == 0)) { Fail(); return; }
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is null ||
+                loginProbe.Result.Value != (loginProbeIndex == 0)) { Fail(); return; }
             if (loginProbeIndex == 0)
             {
                 var page = Url(LoginProbePaths[0]);
@@ -724,7 +725,7 @@ internal sealed class TabbedDevelopmentHost
         }
         else if (phase == 54 && loginProbe is { IsCompleted: true })
         {
-            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result || deletionAuthorizationChecks < 2) { Fail(); return; }
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is not null || deletionAuthorizationChecks < 2) { Fail(); return; }
             Log("Login probe discarded result after authorization expired");
             loginProbeIndex = 1;
             address.Text = Url(LoginProbePaths[loginProbeIndex]);

@@ -618,7 +618,13 @@ test('CEF login fixture exposes only a bounded boolean observation', async () =>
     const probe = cefNative.slice(cefNative.indexOf('int VeilCefStartLoginProbe('), cefNative.indexOf('int VeilCefFixtureLoading('));
     assert.doesNotMatch(probe, /(?:user|pass)\.value|\.submit\(|\.requestSubmit\(/);
     assert.match(probe, /ExecuteDevToolsMethod\(0, "Runtime\.evaluate", parameters\)/);
-    assert.match(cefView, /return Current\(\) && status == 1;\s*\}\s*finally \{ CefNative\.VeilCefEndLoginProbe\(id\); \}/);
+    assert.match(cefView, /if \(!Current\(\)\) return null;\s*return status switch \{ 1 => true, 2 => false, _ => null \};\s*\}\s*finally \{ CefNative\.VeilCefEndLoginProbe\(id\); \}/);
+    assert.match(probe, /expected_list->SetString\(0, CefString\(page\)\);\s*expected->SetList\(expected_list\);\s*const auto quoted_page = CefWriteJSON\(expected, JSON_WRITER_DEFAULT\)/);
+    assert.match(probe, /\}catch\{return null;\}/);
+    assert.match(cefTabbed, /loginProbe\.Result is null \|\|\s*loginProbe\.Result\.Value != \(loginProbeIndex == 0\)/);
+    assert.match(cefTabbed, /loginProbe\.Result is not null \|\| deletionAuthorizationChecks < 2/);
+    assert.match(runner, /f\.contentDocument\.querySelector/);
+    assert.match(runner, /requests\.filter\(x => x === '\/tabs-login-frame-child'\)\.length, 1/);
     assert.match(cefTabbed, /Login probe discarded result after authorization expired/);
     assert.match(runner, /assert\.ok\(!requests\.includes\('\/unused-login'\)/);
 });

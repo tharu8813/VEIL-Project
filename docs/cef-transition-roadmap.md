@@ -147,3 +147,5 @@ IEngineLoginForms는 고정 probe/read/fill만 노출하며 공통 SavedLogin �
 ### 추가 구현: CEF 합성 로그인 양식 boolean 감지 (검증 대기)
 
 CEF 제품 IEngineLoginForms 미구현 유지. 명시적 탭 fixture의 127.0.0.1 포트 및 사전 등록된 6개 경로만 허용하고, 정확한 현재 최상위 URL 확인 후 고정 Runtime.evaluate를 실행한다. 반환값은 제한된 JSON의 boolean만 인정하며 입력값 읽기/채우기/제출 경로 없음. 탐색·주소 변경·renderer 실패·종료 시 observation을 무효화하고 관리 권한 및 뷰 동일성 재확인. 정상 폼과 숨김·다중 비밀번호·다른 출처 제출·iframe·new-password 거부, 권한 만료 결과 폐기를 합성 테스트로 검사한다. HTTP loopback fixture 예외는 제품 HTTPS 규칙 변경이 아니다. 실제 Windows 실행 NOT RUN, 페이지 JS 환경이 신뢰 경계라는 주장 없음. 제품 암호화 저장소 연결 및 실제 계정 읽기/채우기 미지원.
+
+#214 자체 리뷰 보완: CefWriteJSON의 문서화된 배열 root를 사용한다(https://cef-builds.spotifycdn.com/docs/150.0/cef__parser_8h.html). boolean false와 실패/권한 만료/스크립트 예외(null)를 분리하여 실패가 거부 테스트 통과로 오인되지 않도록 한다. iframe fixture는 실제 동일 출처 하위 문서에 폼이 로드되었음을 확인한 뒤 준비 상태를 표시한다. UI thread 확인을 registry 조회보다 먼저 수행한다. 새 head CI 및 실제 Windows 실행 검증 필요.
