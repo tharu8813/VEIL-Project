@@ -1,0 +1,145 @@
+// SPDX-License-Identifier: MPL-2.0
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+namespace Veil.VolumeBroker;
+
+// Disconnected prerequisite. Never accepts a client-provided job object.
+// The disabled preflight gets a single-process job, not a browser job.
+// All calls must be serialized by a future owning broker.
+internal sealed class CefBrokerOwnedJob : IDisposable
+{
+    private readonly SafeFileHandle job;
+    private bool assignmentIssued;
+    private bool bound;
+    private bool disposed;
+
+    private CefBrokerOwnedJob(SafeFileHandle job) => this.job = job;
+
+    internal static CefBrokerOwnedJob CreateDisabledCandidate()
+    {
+        var handle = CreateJobObjectW(IntPtr.Zero, null);
+        if (handle.IsInvalid) { handle.Dispose(); throw new Win32Exception(); }
+        try
+        {
+            var limits = new ExtendedLimits();
+            // ACTIVE_PROCESS + KILL_ON_JOB_CLOSE. Neither breakaway flag.
+            limits.Basic.Flags = 0x00000008 | 0x00002000;
+            limits.Basic.ActiveLimit = 1;
+            if (!SetInformationJobObject(handle, 9, ref limits, (uint)Marshal.SizeOf<ExtendedLimits>()))
+                throw new Win32Exception();
+            return new CefBrokerOwnedJob(handle);
+        }
+        catch { handle.Dispose(); throw; }
+    }
+
+    internal long IssueAssignmentHandle(ClientIdentity owner, SafeProcessHandle observedOwner)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (assignmentIssued || Accounting().TotalProcesses != 0)
+            throw new InvalidOperationException("CEF job assignment already issued.");
+        assignmentIssued = true; // Never retry even if the reply is ambiguous.
+        return Native.DuplicateCefJobAssignment(job, owner, observedOwner);
+    }
+
+    internal void BindSingleCandidate(ClientIdentity owner, SafeProcessHandle ownerHandle,
+        ClientIdentity child, SafeProcessHandle childHandle)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!assignmentIssued || bound || owner.ProcessId == child.ProcessId ||
+            Native.ObserveProcess(ownerHandle) != owner || Native.ObserveProcess(childHandle) != child ||
+            !IsProcessInJob(ownerHandle, job, out bool ownerInside) || ownerInside ||
+            !IsProcessInJob(childHandle, job, out bool childInside) || !childInside)
+            throw new UnauthorizedAccessException("CEF candidate is not the exclusive nominated job member.");
+        var state = Accounting();
+        if (state.TotalProcesses != 1 || state.ActiveProcesses != 1 ||
+            Native.ObserveProcess(ownerHandle) != owner || Native.ObserveProcess(childHandle) != child)
+            throw new UnauthorizedAccessException("CEF job membership changed.");
+        bound = true;
+    }
+
+    internal bool HasNoActiveProcesses()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        return Accounting().ActiveProcesses == 0;
+    }
+
+    // Only this internally created job can be terminated. A false result
+    // requires keeping its handle and retrying; not a proof of exit/relock.
+    internal bool TerminateAndDrain(int milliseconds)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        var elapsed = Stopwatch.StartNew();
+        if (!TerminateJobObject(job, 35)) return false;
+        while (!HasNoActiveProcesses())
+        {
+            if (elapsed.ElapsedMilliseconds >= milliseconds) return false;
+            Thread.Sleep(20);
+        }
+        return true;
+    }
+
+    private AccountingInfo Accounting()
+    {
+        if (!QueryInformationJobObject(job, 1, out var info,
+            (uint)Marshal.SizeOf<AccountingInfo>(), IntPtr.Zero))
+            throw new Win32Exception();
+        return info;
+    }
+
+    public void Dispose()
+    {
+        if (disposed) return;
+        disposed = true;
+        job.Dispose();
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AccountingInfo
+    {
+        public long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime;
+        public uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BasicLimits
+    {
+        public long ProcessTime, JobTime;
+        public uint Flags;
+        public UIntPtr MinimumWorkingSet, MaximumWorkingSet;
+        public uint ActiveLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass, SchedulingClass;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoCounters
+    {
+        public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount;
+        public ulong ReadTransferCount, WriteTransferCount, OtherTransferCount;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ExtendedLimits
+    {
+        public BasicLimits Basic;
+        public IoCounters Io;
+        public UIntPtr ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    private static extern SafeFileHandle CreateJobObjectW(IntPtr attributes, string? name);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetInformationJobObject(SafeFileHandle job, int infoClass, ref ExtendedLimits limits, uint length);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(SafeFileHandle job, int infoClass, out AccountingInfo info, uint length, IntPtr returned);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsProcessInJob(SafeProcessHandle process, SafeFileHandle job, [MarshalAs(UnmanagedType.Bool)] out bool result);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateJobObject(SafeFileHandle job, uint code);
+}

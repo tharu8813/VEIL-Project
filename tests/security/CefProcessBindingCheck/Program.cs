@@ -161,6 +161,38 @@ try
     {
         if (!victim.HasExited) { victim.Kill(); victim.WaitForExit(10000); }
     }
+    // Isolated live test child only. Production must assign atomically at
+    // suspended creation; this test exercises the broker-owned object and
+    // reduced-access duplicate without an actual service or CEF.
+    using (var brokerJob = CefBrokerOwnedJob.CreateDisabledCandidate())
+    using (var assignment = new Microsoft.Win32.SafeHandles.SafeFileHandle(
+        new IntPtr(brokerJob.IssueAssignmentHandle(identity, owner.SafeHandle)), true))
+    using (var jobChild = Process.Start(new ProcessStartInfo
+    {
+        FileName = Environment.ProcessPath!,
+        UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true,
+        ArgumentList = { "--child" }, CreateNoWindow = true,
+    }) ?? throw new InvalidOperationException("Missing synthetic job child."))
+    {
+        try
+        {
+            Check(await jobChild.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)) == "ready",
+                "Job child not ready.");
+            var jobIdentity = Native.ObserveProcess(jobChild.SafeHandle);
+            Reject(() => brokerJob.BindSingleCandidate(identity, owner.SafeHandle, jobIdentity, jobChild.SafeHandle));
+            Check(AssignProcessToJobObject(assignment, jobChild.SafeHandle), "Synthetic job assignment failed.");
+            brokerJob.BindSingleCandidate(identity, owner.SafeHandle, jobIdentity, jobChild.SafeHandle);
+            Check(!brokerJob.HasNoActiveProcesses(), "Live job reported empty.");
+            Check(!TerminateJobObject(assignment, 35) && !jobChild.HasExited,
+                "Reduced-access assignment handle could terminate the job.");
+            Check(brokerJob.TerminateAndDrain(5000) && jobChild.WaitForExit(5000) &&
+                jobChild.ExitCode == 35, "Broker-owned job did not drain.");
+        }
+        finally
+        {
+            if (!jobChild.HasExited) { jobChild.Kill(); jobChild.WaitForExit(10000); }
+        }
+    }
     Console.WriteLine("PASS: synthetic Windows child handle duplication, generation binding and exit detection");
     return 0;
 }
@@ -172,3 +204,13 @@ finally
         await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
     }
 }
+
+
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+[return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+static extern bool AssignProcessToJobObject(Microsoft.Win32.SafeHandles.SafeFileHandle job,
+    Microsoft.Win32.SafeHandles.SafeProcessHandle process);
+
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+[return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+static extern bool TerminateJobObject(Microsoft.Win32.SafeHandles.SafeFileHandle job, uint code);

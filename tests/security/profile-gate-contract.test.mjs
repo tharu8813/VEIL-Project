@@ -486,3 +486,16 @@ test('unconfirmed CEF exit retains the same process handle and blocks new admiss
     assert.match(broker, /request.Command is BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild\)\s*return Protocol.Error\("CefExitUnconfirmed"\)/);
     assert.match(broker, /if \(confirmed\) receipt.Child.Dispose\(\);\s*else StopOrRetain\(receipt.Child\)/);
 });
+
+
+test('future broker-owned disabled job is created internally and never accepts client job handles', async () => {
+    const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
+    const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    assert.match(job, /CreateJobObjectW\(IntPtr.Zero, null\)[\s\S]*?limits.Basic.Flags = 0x00000008 \| 0x00002000;[\s\S]*?limits.Basic.ActiveLimit = 1/);
+    assert.match(job, /assignmentIssued = true;[\s\S]*?Native.DuplicateCefJobAssignment\(job, owner, observedOwner\)/);
+    assert.match(native, /DuplicateJobHandle\(new IntPtr\(-1\), job, destination, out IntPtr remote, 0x0001 \| 0x0004, false, 0\)/);
+    assert.match(job, /!IsProcessInJob\(ownerHandle, job, out bool ownerInside\) \|\| ownerInside[\s\S]*?!IsProcessInJob\(childHandle, job, out bool childInside\) \|\| !childInside[\s\S]*?state.TotalProcesses != 1 \|\| state.ActiveProcesses != 1/);
+    assert.match(job, /TerminateJobObject\(job, 35\)[\s\S]*?while \(!HasNoActiveProcesses\(\)\)/);
+    assert.doesNotMatch(broker, /CefBrokerOwnedJob/);
+});

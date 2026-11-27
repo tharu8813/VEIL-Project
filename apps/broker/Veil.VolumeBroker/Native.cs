@@ -298,6 +298,31 @@ internal static class Native
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool TerminateProcess(SafeProcessHandle process, uint exitCode);
 
+    // The job must be a broker-created object. The remote handle grants
+    // assignment and query only, never setting limits or termination.
+    internal static long DuplicateCefJobAssignment(SafeFileHandle job,
+        ClientIdentity owner, SafeProcessHandle observedOwner)
+    {
+        if (ObserveProcess(observedOwner) != owner)
+            throw new UnauthorizedAccessException("CEF job owner changed.");
+        using var destination = OpenProcess(QueryLimitedInformation | Synchronize | 0x0040,
+            false, (uint)owner.ProcessId);
+        if (!SameLiveProcess(observedOwner, destination) || ObserveProcess(destination) != owner ||
+            !DuplicateJobHandle(new IntPtr(-1), job, destination, out IntPtr remote, 0x0001 | 0x0004, false, 0))
+            throw new UnauthorizedAccessException("CEF job assignment handle could not be issued.");
+        // A remote numeric handle cannot safely be closed after the owner may
+        // have reused its value. On ambiguity deny; the job remains broker-owned.
+        if (!SameLiveProcess(observedOwner, destination) || ObserveProcess(destination) != owner)
+            throw new UnauthorizedAccessException("CEF job owner changed during duplication.");
+        return remote.ToInt64();
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "DuplicateHandle", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DuplicateJobHandle(IntPtr sourceProcess, SafeFileHandle source,
+        SafeProcessHandle destination, out IntPtr target, uint access,
+        [MarshalAs(UnmanagedType.Bool)] bool inherit, uint options);
+
     internal static bool IsRunning(SafeProcessHandle handle)
     {
         if (handle.IsClosed || handle.IsInvalid) return false;
