@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "bootstrap_registration.h"
+#include <cstddef>
 #include <aclapi.h>
 #include <utility>
 
@@ -109,9 +110,14 @@ bool IsAdminOnlyRegistryDescriptor(PSECURITY_DESCRIPTOR descriptor) {
     if (header->AceType != ACCESS_ALLOWED_ACE_TYPE ||
         header->AceSize < sizeof(ACCESS_ALLOWED_ACE)) return false;
     const auto* ace = static_cast<const ACCESS_ALLOWED_ACE*>(raw);
+    constexpr size_t sid_offset = offsetof(ACCESS_ALLOWED_ACE, SidStart);
+    const size_t ace_size = header->AceSize;
+    if (ace_size < sid_offset + 8) return false;  // SID fixed header.
     PSID sid = const_cast<DWORD*>(&ace->SidStart);
-    if (!IsValidSid(sid) ||
-        GetLengthSid(sid) > header->AceSize - FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart))
+    // Bound the variable SID before asking Windows to inspect it.
+    const auto* sid_bytes = reinterpret_cast<const unsigned char*>(sid);
+    if (8u + 4u * sid_bytes[1] > ace_size - sid_offset ||
+        !IsValidSid(sid) || GetLengthSid(sid) > ace_size - sid_offset)
       return false;
     if (!TrustedSid(sid)) {
       // Allow only explicit read bits, including for inheritable ACEs.
