@@ -267,6 +267,37 @@ internal static class Native
 
     // The crash watcher may dispose the handle concurrently after process exit.
     // A closed, signaled, invalid or failed wait never attests a live owner.
+    // Only used after the nominated child has passed the production pin.
+    // Open a termination-capable handle and bind it to the retained object,
+    // never terminate based on a PID or executable name alone.
+    internal static SafeProcessHandle OpenCefTerminationHandle(ClientIdentity child, SafeProcessHandle observed)
+    {
+        var handle = OpenProcess(QueryLimitedInformation | Synchronize | 0x0001, false, (uint)child.ProcessId);
+        try
+        {
+            if (!SameLiveProcess(observed, handle) || ObserveProcess(handle) != child)
+                throw new UnauthorizedAccessException("CEF termination handle did not match the nominated child.");
+            return handle;
+        }
+        catch { handle.Dispose(); throw; }
+    }
+
+    internal static bool TerminateCefChildAndWait(SafeProcessHandle child)
+    {
+        if (child.IsClosed || child.IsInvalid) return false;
+        uint state = WaitForSingleObject(child, 0);
+        if (state == 0) return true;
+        if (state != 0x102) return false;
+        // 35 is forced termination, never the verified-disabled exit 29.
+        if (!TerminateProcess(child, 35) && WaitForSingleObject(child, 0) != 0)
+            return false;
+        return WaitForSingleObject(child, 2000) == 0;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateProcess(SafeProcessHandle process, uint exitCode);
+
     internal static bool IsRunning(SafeProcessHandle handle)
     {
         if (handle.IsClosed || handle.IsInvalid) return false;

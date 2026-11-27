@@ -240,8 +240,8 @@ test('CEF staged child is bounded to one pending slot and retired on lock and ti
     const pending = await readFile('apps/broker/Veil.VolumeBroker/CefPendingChild.cs', 'utf8');
     const stage = broker.slice(broker.indexOf('case BrokerCommand.StageCefChild:'), broker.indexOf('case BrokerCommand.Attach'));
     assert.match(stage, /authenticatedOwner != client[\s\S]*?config\.Development[\s\S]*?if \(pendingCefChild is not null \|\| completedPreflight is not null\)[\s\S]*?CefChildPreflight\.Stage/);
-    assert.match(stage, /pendingCefChild = candidate;\s*_ = ExpirePendingCefChildAsync\(candidate\);/);
-    assert.match(stage, /if \(!ReferenceEquals\(pendingCefChild, candidate\)\) candidate\.Dispose\(\)/);
+    assert.match(stage, /pendingCefChild = candidate;\s*_ = MonitorPendingCefChildAsync\(candidate, generation\);/);
+    assert.match(stage, /if \(!ReferenceEquals\(pendingCefChild, candidate\)\)\s*\{\s*try \{ StopPendingChild\(candidate\); \}\s*finally \{ candidate\.Dispose\(\); \}/);
     assert.match(broker, /request\.Command is BrokerCommand\.Lock or BrokerCommand\.Detach\)\s*RevokePendingCefChild\(\)/);
     assert.match(broker, /private void ClearAuthenticatedOwner\(\)\s*\{\s*RevokePendingCefChild\(\)/);
     assert.match(broker, /if \(ReferenceEquals\(pendingCefChild, expected\)\) RevokePendingCefChild\(\)/);
@@ -446,7 +446,7 @@ test('broker hashes runtime before the admission and reuses retained files in re
     const verify = preflight.slice(preflight.indexOf('internal static bool VerifyRedemption'), preflight.indexOf('internal static CefPendingChild Stage'));
     const stage = preflight.slice(preflight.indexOf('internal static CefPendingChild Stage'));
     assert.doesNotMatch(verify, /CefRuntimeRegistrationLease.OpenInstalled/);
-    assert.match(stage, /OpenInstalled\(serializedBrokerAccess: true\)[\s\S]*?new CefChildAdmission[\s\S]*?binding.Handle, image, runtime/);
+    assert.match(stage, /OpenInstalled\(serializedBrokerAccess: true\)[\s\S]*?new CefChildAdmission[\s\S]*?termination, image, runtime/);
     assert.match(lease, /!serializedBrokerAccess && Environment.CurrentManagedThreadId != ownerThread/);
     assert.match(lease, /foreach \(string modulePath in modulePaths\) CheckObservedApplicationModule/);
 });
@@ -461,4 +461,16 @@ test('disabled preflight polls live authority and never confirms forced terminat
     const natural = process.slice(process.indexOf('internal bool WaitForNaturalJobExit'), process.indexOf('internal void TerminateAndDrain'));
     assert.doesNotMatch(natural, /TerminateJobObject|TerminateProcess/);
     assert.match(runner, /!child.WaitForNaturalJobExit\(250\) \|\| !Current\(\)[\s\S]*?confirm\(\);/);
+});
+
+
+test('broker monitors the exact staged or redeemed disabled candidate and revokes on lost authority', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
+    const preflight = await readFile('apps/broker/Veil.VolumeBroker/CefChildPreflight.cs', 'utf8');
+    assert.match(preflight, /CefRuntimeRegistrationLease.OpenInstalled[\s\S]*?OpenCefTerminationHandle\(binding.Identity, binding.Handle\)[\s\S]*?new CefPendingChild/);
+    assert.match(native, /OpenCefTerminationHandle[\s\S]*?!SameLiveProcess\(observed, handle\)[\s\S]*?ObserveProcess\(handle\) != child/);
+    assert.match(native, /TerminateProcess\(child, 35\)[\s\S]*?WaitForSingleObject\(child, 2000\) == 0/);
+    assert.match(broker, /MonitorPendingCefChildAsync\(CefPendingChild expected, object generation\)[\s\S]*?await serial.WaitAsync\(\)[\s\S]*?!ReferenceEquals\(pendingCefChild, expected\)[\s\S]*?CandidateAuthorityCurrent\(generation\)[\s\S]*?RevokePendingCefChild\(\)/);
+    assert.match(broker, /MonitorCompletedPreflightAsync\(CompletedPreflight expected\)[\s\S]*?!ReferenceEquals\(completedPreflight, expected\)[\s\S]*?CandidateAuthorityCurrent\(expected.Generation\)[\s\S]*?RevokeCompletedPreflight\(\)/);
 });

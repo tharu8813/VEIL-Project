@@ -72,6 +72,7 @@ internal static class CefChildPreflight
         var binding = Native.DuplicateNominatedChild(owner, ownerHandle, new IntPtr(nominatedHandle));
         FileStream? image = null;
         Veil.Desktop.CefRuntimeRegistrationLease? runtime = null;
+        SafeProcessHandle? termination = null;
         try
         {
             image = CefPinnedImage.OpenVerified(binding.Identity, binding.Handle,
@@ -85,8 +86,11 @@ internal static class CefChildPreflight
             if (Native.ObserveProcess(ownerHandle) != owner ||
                 Native.ObserveProcess(binding.Handle) != binding.Identity)
                 throw new UnauthorizedAccessException("CEF staging identity changed.");
-            return new CefPendingChild(new CefChildAdmission(owner, binding.Identity,
-                generation, TimeProvider.System), binding.Handle, image, runtime);
+            termination = Native.OpenCefTerminationHandle(binding.Identity, binding.Handle);
+            var pending = new CefPendingChild(new CefChildAdmission(owner, binding.Identity,
+                generation, TimeProvider.System), termination, image, runtime);
+            binding.Handle.Dispose();
+            return pending;
         }
         catch
         {
@@ -94,7 +98,11 @@ internal static class CefChildPreflight
             finally
             {
                 try { image?.Dispose(); }
-                finally { binding.Handle.Dispose(); }
+                finally
+                {
+                    try { termination?.Dispose(); }
+                    finally { binding.Handle.Dispose(); }
+                }
             }
             throw;
         }

@@ -138,6 +138,29 @@ try
     Check(!Native.MatchesExitedNomination(identity, owner.SafeHandle, child.SafeHandle.DangerousGetHandle().ToInt64(), retained, 29), "Incorrect exit code accepted.");
     Check(!Native.MatchesExitedNomination(identity, owner.SafeHandle, owner.SafeHandle.DangerousGetHandle().ToInt64(), retained, 0), "Different object accepted.");
     Reject(() => Native.DuplicateNominatedChild(identity, owner.SafeHandle, child.SafeHandle.DangerousGetHandle()).Handle.Dispose());
+    using var victim = Process.Start(new ProcessStartInfo
+    {
+        FileName = Environment.ProcessPath!,
+        UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true,
+        ArgumentList = { "--child" }, CreateNoWindow = true,
+    }) ?? throw new InvalidOperationException("Missing synthetic termination child.");
+    try
+    {
+        Check(await victim.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)) == "ready",
+            "Synthetic termination child not ready.");
+        var nominated = Native.DuplicateNominatedChild(identity, owner.SafeHandle, victim.SafeHandle.DangerousGetHandle());
+        using var observed = nominated.Handle;
+        Reject(() => Native.OpenCefTerminationHandle(nominated.Identity, owner.SafeHandle).Dispose());
+        using var stopHandle = Native.OpenCefTerminationHandle(nominated.Identity, observed);
+        Check(Native.SameLiveProcess(observed, stopHandle), "Termination handle object mismatch.");
+        Check(Native.TerminateCefChildAndWait(stopHandle), "Retained child exit not confirmed.");
+        Check(victim.WaitForExit(2000) && victim.ExitCode == 35 &&
+            Native.TerminateCefChildAndWait(stopHandle), "Forced termination failed or used success exit.");
+    }
+    finally
+    {
+        if (!victim.HasExited) { victim.Kill(); victim.WaitForExit(10000); }
+    }
     Console.WriteLine("PASS: synthetic Windows child handle duplication, generation binding and exit detection");
     return 0;
 }

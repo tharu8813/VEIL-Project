@@ -194,18 +194,24 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     return Protocol.Error("CefChildRejected");
                 // Keep an independent child object after pending admission is
                 // disposed. The owner must confirm this exact exited object.
-                var retained = Native.OpenForWait(client, childHandle);
-                if (retained.IsInvalid) { retained.Dispose(); return Protocol.Error("CefChildRejected"); }
+                var retained = Native.OpenCefTerminationHandle(client, childHandle);
                 if (completedPreflight is not null) { retained.Dispose(); return Protocol.Error("CefChildRejected"); }
                 var receipt = new CompletedPreflight(generation, retained, System.Diagnostics.Stopwatch.GetTimestamp());
                 completedPreflight = receipt;
-                _ = ExpireCompletedPreflightAsync(receipt);
+                _ = MonitorCompletedPreflightAsync(receipt);
                 return Protocol.CefChildVerified();
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
                 log.Write("cef-child-rejected", new { type = error.GetType().Name });
                 return Protocol.Error("CefChildRejected");
+            }
+            finally
+            {
+                // A rejected redemption never leaves the verified candidate
+                // running merely because the one-shot slot was consumed.
+                if (completedPreflight is null)
+                    StopPendingChild(pending);
             }
         }
     }
@@ -308,11 +314,15 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                             break;
                         }
                         pendingCefChild = candidate;
-                        _ = ExpirePendingCefChildAsync(candidate);
+                        _ = MonitorPendingCefChildAsync(candidate, generation);
                     }
                     finally
                     {
-                        if (!ReferenceEquals(pendingCefChild, candidate)) candidate.Dispose();
+                        if (!ReferenceEquals(pendingCefChild, candidate))
+                        {
+                            try { StopPendingChild(candidate); }
+                            finally { candidate.Dispose(); }
+                        }
                     }
                     break;
                 case BrokerCommand.ConfirmCefPreflight:
@@ -467,7 +477,14 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     {
         var pending = pendingCefChild;
         pendingCefChild = null;
-        try { pending?.Dispose(); }
+        try
+        {
+            if (pending is not null)
+            {
+                try { StopPendingChild(pending); }
+                finally { pending.Dispose(); }
+            }
+        }
         finally { RevokeCompletedPreflight(); }
     }
 
@@ -475,27 +492,89 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     {
         var receipt = completedPreflight;
         completedPreflight = null;
-        receipt?.Child.Dispose();
+        if (receipt is not null)
+        {
+            try { StopVerifiedChild(receipt.Child); }
+            finally { receipt.Child.Dispose(); }
+        }
     }
 
-    private async Task ExpireCompletedPreflightAsync(CompletedPreflight expected)
+    private void StopPendingChild(CefPendingChild pending)
     {
-        await Task.Delay(TimeSpan.FromSeconds(15));
-        await serial.WaitAsync();
-        try { if (ReferenceEquals(completedPreflight, expected)) RevokeCompletedPreflight(); }
-        finally { serial.Release(); }
+        if (pending.ProcessResource is SafeProcessHandle child) StopVerifiedChild(child);
     }
 
-    private async Task ExpirePendingCefChildAsync(CefPendingChild expected)
+    private void StopVerifiedChild(SafeProcessHandle child)
     {
-        await Task.Delay(CefChildAdmission.Lifetime);
-        await serial.WaitAsync();
+        // Termination is scoped to the verified, retained candidate only,
+        // not the owner, a PID lookup, or an arbitrary process tree.
         try
         {
-            // An older timeout must never revoke a later nomination.
-            if (ReferenceEquals(pendingCefChild, expected)) RevokePendingCefChild();
+            if (!Native.TerminateCefChildAndWait(child))
+                log.Write("cef-child-stop", new { result = "ExitNotConfirmed" });
         }
-        finally { serial.Release(); }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Write("cef-child-stop", new { result = "ExitNotConfirmed", type = error.GetType().Name });
+        }
+    }
+
+    private bool CandidateAuthorityCurrent(object generation)
+    {
+        if (!ReferenceEquals(unlockOwner, generation) ||
+            authenticatedOwnerHandle is not { } owner || !Native.IsRunning(owner))
+            return false;
+        var state = backend.Status();
+        return state.Attached && state.Unlocked && state.FullyEncrypted &&
+            state.ProtectionOn && state.ProtectorPresent &&
+            string.Equals(state.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task MonitorCompletedPreflightAsync(CompletedPreflight expected)
+    {
+        while (true)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1));
+            await serial.WaitAsync();
+            try
+            {
+                if (!ReferenceEquals(completedPreflight, expected)) return;
+                if (!Expired(expected) && CandidateAuthorityCurrent(expected.Generation)) continue;
+                RevokeCompletedPreflight();
+                return;
+            }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                log.Write("cef-child-monitor", new { type = error.GetType().Name });
+                if (ReferenceEquals(completedPreflight, expected)) RevokeCompletedPreflight();
+                return;
+            }
+            finally { serial.Release(); }
+        }
+    }
+
+    private async Task MonitorPendingCefChildAsync(CefPendingChild expected, object generation)
+    {
+        while (true)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1));
+            await serial.WaitAsync();
+            try
+            {
+                if (!ReferenceEquals(pendingCefChild, expected)) return;
+                if (!expected.IsExpired && expected.ProcessResource is SafeProcessHandle child &&
+                    Native.IsRunning(child) && CandidateAuthorityCurrent(generation)) continue;
+                RevokePendingCefChild();
+                return;
+            }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                log.Write("cef-child-monitor", new { type = error.GetType().Name });
+                if (ReferenceEquals(pendingCefChild, expected)) RevokePendingCefChild();
+                return;
+            }
+            finally { serial.Release(); }
+        }
     }
 
     private void Watch(int pid, SafeProcessHandle handle)
