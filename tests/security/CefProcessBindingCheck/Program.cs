@@ -10,6 +10,8 @@ if (args is ["--child"])
     return Console.ReadLine() == "exit" ? 0 : 1;
 }
 
+CefRoleTokenPolicyTests.Run();
+
 // Exercise the actual production parser with no broker or volume access.
 using (var parsed = Protocol.Parse("""{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"123"}"""u8))
 {
