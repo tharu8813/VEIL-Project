@@ -66,6 +66,13 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
     }
     private nint hwnd;
     private bool disposed;
+    private ulong loginContextEpoch;
+    private bool loginOperationActive;
+    internal void InvalidateFixtureLoginContext()
+    {
+        Dispatcher.VerifyAccess();
+        loginContextEpoch++;
+    }
     private ulong retiredHandle;
     internal bool IsSlotReleased => disposed && NativeHandle == 0 &&
         (retiredHandle == 0 || CefNative.VeilCefClosed(retiredHandle) != 0);
@@ -109,6 +116,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         onRenderProcessFailed = code =>
         {
             if (hwnd == 0) return;
+            InvalidateFixtureLoginContext();
             try
             {
                 ProcessFailed?.Invoke(this, new EngineProcessFailedEventArgs(EngineFailureScope.PageOrChildProcess, code));
@@ -125,7 +133,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
             {
                 switch (kind)
                 {
-                    case 1: SourceChanged?.Invoke(this, EventArgs.Empty); break;
+                    case 1: InvalidateFixtureLoginContext(); SourceChanged?.Invoke(this, EventArgs.Empty); break;
                     case 2: TitleChanged?.Invoke(this, EventArgs.Empty); break;
                     case 3: HistoryChanged?.Invoke(this, EventArgs.Empty); break;
                     case 4: FullScreenChanged?.Invoke(this, EventArgs.Empty); break;
@@ -138,6 +146,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         };
         onStarting = (url, id, redirect) =>
         {
+            InvalidateFixtureLoginContext();
             var callback = NavigationStarting;
             if (callback is null) return 1;
             try
@@ -191,30 +200,38 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         Func<bool> stillAuthorized, FixtureLoginOperation operation)
     {
         Dispatcher.VerifyAccess();
+        if (loginOperationActive) return null;
         RequireView();
         ulong id = NativeHandle;
-        bool Current() => !disposed && NativeHandle == id && CefNative.VeilCefClosed(id) == 0 &&
-            SiteDataSupport.Scope == SiteDataScope.SyntheticFixture &&
-            SiteDataPolicy.Origin(page) == origin && Source == page && stillAuthorized();
-        if (!Current()) return null;
-        CefNative.CookieDeleteAuthorization authorize = handle =>
-        {
-            try { return handle == id && Dispatcher.CheckAccess() && Current() ? 1 : 0; }
-            catch (Exception) { return 0; }
-        };
-        int started = operation switch
-        {
-            FixtureLoginOperation.Probe => CefNative.VeilCefStartLoginProbe(id, origin, page),
-            FixtureLoginOperation.CheckValues => CefNative.VeilCefStartLoginValuesCheck(id, origin, page, authorize),
-            FixtureLoginOperation.Fill => CefNative.VeilCefStartLoginFill(id, origin, page, authorize),
-            FixtureLoginOperation.CheckFillState => CefNative.VeilCefStartLoginFillState(id, origin, page, authorize),
-            _ => 0
-        };
-        // Native invokes the callback synchronously and never retains it.
-        GC.KeepAlive(authorize);
-        if (started != 1) return null;
+        ulong epoch = loginContextEpoch;
+        bool ContextMatches() => !disposed && NativeHandle == id && loginContextEpoch == epoch &&
+            CefNative.VeilCefClosed(id) == 0 && SiteDataSupport.Scope == SiteDataScope.SyntheticFixture &&
+            SiteDataPolicy.Origin(page) == origin && Source == page && !IsFixtureLoading;
+        // The callback may reenter the host, switch away and back, or navigate.
+        // A matching URL/active view alone does not revive an expired generation.
+        bool Current() => ContextMatches() && stillAuthorized() && ContextMatches();
+        loginOperationActive = true;
+        bool started = false;
         try
         {
+            if (!Current()) return null;
+            CefNative.CookieDeleteAuthorization authorize = handle =>
+            {
+                try { return handle == id && Dispatcher.CheckAccess() && Current() ? 1 : 0; }
+                catch (Exception) { return 0; }
+            };
+            int nativeStart = operation switch
+            {
+                FixtureLoginOperation.Probe => CefNative.VeilCefStartLoginProbe(id, origin, page),
+                FixtureLoginOperation.CheckValues => CefNative.VeilCefStartLoginValuesCheck(id, origin, page, authorize),
+                FixtureLoginOperation.Fill => CefNative.VeilCefStartLoginFill(id, origin, page, authorize),
+                FixtureLoginOperation.CheckFillState => CefNative.VeilCefStartLoginFillState(id, origin, page, authorize),
+                _ => 0
+            };
+            // Native invokes the callback synchronously and never retains it.
+            GC.KeepAlive(authorize);
+            started = nativeStart == 1;
+            if (!started) return null;
             var deadline = System.Diagnostics.Stopwatch.StartNew();
             int status;
             while ((status = CefNative.VeilCefLoginProbeStatus(id)) == 0)
@@ -225,7 +242,12 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
             if (!Current()) return null;
             return status switch { 1 => true, 2 => false, _ => null };
         }
-        finally { CefNative.VeilCefEndLoginProbe(id); }
+        finally
+        {
+            // Only the operation that acquired the native slot can release it.
+            if (started) CefNative.VeilCefEndLoginProbe(id);
+            loginOperationActive = false;
+        }
     }
 
     public async Task<IReadOnlyList<string>> GetCookieDomainsAsync()
@@ -493,23 +515,25 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
             url.Host is not ("127.0.0.1" or "[::1]" or "localhost") || url.UserInfo.Length != 0)
             throw new ArgumentException("Enter a local HTTP test URL.", nameof(address));
         RequireView();
+        InvalidateFixtureLoginContext();
         CefNative.VeilCefNavigate(NativeHandle, url.AbsoluteUri);
     }
 
     public void ShowInternalHtml(string trustedHostHtml) => throw new NotSupportedException();
-    public void GoBack() => CefNative.VeilCefGoBack(NativeHandle);
-    public void GoForward() => CefNative.VeilCefGoForward(NativeHandle);
-    public void Reload() => CefNative.VeilCefReload(NativeHandle);
+    public void GoBack() { InvalidateFixtureLoginContext(); CefNative.VeilCefGoBack(NativeHandle); }
+    public void GoForward() { InvalidateFixtureLoginContext(); CefNative.VeilCefGoForward(NativeHandle); }
+    public void Reload() { InvalidateFixtureLoginContext(); CefNative.VeilCefReload(NativeHandle); }
     public Task ReloadIgnoringCacheAsync()
     {
         RequireView();
+        InvalidateFixtureLoginContext();
         CefNative.VeilCefReloadIgnoringCache(NativeHandle);
         return Task.CompletedTask;
     }
 
     // Native find callbacks and request lifetime have not yet been verified.
     public Task<bool?> FindTextAsync(string query, bool backwards) => Task.FromResult<bool?>(null);
-    public void Stop() => CefNative.VeilCefStop(NativeHandle);
+    public void Stop() { InvalidateFixtureLoginContext(); CefNative.VeilCefStop(NativeHandle); }
 
     private void RequireView()
     {
@@ -543,6 +567,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
 
     protected override void DestroyWindowCore(HandleRef window)
     {
+        InvalidateFixtureLoginContext();
         if (NativeHandle != 0) retiredHandle = NativeHandle;
         CefNative.VeilCefDetachCallbacks(NativeHandle, window.Handle);
         NativeHandle = 0;

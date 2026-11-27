@@ -157,3 +157,7 @@ CEF 제품 IEngineLoginForms 미구현 유지. 명시적 탭 fixture의 127.0.0.
 ### 추가 구현: CEF 합성 로그인 자동완성 및 독립 상태 검증 (검증 대기)
 
 제품 credential capability는 미구현 유지. 명시된 5개 loopback 페이지에서만 고정 합성 문자열을 채우며 기존 비밀번호 또는 다른 계정명이 있으면 거부한다. 값 비교와 같은 UI thread/뷰/페이지/dispatch 권한 가드를 적용하고 결과는 boolean/null만 반환한다. 별도의 고정 읽기 전용 상태 검사로 실제 입력값과 input/change 이벤트 수, submit 이벤트 부재를 확인한다. 빈 폼, 같은 계정, 기존 비밀번호, 다른 계정, dispatch 권한 철회 및 허용 외 경로 테스트 추가. 발행된 명령은 취소/롤백 보장 없음. Windows 실행 NOT RUN. 일반 계정 저장·읽기·채우기 및 암호화 저장소 연결은 여전히 미지원.
+
+### 추가 구현: CEF 합성 로그인 작업의 재진입 및 수명 가드 (검증 대기)
+
+관리 어댑터의 작업 슬롯과 컨텍스트 generation을 추가하고 권한 콜백 전후 동일 generation을 확인한다. 탐색 명령/탐색 콜백/주소 변경/renderer 오류/뷰 해제 및 탭 선택·닫기에서 이전 권한을 무효화한다. 네이티브 탐색 및 닫기 명령에서도 기존 observation을 즉시 무효화한다. 중복 호출은 최초 작업의 슬롯을 정리하지 않으며, A-B-A 탭 변경 및 native dispatch 권한 콜백 내부 탐색의 결과를 합성 폼 상태 검사로 검증한다. 테스트 시간 상한 조정. 실제 Windows 실행 NOT RUN. 이미 발행된 CDP mutation 취소/롤백 보장 없음, renderer 종료 및 닫기 중 실제 실행 검증 별도 필요. CEF 제품 credential capability 미구현 유지.
