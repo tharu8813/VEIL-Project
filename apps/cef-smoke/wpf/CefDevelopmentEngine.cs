@@ -170,7 +170,16 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
     // product credential capability. The native route allowlist is authoritative.
     internal bool IsFixtureLoading => NativeHandle == 0 || CefNative.VeilCefFixtureLoading(NativeHandle) != 0;
 
-    internal async Task<bool?> ProbeFixtureLoginFormAsync(string origin, string page, Func<bool> stillAuthorized)
+    internal Task<bool?> ProbeFixtureLoginFormAsync(string origin, string page, Func<bool> stillAuthorized) =>
+        ObserveFixtureLoginAsync(origin, page, stillAuthorized, checkValues: false);
+
+    // Synthetic marker equality only. No username/password payload crosses
+    // this boundary, and the product credential capability stays absent.
+    internal Task<bool?> CheckFixtureLoginValuesAsync(string origin, string page, Func<bool> stillAuthorized) =>
+        ObserveFixtureLoginAsync(origin, page, stillAuthorized, checkValues: true);
+
+    private async Task<bool?> ObserveFixtureLoginAsync(string origin, string page,
+        Func<bool> stillAuthorized, bool checkValues)
     {
         Dispatcher.VerifyAccess();
         RequireView();
@@ -179,7 +188,17 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
             SiteDataSupport.Scope == SiteDataScope.SyntheticFixture &&
             SiteDataPolicy.Origin(page) == origin && Source == page && stillAuthorized();
         if (!Current()) return null;
-        if (CefNative.VeilCefStartLoginProbe(id, origin, page) != 1) return null;
+        CefNative.CookieDeleteAuthorization authorize = handle =>
+        {
+            try { return handle == id && Dispatcher.CheckAccess() && Current() ? 1 : 0; }
+            catch (Exception) { return 0; }
+        };
+        int started = checkValues
+            ? CefNative.VeilCefStartLoginValuesCheck(id, origin, page, authorize)
+            : CefNative.VeilCefStartLoginProbe(id, origin, page);
+        // Native invokes the callback synchronously and never retains it.
+        GC.KeepAlive(authorize);
+        if (started != 1) return null;
         try
         {
             var deadline = System.Diagnostics.Stopwatch.StartNew();
@@ -565,6 +584,8 @@ internal static class CefNative
     [DllImport(Module)] internal static extern void VeilCefCancelOwnedAttachment(ulong id);
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
     internal static extern int VeilCefStartLoginProbe(ulong id, string origin, string page);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern int VeilCefStartLoginValuesCheck(ulong id, string origin, string page, CookieDeleteAuthorization authorize);
     [DllImport(Module)] internal static extern int VeilCefFixtureLoading(ulong id);
     [DllImport(Module)] internal static extern int VeilCefLoginProbeStatus(ulong id);
     [DllImport(Module)] internal static extern void VeilCefEndLoginProbe(ulong id);

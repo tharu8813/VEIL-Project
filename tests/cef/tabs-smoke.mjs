@@ -22,6 +22,11 @@ const loginFixtures = new Map([
   ['/tabs-login-iframe', '<iframe id="fixture-frame" src="/tabs-login-frame-child"></iframe>'],
   ['/tabs-login-new', '<form><input><input type="password" autocomplete="new-password"></form>'],
 ]);
+const loginValueFixtures = new Map([
+  ['/tabs-login-read', 'veil-synthetic-marker'],
+  ['/tabs-login-read-empty', ''],
+  ['/tabs-login-read-mismatch', 'different-synthetic-marker'],
+]);
 const server = http.createServer((request, response) => {
   requests.push(request.url);
   if (request.url === '/fixture-http-cache-resource') {
@@ -43,6 +48,14 @@ const server = http.createServer((request, response) => {
   if (request.url === '/tabs-login-frame-child') {
     response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
     response.end('<!doctype html><form><input><input type="password"></form>');
+    return;
+  }
+  if (loginValueFixtures.has(request.url)) {
+    const index = [...loginValueFixtures.keys()].indexOf(request.url);
+    response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+    response.end('<!doctype html><title>TAB_LOGIN_VALUES_' + index +
+      '</title><form action="/unused-login"><input autocomplete="username" value="veil-synthetic-user">' +
+      '<input type="password" value="' + loginValueFixtures.get(request.url) + '"></form>');
     return;
   }
   if (loginFixtures.has(request.url)) {
@@ -145,7 +158,7 @@ async function runFixture(fresh) {
       const killed = spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 });
       if (killed.status !== 0) child.kill();
     }
-  }, fresh ? 45000 : 90000);
+  }, fresh ? 60000 : 90000);
   try {
     const [code] = await once(child, 'exit');
     const profile = join(runTemp, 'veil-cef-wpf-profile-' + child.pid);
@@ -225,6 +238,9 @@ try {
   for (const route of loginFixtures.keys()) assert.equal(requests.filter(x => x === route).length, 1, route);
   assert.equal(requests.filter(x => x === '/tabs-login-frame-child').length, 1, 'Child form must actually load');
   assert.ok(!requests.includes('/unused-login'), 'Probe must never submit a form');
+  for (const route of loginValueFixtures.keys()) assert.equal(requests.filter(x => x === route).length, 1, route);
+  assert.match(fresh.evidence, /Synthetic values check rejected authorization at native dispatch[\s\S]*Synthetic login values equality accepted matching markers and rejected empty and mismatched markers/);
+  assert.ok(!fresh.evidence.includes('veil-synthetic-user') && !fresh.evidence.includes('veil-synthetic-marker'), 'Synthetic input values must not appear in diagnostic output');
   assert.match(fresh.evidence, /Login probe discarded result after authorization expired[\s\S]*Boolean-only login probe accepted one form and rejected hidden, ambiguous, cross-origin, iframe and new-password forms/);
   assertNoFixtureProcesses();
   // Only delete the unique directory created by this runner. Preserve failed

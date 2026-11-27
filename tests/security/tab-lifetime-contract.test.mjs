@@ -615,8 +615,10 @@ test('CEF login fixture exposes only a bounded boolean observation', async () =>
     assert.match(cefNative, /remote->GetString\("type"\) != "boolean" \|\| remote->GetType\("value"\) != VTYPE_BOOL/);
     assert.match(cefNative, /probe_->status = remote->GetBool\("value"\) \? 1 : 2;/);
     assert.match(cefNative, /if \(frame->IsMain\(\)\) state_->InvalidateLoginProbe\(\);/);
-    const probe = cefNative.slice(cefNative.indexOf('int VeilCefStartLoginProbe('), cefNative.indexOf('int VeilCefFixtureLoading('));
-    assert.doesNotMatch(probe, /(?:user|pass)\.value|\.submit\(|\.requestSubmit\(/);
+    const probe = cefNative.slice(cefNative.indexOf('static int StartFixtureLoginObservation('), cefNative.indexOf('int VeilCefFixtureLoading('));
+    assert.doesNotMatch(probe, /\.submit\(|\.requestSubmit\(/);
+    assert.match(probe, /expression \+= check_values\s*\? "return user\.value==='veil-synthetic-user'&&pass\.value==='veil-synthetic-marker';"\s*: "return true;";/);
+    assert.match(probe, /return StartFixtureLoginObservation\(id, origin, page, false, nullptr\);/);
     assert.match(probe, /ExecuteDevToolsMethod\(0, "Runtime\.evaluate", parameters\)/);
     assert.match(cefView, /if \(!Current\(\)\) return null;\s*return status switch \{ 1 => true, 2 => false, _ => null \};\s*\}\s*finally \{ CefNative\.VeilCefEndLoginProbe\(id\); \}/);
     assert.match(probe, /expected_list->SetString\(0, CefString\(page\)\);\s*expected->SetList\(expected_list\);\s*const auto quoted_page = CefWriteJSON\(expected, JSON_WRITER_DEFAULT\)/);
@@ -627,4 +629,18 @@ test('CEF login fixture exposes only a bounded boolean observation', async () =>
     assert.match(runner, /requests\.filter\(x => x === '\/tabs-login-frame-child'\)\.length, 1/);
     assert.match(cefTabbed, /Login probe discarded result after authorization expired/);
     assert.match(runner, /assert\.ok\(!requests\.includes\('\/unused-login'\)/);
+});
+
+
+test('CEF synthetic login values test returns equality only and authorizes native dispatch', async () => {
+    const runner = await readFile('tests/cef/tabs-smoke.mjs', 'utf8');
+    assert.match(cefNative, /static bool IsFixtureLoginValuesPage[\s\S]*?page == origin \+ L"\/tabs-login-read" \|\|[\s\S]*?page == origin \+ L"\/tabs-login-read-empty" \|\|[\s\S]*?page == origin \+ L"\/tabs-login-read-mismatch";/);
+    assert.match(cefNative, /if \(check_values \? \(!authorize \|\| !IsFixtureLoginValuesPage\(origin, page\)\) :\s*!IsFixtureLoginPage\(origin, page\)\) return 0;/);
+    assert.match(cefNative, /const bool allowed = !check_values \|\| authorize\(id\) != 0;[\s\S]*?state->login_probe == probe && probe->status == 0 && current == browser[\s\S]*?ExecuteDevToolsMethod\(0, "Runtime\.evaluate", parameters\)/);
+    assert.match(cefView, /internal Task<bool\?> CheckFixtureLoginValuesAsync[\s\S]*?checkValues: true/);
+    assert.match(cefView, /CefNative\.VeilCefStartLoginValuesCheck\(id, origin, page, authorize\)[\s\S]*?GC\.KeepAlive\(authorize\);/);
+    assert.match(cefTabbed, /deletionAuthorizationChecks != 2/);
+    assert.match(cefTabbed, /loginProbe\.Result\.Value != \(loginValuesIndex == 0\)/);
+    assert.match(runner, /!fresh\.evidence\.includes\('veil-synthetic-user'\) && !fresh\.evidence\.includes\('veil-synthetic-marker'\)/);
+    assert.doesNotMatch(cefView, /:\s*HwndHost[^\n]*IEngineLoginForms|Task<SavedLogin\?>/);
 });

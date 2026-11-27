@@ -49,7 +49,8 @@ internal sealed class TabbedDevelopmentHost
     private Task<bool>? storageClear, httpCacheClear;
     private Task<int>? knownOriginClear;
     private Task<bool?>? loginProbe;
-    private int loginProbeIndex;
+    private int loginProbeIndex, loginValuesIndex;
+    private static readonly string[] LoginValuesPaths = ["/tabs-login-read", "/tabs-login-read-empty", "/tabs-login-read-mismatch"];
     private static readonly string[] LoginProbePaths = ["/tabs-login-valid", "/tabs-login-hidden", "/tabs-login-ambiguous", "/tabs-login-cross-origin", "/tabs-login-iframe", "/tabs-login-new"];
     private int deletionAuthorizationChecks;
     private int phase, result;
@@ -713,8 +714,10 @@ internal sealed class TabbedDevelopmentHost
             if (++loginProbeIndex == LoginProbePaths.Length)
             {
                 Log("Boolean-only login probe accepted one form and rejected hidden, ambiguous, cross-origin, iframe and new-password forms");
-                result = 0;
-                BeginShutdown();
+                // Existing detection pages are outside the separate values allowlist.
+                var page = Url(LoginProbePaths[^1]);
+                loginProbe = first!.View.CheckFixtureLoginValuesAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page, () => true);
+                phase = 55;
             }
             else
             {
@@ -731,6 +734,59 @@ internal sealed class TabbedDevelopmentHost
             address.Text = Url(LoginProbePaths[loginProbeIndex]);
             NavigateAddress();
             phase = 52;
+        }
+        else if (phase == 55 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is not null) { Fail(); return; }
+            address.Text = Url(LoginValuesPaths[0]);
+            NavigateAddress();
+            phase = 56;
+        }
+        else if (phase == 56 && first?.View.DocumentTitle == "TAB_LOGIN_VALUES_" + loginValuesIndex &&
+                 !first.View.IsFixtureLoading)
+        {
+            var page = Url(LoginValuesPaths[loginValuesIndex]);
+            if (first.View.Source != page) { Fail(); return; }
+            var origin = new Uri(page).GetLeftPart(UriPartial.Authority);
+            if (loginValuesIndex == 0)
+            {
+                deletionAuthorizationChecks = 0;
+                loginProbe = first.View.CheckFixtureLoginValuesAsync(origin, page, () => ++deletionAuthorizationChecks == 1);
+                phase = 57;
+            }
+            else
+            {
+                loginProbe = first.View.CheckFixtureLoginValuesAsync(origin, page,
+                    () => active == first && !first.Closing && !shuttingDown);
+                phase = 58;
+            }
+        }
+        else if (phase == 57 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is not null ||
+                deletionAuthorizationChecks != 2) { Fail(); return; }
+            Log("Synthetic values check rejected authorization at native dispatch");
+            var page = Url(LoginValuesPaths[0]);
+            loginProbe = first!.View.CheckFixtureLoginValuesAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page,
+                () => active == first && !first.Closing && !shuttingDown);
+            phase = 58;
+        }
+        else if (phase == 58 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is null ||
+                loginProbe.Result.Value != (loginValuesIndex == 0)) { Fail(); return; }
+            if (++loginValuesIndex == LoginValuesPaths.Length)
+            {
+                Log("Synthetic login values equality accepted matching markers and rejected empty and mismatched markers");
+                result = 0;
+                BeginShutdown();
+            }
+            else
+            {
+                address.Text = Url(LoginValuesPaths[loginValuesIndex]);
+                NavigateAddress();
+                phase = 56;
+            }
         }
     }
 }
