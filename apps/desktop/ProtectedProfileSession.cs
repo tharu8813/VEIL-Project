@@ -193,6 +193,22 @@ internal sealed class ProtectedProfileSession : IDisposable
             return plan;
         }
 
+        // Open only the fixed installed runtime registration, retaining both
+        // registration and runtime handles. No process creation or resume.
+        // The caller owns this lease and must retain it through child shutdown.
+        internal CefRuntimeRegistrationLease PrepareRegisteredRuntime()
+        {
+            RequireCurrentPreparation();
+            var runtime = CefRuntimeRegistrationLease.OpenInstalled();
+            try
+            {
+                RequireCurrentPreparation();
+                runtime.RequireCurrent();
+                return runtime;
+            }
+            catch { runtime.Dispose(); throw; }
+        }
+
         // Stage exactly one already-contained suspended child. This does not
         // resume it or authorize CEF; the future product coordinator must
         // bind image trust, redemption, runtime lifetime and shutdown.

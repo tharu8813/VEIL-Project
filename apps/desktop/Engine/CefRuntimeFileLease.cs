@@ -140,7 +140,7 @@ internal sealed class CefRuntimeFileLease : IDisposable
             ext is ".dll" or ".pak" or ".dat" or ".bin" or ".json" or ".txt";
     }
 
-    private static void RequireCanonicalSingleLink(SafeFileHandle file, string path)
+    internal static void RequireCanonicalSingleLink(SafeFileHandle file, string path)
     {
         var resolved = new StringBuilder(32768);
         uint length = GetFinalPathNameByHandleW(file, resolved, (uint)resolved.Capacity, 0);

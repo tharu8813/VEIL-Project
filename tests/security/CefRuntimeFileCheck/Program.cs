@@ -9,7 +9,7 @@ static void Check(bool value, string message)
 static void Reject(Action action)
 {
     try { action(); }
-    catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+    catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or System.Text.Json.JsonException)
     { return; }
     throw new InvalidOperationException("Expected runtime refusal.");
 }
@@ -29,6 +29,32 @@ try
         File.WriteAllBytes(path, bytes);
         pins.Add(new(name, bytes.Length, Convert.ToHexString(SHA256.HashData(bytes))));
     }
+    string registration = System.Text.Json.JsonSerializer.Serialize(new
+    {
+        kind = "cef-admin-runtime-pins", format = 1, architecture = "win-x64",
+        sourceCommit = new string('a', 40),
+        cefArchiveSha256 = "1da0b9fe0e915bd41448939f944003d848f8d9e4d15c7d85d7a17cce656b1a9a",
+        startupEnabled = false,
+        files = pins.Select(p => new { path = p.Path, bytes = p.Bytes, sha256 = p.Sha256 })
+    });
+    IReadOnlyList<CefRuntimeFilePin> Parse(string json) =>
+        CefRuntimeRegistrationLease.Parse(System.Text.Encoding.UTF8.GetBytes(json));
+    Check(Parse(registration).SequenceEqual(pins), "Runtime registration roundtrip failed.");
+    foreach (string bad in new[] {
+        registration.Replace("\"format\":1", "\"format\":1,\"format\":1"),
+        registration.Replace("\"format\":1", "\"format\":1.0"),
+        registration.Replace("\"startupEnabled\":false", "\"startupEnabled\":true"),
+        registration.Replace("cef-admin-runtime-pins", "cef-signed-candidate-evidence"),
+        registration.Replace("win-x64", "win-arm64"),
+        registration.Replace("veil-cef-product.exe", "../outside.exe"),
+        registration.Replace("libcef.dll", "veil-cef-product.dll"),
+        registration.Replace("icudtl.dat", "other.dat"),
+        registration.Replace("\"bytes\":", "\"extra\":0,\"bytes\":"),
+        registration.Replace(new string('a',40), "bad"),
+        registration.Replace("1da0b9fe0e915bd41448939f944003d848f8d9e4d15c7d85d7a17cce656b1a9a", new string('0',64))
+    })
+        Reject(() => Parse(bad));
+    Console.WriteLine("PASS: strict disabled runtime registration parsing");
     CefRuntimeFileLease Open(IEnumerable<CefRuntimeFilePin> input) => CefRuntimeFileLease.Open(root, input, _ => { });
     using (var lease = Open(pins))
     {
