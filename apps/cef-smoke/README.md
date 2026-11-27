@@ -106,3 +106,13 @@ After the native compile workflow succeeds, download its `cef-nested-smoke-<sha>
 ```
 
 Only run artifacts from the trusted repository/workflow and verified run; the unsigned manifest is a consistency check, not a publisher signature or independent provenance. The artifact contains only the Win32 smoke and nested runner, pinned CEF runtime/resources and licenses, not the product candidate or an installer. The script verifies inventory and produces result.json/stdout.json/stderr.log in a new evidence directory. Actual execution is still NOT RUN on hosted CI. Send the result files, not the temporary browser profile, for review.
+
+
+### Review returned nested smoke evidence
+Use the original manifest from the verified artifact download, not a manifest supplied solely with the result. From a repository checkout with Node.js:
+
+```powershell
+node scripts/check-cef-nested-evidence.mjs --commit '<exact artifact checkout SHA>' --manifest 'C:\test-bundle\manifest.json' --evidence 'C:\test-evidence'
+```
+
+This accepts the existing bundle's result.json and stdout.json, compares exact checkout and raw manifest hash, validates required fixture inventory pins, empty-job flags, and actual reported restricted Low/Untrusted token samples. Output is `CONSISTENT_REPORTED_SMOKE_PASS`, not independent attestation. It never marks product gates passed; a local report can be fabricated and the validator does not measure installed files or execute a browser. Keep stderr.log for diagnosis; do not share the temporary profile.

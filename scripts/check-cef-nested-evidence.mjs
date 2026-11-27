@@ -1,0 +1,107 @@
+// SPDX-License-Identifier: MPL-2.0
+import { createHash } from 'node:crypto';
+import { readFile, lstat } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const archive = '1da0b9fe0e915bd41448939f944003d848f8d9e4d15c7d85d7a17cce656b1a9a';
+const hex = /^[0-9a-f]{64}$/i;
+const commit = /^[0-9a-f]{40}$/;
+const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+const require = (condition, message) => { if (!condition) throw new Error(message); };
+const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
+const pid = x => Number.isInteger(x) && x > 0 && x <= 0xffffffff;
+function parse(bytes) {
+    // Windows PowerShell may emit a UTF-8 BOM; hash the original bytes.
+    return JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/, ''));
+}
+
+// Structural consistency review of locally reported evidence. This is NOT
+// attestation, provenance, independent execution, or a product gate.
+export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes, sampleBytes }) {
+    require(typeof expectedCommit === 'string' && commit.test(expectedCommit), 'Expected exact checkout SHA');
+    const manifest = parse(manifestBytes), report = parse(reportBytes), sample = parse(sampleBytes);
+    require(record(manifest) && manifest.schema === 1 &&
+        manifest.scope === 'unsigned-nested-cef-smoke-only' &&
+        manifest.sourceCommit === expectedCommit && manifest.cefArchiveSha256 === archive &&
+        manifest.runtimeStatus === 'NOT RUN' && manifest.installable === false, 'Manifest scope or commit mismatch');
+    require(Array.isArray(manifest.files) && manifest.files.length >= 8 && manifest.files.length <= 4096,
+        'Invalid manifest inventory');
+    const files = new Map();
+    for (const pin of manifest.files) {
+        require(record(pin) && typeof pin.path === 'string' &&
+            /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(pin.path) &&
+            pin.path.split('/').every(x => x !== '.' && x !== '..' && !x.endsWith('.')) &&
+            Number.isSafeInteger(pin.bytes) && pin.bytes >= 0 &&
+            typeof pin.sha256 === 'string' && hex.test(pin.sha256), 'Invalid file pin');
+        const key = pin.path.toLowerCase();
+        require(!files.has(key), 'Duplicate file pin');
+        files.set(key, pin);
+    }
+    for (const path of ['smoke/veil-cef-smoke.exe', 'smoke/veil-cef-smoke.dll', 'smoke/libcef.dll',
+        'smoke/icudtl.dat', 'smoke/resources.pak', 'runner/CefNestedSmoke.exe',
+        'runner/CefNestedSmoke.dll', 'run-cef-nested-bundle.ps1']) {
+        require(files.has(path.toLowerCase()) && files.get(path.toLowerCase()).bytes > 0, 'Missing required fixture file: ' + path);
+    }
+    require(record(report) && report.scope === 'nested-win32-smoke-only' &&
+        report.sourceCommit === expectedCommit && report.productReleaseGates === 'NOT RUN',
+        'Wrong result scope or commit');
+    require(typeof report.manifestSha256 === 'string' && hex.test(report.manifestSha256) &&
+        report.manifestSha256.toLowerCase() === digest(manifestBytes), 'Result manifest digest mismatch');
+    require(report.status === 'PASS', 'Run did not report PASS');
+    require(record(sample) && sample.scope === 'nested-win32-smoke-only' && pid(sample.rootPid) &&
+        sample.exit === 0 && sample.outerEmpty === true && sample.innerEmpty === true &&
+        sample.restricted === true, 'Missing successful smoke/empty job evidence');
+    require(Array.isArray(sample.observed) && sample.observed.length > 0 && sample.observed.length <= 4096,
+        'Missing or excessive token samples');
+    const seen = new Set();
+    let restrictedLow = 0;
+    for (const entry of sample.observed) {
+        require(record(entry) && pid(entry.Pid) && entry.Pid !== sample.rootPid &&
+            !seen.has(entry.Pid) && Number.isInteger(entry.IntegrityRid) &&
+            entry.IntegrityRid >= 0 && entry.IntegrityRid <= 0xffffffff &&
+            typeof entry.Restricted === 'boolean', 'Invalid or duplicate descendant sample');
+        seen.add(entry.Pid);
+        if (entry.Restricted && entry.IntegrityRid <= 0x1000) restrictedLow++;
+    }
+    require(restrictedLow > 0, 'Restricted-low token assertion not supported by samples');
+    return {
+        status: 'CONSISTENT_REPORTED_SMOKE_PASS',
+        sourceCommit: expectedCommit,
+        manifestSha256: digest(manifestBytes),
+        reportSha256: digest(reportBytes),
+        sampleSha256: digest(sampleBytes),
+        observedDescendants: seen.size,
+        restrictedLowDescendants: restrictedLow,
+        independentRuntimeVerification: 'NOT ESTABLISHED',
+        productReleaseGates: 'NOT RUN',
+        limitations: 'Unsigned local evidence; no renderer role, complete containment audit, site isolation, protected storage or product authorization.'
+    };
+}
+
+async function readBounded(path, limit) {
+    const info = await lstat(path);
+    require(info.isFile() && !info.isSymbolicLink() && info.size > 0 && info.size <= limit, 'Invalid evidence file: ' + path);
+    const bytes = await readFile(path);
+    require(bytes.length === info.size, 'Evidence size changed: ' + path);
+    return bytes;
+}
+
+async function main(args) {
+    require(args.length === 6 && args[0] === '--commit' && args[2] === '--manifest' && args[4] === '--evidence',
+        'Usage: node scripts/check-cef-nested-evidence.mjs --commit <checkout-sha> --manifest <original-manifest.json> --evidence <result-directory>');
+    const evidence = resolve(args[5]);
+    const [manifestBytes, reportBytes, sampleBytes] = await Promise.all([
+        readBounded(resolve(args[3]), 4 * 1024 * 1024),
+        readBounded(join(evidence, 'result.json'), 64 * 1024),
+        readBounded(join(evidence, 'stdout.json'), 1024 * 1024)
+    ]);
+    console.log(JSON.stringify(checkNestedEvidence({ expectedCommit: args[1], manifestBytes, reportBytes, sampleBytes }), null, 2));
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+    main(process.argv.slice(2)).catch(error => {
+        console.error('Evidence rejected: ' + error.message);
+        process.exitCode = 1;
+    });
+}
