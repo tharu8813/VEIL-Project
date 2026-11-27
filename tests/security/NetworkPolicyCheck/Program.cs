@@ -519,6 +519,7 @@ foreach (var invalidChild in new[] {
     Check(rejected, "invalid child binding accepted");
 }
 Console.WriteLine("PASS: CEF child one-shot admission policy, generation, expiry, revocation and identity");
+CefSessionObservationTests.Run();
 
 // Pure digest pin tests use synthetic bytes, not real signed executables.
 byte[] syntheticImage = [0, 1, 2, 3, 4, 255];
