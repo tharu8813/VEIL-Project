@@ -2,7 +2,7 @@
 
 ## 현재 주력 개발 방향 (2026-11-27)
 
-엔진 전환 작업은 [CEF 전환 로드맵](cef-transition-roadmap.md)을 따른다. 아래 Phase 0~7은 현재 WebView2 제품의 개발 및 검증 이력이다. CEF 제품 후보는 기존 Internal Alpha 기준과 보안 게이트를 별도로 검증한다.
+엔진 전환 작업은 [CEF 전환 로드맵](cef-transition-roadmap.md)을 따른다. 현재 실행 순서, 미병합 PR 정리, 차단점 및 최종 전환 기준은 [CEF 남은 작업 로드맵](cef-remaining-roadmap.md)을 우선 참조한다. 해당 문서는 main과 실험 브랜치의 상태를 구분한다. 아래 Phase 0~7은 현재 WebView2 제품의 개발 및 검증 이력이다. CEF 제품 후보는 기존 Internal Alpha 기준과 보안 게이트를 별도로 검증한다.
 
 ## 진행 순서 (기존 WebView2 경로)
 
