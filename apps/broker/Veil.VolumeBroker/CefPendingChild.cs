@@ -8,13 +8,15 @@ internal sealed class CefPendingChild : IDisposable
     private readonly CefChildAdmission admission;
     private readonly IDisposable process;
     private readonly IDisposable image;
+    private readonly IDisposable? runtime;
     private bool disposed;
 
-    internal CefPendingChild(CefChildAdmission admission, IDisposable process, IDisposable image)
+    internal CefPendingChild(CefChildAdmission admission, IDisposable process, IDisposable image, IDisposable? runtime = null)
     {
         this.admission = admission;
         this.process = process;
         this.image = image;
+        this.runtime = runtime;
     }
 
     internal bool IsExpired => disposed || admission.IsExpired;
@@ -24,6 +26,7 @@ internal sealed class CefPendingChild : IDisposable
     // These resources remain owned by this object, never transferred to the client.
     internal IDisposable ProcessResource => process;
     internal IDisposable ImageResource => image;
+    internal IDisposable? RuntimeResource => runtime;
 
     internal bool TryRedeem(ClientIdentity owner, ClientIdentity child, object generation,
         bool ownerAlive, bool childAlive, bool imageVerified, bool volumeProtected) =>
@@ -35,7 +38,11 @@ internal sealed class CefPendingChild : IDisposable
         if (disposed) return;
         disposed = true;
         admission.Revoke();
-        try { image.Dispose(); }
-        finally { process.Dispose(); }
+        try { runtime?.Dispose(); }
+        finally
+        {
+            try { image.Dispose(); }
+            finally { process.Dispose(); }
+        }
     }
 }

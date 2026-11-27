@@ -20,22 +20,24 @@ internal sealed class CefRuntimeFileLease : IDisposable
     private readonly Dictionary<string, CefRuntimeFilePin> pins;
     private readonly int ownerThread = Environment.CurrentManagedThreadId;
     private bool disposed;
+    private readonly bool serializedBrokerAccess;
 
-    private CefRuntimeFileLease(string root, Dictionary<string, CefRuntimeFilePin> pins)
+    private CefRuntimeFileLease(string root, Dictionary<string, CefRuntimeFilePin> pins, bool serializedBrokerAccess)
     {
         this.root = root;
         this.pins = pins;
+        this.serializedBrokerAccess = serializedBrokerAccess;
     }
 
-    internal static CefRuntimeFileLease OpenInstalled(IEnumerable<CefRuntimeFilePin> authenticatedPins)
+    internal static CefRuntimeFileLease OpenInstalled(IEnumerable<CefRuntimeFilePin> authenticatedPins, bool serializedBrokerAccess = false)
     {
         string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "VEIL", "Cef");
-        return Open(root, authenticatedPins, AdminOnlyFile.RequireProtectedExecutable);
+        return Open(root, authenticatedPins, AdminOnlyFile.RequireProtectedExecutable, serializedBrokerAccess);
     }
 
     // Separate test seam for disposable synthetic files; never used by product startup.
     internal static CefRuntimeFileLease Open(string root, IEnumerable<CefRuntimeFilePin> authenticatedPins,
-        Action<string> requireProtectedFile)
+        Action<string> requireProtectedFile, bool serializedBrokerAccess = false)
     {
         ArgumentNullException.ThrowIfNull(authenticatedPins);
         ArgumentNullException.ThrowIfNull(requireProtectedFile);
@@ -52,7 +54,7 @@ internal sealed class CefRuntimeFileLease : IDisposable
         }
         foreach (string required in new[] { "veil-cef-product.exe", "veil-cef-product.dll", "libcef.dll", "icudtl.dat" })
             if (!pins.ContainsKey(required)) throw new InvalidDataException("Required CEF runtime pin missing.");
-        var lease = new CefRuntimeFileLease(root, pins);
+        var lease = new CefRuntimeFileLease(root, pins, serializedBrokerAccess);
         try
         {
             lease.CheckInventory();
@@ -84,7 +86,7 @@ internal sealed class CefRuntimeFileLease : IDisposable
     internal void RequireCurrent()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        if (Environment.CurrentManagedThreadId != ownerThread ||
+        if ((!serializedBrokerAccess && Environment.CurrentManagedThreadId != ownerThread) ||
             streams.Count != pins.Count || streams.Any(s => s.SafeFileHandle.IsClosed || s.SafeFileHandle.IsInvalid))
             throw new UnauthorizedAccessException("CEF runtime lease unavailable.");
         CheckInventory();
@@ -97,9 +99,18 @@ internal sealed class CefRuntimeFileLease : IDisposable
     // Broker-side loader snapshot names must resolve to the same retained
     // disk objects that passed the registered SHA-256 inventory check.
     // This is not a comparison with the kernel's mapped section object.
-    internal void RequireObservedApplicationModule(string modulePath)
+    internal void RequireObservedApplicationModule(string modulePath) =>
+        RequireObservedApplicationModules([modulePath]);
+
+    internal void RequireObservedApplicationModules(IEnumerable<string> modulePaths)
     {
         RequireCurrent();
+        foreach (string modulePath in modulePaths) CheckObservedApplicationModule(modulePath);
+        RequireCurrent();
+    }
+
+    private void CheckObservedApplicationModule(string modulePath)
+    {
         if (!Path.IsPathFullyQualified(modulePath) ||
             !string.Equals(modulePath, Path.GetFullPath(modulePath), StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(Path.GetDirectoryName(modulePath), root, StringComparison.OrdinalIgnoreCase))

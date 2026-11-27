@@ -549,22 +549,24 @@ Console.WriteLine("PASS: CEF executable SHA-256 pin and changed bytes refusal");
 var retainedPolicy = Grant();
 var retainedProcess = new SyntheticRetainedResource();
 var retainedImage = new SyntheticRetainedResource();
-using (var stagedChildResource = new Veil.VolumeBroker.CefPendingChild(retainedPolicy, retainedProcess, retainedImage))
+var retainedRuntime = new SyntheticRetainedResource();
+using (var stagedChildResource = new Veil.VolumeBroker.CefPendingChild(retainedPolicy, retainedProcess, retainedImage, retainedRuntime))
 {
     Check(!stagedChildResource.IsExpired, "new pending child expired immediately");
     admissionClock.Advance(TimeSpan.FromSeconds(15));
     Check(stagedChildResource.IsExpired, "pending child did not expire");
     stagedChildResource.Dispose();
     stagedChildResource.Dispose();
-    Check(retainedProcess.Disposals == 1 && retainedImage.Disposals == 1 &&
+    Check(retainedProcess.Disposals == 1 && retainedImage.Disposals == 1 && retainedRuntime.Disposals == 1 &&
         !Redeem(retainedPolicy), "pending child disposal failed to retire resources");
 }
 var throwingProcess = new SyntheticRetainedResource();
 var throwingImage = new SyntheticRetainedResource { Throw = true };
-var throwingPending = new Veil.VolumeBroker.CefPendingChild(Grant(), throwingProcess, throwingImage);
+var throwingRuntime = new SyntheticRetainedResource { Throw = true };
+var throwingPending = new Veil.VolumeBroker.CefPendingChild(Grant(), throwingProcess, throwingImage, throwingRuntime);
 try { throwingPending.Dispose(); }
 catch (IOException) { }
-Check(throwingProcess.Disposals == 1 && throwingImage.Disposals == 1,
+Check(throwingProcess.Disposals == 1 && throwingImage.Disposals == 1 && throwingRuntime.Disposals == 1,
     "image disposal failure leaked the process resource");
 Console.WriteLine("PASS: pending CEF child resource ownership and retirement");
 

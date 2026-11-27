@@ -16,14 +16,16 @@ internal static class CefDisabledPreflight
         ArgumentNullException.ThrowIfNull(stillAuthorized);
         ArgumentNullException.ThrowIfNull(confirm);
         // The broker's stage lifetime is 15 seconds, counted by the broker.
-        // This more conservative local deadline includes the staging request.
-        var elapsed = Stopwatch.StartNew();
+        // Full runtime hashing happens during staging, before the broker issues
+        // the admission. Start the local redemption budget after its reply.
+        var elapsed = new Stopwatch();
         bool Current() => elapsed.Elapsed < TimeSpan.FromSeconds(12) && stillAuthorized() &&
             elapsed.Elapsed < TimeSpan.FromSeconds(12);
         try
         {
-            if (!Current()) throw new InvalidOperationException("CEF preflight preparation expired.");
+            if (!stillAuthorized()) throw new InvalidOperationException("CEF preflight preparation expired.");
             stage();
+            elapsed.Start();
             child.ResumeAfterVerification(Current);
             int remaining = Math.Max(0, 12000 - (int)Math.Min(12000, elapsed.ElapsedMilliseconds));
             if (!child.WaitForExit(remaining))

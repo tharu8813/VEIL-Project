@@ -246,7 +246,7 @@ test('CEF staged child is bounded to one pending slot and retired on lock and ti
     assert.match(broker, /private void ClearAuthenticatedOwner\(\)\s*\{\s*RevokePendingCefChild\(\)/);
     assert.match(broker, /if \(ReferenceEquals\(pendingCefChild, expected\)\) RevokePendingCefChild\(\)/);
     assert.match(preflight, /return new CefPendingChild\(new CefChildAdmission/);
-    assert.match(pending, /admission\.Revoke\(\);\s*try \{ image\.Dispose\(\); \}\s*finally \{ process\.Dispose\(\); \}/);
+    assert.match(pending, /admission\.Revoke\(\);\s*try \{ runtime\?\.Dispose\(\); \}\s*finally\s*\{\s*try \{ image\.Dispose\(\); \}\s*finally \{ process\.Dispose\(\); \}/);
     assert.doesNotMatch(stage, /TryRedeem\(/);
 });
 
@@ -388,7 +388,7 @@ test('disabled CEF coordinator binds profile and runtime leases before suspended
     const runner = await readFile('apps/desktop/Engine/CefDisabledPreflight.cs', 'utf8');
     const startup = await readFile('apps/desktop/Program.cs', 'utf8');
     assert.match(coordinator, /using var profile = session.AcquireCefPreparationLease\(\);[\s\S]*?using var runtime = profile.PrepareRegisteredRuntime\(\);[\s\S]*?using var child = CefContainedProcess.CreateSuspended\(runtime.ImagePath, minimal\);[\s\S]*?CefDisabledPreflight.Run\(child, \(\) => profile.StageSuspendedChild\(child\), Current,\s*\(\) => profile.ConfirmCompletedPreflight\(child\)\)/);
-    assert.match(runner, /stage\(\);\s*child.ResumeAfterVerification\(Current\);[\s\S]*?child.ReadExitCode\(\);[\s\S]*?code != VerifiedButDisabled/);
+    assert.match(runner, /stage\(\);\s*elapsed.Start\(\);\s*child.ResumeAfterVerification\(Current\);[\s\S]*?child.ReadExitCode\(\);[\s\S]*?code != VerifiedButDisabled/);
     assert.match(runner, /finally\s*\{[\s\S]*?child.TerminateAndDrain\(5000\)/);
     assert.doesNotMatch(startup, /CefDisabledLaunchCoordinator|CefDisabledPreflight/);
 });
@@ -434,7 +434,19 @@ test('broker independently checks the live CEF module snapshot against retained 
     const preflight = await readFile('apps/broker/Veil.VolumeBroker/CefChildPreflight.cs', 'utf8');
     const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
     const lease = await readFile('apps/desktop/Engine/CefRuntimeFileLease.cs', 'utf8');
-    assert.match(preflight, /CefRuntimeRegistrationLease.OpenInstalled\(\)[\s\S]*?Native.SnapshotModulePaths\(process, child\)[\s\S]*?runtime.RequireObservedApplicationModule\(module\)[\s\S]*?Native.SnapshotModulePaths\(process, child\)[\s\S]*?before.SequenceEqual\(after/);
+    assert.match(preflight, /pending.RuntimeResource is not Veil.Desktop.CefRuntimeRegistrationLease runtime[\s\S]*?Native.SnapshotModulePaths\(process, child\)[\s\S]*?runtime.RequireObservedApplicationModules\(applicationModules\)[\s\S]*?Native.SnapshotModulePaths\(process, child\)[\s\S]*?before.SequenceEqual\(after/);
     assert.match(native, /SnapshotModulePaths[\s\S]*?ObserveProcess\(process\) != expected[\s\S]*?CreateToolhelp32Snapshot\(0x00000008 \| 0x00000010/);
     assert.match(lease, /RequireObservedApplicationModule[\s\S]*?RequireCanonicalSingleLink\(observed.SafeFileHandle, modulePath\)[\s\S]*?original.VolumeSerial != current.VolumeSerial[\s\S]*?original.IndexHigh != current.IndexHigh \|\| original.IndexLow != current.IndexLow/);
+});
+
+
+test('broker hashes runtime before the admission and reuses retained files in redemption', async () => {
+    const preflight = await readFile('apps/broker/Veil.VolumeBroker/CefChildPreflight.cs', 'utf8');
+    const lease = await readFile('apps/desktop/Engine/CefRuntimeFileLease.cs', 'utf8');
+    const verify = preflight.slice(preflight.indexOf('internal static bool VerifyRedemption'), preflight.indexOf('internal static CefPendingChild Stage'));
+    const stage = preflight.slice(preflight.indexOf('internal static CefPendingChild Stage'));
+    assert.doesNotMatch(verify, /CefRuntimeRegistrationLease.OpenInstalled/);
+    assert.match(stage, /OpenInstalled\(serializedBrokerAccess: true\)[\s\S]*?new CefChildAdmission[\s\S]*?binding.Handle, image, runtime/);
+    assert.match(lease, /!serializedBrokerAccess && Environment.CurrentManagedThreadId != ownerThread/);
+    assert.match(lease, /foreach \(string modulePath in modulePaths\) CheckObservedApplicationModule/);
 });

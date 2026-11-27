@@ -24,7 +24,7 @@ internal sealed class CefRuntimeRegistrationLease : IDisposable
         this.path = path;
     }
 
-    internal static CefRuntimeRegistrationLease OpenInstalled()
+    internal static CefRuntimeRegistrationLease OpenInstalled(bool serializedBrokerAccess = false)
     {
         string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "VEIL", "cef-runtime-pins.json");
@@ -41,7 +41,7 @@ internal sealed class CefRuntimeRegistrationLease : IDisposable
             var pins = Parse(data);
             AdminOnlyFile.RequireProtectedExecutable(path);
             CefRuntimeFileLease.RequireCanonicalSingleLink(registration.SafeFileHandle, path);
-            runtime = CefRuntimeFileLease.OpenInstalled(pins);
+            runtime = CefRuntimeFileLease.OpenInstalled(pins, serializedBrokerAccess);
             var lease = new CefRuntimeRegistrationLease(registration, runtime, path);
             lease.RequireCurrent();
             return lease;
@@ -119,10 +119,10 @@ internal sealed class CefRuntimeRegistrationLease : IDisposable
         get { RequireCurrent(); return runtime.ImagePath; }
     }
 
-    internal void RequireObservedApplicationModule(string modulePath)
+    internal void RequireObservedApplicationModules(IEnumerable<string> modulePaths)
     {
         RequireCurrent();
-        runtime.RequireObservedApplicationModule(modulePath);
+        runtime.RequireObservedApplicationModules(modulePaths);
     }
 
     internal void RequireCurrent()

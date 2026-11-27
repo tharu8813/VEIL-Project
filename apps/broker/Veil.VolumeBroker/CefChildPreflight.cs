@@ -18,22 +18,21 @@ internal static class CefChildPreflight
             throw new UnauthorizedAccessException("CEF preflight process identity changed.");
     }
 
-    // Both resources were acquired by Stage and are still held. Recheck the
-    // actual retained handles and independently pin the executable again.
+    // Stage retains the independently verified runtime inventory until redemption.
     internal static bool VerifyRedemption(CefPendingChild pending, ClientIdentity owner,
         SafeProcessHandle ownerHandle, ClientIdentity child, string registeredPath, string sha256)
     {
         if (pending.ProcessResource is not SafeProcessHandle process ||
             pending.ImageResource is not FileStream retainedImage ||
+            pending.RuntimeResource is not Veil.Desktop.CefRuntimeRegistrationLease runtime ||
             retainedImage.SafeFileHandle.IsClosed || retainedImage.SafeFileHandle.IsInvalid ||
             Native.ObserveProcess(ownerHandle) != owner || Native.ObserveProcess(process) != child)
             return false;
         Native.RequireCanonicalSingleLinkImage(retainedImage.SafeFileHandle, registeredPath);
         using var rechecked = CefPinnedImage.OpenVerified(child, process,
             registeredPath, new CefImageDigest(sha256));
-        // Independently read the fixed admin registration and inspect the
-        // actual child loader list before releasing the broker receipt.
-        using var runtime = Veil.Desktop.CefRuntimeRegistrationLease.OpenInstalled();
+        // Inspect the live loader list against the retained inventory.
+        runtime.RequireCurrent();
         if (!string.Equals(runtime.ImagePath, registeredPath, StringComparison.OrdinalIgnoreCase))
             return false;
         var before = Native.SnapshotModulePaths(process, child);
@@ -41,6 +40,7 @@ internal static class CefChildPreflight
         string system = Environment.SystemDirectory;
         if (string.IsNullOrWhiteSpace(system)) return false;
         bool host = false, product = false;
+        var applicationModules = new List<string>();
         foreach (string module in before)
         {
             if (!Path.IsPathFullyQualified(module) ||
@@ -49,7 +49,7 @@ internal static class CefChildPreflight
             string? directory = Path.GetDirectoryName(module);
             if (string.Equals(directory, application, StringComparison.OrdinalIgnoreCase))
             {
-                runtime.RequireObservedApplicationModule(module);
+                applicationModules.Add(module);
                 host |= string.Equals(module, registeredPath, StringComparison.OrdinalIgnoreCase);
                 product |= string.Equals(Path.GetFileName(module), "veil-cef-product.dll", StringComparison.OrdinalIgnoreCase);
             }
@@ -57,6 +57,7 @@ internal static class CefChildPreflight
                 return false;
         }
         if (!host || !product) return false;
+        runtime.RequireObservedApplicationModules(applicationModules);
         runtime.RequireCurrent();
         var after = Native.SnapshotModulePaths(process, child);
         return before.SequenceEqual(after, StringComparer.OrdinalIgnoreCase) &&
@@ -70,20 +71,31 @@ internal static class CefChildPreflight
     {
         var binding = Native.DuplicateNominatedChild(owner, ownerHandle, new IntPtr(nominatedHandle));
         FileStream? image = null;
+        Veil.Desktop.CefRuntimeRegistrationLease? runtime = null;
         try
         {
             image = CefPinnedImage.OpenVerified(binding.Identity, binding.Handle,
                 registeredPath, new CefImageDigest(sha256));
+            // All calls are serialized by the broker semaphore. Hash before
+            // creating the short-lived admission, retain the verified files.
+            runtime = Veil.Desktop.CefRuntimeRegistrationLease.OpenInstalled(serializedBrokerAccess: true);
+            if (!string.Equals(runtime.ImagePath, registeredPath, StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("CEF runtime registration does not match broker pin.");
+            runtime.RequireCurrent();
             if (Native.ObserveProcess(ownerHandle) != owner ||
                 Native.ObserveProcess(binding.Handle) != binding.Identity)
                 throw new UnauthorizedAccessException("CEF staging identity changed.");
             return new CefPendingChild(new CefChildAdmission(owner, binding.Identity,
-                generation, TimeProvider.System), binding.Handle, image);
+                generation, TimeProvider.System), binding.Handle, image, runtime);
         }
         catch
         {
-            try { image?.Dispose(); }
-            finally { binding.Handle.Dispose(); }
+            try { runtime?.Dispose(); }
+            finally
+            {
+                try { image?.Dispose(); }
+                finally { binding.Handle.Dispose(); }
+            }
             throw;
         }
     }

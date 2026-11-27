@@ -75,6 +75,12 @@ try
         File.Delete(extra);
         lease.RequireCurrent();
     }
+    using (var brokerLease = CefRuntimeFileLease.Open(root, pins, _ => { }, serializedBrokerAccess: true))
+        Task.Run(() => brokerLease.RequireObservedApplicationModules([
+            Path.Combine(root, "libcef.dll"), Path.Combine(root, "veil-cef-product.exe")
+        ])).GetAwaiter().GetResult();
+    using (var desktopLease = Open(pins))
+        Task.Run(() => Reject(desktopLease.RequireCurrent)).GetAwaiter().GetResult();
     Reject(() => Open(pins.Append(pins[0])).Dispose());
     Reject(() => Open(pins.Select(p => p.Path == "libcef.dll" ? p with { Sha256 = new string('0', 64) } : p)).Dispose());
     Reject(() => Open(pins.Where(p => p.Path != "libcef.dll")).Dispose());

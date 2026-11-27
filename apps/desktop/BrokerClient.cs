@@ -224,7 +224,7 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
             VerifyServer(pipe);
             // A mutation can take longer than a status query, especially when Windows
             // mounts a cold VHDX and BitLocker discovers the volume.
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(command is "Status" or "AuthenticatedOwner" or "StageCefChild" or "ConfirmCefPreflight" ? 8 : 45));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(command is "Status" or "AuthenticatedOwner" or "ConfirmCefPreflight" ? 8 : 45));
             pipe.WriteAsync(wire.AsMemory(0, checked((int)request.Length)), timeout.Token)
                 .AsTask().GetAwaiter().GetResult();
             byte[] newline = [10];
