@@ -91,3 +91,18 @@ test('future CEF protected profile preflight is read-only and refuses unverified
     assert.match(session, /EngineHost \{ get; \} = new WebView2BrowserEngine\(\);/);
     assert.doesNotMatch(startup, /CefProtectedProfilePreflight|CefDevelopmentEngine/);
 });
+
+
+test('CEF protected preparation verifies every fixed child before and after creation without fallback or launch', async () => {
+    const layout = await readFile('apps/desktop/Engine/CefProfileLayout.cs', 'utf8');
+    const prepare = await readFile('apps/desktop/Engine/CefProtectedProfilePreparation.cs', 'utf8');
+    assert.match(layout, /PreparationSteps =>\s*\[\(ProductRoot, EngineRoot\), \(EngineRoot, Cache\), \(EngineRoot, Scratch\), \(EngineRoot, Logs\)\];/);
+    assert.match(prepare, /ProfileGate\.RejectElevated\(\);\s*RequireAuthorization\(stillAuthorized\);[\s\S]*?var initial = ProfileGate\.Verify\(layout\.ProductRoot, broker, requireProtected: true\);/);
+    assert.match(prepare, /CefProtectedProfilePreflight\.Inspect\(layout\.ProductRoot, broker\);\s*foreach \(var \(parent, child\) in layout\.PreparationSteps\)/);
+    assert.match(prepare, /foreach \(var \(parent, child\) in layout\.PreparationSteps\)\s*\{\s*RequireAuthorization\(stillAuthorized\);\s*CefProtectedProfilePreflight\.RequireSameVolume\(initial,\s*ProfileGate\.Verify\(layout\.ProductRoot, broker, requireProtected: true\)\);\s*CefProtectedProfilePreflight\.RequireSameVolume\(initial,\s*ProfileGate\.Verify\(parent, broker, requireProtected: true\)\);[\s\S]*?var prepared = ProfileGate\.Prepare\(child, broker, requireProtected: true\);\s*CefProtectedProfilePreflight\.RequireSameVolume\(initial, prepared\);\s*ProfileGate\.RejectRedirectedChildren\(child\);\s*RequireAuthorization\(stillAuthorized\);/);
+    assert.match(prepare, /CefProtectedProfilePreflight\.Inspect\(layout\.ProductRoot, broker\);\s*foreach \(string path in layout\.Directories\)\s*CefProtectedProfilePreflight\.RequireSameVolume\(initial,\s*ProfileGate\.Verify\(path, broker, requireProtected: true\)\);\s*RequireAuthorization\(stillAuthorized\);/);
+    assert.match(prepare, /if \(!stillAuthorized\(\)\)\s*throw new ProfileLocationException/);
+    assert.equal((prepare.match(/ProfileGate\.Prepare\(/g) ?? []).length, 1);
+    assert.doesNotMatch(prepare, /requireProtected:\s*false|UnmanagedDevelopmentVolume|Directory\.CreateDirectory|Directory\.Delete|File\.Delete|SetEnvironmentVariable|Process\.Start|CefInitialize\(/);
+    assert.doesNotMatch(startup, /CefProtectedProfilePreparation/);
+});

@@ -420,6 +420,15 @@ Check(cefLayout.Cache == Path.Combine(layoutRoot, "cef", "cache") &&
 Check(cefLayout.Directories.Distinct().Count() == 4 &&
     cefLayout.Directories.All(path => path.StartsWith(cefLayout.EngineRoot, StringComparison.Ordinal)),
     "CEF directories overlap or escape engine root");
+var steps = cefLayout.PreparationSteps.ToArray();
+Check(steps.SequenceEqual(new (string Parent, string Child)[] {
+    (cefLayout.ProductRoot, cefLayout.EngineRoot),
+    (cefLayout.EngineRoot, cefLayout.Cache),
+    (cefLayout.EngineRoot, cefLayout.Scratch),
+    (cefLayout.EngineRoot, cefLayout.Logs)
+}), "CEF preparation order or immediate parent mismatch");
+Check(steps.Select(step => step.Child).SequenceEqual(cefLayout.Directories),
+    "CEF preparation steps do not cover exactly the expected directories");
 Check(!Directory.Exists(layoutRoot), "layout planning created a profile");
 bool relativeRejected = false;
 try { _ = new CefProfileLayout("relative-profile"); }

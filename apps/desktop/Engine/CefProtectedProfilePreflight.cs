@@ -42,7 +42,7 @@ internal static class CefProtectedProfilePreflight
         return layout;
     }
 
-    private static void RequireSameVolume(ProfileLocation expected, ProfileLocation actual)
+    internal static void RequireSameVolume(ProfileLocation expected, ProfileLocation actual)
     {
         if (!expected.Protected || !actual.Protected ||
             !string.Equals(expected.VolumeGuid, actual.VolumeGuid, StringComparison.OrdinalIgnoreCase))
