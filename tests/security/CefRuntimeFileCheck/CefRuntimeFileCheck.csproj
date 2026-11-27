@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../../apps/desktop/Engine/CefRuntimeFileLease.cs" Link="CefRuntimeFileLease.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefModuleInventoryPolicy.cs" Link="CefModuleInventoryPolicy.cs" />
     <Compile Include="../../../apps/desktop/Engine/CefRuntimeRegistrationLease.cs" Link="CefRuntimeRegistrationLease.cs" />
     <Compile Include="../../../apps/shared/AdminOnlyFile.cs" Link="AdminOnlyFile.cs" />
   </ItemGroup>
