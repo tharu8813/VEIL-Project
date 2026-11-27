@@ -329,7 +329,7 @@ test('product-named CEF candidate is isolated and does not initialize CEF', asyn
     const product = await readFile('apps/cef-smoke/product_candidate.cc', 'utf8');
     const packageBuild = await readFile('scripts/build-package.ps1', 'utf8');
     const packagePolicy = await readFile('scripts/package-common.ps1', 'utf8');
-    assert.match(cmake, /add_library\(veil-cef-product SHARED EXCLUDE_FROM_ALL product_candidate\.cc\s+protected_bootstrap\.cc bootstrap_registration\.cc broker_verification\.cc\)/);
+    assert.match(cmake, /add_library\(veil-cef-product SHARED EXCLUDE_FROM_ALL product_candidate\.cc\s+protected_bootstrap\.cc bootstrap_registration\.cc broker_verification\.cc product_module_policy\.cc\)/);
     assert.match(cmake, /RUNTIME_OUTPUT_DIRECTORY "\$\{CMAKE_BINARY_DIR\}\/product-candidate"/);
     assert.match(product, /RunProductPreflight\(allowed,\s*veil_cef::LoadRegisteredBootstrap, veil_cef::VerifyRegisteredBootstrap\)/);
     assert.match(product, /sandbox_info != nullptr[\s\S]*?command_line\[0\] == L'\\0'[\s\S]*?IsProcessInJob/);
@@ -351,7 +351,7 @@ test('CEF containment primitive starts suspended and assigns a kill-on-close job
     assert.match(launch, /using var attributes = new JobAttributeList\(job\)[\s\S]*?CreateProcessW\(image, command, IntPtr\.Zero, IntPtr\.Zero, false, flags[\s\S]*?IsProcessInJob\(process, job/);
     assert.match(launch, /UpdateProcThreadAttribute\(list, 0, new UIntPtr\(0x0002000D\)/);
     assert.doesNotMatch(launch, /AssignProcessToJobObject/);
-    assert.match(launch, /!verified\(\) \|\| !IsProcessInJob\(process, job, out bool contained\) \|\| !contained \|\|\s*ResumeThread\(thread\) != 1/);
+    assert.match(launch, /!verified\(\) \|\| !IsProcessInJob\(process, job, out bool contained\) \|\| !contained \|\|\s*!HasImageLoadMitigations\(process\) \|\| ResumeThread\(thread\) != 1/);
     assert.doesNotMatch(startup, /CefContainedProcess/);
 });
 
@@ -402,4 +402,17 @@ test('disabled preflight requires broker confirmation of the same exited child',
     assert.match(broker, /case BrokerCommand.ConfirmCefPreflight:[\s\S]*?completedPreflight = null;[\s\S]*?MatchesExitedNomination/);
     assert.match(native, /CompareObjectHandles\(child, retained\)[\s\S]*?GetExitCodeProcess\(child, out uint code\) && code == expectedExit/);
     assert.match(runner, /child.TerminateAndDrain\(5000\);\s*confirm\(\);/);
+});
+
+
+test('disabled candidate requires creation-time image mitigations and restricts post-bootstrap module paths', async () => {
+    const launch = await readFile('apps/desktop/Engine/CefContainedProcess.cs', 'utf8');
+    const native = await readFile('apps/cef-smoke/product_module_policy.cc', 'utf8');
+    const product = await readFile('apps/cef-smoke/product_candidate.cc', 'utf8');
+    assert.match(launch, /const long imagePolicy = \(1L << 52\) \| \(1L << 56\) \| \(1L << 60\)/);
+    assert.match(launch, /UpdateProcThreadAttribute\(list, 0, new UIntPtr\(0x00020007\)/);
+    assert.match(launch, /GetProcessMitigationPolicy\(handle, 10, out uint flags, new UIntPtr\(4u\)\)/);
+    assert.match(native, /SetDefaultDllDirectories\(LOAD_LIBRARY_SEARCH_APPLICATION_DIR \|\s*LOAD_LIBRARY_SEARCH_SYSTEM32\)/);
+    assert.match(native, /CreateToolhelp32Snapshot\(TH32CS_SNAPMODULE \| TH32CS_SNAPMODULE32/);
+    assert.match(product, /RestrictAndObserveLoadedModules\(\)[\s\S]*?RunProductPreflight/);
 });

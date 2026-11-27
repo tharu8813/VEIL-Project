@@ -2,6 +2,7 @@
 #include "include/cef_app.h"
 #include "include/cef_sandbox_win.h"
 #include "product_preflight.h"
+#include "product_module_policy.h"
 
 // Product-named candidate: only the initial no-arguments browser process
 // can attempt a preflight. Job membership is a necessary condition, not
@@ -11,7 +12,8 @@ int RunWinMain(HINSTANCE, LPWSTR command_line, int, void* sandbox_info,
   BOOL in_job = FALSE;
   const bool allowed = sandbox_info != nullptr &&
       command_line != nullptr && command_line[0] == L'\0' &&
-      IsProcessInJob(GetCurrentProcess(), nullptr, &in_job) && in_job;
+      IsProcessInJob(GetCurrentProcess(), nullptr, &in_job) && in_job &&
+      veil_cef::RestrictAndObserveLoadedModules();
   return static_cast<int>(veil_cef::RunProductPreflight(allowed,
       veil_cef::LoadRegisteredBootstrap, veil_cef::VerifyRegisteredBootstrap));
 }

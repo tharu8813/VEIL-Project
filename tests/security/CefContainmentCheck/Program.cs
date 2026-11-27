@@ -59,11 +59,13 @@ try
     using (var child = CefContainedProcess.CreateSuspended(image, environment))
     {
         Check(child.IsAlive && !child.WaitForExit(50) && !File.Exists(markerPath), "Child suspension failed.");
+        Check(child.ImageLoadMitigationsActive, "Creation-time image load policy was not active.");
         int pid = GetProcessId(new IntPtr(child.NominatedHandle));
         using var observer = Process.GetProcessById(pid);
         // Retain an independent process handle before closing the job.
         _ = observer.SafeHandle;
         child.ResumeAfterVerification(() => true);
+        Check(child.ImageLoadMitigationsActive, "Image load policy was absent after resume.");
         Check(SpinWait.SpinUntil(() => File.Exists(markerPath), TimeSpan.FromSeconds(10)), "Resumed synthetic child did not start.");
         child.Dispose();
         Check(observer.WaitForExit(10000), "Child survived job close.");

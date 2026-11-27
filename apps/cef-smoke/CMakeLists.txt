@@ -59,10 +59,13 @@ endif()
 add_executable(veil-cef-product-preflight-test product_preflight_test.cc)
 target_compile_features(veil-cef-product-preflight-test PRIVATE cxx_std_17)
 
+add_executable(veil-cef-product-module-test product_module_policy_test.cc)
+target_compile_features(veil-cef-product-module-test PRIVATE cxx_std_17)
+
 add_library(veil-cef-product SHARED EXCLUDE_FROM_ALL product_candidate.cc
-  protected_bootstrap.cc bootstrap_registration.cc broker_verification.cc)
+  protected_bootstrap.cc bootstrap_registration.cc broker_verification.cc product_module_policy.cc)
 target_compile_features(veil-cef-product PRIVATE cxx_std_17)
-add_dependencies(veil-cef-product veil-cef-product-preflight-test)
+add_dependencies(veil-cef-product veil-cef-product-preflight-test veil-cef-product-module-test)
 SET_LIBRARY_TARGET_PROPERTIES(veil-cef-product)
 set_target_properties(veil-cef-product PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/product-candidate"

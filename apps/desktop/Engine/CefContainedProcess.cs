@@ -71,6 +71,8 @@ internal sealed class CefContainedProcess : IDisposable
             thread = new SafeFileHandle(info.Thread, ownsHandle: true);
             if (!IsProcessInJob(process, job, out bool contained) || !contained)
                 throw new InvalidOperationException("CEF child containment could not be confirmed.");
+            if (!HasImageLoadMitigations(process))
+                throw new InvalidOperationException("CEF image loading policy could not be confirmed.");
             return new CefContainedProcess(job, process, thread);
         }
         catch
@@ -119,6 +121,16 @@ internal sealed class CefContainedProcess : IDisposable
 
     internal bool IsAlive => !disposed && WaitForSingleObject(process, 0) == 0x102;
 
+    internal bool ImageLoadMitigationsActive => !disposed && HasImageLoadMitigations(process);
+
+    private static bool HasImageLoadMitigations(SafeProcessHandle handle)
+    {
+        // PROCESS_MITIGATION_POLICY.ProcessImageLoadPolicy = 10.
+        // Require NoRemoteImages, NoLowMandatoryLabelImages, PreferSystem32Images.
+        return GetProcessMitigationPolicy(handle, 10, out uint flags, new UIntPtr(4u)) &&
+            (flags & 7u) == 7u;
+    }
+
     internal void ResumeAfterVerification(Func<bool> verified)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -127,7 +139,7 @@ internal sealed class CefContainedProcess : IDisposable
         try
         {
             if (!verified() || !IsProcessInJob(process, job, out bool contained) || !contained ||
-                ResumeThread(thread) != 1)
+                !HasImageLoadMitigations(process) || ResumeThread(thread) != 1)
                 throw new InvalidOperationException("CEF child verification or resume failed.");
             resumed = true;
         }
@@ -251,7 +263,7 @@ internal sealed class CefContainedProcess : IDisposable
 
     private sealed class JobAttributeList : IDisposable
     {
-        private IntPtr list, value;
+        private IntPtr list, value, mitigation;
         private bool initialized;
         private readonly SafeFileHandle job;
         private bool retained;
@@ -264,12 +276,12 @@ internal sealed class CefContainedProcess : IDisposable
             {
                 job.DangerousAddRef(ref retained);
                 UIntPtr size = UIntPtr.Zero;
-                bool unexpected = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+                bool unexpected = InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref size);
                 if (unexpected || Marshal.GetLastWin32Error() != 122 ||
                     size.ToUInt64() == 0 || size.ToUInt64() > int.MaxValue)
                     throw Failure("InitializeProcThreadAttributeList size");
                 list = Marshal.AllocHGlobal((int)size.ToUInt64());
-                if (!InitializeProcThreadAttributeList(list, 1, 0, ref size))
+                if (!InitializeProcThreadAttributeList(list, 2, 0, ref size))
                     throw Failure("InitializeProcThreadAttributeList");
                 initialized = true;
                 value = Marshal.AllocHGlobal(IntPtr.Size);
@@ -278,6 +290,15 @@ internal sealed class CefContainedProcess : IDisposable
                 if (!UpdateProcThreadAttribute(list, 0, new UIntPtr(0x0002000D),
                     value, new UIntPtr((uint)IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
                     throw Failure("UpdateProcThreadAttribute JOB_LIST");
+                // PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY (7 | INPUT).
+                // IMAGE_LOAD_NO_REMOTE, NO_LOW_LABEL and PREFER_SYSTEM32,
+                // ALWAYS_ON at bits 52, 56 and 60. Set at creation, not after resume.
+                const long imagePolicy = (1L << 52) | (1L << 56) | (1L << 60);
+                mitigation = Marshal.AllocHGlobal(sizeof(long));
+                Marshal.WriteInt64(mitigation, imagePolicy);
+                if (!UpdateProcThreadAttribute(list, 0, new UIntPtr(0x00020007),
+                    mitigation, new UIntPtr(8u), IntPtr.Zero, IntPtr.Zero))
+                    throw Failure("UpdateProcThreadAttribute MITIGATION_POLICY");
             }
             catch { Dispose(); throw; }
         }
@@ -287,6 +308,7 @@ internal sealed class CefContainedProcess : IDisposable
             if (initialized) { DeleteProcThreadAttributeList(list); initialized = false; }
             if (list != IntPtr.Zero) { Marshal.FreeHGlobal(list); list = IntPtr.Zero; }
             if (value != IntPtr.Zero) { Marshal.FreeHGlobal(value); value = IntPtr.Zero; }
+            if (mitigation != IntPtr.Zero) { Marshal.FreeHGlobal(mitigation); mitigation = IntPtr.Zero; }
             if (retained) { job.DangerousRelease(); retained = false; }
         }
     }
@@ -329,6 +351,10 @@ internal sealed class CefContainedProcess : IDisposable
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetExitCodeProcess(SafeProcessHandle process, out uint code);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessMitigationPolicy(SafeProcessHandle process, int policy,
+        out uint flags, UIntPtr size);
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool QueryInformationJobObject(SafeFileHandle job, int infoClass,
