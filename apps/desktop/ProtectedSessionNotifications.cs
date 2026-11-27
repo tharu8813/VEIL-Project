@@ -18,7 +18,13 @@ internal sealed class ProtectedSessionNotifications : IDisposable
     private readonly HwndSource source;
     private readonly Action close;
 
-    internal bool LockRequested { get; private set; }
+    private int lockRequested;
+    internal bool LockRequested => System.Threading.Volatile.Read(ref lockRequested) != 0;
+
+#if VEIL_CEF_PREFLIGHT_ONLY
+    // A stopped independent notification pump must fail closed.
+    internal void MarkUnavailable() => System.Threading.Interlocked.Exchange(ref lockRequested, 1);
+#endif
 
     internal ProtectedSessionNotifications(Action close)
     {
@@ -40,9 +46,8 @@ internal sealed class ProtectedSessionNotifications : IDisposable
         bool powerTransition = message == PowerBroadcast && reason is Suspend or ResumeAutomatic;
         if (powerTransition || (message == SessionChange && reason == SessionLock))
         {
-            if (!LockRequested)
+            if (System.Threading.Interlocked.Exchange(ref lockRequested, 1) == 0)
             {
-                LockRequested = true;
                 // Let Windows continue the transition. Volume I/O can outlast the suspend notification.
                 source.Dispatcher.BeginInvoke(DispatcherPriority.Send, close);
             }

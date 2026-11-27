@@ -593,3 +593,18 @@ test('isolated CEF preflight entry is compile-time exclusive and never falls bac
     assert.match(entry, /session\?\.Dispose\(\);[\s\S]*?broker\.QueryRegisteredVolume\(\)[\s\S]*?VerifiedButDisabled/);
     assert.doesNotMatch(entry, /new BrowserWindow|CreateEngine\(|UnmanagedDevelopmentVolume|activation\.Forward|activation\.Start|GetEnvironmentVariable/);
 });
+
+test('isolated preflight observes session notifications independently of synchronous owner checks', async () => {
+    const entry = await readFile('apps/desktop/Engine/CefProtectedPreflightEntry.cs', 'utf8');
+    const pump = await readFile('apps/desktop/Engine/CefPreflightNotificationPump.cs', 'utf8');
+    const notifications = await readFile('apps/desktop/ProtectedSessionNotifications.cs', 'utf8');
+    assert.match(entry, /using var pump = new CefPreflightNotificationPump\(application\.Dispatcher,[\s\S]*?var notifications = pump\.Notifications;[\s\S]*?if \(notifications\.LockRequested\) return 1;[\s\S]*?ProtectedProfileSession\.TryOpen/);
+    assert.match(pump, /#if VEIL_CEF_PREFLIGHT_ONLY/);
+    assert.match(pump, /new Thread\([\s\S]*?new ProtectedSessionNotifications\([\s\S]*?owner\.BeginInvoke[\s\S]*?Dispatcher\.Run\(\)/);
+    assert.match(pump, /thread\.SetApartmentState\(ApartmentState\.STA\);[\s\S]*?thread\.Start\(\)/);
+    assert.match(pump, /finally[\s\S]*?notifications\?\.MarkUnavailable\(\);[\s\S]*?notifications\?\.Dispose\(\)/);
+    assert.match(pump, /BeginInvokeShutdown[\s\S]*?thread\.Join/);
+    assert.match(notifications, /Volatile\.Read\(ref lockRequested\) != 0/);
+    assert.match(notifications, /Interlocked\.Exchange\(ref lockRequested, 1\) == 0[\s\S]*?Dispatcher\.BeginInvoke/);
+    assert.doesNotMatch(pump, /Dispatcher\.Invoke\(|PushFrame|Thread\.Abort/);
+});

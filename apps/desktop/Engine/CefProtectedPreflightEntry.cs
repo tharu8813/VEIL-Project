@@ -22,7 +22,9 @@ internal static class CefProtectedPreflightEntry
             var config = BrokerClientConfig.Load(BrokerClientConfig.ProductPath, development: false);
             var broker = new NamedPipeVolumeBroker(config);
             var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-            using var notifications = new ProtectedSessionNotifications(() => application.Shutdown());
+            using var pump = new CefPreflightNotificationPump(application.Dispatcher, () => application.Shutdown());
+            var notifications = pump.Notifications;
+            if (notifications.LockRequested) return 1;
             ProtectedProfileSession? session = null;
             char[]? password = null;
             uint result = 0;
