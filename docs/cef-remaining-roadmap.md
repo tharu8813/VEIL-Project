@@ -44,7 +44,7 @@
 ## 2. CEF 다중 프로세스와 샌드박스 (P1)
 
 - [x] P2-01: 일반 사용자 Windows에서 nested Win32 smoke를 실제 실행해 제한 토큰과 낮은 무결성의 renderer 표본을 확인하고, 두 Job이 정상 종료 후 비었음을 검증했다. 역할별 전체 수명 검증은 P2-02 이후에 남아 있다.
-- [ ] P2-02: CEF browser/renderer/GPU/utility/network 등의 공식 bootstrap 역할과 실제 프로세스/모듈 목록을 조사. role별 제한 token, integrity, AppContainer/job, site isolation, command-line 및 실행 경로를 관측한다. 단순 PID/부모 metadata나 sampling만으로 전체 수명을 보증하지 않는다.
+- [x] P2-02: CEF browser/renderer/GPU/utility/network의 역할, 모듈, 토큰, AppContainer 및 Job 소속을 합성 실행에서 관측했다. 교차 사이트 renderer 분리와 오프라인 VM의 독립 Procmon 추적을 확인했다. 이 결과는 시험한 실행에 한정되며, 제품 전체 수명 보증은 P2-03/P2-04에 남아 있다.
 - [ ] P2-03: 등록된 image와 runtime lease 및 broker 세션 generation을 전체 브라우저 수명에 결합하는 별도 다중 프로세스 admission 설계. 하위 프로세스마다 동일 계정/세션 및 적절한 sandbox 권한/역할, retained object, 모듈 핀을 검증. unknown role/image, breakaway, sandbox disable, 권한 철회/재인증 실패를 fail closed 처리. 기존 one-shot disabled candidate와 별도 protocol 및 tests.
 - [ ] P2-04: 보호 세션 권한 철회/desktop 또는 broker crash 때 모든 프로세스와 runtime lease 정리, job empty 확인 후 relock. timeout/강제 정리를 정상 종료와 구별.
 - [ ] P2-05: 별도 시험 빌드에서 제한된 보호 경로와 로컬 합성 페이지로 실제 CefInitialize/CefExecuteProcess/CefShutdown 연결. 암호화 볼륨 부재 또는 초기화 오류 시 시작 차단, 임시 프로필 fallback 금지.
@@ -132,3 +132,18 @@ node scripts/check-cef-process-trace.mjs <commit> <bundle-manifest.json> <bundle
 호스트 로컬 증거는 임시 폴더 `veil-cef-guest-export-dc3e1303`의 `trace.pml`, `trace.csv`, `comparison.json`, `manifest.json`, `evidence/result.json`, `evidence/stdout.json`에 있다. CSV SHA-256은 `371B69CA2931D8218A1E0AF7303C87D5524A07607D3DBBA8D28B8AB896783BD7`이고, PML SHA-256은 `7DF40EBFC993213447651BAFF29D4BD3EAF5E68783874F9B3E3EAB4F2CF7F5AA`다. 호스트의 시험 전용 임시 VirtualBox 공유는 내보낸 뒤 해제했다.
 
 GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기록만으로 완료 포트 알림이 생성되지 않았는지 또는 전달 과정에서 빠졌는지는 판단할 수 없다. 후속 시험 러너는 살아 있을 때 검증한 각 프로세스의 핸들을 보존하고, 반복 표본의 핸들이 동일한 객체인지 확인한 뒤 정상 정리 후 각 핸들의 종료 신호와 종료 코드를 기록한다. 로컬 CEF 실행에서 표본 7개의 종료 코드 0과 두 Job의 정리를 확인했다. 새 증거 검사는 핸들로 확인한 종료와 Procmon 종료의 차이를 별도로 표시한다. 이전 VM의 Job 알림 불일치는 보존한다.
+
+**보존 핸들 검증 후속 VM 실행.** 커밋 `308e8e832b6b5e7beb91ad452ff9c054923105ff`의 번들을 일반 사용자로 실행했다. Procmon 시작·종료 각 7건과 두 Job의 알림이 일치했고, 관측한 7개 프로세스 모두 보존 핸들에서 종료 코드 0을 확인했다. 두 Job은 비었으며, 분석기 결과는 `MATCHED_CAPTURE`다. 이전 실행의 GPU 종료 알림 누락 원인은 여전히 미확정이다. 호스트 임시 폴더 `veil-cef-retained-guest-308e8e8-r`에 증거를 보존했다. CSV SHA-256 `55282378DB9DE91D11284A86B9E14BA0DE81AA7AD9088A4F4B55BF2C55B4F266`, PML SHA-256 `849C887024EE2EED79F4608CE1AA33B0F70A9DD16173EDEA03B4463720E27CD0`. VirtualBox 임시 공유는 내보낸 뒤 해제했으며, 보호 VM 설치·제품 게이트는 NOT RUN이다.
+
+### P1 보호 VM 준비 기록
+
+- 커밋 `308e8e832b6b5e7beb91ad452ff9c054923105ff`의 소스 아카이브로 Desktop CefPreflight, Broker Release와 CEF 비활성 후보를 빌드했다. 네이티브 후보 인벤토리 234개 PASS. 빌드에서 나온 PDB와 WebView2 API XML 문서는 전달본에서 제외했다. 비서명 묶음 SHA-256은 `2678F22C4B3D74855CAC782EF1D369874F2ADF9988536980B46E381327D72EB2`다.
+- 오프라인 `Veil-VM-TESTER`의 기존 VEIL 서비스, Program Files/ProgramData 설치 폴더 및 HKLM 등록 키가 없는 것을 확인했다. 게스트에서 아카이브 해시와 CefPreflight 빌드 표식을 확인하고 `C:\Users\vboxuser\VeilPreflight308Input`에 풀었다. 임시 공유를 해제했다.
+- 폐기용 자체 서명 코드 서명 인증서의 개인 키는 게스트 관리자 계정의 반출 불가 저장소에 두고, 공개 인증서는 오프라인 게스트의 신뢰 저장소에 등록했다. 인증서 지문은 `016D4ED89AE4F7ACADFACEFBCDEC8AF1E2CE45AE`다. 관리자 제한 ACL에서 데스크톱, 브로커, CEF 후보의 EXE/DLL 6개 Authenticode 검증 PASS. 시험 서명에는 타임스탬프를 사용하지 않았다.
+- CEF 후보 CMS 및 후보 스테이징 재검증 PASS. 독립 런타임 핀 계획의 최초 실행은 상위 staging 폴더까지 열거해 CMS 확장자를 후보 파일로 처리하면서 FAIL. `scripts/plan-cef-runtime-pins.ps1`의 대상 경로를 실제 `candidate` 하위 폴더로 수정했다.
+- 수정한 도구의 해시를 게스트에서 대조한 뒤 독립 런타임 핀 계획, 전체 payload 분리 CMS, 제한 ACL 전체 스테이징 및 복사본 재검증 PASS. 계획의 `startupEnabled=false`와 `installable=false`를 확인했다. VM 결과 화면은 호스트 임시 폴더 `veil-preflight-308e8e8-7704bf5e/vm-media/staging-result.png`에 보존했다.
+- 게스트의 제한 ACL 폴더에 동적 2 GiB 시험 VHDX `C:\Program Files\VEIL.cef-preflight-test-media\profile-test.vhdx`를 생성하고 GPT/NTFS로 초기화했다. 볼륨 레이블 `VEILCEFTEST`, 관측한 볼륨 GUID `4e366859-18a3-4bf4-8d77-620faef2bb8b`, 분리 상태 `Attached=False`를 확인했다. 결과 화면은 같은 호스트 임시 폴더의 `vhdx-ntfs.png`에 보존했다.
+- 게스트에서 별도 로컬 계정 `VeilCefTest`를 임의 암호로 생성했다. 계정 활성 상태와 Users 직접 구성원을 확인했고 Administrators 직접 구성원 검사도 통과했다. 임시 DPAPI 파일의 삭제를 확인하고 운영자가 시험용 Windows 암호를 직접 설정할 보안 프롬프트를 열었다. BitLocker PowerShell 명령의 존재와 VHDX 분리 상태를 확인했다. 보호기 설정, 게시, HKLM/SCM 등록 및 보호 세션 실행은 NOT RUN.
+- VHDX를 다시 연결하여 동일 GUID를 Windows `Win32_EncryptableVolume`에서 확인했다. 드라이브 문자 없음, `ProtectionStatus=0`, 검사 후 `Attached=False`. 운영자 Windows 암호 및 별도 BitLocker 암호의 연속 보안 입력을 열었다. 보호기 생성 스크립트는 호스트 임시 폴더에서 구문 검사를 통과했다.
+- 운영자 입력 후 시험 VHDX의 BitLocker 암호화 100%, 보호 활성, 잠금 및 분리 상태를 확인했다. 초기 복구 암호가 콘솔 경고에 출력되어 해당 보호기를 교체하고 그 값이 담긴 임시 화면 파일을 삭제했다. 현재 Password 보호기 ID는 `3131BE9A-0075-4896-8B84-35EA659A1776`, RecoveryPassword 보호기 ID는 `89ED40F1-D12C-4C40-9229-8A33F09BC225`다. 기본 암호로 잠금 해제한 뒤 볼륨의 `VeilProfile`에 SYSTEM/Administrators FullControl 및 `VeilCefTest` Modify ACL을 확인하고 재잠금·분리했다. 등록 초안 도구의 운영자 외부 복구 백업 및 확인은 진행 중이다.
+- 최초 등록 초안 실행은 GUID 형식의 프로필 경로를 거부했다. 실제 권한을 확인한 드라이브 문자 경로 `E:\VeilProfile`와 별도 볼륨 GUID로 재실행하여 기본 암호 보안 프롬프트에 도달했다. 외부 복구 백업 검증 및 초안 재검증은 대기 중이다.

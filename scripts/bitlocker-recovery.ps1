@@ -130,7 +130,7 @@ function Register-VeilRecoveryBackup([string]$ImagePath, [string]$VolumePath, [g
             throw 'The selected volume must have exactly one passphrase protector matching the registration.'
         }
 
-        $recovery = Invoke-VeilBitLocker $volume GetKeyProtectors @{ KeyProtectorType = [uint32]2 }
+        $recovery = Invoke-VeilBitLocker $volume GetKeyProtectors @{ KeyProtectorType = [uint32]3 }
         if ($PreferredRecoveryId -ne [guid]::Empty) {
             $id = $PreferredRecoveryId.ToString('B')
             if ($id -notin $recovery.VolumeKeyProtectorID) {
