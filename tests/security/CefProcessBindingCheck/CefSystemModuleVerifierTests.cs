@@ -27,6 +27,25 @@ internal static class CefSystemModuleVerifierTests
         // Real system file with intentionally wrong pin must never pass.
         // This test does not establish its signer or a usable OS baseline.
         Reject(() => verifier.RequireModules([path]));
-        Console.WriteLine("PASS: system module baseline and wrong-pin refusal");
+        // Exercise the real native trust calls independently of the ACL/pin
+        // rejection path. No catalog is installed or modified by this test.
+        string unsigned = Path.Combine(Path.GetTempPath(), "veil-unsigned-" + Guid.NewGuid().ToString("N") + ".dll");
+        try
+        {
+            File.WriteAllText(unsigned, "synthetic unsigned file");
+            using var file = new FileStream(unsigned, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (CefSystemSignatureTrust.Verify(unsigned, file.SafeFileHandle))
+                throw new InvalidOperationException("Unsigned synthetic module was trusted.");
+        }
+        finally { File.Delete(unsigned); }
+        using (var invalid = new Microsoft.Win32.SafeHandles.SafeFileHandle(IntPtr.Zero, false))
+            if (CefSystemSignatureTrust.Verify(path, invalid))
+                throw new InvalidOperationException("Invalid module handle was trusted.");
+        // Hosted image compatibility diagnostic only, not a required success
+        // or a replacement for an independently authenticated OS baseline.
+        using (var real = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            Console.WriteLine("DIAGNOSTIC: kernel32 Microsoft-root signature = " +
+                CefSystemSignatureTrust.Verify(path, real.SafeFileHandle));
+        Console.WriteLine("PASS: system module baseline, wrong-pin and unsigned trust refusal");
     }
 }
