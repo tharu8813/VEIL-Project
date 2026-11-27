@@ -116,3 +116,17 @@ node scripts/check-cef-nested-evidence.mjs --commit '<exact artifact checkout SH
 ```
 
 This accepts the existing bundle's result.json and stdout.json, compares exact checkout and raw manifest hash, requires the report's raw stdout SHA-256 to match stdout.json (older reports without this field require a fresh run), validates required fixture inventory pins including locale, runner configuration and licenses, empty-job flags, and actual reported restricted Low/Untrusted token samples. Output is `CONSISTENT_REPORTED_SMOKE_PASS`, not independent attestation. It never marks product gates passed; a local report can be fabricated and the validator does not measure installed files or execute a browser. Keep stderr.log for diagnosis; do not share the temporary profile.
+
+### Run the broker authorization regression without building CEF
+
+From a clean checkout on an interactive, non-elevated Windows x64 test account (prefer a disposable VM), with Node 22 and .NET 10 SDK:
+
+```powershell
+dotnet build apps/desktop/Veil.Desktop.csproj -c Debug
+if ($LASTEXITCODE -ne 0) { throw 'Desktop build failed' }
+dotnet build apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj -c Debug
+if ($LASTEXITCODE -ne 0) { throw 'Broker build failed' }
+node tests/broker/broker.mjs
+```
+
+The suite now refuses SYSTEM, elevated and noninteractive/session-0 execution before starting a broker. It uses randomized test pipes, a disposable fake backend and synthetic secrets, not a real VHDX. The negative real-backend case must refuse the non-elevated token before opening a volume. The new regression requires the same authenticated owner to receive a refused Lock, lose CEF authority and exit; the broker must observe a refused automatic lock while the synthetic handle marker exists, then relock when the marker is removed. Check the final PASS output and `evidence.json` in its reported `.veil-dev/broker-test-*` directory; `refusedOwnerExitRelock` must be true. Keep these observations separate from installed-service, actual BitLocker, CEF runtime and release gates. Hosted CI syntax/source checks do not execute this suite.

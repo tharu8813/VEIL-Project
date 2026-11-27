@@ -10,6 +10,17 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
+// Some negative cases deliberately ask a development broker to refuse the
+// real backend. Never run this suite as SYSTEM, elevated, or in session 0.
+assert.equal(process.platform, 'win32', 'Windows standard-user session required');
+const tokenProbe = await run(join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    ['-NoProfile', '-NonInteractive', '-Command',
+        '$ErrorActionPreference="Stop"; $i=[Security.Principal.WindowsIdentity]::GetCurrent(); ' +
+        '$p=[Security.Principal.WindowsPrincipal]::new($i); ' +
+        'if ($i.IsSystem -or $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) -or ' +
+        '(Get-Process -Id $PID).SessionId -eq 0 -or -not [Environment]::UserInteractive) { exit 1 }; Write-Output "STANDARD"'],
+    { timeout: 15000, windowsHide: true });
+assert.equal(tokenProbe.stdout.trim(), 'STANDARD', 'Refusing non-standard test token');
 const args = process.argv.slice(2);
 const desktopBin = args[0] === '--desktop-bin' && args[1] && isAbsolute(args[1])
     ? args[1] : resolve('apps/desktop/bin/Debug/net10.0-windows');
@@ -178,6 +189,69 @@ try {
     assert.ok(relocked, 'volume stayed unlocked after the unlocking client exited');
     assert.deepEqual(await command(a, 'AuthenticatedOwner'), { ok: false, error: 'NotAuthenticatedOwner' });
     assert.equal((await command(a, 'Detach')).status.attached, false);
+
+    // A refused lock revokes CEF authorization, but must NOT retire the
+    // original crash watcher. Only the original owner performs these calls.
+    const refusedMarker = join(directory, 'refused-owner-open-handles');
+    const refused = await startBroker('refused-owner-exit', config('refused-owner-exit', {
+        fake: { ...config('unused').fake, handleMarker: refusedMarker }
+    }));
+    assert.equal((await command(refused, 'Attach')).status.attached, true);
+    await writeFile(refusedMarker, 'synthetic open handle');
+    const refusalOwnerScript = `
+const net = require('node:net');
+const pipe = process.argv[1], secret = process.argv[2], volumeId = process.argv[3];
+function request(command, extra = {}) {
+    return new Promise((resolve, reject) => {
+        const socket = net.connect(pipe);
+        let data = '';
+        socket.setTimeout(5000, () => socket.destroy(new Error('IPC timeout')));
+        socket.on('error', reject);
+        socket.on('connect', () => socket.write(JSON.stringify({ command, volumeId, ...extra }) + '\\n'));
+        socket.on('data', chunk => { data += chunk; });
+        socket.on('end', () => {
+            try { resolve(JSON.parse(data.split('\\n')[0])); } catch (error) { reject(error); }
+        });
+    });
+}
+(async () => {
+    const unlocked = await request('Unlock', { secret });
+    const before = await request('AuthenticatedOwner');
+    const lock = await request('Lock');
+    const after = await request('AuthenticatedOwner');
+    const stage = await request('StageCefChild', { childHandle: '1' });
+    console.log(JSON.stringify({ unlocked, before, lock, after, stage }));
+})().catch(error => { console.error(error.message); process.exitCode = 1; });
+`;
+    try {
+        const exitedOwner = await run(process.execPath, ['-e', refusalOwnerScript,
+            '\\\\.\\pipe\\' + refused.settings.pipeName, secret, volumeId], { timeout: 30000 });
+        const replies = JSON.parse(exitedOwner.stdout);
+        assert.equal(replies.unlocked.status.unlocked, true);
+        assert.equal(replies.before.status.unlocked, true);
+        assert.deepEqual(replies.lock, { ok: false, error: 'HandlesOpen' });
+        assert.deepEqual(replies.after, { ok: false, error: 'NotAuthenticatedOwner' });
+        assert.deepEqual(replies.stage, { ok: false, error: 'NotAuthenticatedOwner' });
+        let watcherRefused = false;
+        for (let i = 0; i < 60 && !watcherRefused; i++) {
+            watcherRefused = /"event":"client-exit-lock"[^\n]*"result":"HandlesOpen"/.test(refused.stdout);
+            if (!watcherRefused) await delay(250);
+        }
+        assert.ok(watcherRefused, 'owner-exit watcher did not retry the refused lock');
+        assert.equal((await command(refused, 'Status')).status.unlocked, true);
+        await rm(refusedMarker);
+        let retryLocked = false;
+        for (let i = 0; i < 60 && !retryLocked; i++) {
+            retryLocked = (await command(refused, 'Status')).status.unlocked === false;
+            if (!retryLocked) await delay(250);
+        }
+        assert.ok(retryLocked, 'owner-exit watcher did not relock after handles closed');
+        assert.deepEqual(await command(refused, 'AuthenticatedOwner'), { ok: false, error: 'NotAuthenticatedOwner' });
+        assert.equal((await command(refused, 'Detach')).status.attached, false);
+        evidence.refusedOwnerExitRelock = true;
+    } finally {
+        await rm(refusedMarker, { force: true });
+    }
 
     // The fake OS unlocks, then throws before returning its result. The child
     // must receive failure and its exit must still trigger the broker's watcher.

@@ -349,3 +349,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### CI 보완: retained process 종료 신호의 독립 검증
 
 통합 head 2d51601의 일반 CI (45947323875)에서 CefProcessBindingCheck가 `Exited child still considered live` 복합 단언으로 실패했다. Rust, .NET 빌드, source/evidence 및 NetworkPolicyCheck는 통과했으나 후속 containment/runtime file 테스트는 건너뛰었다. 실제 실패 조건(비정상 exit code 또는 retained handle liveness)은 기존 로그만으로 구분할 수 없다. 합성 자식 stdin을 명시적으로 flush하고 정확히 복제된 process handle의 WAIT_OBJECT_0를 제한 10초 내 요구하며 이후 managed exit code, production IsRunning, SameLiveProcess 및 기존 nomination 단언을 모두 보존한다. 실패 원인을 진단 가능하게 분리하며 timeout이나 오류를 성공으로 처리하지 않는다. production liveness 정책 변경 없음. 수정 head CI 및 실제 CEF/BitLocker/독립 리뷰 미확인; startup disabled 및 WebView2 유지.
+
+### 추가 검증: 잠금 거부 후 owner 종료 및 자동 재잠금 회귀
+
+정확한 head 82ce76c 일반 CI 45947832401 PASS (직전 실패했던 CefProcessBindingCheck, containment, runtime inventory 포함); native CI 확인 시 진행 중. 표준 사용자 fake-backend suite에 같은 별도 owner process가 Unlock/AuthenticatedOwner/Lock(HandlesOpen)/AuthenticatedOwner 및 Stage 거부를 차례로 받고 종료하는 시나리오를 추가한다. watcher의 실제 HandlesOpen 로그를 먼저 요구한 다음 synthetic marker 제거, 자동 relock, 권한 거부 및 Detach를 확인한다. SYSTEM/elevated/session 0/noninteractive 실행을 테스트 시작 전에 거부한다. README에 CEF 빌드 없이 실행할 방법과 증거 필드를 문서화했다. 이 회귀는 hosted CI에서 문법만 검사되고 실제 Windows broker 실행 NOT RUN. 실제 BitLocker, CEF, 독립 리뷰 및 출시 검증은 별도. Product startup disabled; WebView2 unchanged.
