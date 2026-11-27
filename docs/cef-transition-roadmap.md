@@ -179,3 +179,11 @@ main의 컴파일 전용 helper와 분리한 `scripts/test-cef-wpf.ps1`을 추�
 ### 추가 구현: CEF 보호 프로필 읽기 전용 사전 검사 (검증 대기)
 
 제품 브로커 기반 ProfileGate를 재사용하는 CefProtectedProfilePreflight 및 별도 CefProfileLayout을 추가한다. 고정 제품 root/cef 아래 cache, temp, logs 및 cef.log 경로를 분리하며 WebView2 프로필이나 기존 temp를 사용하지 않는다. 실제 등록된 암호화/보호/잠금 해제/보호기 상태 및 동일 볼륨 GUID를 기존 root와 존재하는 디렉터리에 요구하고 재분석 지점·파일 충돌·권한 오류를 거부한다. 초기/종료 root 검증, 기존 CEF 하위 경로 검사, 순수 레이아웃 회귀 포함. 읽기 전용: 생성, 환경 변경, 엔진 시작, 암호화 보장 또는 launch permission 없음. 기존 CEF smoke는 CefInitialize 이후 WPF 진입이므로 이 검사에 통과해도 보호 엔진 연결은 불가하다. 후속은 broker 인증 완료 후, 보호 경로 생성/재검증, 자식 bootstrap 시작 전 TEMP/TMP/로그 경로 전달, bootstrap 측 native 초기화 이전 독립 검증 및 종료/재잠금 조율. 검사와 사용 사이 TOCTOU, 볼륨 외 쓰기, renderer sandbox/사이트 격리 및 실제 BitLocker VM 실행 미검증. 제품 엔진 WebView2 유지.
+
+### 추가 구현: CEF 보호 디렉터리 준비 모듈 (검증 대기)
+
+기존 보호 세션과 exclusive profile lock을 호출자가 소유하는 전제에서만 CefProtectedProfilePreparation.Prepare를 사용하도록 계약을 정의했다. 최초 root 보호 상태 및 GUID 고정, 기존 대상 전체 read-only preflight 이후 고정 parent/child 순서로 CEF root/cache/temp/logs를 준비한다. 각 단계에서 세션 권한, root와 직접 parent의 등록 보호 상태/GUID를 재확인하고 기존 ProfileGate.Prepare의 생성 전 ancestor 검증을 재사용한다. 생성 후 동일 GUID 및 redirected children 검사, 전체 재검사 및 최종 권한/볼륨 확인을 수행한다. 중간 실패는 즉시 전파하며 이미 만들어진 빈 폴더를 삭제하거나 기존 데이터에 롤백/정리를 시도하지 않는다. 레이아웃 순서 순수 .NET 검사와 소스 계약 검사 추가. 제품 startup에서 미호출, 실제 session/lock 소유권과 호출자 권한의 결합은 후속. path TOCTOU/파일 hardlink/OS 쓰기 검증을 대체하지 않으며 실제 BitLocker VM 실행 NOT RUN. CEF 초기화 전 별도 실행 경계 및 child/renderer 종료와 relock 조율은 미구현. 제품 WebView2 유지.
+
+### 추가 구현: 인증 세션 기반 CEF 준비 환경 통합 (검증 대기)
+
+#222~#224의 정확한 head를 합친 통합 브랜치에서 CefPreparationLease.PrepareChildEnvironment를 추가한다. 등록 제품 root와 같은 인증 broker를 사용하여 살아 있는 lease를 재확인하고, 보호 디렉터리 준비에 lease의 StillAuthorized를 직접 전달한다. 현재 프로세스 환경을 복사하여 CEF 전용 TEMP/TMP/cache/log 계획을 구성하고 반환 직전 권한을 다시 검증한다. 호출자에게 임의 root/broker/권한 콜백을 받지 않는다. 반환값은 환경 스냅샷이며 launch 권한이 아니다. 기존 제품 시작 경로 미호출, native broker 인증 및 보호 경로 검증 연결 미완료. #225 네이티브 경로 검증 PR은 별도. 실제 Windows/BitLocker/lock contention 및 프로세스 수명 검증 NOT RUN, 기존 WebView2와 release gate 유지.

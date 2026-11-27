@@ -156,6 +156,35 @@ internal sealed class ProtectedProfileSession : IDisposable
             return true;
         }
 
+        // This plan uses the same authenticated broker as the lease. The
+        // caller owns the lease and must dispose it before the parent session.
+        // Returned paths/environment are a snapshot, never launch authority.
+        internal IReadOnlyDictionary<string, string?> PrepareChildEnvironment()
+        {
+            RequireCurrentPreparation();
+            var layout = CefProtectedProfilePreparation.Prepare(ProductRoot,
+                session.broker, StillAuthorized);
+            RequireCurrentPreparation();
+
+            var inherited = new List<KeyValuePair<string, string?>>();
+            foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+            {
+                if (entry.Key is not string key || entry.Value is not string value)
+                    throw new InvalidOperationException("Unexpected process environment entry.");
+                inherited.Add(new KeyValuePair<string, string?>(key, value));
+            }
+
+            var plan = CefChildEnvironmentPlan.Build(layout, inherited);
+            RequireCurrentPreparation();
+            return plan;
+        }
+
+        private void RequireCurrentPreparation()
+        {
+            if (!StillAuthorized())
+                throw new ProfileLocationException("The CEF preparation lease is no longer available.");
+        }
+
         public void Dispose()
         {
             if (Environment.CurrentManagedThreadId != session.ownerThread)
