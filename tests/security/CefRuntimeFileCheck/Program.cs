@@ -63,6 +63,27 @@ try
         string dll = Path.Combine(root, "libcef.dll");
         lease.RequireObservedApplicationModule(dll);
         lease.RequireObservedApplicationModule(lease.ImagePath);
+        string system = Environment.SystemDirectory;
+        string systemDll = Path.Combine(system, "kernel32.dll");
+        string[] modules = [lease.ImagePath, dll, systemDll];
+        Veil.VolumeBroker.CefModuleInventoryObservation Verify(string[] before, string[]? after = null) =>
+            Veil.VolumeBroker.CefModuleInventoryPolicy.Verify(lease.ImagePath, system, before,
+                lease.RequireObservedApplicationModules, () => after ?? before);
+        var observed = Verify(modules, modules.Reverse().ToArray());
+        Check(observed.ApplicationModules == 2 && observed.UnverifiedSystemModules == 1,
+            "System DLL incorrectly counted as a pinned application module.");
+        Reject(() => Verify([lease.ImagePath, dll, dll]));
+        Reject(() => Verify([lease.ImagePath, systemDll]));
+        Reject(() => Verify([dll, systemDll]));
+        Reject(() => Verify([lease.ImagePath, dll, Path.Combine(root, "unregistered.dll")]));
+        Reject(() => Verify([lease.ImagePath, dll, Path.Combine(root, "icudtl.dat")]));
+        Reject(() => Verify([lease.ImagePath, dll, Path.Combine(system, "sub", "kernel32.dll")]));
+        Reject(() => Verify([lease.ImagePath, dll, Path.Combine(Path.GetTempPath(), "outside.dll")]));
+        Reject(() => Verify([lease.ImagePath, dll, systemDll + ":alternate"]));
+        Reject(() => Verify(modules, [lease.ImagePath, dll]));
+        Reject(() => Verify(modules, [lease.ImagePath, dll, dll]));
+        Reject(() => Verify(modules, [lease.ImagePath, dll, Path.Combine(system, "other.dll")]));
+        Console.WriteLine("PASS: observed module inventory, retained pins and unverified system separation");
         Reject(() => lease.RequireObservedApplicationModule(Path.Combine(root, "icudtl.dat")));
         Reject(() => lease.RequireObservedApplicationModule(Path.Combine(root, "unregistered.dll")));
         Reject(() => lease.RequireObservedApplicationModule(Path.Combine(root, "locales", "en-US.pak")));
