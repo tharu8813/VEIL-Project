@@ -549,3 +549,15 @@ test('native CI publishes only a test runtime bundle and local runner verifies e
     assert.match(runner, /Assert-Inventory[\s\S]*?Start-Process -FilePath \$program[\s\S]*?Assert-Inventory/);
     assert.match(runner, /productReleaseGates = 'NOT RUN'/);
 });
+
+
+test('failed initial broker job assignment transfers only verified handles into stop recovery', async () => {
+    const preflight = await readFile('apps/broker/Veil.VolumeBroker/CefChildPreflight.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const stage = preflight.slice(preflight.indexOf('internal static CefPendingChild Stage'));
+    assert.match(stage, /CefPinnedImage.OpenVerified[\s\S]*?runtime.RequireCurrent\(\)[\s\S]*?termination = Native.OpenCefTerminationHandle[\s\S]*?job.AssignVerifiedCandidate/);
+    assert.match(stage, /catch\s*\{\s*try\s*\{\s*if \(termination is not null\)[\s\S]*?termination = null;\s*job = null;\s*stopRejected\(rejected, rejectedJob\)/);
+    assert.match(broker, /CefChildPreflight.Stage[\s\S]*?\(child, job\) => StopOrRetain\(new CandidateStop\(child, job\)\)/);
+    assert.match(broker, /RevokeCompletedPreflight\(\);[\s\S]*?if \(unresolvedCefStops.Count != 0 &&[\s\S]*?BrokerCommand.StageCefChild\)\s*return Protocol.Error\("CefExitUnconfirmed"\);\s*switch \(request.Command\)/);
+    assert.match(broker, /bool drained = Attempt\([\s\S]*?bool exited = Attempt\([\s\S]*?bool empty = Attempt\([\s\S]*?return drained && exited && empty/);
+});

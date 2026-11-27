@@ -66,11 +66,14 @@ internal static class CefChildPreflight
             Native.ObserveProcess(ownerHandle) == owner && Native.ObserveProcess(process) == child;
     }
 
-    // Transfers ownership only after all observations succeed. The caller
-    // must either install this in its serialized pending slot or dispose it.
+    // Before the executable/runtime pin succeeds there is no termination
+    // authority. Once the verified process handle is acquired, transfer it
+    // and any privately created job to the caller's stop recovery on failure.
     internal static CefPendingChild Stage(ClientIdentity owner, SafeProcessHandle ownerHandle,
-        long nominatedHandle, string registeredPath, string sha256, object generation)
+        long nominatedHandle, string registeredPath, string sha256, object generation,
+        Action<SafeProcessHandle, CefBrokerOwnedJob?> stopRejected)
     {
+        ArgumentNullException.ThrowIfNull(stopRejected);
         var binding = Native.DuplicateNominatedChild(owner, ownerHandle, new IntPtr(nominatedHandle));
         FileStream? image = null;
         Veil.Desktop.CefRuntimeRegistrationLease? runtime = null;
@@ -99,17 +102,33 @@ internal static class CefChildPreflight
         }
         catch
         {
-            try { runtime?.Dispose(); }
+            try
+            {
+                if (termination is not null)
+                {
+                    // Recovery owns both handles, even if the job assignment
+                    // was ambiguous. Never reopen a PID or issue a grant.
+                    var rejected = termination;
+                    var rejectedJob = job;
+                    termination = null;
+                    job = null;
+                    stopRejected(rejected, rejectedJob);
+                }
+            }
             finally
             {
-                try { image?.Dispose(); }
+                try { runtime?.Dispose(); }
                 finally
                 {
-                    try { job?.Dispose(); }
+                    try { image?.Dispose(); }
                     finally
                     {
-                        try { termination?.Dispose(); }
-                        finally { binding.Handle.Dispose(); }
+                        try { job?.Dispose(); }
+                        finally
+                        {
+                            try { termination?.Dispose(); }
+                            finally { binding.Handle.Dispose(); }
+                        }
                     }
                 }
             }

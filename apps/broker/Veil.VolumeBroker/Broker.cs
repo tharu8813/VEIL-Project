@@ -262,6 +262,11 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 RevokeCompletedPreflight();
             if (status.Attached && !Registered(status))
                 return Protocol.Error("VolumeMismatch");
+            // Revocation above can create a new unresolved stop after the
+            // first guard. Do not admit a new candidate in that same request.
+            if (unresolvedCefStops.Count != 0 &&
+                request.Command is BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild)
+                return Protocol.Error("CefExitUnconfirmed");
             switch (request.Command)
             {
                 case BrokerCommand.Status:
@@ -321,7 +326,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                         break;
                     }
                     var candidate = CefChildPreflight.Stage(client, stagingOwner,
-                        request.ChildHandle!.Value, stagePath, stageHash, generation);
+                        request.ChildHandle!.Value, stagePath, stageHash, generation,
+                        (child, job) => StopOrRetain(new CandidateStop(child, job)));
                     try
                     {
                         status = backend.Status();
@@ -541,18 +547,21 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
 
     private bool TryStopVerifiedChild(CandidateStop candidate)
     {
-        try
+        // Job query/termination failure must not suppress the independent
+        // process stop. Each action runs even if the other fails.
+        bool drained = Attempt(() => candidate.Job is null || candidate.Job.TerminateAndDrain(2000), "job-drain");
+        bool exited = Attempt(() => Native.TerminateCefChildAndWait(candidate.Child), "process-exit");
+        bool empty = Attempt(() => candidate.Job is null || candidate.Job.HasNoActiveProcesses(), "job-accounting");
+        return drained && exited && empty;
+
+        bool Attempt(Func<bool> action, string step)
         {
-            // Both job accounting and the original process exit signal are
-            // required. Failure retains both handles for the existing retry.
-            bool drained = candidate.Job is null || candidate.Job.TerminateAndDrain(2000);
-            bool exited = Native.TerminateCefChildAndWait(candidate.Child);
-            return drained && exited && (candidate.Job is null || candidate.Job.HasNoActiveProcesses());
-        }
-        catch (Exception error) when (error is not OutOfMemoryException)
-        {
-            log.Write("cef-child-stop", new { result = "ExitNotConfirmed", type = error.GetType().Name });
-            return false;
+            try { return action(); }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                log.Write("cef-child-stop", new { result = "ExitNotConfirmed", step, type = error.GetType().Name });
+                return false;
+            }
         }
     }
 
