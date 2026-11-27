@@ -131,6 +131,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/security/CefRuntimeFileCheck/CefRuntimeFileCheck.csproj -c Release
 
+      - name: Compile nested CEF smoke runner (interactive execution not run)
+        shell: pwsh
+        run: dotnet build tests/cef/CefNestedSmoke/CefNestedSmoke.csproj -c Release
+
       # Hosted runners may be elevated and do not provide an interactive desktop.
       # Running the WPF smoke suite or broker authorization test here would
       # incorrectly test the runner, not a regular Windows user's security token.

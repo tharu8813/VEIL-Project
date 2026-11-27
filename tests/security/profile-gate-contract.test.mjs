@@ -521,3 +521,18 @@ test('production disabled candidate retains broker job through admission, receip
     assert.match(broker, /Native.MatchesExitedNomination[\s\S]*?!receipt.Job.HasNoActiveProcesses\(\)/);
     assert.match(broker, /candidate.Job.TerminateAndDrain\(2000\)[\s\S]*?Native.TerminateCefChildAndWait\(candidate.Child\)[\s\S]*?return drained && exited/);
 });
+
+
+test('nested CEF runtime experiment remains isolated from production admission', async () => {
+    const fixture = await readFile('tests/cef/CefNestedSmoke/Program.cs', 'utf8');
+    const runner = await readFile('scripts/test-cef-wpf.ps1', 'utf8');
+    const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
+    const workflow = await readFile('.github/workflows/veil-checks.yml', 'utf8');
+    assert.match(fixture, /CefContainedProcess.CreateSuspended\(image, environment\)[\s\S]*?second.AssignRoot\(root\)[\s\S]*?child.ResumeAfterVerification/);
+    assert.match(fixture, /s.Restricted && s.IntegrityRid <= 0x1000/);
+    assert.match(fixture, /exit != 0 \|\| !outerEmpty \|\| !innerEmpty \|\| !restricted/);
+    assert.match(runner, /Invoke-Stage 'nestedWin32'[\s\S]*?Invoke-Bounded 'nested-win32'/);
+    assert.match(workflow, /dotnet build tests\/cef\/CefNestedSmoke\/CefNestedSmoke.csproj -c Release/);
+    assert.match(job, /limits.Basic.ActiveLimit = 1/);
+    assert.doesNotMatch(startup, /CefNestedSmoke|FixtureJob/);
+});
