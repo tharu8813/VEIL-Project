@@ -9,11 +9,12 @@ internal static class CefDisabledPreflight
 {
     internal const uint VerifiedButDisabled = 29;
 
-    internal static uint Run(CefContainedProcess child, Action stage, Func<bool> stillAuthorized)
+    internal static uint Run(CefContainedProcess child, Action stage, Func<bool> stillAuthorized, Action confirm)
     {
         ArgumentNullException.ThrowIfNull(child);
         ArgumentNullException.ThrowIfNull(stage);
         ArgumentNullException.ThrowIfNull(stillAuthorized);
+        ArgumentNullException.ThrowIfNull(confirm);
         // The broker's stage lifetime is 15 seconds, counted by the broker.
         // This more conservative local deadline includes the staging request.
         var elapsed = Stopwatch.StartNew();
@@ -31,6 +32,9 @@ internal static class CefDisabledPreflight
             if (code != VerifiedButDisabled)
                 throw new InvalidOperationException("CEF disabled preflight did not report verification.");
             if (!Current()) throw new InvalidOperationException("CEF preparation changed during preflight.");
+            child.TerminateAndDrain(5000);
+            confirm();
+            if (!Current()) throw new InvalidOperationException("CEF confirmation expired.");
             return code;
         }
         finally

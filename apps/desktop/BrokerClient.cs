@@ -80,6 +80,17 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
             throw new ProfileLocationException("The volume broker refused protected CEF child staging.");
     }
 
+    internal void ConfirmCefPreflight(long childHandle, string expectedGuid)
+    {
+        if (config.Development || !config.RequireWindowsService ||
+            config.PipeName != "VEIL.VolumeBroker" || config.BrokerImage is null ||
+            string.IsNullOrWhiteSpace(expectedGuid))
+            throw new ProfileLocationException("CEF confirmation requires the registered production broker.");
+        using var response = SendCommand("ConfirmCefPreflight", ReadOnlySpan<char>.Empty, childHandle);
+        if (!CefStageWire.IsProtectedStageReply(response.RootElement, expectedGuid))
+            throw new ProfileLocationException("The broker did not confirm the completed CEF preflight.");
+    }
+
     private VolumeStatus? QueryVolume(string command)
     {
         try
@@ -187,11 +198,11 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
         using var request = new MemoryStream();
         using (var writer = new Utf8JsonWriter(request))
         {
-            if (command == "StageCefChild")
+            if (command is "StageCefChild" or "ConfirmCefPreflight")
             {
                 if (childHandle is not { } handle || !secret.IsEmpty)
                     throw new ArgumentException("Invalid CEF staging command.");
-                CefStageWire.WriteRequest(writer, config.VolumeId, handle);
+                CefStageWire.WriteRequest(writer, config.VolumeId, handle, command);
             }
             else
             {
@@ -213,7 +224,7 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
             VerifyServer(pipe);
             // A mutation can take longer than a status query, especially when Windows
             // mounts a cold VHDX and BitLocker discovers the volume.
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(command is "Status" or "AuthenticatedOwner" or "StageCefChild" ? 8 : 45));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(command is "Status" or "AuthenticatedOwner" or "StageCefChild" or "ConfirmCefPreflight" ? 8 : 45));
             pipe.WriteAsync(wire.AsMemory(0, checked((int)request.Length)), timeout.Token)
                 .AsTask().GetAwaiter().GetResult();
             byte[] newline = [10];
@@ -230,7 +241,7 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
                 if (response.Length >= 4096) throw new InvalidDataException("Broker response too large.");
                 response.WriteByte(byteBuffer[0]);
             }
-            if (command == "StageCefChild") VerifyServer(pipe);
+            if (command is "StageCefChild" or "ConfirmCefPreflight") VerifyServer(pipe);
             return JsonDocument.Parse(response.ToArray());
         }
         catch (Exception error) when (error is IOException or TimeoutException or UnauthorizedAccessException or

@@ -77,14 +77,18 @@ try
         {
             Check(preflight.NominatedHandle > 0 && !File.Exists(markerPath), "Stage did not see suspended child.");
             stages++;
-        }, () => true);
-        Check(exit == 29 && stages == 1 && File.Exists(markerPath) && !preflight.IsAlive,
+        }, () => true, () =>
+        {
+            Check(preflight.ExitedHandle > 0 && preflight.ReadExitCode() == 29, "Confirmation did not see exited child.");
+            stages++;
+        });
+        Check(exit == 29 && stages == 2 && File.Exists(markerPath) && !preflight.IsAlive,
             "Disabled preflight did not complete exactly once.");
     }
     File.Delete(markerPath);
     using (var denied = CefContainedProcess.CreateSuspended(image, environment))
     {
-        Reject(() => CefDisabledPreflight.Run(denied, () => throw new InvalidOperationException("Synthetic denial"), () => true));
+        Reject(() => CefDisabledPreflight.Run(denied, () => throw new InvalidOperationException("Synthetic denial"), () => true, () => throw new Exception("Unexpected confirmation")));
         Check(!File.Exists(markerPath) && !denied.IsAlive, "Denied preflight ran.");
     }
     environment.Remove("VEIL_SYNTHETIC_EXIT");

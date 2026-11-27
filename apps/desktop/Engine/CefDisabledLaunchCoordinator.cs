@@ -34,7 +34,8 @@ internal static class CefDisabledLaunchCoordinator
 
         if (!Current()) throw new InvalidOperationException("CEF preparation unavailable.");
         using var child = CefContainedProcess.CreateSuspended(runtime.ImagePath, minimal);
-        return CefDisabledPreflight.Run(child, () => profile.StageSuspendedChild(child), Current);
+        return CefDisabledPreflight.Run(child, () => profile.StageSuspendedChild(child), Current,
+            () => profile.ConfirmCompletedPreflight(child));
         // using disposal order: child job, runtime registration/files, profile
         // lock. The caller still owns the parent session and relock.
     }

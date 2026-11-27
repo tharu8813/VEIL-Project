@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Veil.VolumeBroker;
 
-internal enum BrokerCommand { Status, Attach, Unlock, Lock, Detach, AuthenticatedOwner, CheckCefChild, StageCefChild, RedeemCefChild }
+internal enum BrokerCommand { Status, Attach, Unlock, Lock, Detach, AuthenticatedOwner, CheckCefChild, StageCefChild, RedeemCefChild, ConfirmCefPreflight }
 
 /// <summary>One parsed request. The secret is held in a clearable buffer, never in a string.</summary>
 internal sealed class BrokerRequest : IDisposable
@@ -76,7 +76,7 @@ internal static class Protocol
                 !Enum.IsDefined(parsed) || command != parsed.ToString() || volumeId is null)
                 throw new ProtocolException("BadRequest");
             if ((parsed == BrokerCommand.Unlock) != (secret is not null)) throw new ProtocolException("BadRequest");
-            if ((parsed is BrokerCommand.CheckCefChild or BrokerCommand.StageCefChild) != childHandle.HasValue) throw new ProtocolException("BadRequest");
+            if ((parsed is BrokerCommand.CheckCefChild or BrokerCommand.StageCefChild or BrokerCommand.ConfirmCefPreflight) != childHandle.HasValue) throw new ProtocolException("BadRequest");
             return new BrokerRequest { Command = parsed, VolumeId = volumeId, Secret = secret,
                 SecretLength = secretLength, ChildHandle = childHandle };
         }

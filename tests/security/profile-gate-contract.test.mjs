@@ -228,7 +228,7 @@ test('CEF preflight command is owner-only, separately pinned and never grants ch
     assert.match(reject, /Native\.MatchesSha256\(client\.ImagePath, config\.ClientSha256!/);
     assert.doesNotMatch(reject, /CefChildImage|CefChildSha256|CheckCefChild/);
     assert.match(config, /if \(CefChildImage is not null \|\| CefChildSha256 is not null\)[\s\S]*?if \(development \|\|/);
-    assert.match(protocol, /\(parsed is BrokerCommand\.CheckCefChild or BrokerCommand\.StageCefChild\) != childHandle\.HasValue/);
+    assert.match(protocol, /\(parsed is BrokerCommand\.CheckCefChild or BrokerCommand\.StageCefChild or BrokerCommand\.ConfirmCefPreflight\) != childHandle\.HasValue/);
     assert.match(preflight, /using var child = binding\.Handle;\s*using var image = CefPinnedImage\.OpenVerified/);
     assert.match(preflight, /Native\.ObserveProcess\(ownerHandle\) != owner \|\|\s*Native\.ObserveProcess\(child\) != binding\.Identity/);
 });
@@ -239,7 +239,7 @@ test('CEF staged child is bounded to one pending slot and retired on lock and ti
     const preflight = await readFile('apps/broker/Veil.VolumeBroker/CefChildPreflight.cs', 'utf8');
     const pending = await readFile('apps/broker/Veil.VolumeBroker/CefPendingChild.cs', 'utf8');
     const stage = broker.slice(broker.indexOf('case BrokerCommand.StageCefChild:'), broker.indexOf('case BrokerCommand.Attach'));
-    assert.match(stage, /authenticatedOwner != client[\s\S]*?config\.Development[\s\S]*?if \(pendingCefChild is not null\)[\s\S]*?CefChildPreflight\.Stage/);
+    assert.match(stage, /authenticatedOwner != client[\s\S]*?config\.Development[\s\S]*?if \(pendingCefChild is not null \|\| completedPreflight is not null\)[\s\S]*?CefChildPreflight\.Stage/);
     assert.match(stage, /pendingCefChild = candidate;\s*_ = ExpirePendingCefChildAsync\(candidate\);/);
     assert.match(stage, /if \(!ReferenceEquals\(pendingCefChild, candidate\)\) candidate\.Dispose\(\)/);
     assert.match(broker, /request\.Command is BrokerCommand\.Lock or BrokerCommand\.Detach\)\s*RevokePendingCefChild\(\)/);
@@ -364,8 +364,8 @@ test('desktop stages a contained suspended child only under the existing owner l
     assert.match(stage, /RequireCurrentPreparation\(\);[\s\S]*?long nominated = child\.NominatedHandle;[\s\S]*?session\.broker\.StageCefChild\(nominated, session\.authenticatedVolumeGuid!\);[\s\S]*?RequireCurrentPreparation\(\);[\s\S]*?child\.NominatedHandle != nominated/);
     assert.match(stage, /catch\s*\{[\s\S]*?child\.Dispose\(\);[\s\S]*?throw;/);
     assert.doesNotMatch(stage, /ResumeAfterVerification|CreateSuspended/);
-    assert.match(client, /CefStageWire\.WriteRequest\(writer, config\.VolumeId, handle\)/);
-    assert.match(client, /if \(command == "StageCefChild"\) VerifyServer\(pipe\);/);
+    assert.match(client, /CefStageWire\.WriteRequest\(writer, config\.VolumeId, handle, command\)/);
+    assert.match(client, /if \(command is "StageCefChild" or "ConfirmCefPreflight"\) VerifyServer\(pipe\);/);
     assert.doesNotMatch(startup, /StageSuspendedChild|StageCefChild/);
 });
 
@@ -387,8 +387,19 @@ test('disabled CEF coordinator binds profile and runtime leases before suspended
     const coordinator = await readFile('apps/desktop/Engine/CefDisabledLaunchCoordinator.cs', 'utf8');
     const runner = await readFile('apps/desktop/Engine/CefDisabledPreflight.cs', 'utf8');
     const startup = await readFile('apps/desktop/Program.cs', 'utf8');
-    assert.match(coordinator, /using var profile = session.AcquireCefPreparationLease\(\);[\s\S]*?using var runtime = profile.PrepareRegisteredRuntime\(\);[\s\S]*?using var child = CefContainedProcess.CreateSuspended\(runtime.ImagePath, minimal\);[\s\S]*?CefDisabledPreflight.Run\(child, \(\) => profile.StageSuspendedChild\(child\), Current\)/);
+    assert.match(coordinator, /using var profile = session.AcquireCefPreparationLease\(\);[\s\S]*?using var runtime = profile.PrepareRegisteredRuntime\(\);[\s\S]*?using var child = CefContainedProcess.CreateSuspended\(runtime.ImagePath, minimal\);[\s\S]*?CefDisabledPreflight.Run\(child, \(\) => profile.StageSuspendedChild\(child\), Current,\s*\(\) => profile.ConfirmCompletedPreflight\(child\)\)/);
     assert.match(runner, /stage\(\);\s*child.ResumeAfterVerification\(Current\);[\s\S]*?child.ReadExitCode\(\);[\s\S]*?code != VerifiedButDisabled/);
     assert.match(runner, /finally\s*\{[\s\S]*?child.TerminateAndDrain\(5000\)/);
     assert.doesNotMatch(startup, /CefDisabledLaunchCoordinator|CefDisabledPreflight/);
+});
+
+
+test('disabled preflight requires broker confirmation of the same exited child', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const runner = await readFile('apps/desktop/Engine/CefDisabledPreflight.cs', 'utf8');
+    const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
+    assert.match(broker, /completedPreflight = receipt;[\s\S]*?return Protocol.CefChildVerified/);
+    assert.match(broker, /case BrokerCommand.ConfirmCefPreflight:[\s\S]*?completedPreflight = null;[\s\S]*?MatchesExitedNomination/);
+    assert.match(native, /CompareObjectHandles\(child, retained\)[\s\S]*?GetExitCodeProcess\(child, out uint code\) && code == expectedExit/);
+    assert.match(runner, /child.TerminateAndDrain\(5000\);\s*confirm\(\);/);
 });

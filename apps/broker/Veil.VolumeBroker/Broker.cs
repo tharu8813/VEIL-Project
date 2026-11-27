@@ -12,6 +12,10 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private ClientIdentity? authenticatedOwner;
     private SafeProcessHandle? authenticatedOwnerHandle;
     private CefPendingChild? pendingCefChild;
+    private sealed record CompletedPreflight(object Generation, SafeProcessHandle Child, long Issued);
+    private CompletedPreflight? completedPreflight;
+    private static bool Expired(CompletedPreflight receipt) =>
+        System.Diagnostics.Stopwatch.GetElapsedTime(receipt.Issued) >= TimeSpan.FromSeconds(15);
 
     internal async Task RunAsync(CancellationToken stop, Action? ready = null)
     {
@@ -188,6 +192,14 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     !pending.TryRedeem(owner, client, generation,
                         Native.IsRunning(ownerHandle), Native.IsRunning(childHandle), true, true))
                     return Protocol.Error("CefChildRejected");
+                // Keep an independent child object after pending admission is
+                // disposed. The owner must confirm this exact exited object.
+                var retained = Native.OpenForWait(client, childHandle);
+                if (retained.IsInvalid) { retained.Dispose(); return Protocol.Error("CefChildRejected"); }
+                if (completedPreflight is not null) { retained.Dispose(); return Protocol.Error("CefChildRejected"); }
+                var receipt = new CompletedPreflight(generation, retained, System.Diagnostics.Stopwatch.GetTimestamp());
+                completedPreflight = receipt;
+                _ = ExpireCompletedPreflightAsync(receipt);
                 return Protocol.CefChildVerified();
             }
             catch (Exception error) when (error is not OutOfMemoryException)
@@ -219,6 +231,10 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 !status.ProtectorPresent || authenticatedOwnerHandle is not { } active ||
                 !Native.IsRunning(active)))
                 RevokePendingCefChild();
+            if (completedPreflight is { } completed && (Expired(completed) || !Registered(status) ||
+                !status.Unlocked || !status.FullyEncrypted || !status.ProtectionOn || !status.ProtectorPresent ||
+                authenticatedOwnerHandle is not { } receiptOwner || !Native.IsRunning(receiptOwner)))
+                RevokeCompletedPreflight();
             if (status.Attached && !Registered(status))
                 return Protocol.Error("VolumeMismatch");
             switch (request.Command)
@@ -274,7 +290,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                         code = "CefUnavailable";
                         break;
                     }
-                    if (pendingCefChild is not null)
+                    if (pendingCefChild is not null || completedPreflight is not null)
                     {
                         code = "CefChildPending";
                         break;
@@ -297,6 +313,34 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     finally
                     {
                         if (!ReferenceEquals(pendingCefChild, candidate)) candidate.Dispose();
+                    }
+                    break;
+                case BrokerCommand.ConfirmCefPreflight:
+                    if (config.Development || !Registered(status) || !status.Unlocked ||
+                        !status.FullyEncrypted || !status.ProtectionOn || !status.ProtectorPresent ||
+                        authenticatedOwner != client || authenticatedOwnerHandle is not { } confirmOwner ||
+                        !Native.SameLiveProcess(confirmOwner, pipeClient) ||
+                        completedPreflight is not { } receipt)
+                    {
+                        code = "CefChildRejected";
+                        break;
+                    }
+                    // Only the authenticated owner can consume a receipt.
+                    // Any attempt by that owner is one-shot, even on refusal.
+                    completedPreflight = null;
+                    using (receipt.Child)
+                    {
+                        if (Expired(receipt) || !ReferenceEquals(receipt.Generation, unlockOwner) ||
+                            !Native.MatchesExitedNomination(client, confirmOwner, request.ChildHandle!.Value, receipt.Child, 29))
+                        {
+                            code = "CefChildRejected";
+                            break;
+                        }
+                        status = backend.Status();
+                        if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
+                            !status.ProtectionOn || !status.ProtectorPresent || Expired(receipt) ||
+                            !Native.SameLiveProcess(confirmOwner, pipeClient))
+                            code = "CefChildRejected";
                     }
                     break;
                 case BrokerCommand.Attach when status.Attached:
@@ -423,7 +467,23 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     {
         var pending = pendingCefChild;
         pendingCefChild = null;
-        pending?.Dispose();
+        try { pending?.Dispose(); }
+        finally { RevokeCompletedPreflight(); }
+    }
+
+    private void RevokeCompletedPreflight()
+    {
+        var receipt = completedPreflight;
+        completedPreflight = null;
+        receipt?.Child.Dispose();
+    }
+
+    private async Task ExpireCompletedPreflightAsync(CompletedPreflight expected)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(15));
+        await serial.WaitAsync();
+        try { if (ReferenceEquals(completedPreflight, expected)) RevokeCompletedPreflight(); }
+        finally { serial.Release(); }
     }
 
     private async Task ExpirePendingCefChildAsync(CefPendingChild expected)

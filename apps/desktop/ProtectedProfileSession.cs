@@ -233,6 +233,13 @@ internal sealed class ProtectedProfileSession : IDisposable
             }
         }
 
+        internal void ConfirmCompletedPreflight(CefContainedProcess child)
+        {
+            RequireCurrentPreparation();
+            session.broker.ConfirmCefPreflight(child.ExitedHandle, session.authenticatedVolumeGuid!);
+            RequireCurrentPreparation();
+        }
+
         private void RequireCurrentPreparation()
         {
             if (!StillAuthorized())

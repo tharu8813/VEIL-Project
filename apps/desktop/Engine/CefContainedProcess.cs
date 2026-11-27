@@ -148,6 +148,15 @@ internal sealed class CefContainedProcess : IDisposable
         throw Failure("WaitForSingleObject");
     }
 
+    internal long ExitedHandle
+    {
+        get
+        {
+            if (!WaitForExit(0)) throw new InvalidOperationException("Child has not exited.");
+            return process.DangerousGetHandle().ToInt64();
+        }
+    }
+
     internal uint ReadExitCode()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -169,15 +178,16 @@ internal sealed class CefContainedProcess : IDisposable
                 throw Failure("QueryInformationJobObject");
             return info.ActiveProcesses;
         }
-        if (ActiveProcesses() == 0) return;
-        if (!TerminateJobObject(job, 29)) throw Failure("TerminateJobObject");
         var started = System.Diagnostics.Stopwatch.StartNew();
+        if (ActiveProcesses() != 0 && !TerminateJobObject(job, 29)) throw Failure("TerminateJobObject");
         while (ActiveProcesses() != 0)
         {
             if (started.ElapsedMilliseconds >= milliseconds)
                 throw new TimeoutException("CEF job drain could not be confirmed.");
             Thread.Sleep(20);
         }
+        int remaining = Math.Max(0, milliseconds - (int)Math.Min(milliseconds, started.ElapsedMilliseconds));
+        if (!WaitForExit(remaining)) throw new TimeoutException("CEF process exit was not confirmed.");
     }
 
     public void Dispose()

@@ -79,6 +79,27 @@ internal static class Native
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CompareObjectHandles(SafeProcessHandle first, SafeProcessHandle second);
 
+    // Compare an exited, retained child to the handle still owned by its
+    // authenticated parent. Do not reopen a PID or accept a numeric PID.
+    internal static bool MatchesExitedNomination(ClientIdentity owner, SafeProcessHandle ownerHandle,
+        long nomination, SafeProcessHandle retained, uint expectedExit)
+    {
+        if (nomination <= 0 || ObserveProcess(ownerHandle) != owner) return false;
+        using var source = OpenProcess(QueryLimitedInformation | Synchronize | 0x0040, false, (uint)owner.ProcessId);
+        if (!SameLiveProcess(source, ownerHandle) ||
+            !DuplicateHandle(source, new IntPtr(nomination), new IntPtr(-1), out var child,
+                QueryLimitedInformation | Synchronize, false, 0)) return false;
+        using (child)
+            return CompareObjectHandles(child, retained) &&
+                WaitForSingleObject(child, 0) == 0 &&
+                GetExitCodeProcess(child, out uint code) && code == expectedExit &&
+                SameLiveProcess(source, ownerHandle);
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(SafeProcessHandle process, out uint code);
+
     internal static ClientIdentity ObserveProcess(SafeProcessHandle process)
     {
         uint pid = GetProcessId(process);

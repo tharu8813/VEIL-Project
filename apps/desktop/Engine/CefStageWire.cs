@@ -8,14 +8,15 @@ namespace Veil.Desktop;
 // not a redemption receipt and does not authorize native initialization.
 internal static class CefStageWire
 {
-    internal static void WriteRequest(Utf8JsonWriter writer, string volumeId, long childHandle)
+    internal static void WriteRequest(Utf8JsonWriter writer, string volumeId, long childHandle, string command = "StageCefChild")
     {
-        if (volumeId.Length is 0 or > 64 ||
+        if (command is not ("StageCefChild" or "ConfirmCefPreflight") ||
+            volumeId.Length is 0 or > 64 ||
             !volumeId.All(c => c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '-' or '_') ||
             childHandle <= 0)
             throw new ArgumentException("Invalid CEF staging request.");
         writer.WriteStartObject();
-        writer.WriteString("command", "StageCefChild");
+        writer.WriteString("command", command);
         writer.WriteString("volumeId", volumeId);
         writer.WriteString("childHandle", childHandle.ToString(CultureInfo.InvariantCulture));
         writer.WriteEndObject();

@@ -129,6 +129,9 @@ try
     await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
     Check(child.ExitCode == 0 && !Native.IsRunning(retained), "Exited child still considered live.");
     Check(!Native.SameLiveProcess(retained, child.SafeHandle), "Exited process objects matched as live.");
+    Check(Native.MatchesExitedNomination(identity, owner.SafeHandle, child.SafeHandle.DangerousGetHandle().ToInt64(), retained, 0), "Exited nominated object did not match.");
+    Check(!Native.MatchesExitedNomination(identity, owner.SafeHandle, child.SafeHandle.DangerousGetHandle().ToInt64(), retained, 29), "Incorrect exit code accepted.");
+    Check(!Native.MatchesExitedNomination(identity, owner.SafeHandle, owner.SafeHandle.DangerousGetHandle().ToInt64(), retained, 0), "Different object accepted.");
     Reject(() => Native.DuplicateNominatedChild(identity, owner.SafeHandle, child.SafeHandle.DangerousGetHandle()).Handle.Dispose());
     Console.WriteLine("PASS: synthetic Windows child handle duplication, generation binding and exit detection");
     return 0;
