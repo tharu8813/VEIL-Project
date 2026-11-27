@@ -72,6 +72,24 @@ try
         var observed = Verify(modules, modules.Reverse().ToArray());
         Check(observed.ApplicationModules == 2 && observed.UnverifiedSystemModules == 1,
             "System DLL incorrectly counted as a pinned application module.");
+        int systemChecks = 0;
+        var withSystemVerifier = Veil.VolumeBroker.CefModuleInventoryPolicy.Verify(
+            lease.ImagePath, system, modules, lease.RequireObservedApplicationModules,
+            () => modules, paths =>
+            {
+                Check(paths.SequenceEqual(new[] { systemDll }), "Incorrect system verification input.");
+                systemChecks++;
+            });
+        Check(systemChecks == 1 && withSystemVerifier.ApplicationModules == 2 &&
+            withSystemVerifier.UnverifiedSystemModules == 0 && withSystemVerifier.PinnedSignedSystemModules == 1,
+            "System verification result not separated from application pins.");
+        Reject(() => Veil.VolumeBroker.CefModuleInventoryPolicy.Verify(
+            lease.ImagePath, system, modules, lease.RequireObservedApplicationModules,
+            () => modules, _ => throw new UnauthorizedAccessException("Synthetic signature refusal.")));
+        Reject(() => Veil.VolumeBroker.CefModuleInventoryPolicy.Verify(
+            lease.ImagePath, system, modules, lease.RequireObservedApplicationModules,
+            () => [lease.ImagePath, dll], _ => { }));
+
         Reject(() => Verify([lease.ImagePath, dll, dll]));
         Reject(() => Verify([lease.ImagePath, systemDll]));
         Reject(() => Verify([dll, systemDll]));
