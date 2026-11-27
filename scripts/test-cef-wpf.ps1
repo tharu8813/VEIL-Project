@@ -45,7 +45,7 @@ $report = [ordered]@{
     startedUtc = [DateTime]::UtcNow.ToString('o')
     finishedUtc = $null
     status = 'NOT RUN'
-    stages = [ordered]@{ build = 'NOT RUN'; vaultBuild = 'NOT RUN'; win32 = 'NOT RUN'; nestedBuild = 'NOT RUN'; nestedWin32 = 'NOT RUN'; wpf = 'NOT RUN'; tabs = 'NOT RUN' }
+    stages = [ordered]@{ build = 'NOT RUN'; vaultBuild = 'NOT RUN'; win32 = 'NOT RUN'; nestedBuild = 'NOT RUN'; nestedWin32 = 'NOT RUN'; siteIsolation = 'NOT RUN'; wpf = 'NOT RUN'; tabs = 'NOT RUN' }
     hashes = [ordered]@{}
     productReleaseGates = 'NOT RUN'
     limitations = @('No product credentials or profile.', 'Not independent token, site-isolation or OS write tracing evidence.', 'No release approval.')
@@ -102,7 +102,7 @@ function Assert-NoTestProcesses([string[]]$Executables) {
     })
     if ($remaining.Count -ne 0) { throw 'Test executable processes remain or could not be identified safely.' }
 }
-$environmentNames = @('TEMP', 'TMP', 'VEIL_CEF_WPF_TABS', 'VEIL_CEF_WPF_TABS_FRESH_PROBE',
+$environmentNames = @('TEMP', 'TMP', 'VEIL_CEF_SITE_SMOKE_PORT', 'VEIL_CEF_WPF_TABS', 'VEIL_CEF_WPF_TABS_FRESH_PROBE',
     'VEIL_CEF_WPF_TEST_URL', 'VEIL_CEF_WPF_VAULT_EXE')
 $previousEnvironment = @{}
 foreach ($name in $environmentNames) { $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
@@ -149,6 +149,10 @@ try {
         Write-Report
         Invoke-Bounded 'nested-win32' $nested @($win32, (Join-Path $runtimeTemp 'nested-fixture')) 60
         Assert-NoTestProcesses ($executables + @($nested))
+    }
+    Invoke-Stage 'siteIsolation' {
+        Invoke-Bounded 'site-isolation' $node @((Join-Path $repo 'tests/cef/site-isolation-smoke.mjs'), $win32) 50
+        Assert-NoTestProcesses $executables
     }
     Invoke-Stage 'wpf' {
         Invoke-Bounded 'wpf' $node @((Join-Path $repo 'tests/cef/wpf-smoke.mjs'), $wpf, $vault) 120
