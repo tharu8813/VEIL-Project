@@ -223,3 +223,7 @@ RedeemCefChild는 기존 client allowlist의 image 거부 중 별도 admin pin�
 ### 추가 구현: native 경로 및 broker wire 검증 통합 (검증 대기)
 
 #225의 정확한 head 2a9370fe512b6ac4dadb1dba2f456a7ab7a201c9를 #226에 통합한다. 기존 native wire CI와 synthetic path CI를 모두 유지하며 기존 두 smoke host는 product 경로 환경이 존재하면 CefExecuteProcess 이전에 즉시 거부한다. 경로/볼륨 문자열 비교에 길이 제한과 embedded NUL 거부를 추가하고 아직 존재하지 않는 log를 포함해 모든 supplied path의 canonical drive 형식을 먼저 확인한다. synthetic NUL regression 추가. 두 모듈을 동일 브랜치에서 빌드/검증하는 단계이며 실제 native bootstrap의 broker auth + registered paths 결합, 권한 수명/containment 및 BitLocker는 NOT RUN. WebView2 제품 및 release gate 유지.
+
+### 추가 구현: native startup preflight sequencing (검증 대기)
+
+RegisteredBootstrap은 별도의 신뢰된 admin 등록 root/volume GUID/volume ID를 입력으로 요구한다. 현재 v1 broker receipt에는 이 정보가 없어 환경변수나 receipt만으로 trust를 구성할 수 없다. 실제 등록 loader 및 설치 계약 미구현. CheckBootstrap은 TEMP/TMP와 고정 protected path, volume 및 canonical handles 검증 후 단 한 번 receipt 요청, 재조회한 환경/경로 상태를 다시 검증하고 변화 시 거부. known fixture/log override 존재 거부. 독립 native module과 합성 filesystem/receipt sequencing regression (invalid volume, TEMP/TMP mismatch, refused receipt, env mutation, removed cache) CI 추가. 기존 RunWinMain과 CefInitialize는 이 함수를 호출하지 않으며 product environment 거부 유지. Bootstrap executable + loaded DLL pin, trusted registration, launch containment/lifetime, actual broker + BitLocker/runtime NOT RUN. 성공 preflight는 초기화 권한이 아니다. WebView2 유지.

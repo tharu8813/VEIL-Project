@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-#include "protected_paths.h"
+#include "protected_bootstrap.h"
 #include <iostream>
 #include <fstream>
 
@@ -42,6 +42,48 @@ int main() {
     std::cerr << "Initial native path check: " << (failure ? failure : "unknown") << '\n';
     return 5;
   }
+  // Ordinary synthetic directories; the receipt callback is not a real broker.
+  RegisteredBootstrap registration{product, volume, "synthetic-volume"};
+  BootstrapEnvironment environment{paths, paths.scratch, paths.scratch};
+  int receipts = 0;
+  const auto yes = [&receipts](std::string_view id) {
+    ++receipts;
+    return id == "synthetic-volume";
+  };
+  const auto read = [&environment](BootstrapEnvironment& out) {
+    out = environment;
+    return true;
+  };
+  if (CheckBootstrap(registration, yes, read) != BootstrapCheck::kPreflightVerified ||
+      receipts != 1) return 24;
+  auto wrong = registration;
+  wrong.volume_guid = L"wrong-volume";
+  if (CheckBootstrap(wrong, yes, read) != BootstrapCheck::kInvalidPaths ||
+      receipts != 1) return 25;
+  environment.tmp = product;
+  if (CheckBootstrap(registration, yes, read) != BootstrapCheck::kInvalidEnvironment ||
+      receipts != 1) return 26;
+  environment.tmp = paths.scratch;
+  const auto no = [&receipts](std::string_view) { ++receipts; return false; };
+  if (CheckBootstrap(registration, no, read) != BootstrapCheck::kBrokerRejected ||
+      receipts != 2) return 27;
+  const auto changes = [&environment, &receipts, &product](std::string_view) {
+    ++receipts;
+    environment.temp = product;
+    return true;
+  };
+  if (CheckBootstrap(registration, changes, read) != BootstrapCheck::kChangedAfterReceipt ||
+      receipts != 3) return 28;
+  environment.temp = paths.scratch;
+  const auto remove_cache = [&paths, &receipts](std::string_view) {
+    ++receipts;
+    std::error_code e;
+    return fs::remove(paths.cache, e) && !e;
+  };
+  if (CheckBootstrap(registration, remove_cache, read) != BootstrapCheck::kChangedAfterReceipt ||
+      receipts != 4) return 29;
+  if (!fs::create_directory(paths.cache, error) || error) return 30;
+
   if (VerifyPaths(product, L"wrong-volume", paths)) return 6;
   std::wstring bad_volume(volume);
   bad_volume.push_back(L'\0');

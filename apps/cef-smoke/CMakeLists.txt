@@ -16,8 +16,9 @@ add_executable(veil-cef-broker-wire-test broker_verification_test.cc broker_veri
 target_compile_features(veil-cef-broker-wire-test PRIVATE cxx_std_17)
 target_link_libraries(veil-cef-broker-wire-test PRIVATE advapi32)
 
-add_executable(veil-cef-protected-path-test protected_paths_test.cc)
+add_executable(veil-cef-protected-path-test protected_paths_test.cc protected_bootstrap.cc broker_verification.cc)
 target_compile_features(veil-cef-protected-path-test PRIVATE cxx_std_17)
+target_link_libraries(veil-cef-protected-path-test PRIVATE advapi32)
 
 add_library(veil-cef-smoke SHARED smoke.cc)
 add_dependencies(veil-cef-smoke veil-cef-protected-path-test)

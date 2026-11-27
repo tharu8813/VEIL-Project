@@ -293,3 +293,17 @@ test('native development hosts refuse product configuration before any CEF execu
     assert.match(paths, /for \(const auto& path : \{supplied\.root, supplied\.cache, supplied\.scratch, supplied\.log\}\)\s*if \(!DriveAbsolute\(path\)\)/);
     assert.match(paths, /a\.find\(L'\\0'\) != std::wstring::npos \|\| b\.find\(L'\\0'\) != std::wstring::npos/);
 });
+
+
+test('native bootstrap preflight verifies environment and paths before a single receipt and rechecks afterward', async () => {
+    const header = await readFile('apps/cef-smoke/protected_bootstrap.h', 'utf8');
+    const impl = await readFile('apps/cef-smoke/protected_bootstrap.cc', 'utf8');
+    assert.match(header, /!read_environment\(before\) \|\| !CheckEnvironment\(before\)[\s\S]*?!VerifyPaths\(registration\.product_root, registration\.volume_guid, before\.paths\)[\s\S]*?!receipt\(registration\.volume_id\)[\s\S]*?!read_environment\(after\) \|\| !CheckEnvironment\(after\)[\s\S]*?!VerifyPaths\(registration\.product_root, registration\.volume_guid, after\.paths\)/);
+    assert.equal((header.match(/receipt\(registration\.volume_id\)/g) ?? []).length, 1);
+    assert.match(impl, /CheckBootstrap\(registration, RequestChildVerification, ReadBootstrapEnvironment\)/);
+    assert.match(impl, /!Absent\(L"CHROME_LOG_FILE"\)/);
+    for (const file of ['smoke.cc', 'wpf.cc']) {
+        const host = await readFile('apps/cef-smoke/' + file, 'utf8');
+        assert.doesNotMatch(host, /VerifyRegisteredBootstrap|CheckBootstrap|protected_bootstrap\.h/);
+    }
+});
