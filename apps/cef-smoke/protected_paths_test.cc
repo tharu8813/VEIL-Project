@@ -7,8 +7,19 @@ int main() {
   namespace fs = std::filesystem;
   using namespace veil_cef;
   std::error_code error;
-  const auto temp = fs::temp_directory_path(error);
+  const auto configured_temp = fs::temp_directory_path(error);
   if (error) return 1;
+  // CI's inherited TEMP can be a short-name or redirected spelling. Resolve
+  // the synthetic fixture base before building inputs to the strict verifier.
+  auto temp = fs::canonical(configured_temp, error);
+  if (error) return 1;
+  const auto native = temp.native();
+  if (native.rfind(L"\\\\?\\", 0) == 0) temp = fs::path(native.substr(4));
+  temp.make_preferred();
+  if (!DriveAbsolute(temp)) {
+    std::cerr << "Synthetic fixture base is not a canonical drive path\n";
+    return 1;
+  }
   const auto product = temp / (L"veil-cef-path-test-" + std::to_wstring(GetCurrentProcessId()));
   if (!fs::create_directory(product, error) || error) return 2;
   struct Cleanup {
@@ -26,7 +37,11 @@ int main() {
   wchar_t mount[32768]{}, volume[128]{};
   if (!GetVolumePathNameW(product.c_str(), mount, 32768) ||
       !GetVolumeNameForVolumeMountPointW(mount, volume, 128)) return 4;
-  if (!VerifyPaths(product, volume, paths)) return 5;
+  const char* failure = nullptr;
+  if (!VerifyPaths(product, volume, paths, &failure)) {
+    std::cerr << "Initial native path check: " << (failure ? failure : "unknown") << '\n';
+    return 5;
+  }
   if (VerifyPaths(product, L"wrong-volume", paths)) return 6;
   auto bad = paths;
   bad.cache = product;
@@ -38,7 +53,11 @@ int main() {
   if (VerifyPaths(product, volume, paths)) return 10;
   if (!fs::remove(paths.log, error) || error) return 11;
   { std::ofstream out(paths.log); out << "synthetic"; if (!out) return 12; }
-  if (!VerifyPaths(product, volume, paths)) return 13;
+  failure = nullptr;
+  if (!VerifyPaths(product, volume, paths, &failure)) {
+    std::cerr << "Existing log native path check: " << (failure ? failure : "unknown") << '\n';
+    return 13;
+  }
   const auto alias = paths.root / L"logs" / L"alias.log";
   if (!CreateHardLinkW(alias.c_str(), paths.log.c_str(), nullptr)) return 14;
   if (VerifyPaths(product, volume, paths)) return 15;

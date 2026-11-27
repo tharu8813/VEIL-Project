@@ -45,12 +45,16 @@ inline bool DriveAbsolute(const fs::path& path) {
 }
 
 inline bool VerifyEntry(const fs::path& path, bool directory,
-                        const std::wstring& volume) {
-  if (!DriveAbsolute(path)) return false;
+                        const std::wstring& volume, const char** failure = nullptr) {
+  const auto reject = [failure](const char* reason) {
+    if (failure) *failure = reason;
+    return false;
+  };
+  if (!DriveAbsolute(path)) return reject("non-canonical-drive-path");
   for (auto current = path; !current.empty();) {
     const DWORD attrs = GetFileAttributesW(current.c_str());
-    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_REPARSE_POINT))
-      return false;
+    if (attrs == INVALID_FILE_ATTRIBUTES) return reject("ancestor-attributes");
+    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) return reject("ancestor-reparse");
     const auto parent = current.parent_path();
     if (parent == current) break;
     current = parent;
@@ -58,41 +62,48 @@ inline bool VerifyEntry(const fs::path& path, bool directory,
   const HANDLE h = CreateFileW(path.c_str(), 0,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-  if (h == INVALID_HANDLE_VALUE) return false;
+  if (h == INVALID_HANDLE_VALUE) return reject("open-entry");
   BY_HANDLE_FILE_INFORMATION info{};
   wchar_t final_path[32768]{};
   const DWORD length = GetFinalPathNameByHandleW(h, final_path, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-  const bool valid = GetFileInformationByHandle(h, &info) &&
-      !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
-      ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) == directory &&
-      (directory || info.nNumberOfLinks == 1) &&
-      length > 4 && length < 32768 &&
-      Same(final_path, L"\\\\?\\" + path.native());
+  const bool have_info = GetFileInformationByHandle(h, &info) != 0;
   CloseHandle(h);
-  if (!valid) return false;
+  if (!have_info) return reject("handle-info");
+  if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return reject("handle-reparse");
+  if (((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) != directory)
+    return reject("entry-type");
+  if (!directory && info.nNumberOfLinks != 1) return reject("file-links");
+  if (length <= 4 || length >= 32768) return reject("final-path-query");
+  if (!Same(final_path, L"\\\\?\\" + path.native())) return reject("final-path-mismatch");
   wchar_t mount[32768]{}, guid[128]{};
-  return GetVolumePathNameW(path.c_str(), mount, 32768) &&
-      GetDriveTypeW(mount) == DRIVE_FIXED &&
-      GetVolumeNameForVolumeMountPointW(mount, guid, 128) && Same(guid, volume);
+  if (!GetVolumePathNameW(path.c_str(), mount, 32768)) return reject("mount-query");
+  if (GetDriveTypeW(mount) != DRIVE_FIXED) return reject("drive-type");
+  if (!GetVolumeNameForVolumeMountPointW(mount, guid, 128)) return reject("volume-query");
+  if (!Same(guid, volume)) return reject("volume-mismatch");
+  return true;
 }
 
 // The future caller must provide a separately authenticated registered product
 // root and volume GUID. Neither is trusted merely because an env variable says
 // so. This verifies path layout/identity only, not BitLocker or session authority.
 inline bool VerifyPaths(const fs::path& product_root, const std::wstring& volume,
-                        const Paths& supplied) {
-  if (!DriveAbsolute(product_root) || volume.empty()) return false;
+                        const Paths& supplied, const char** failure = nullptr) {
+  const auto reject = [failure](const char* reason) {
+    if (failure) *failure = reason;
+    return false;
+  };
+  if (!DriveAbsolute(product_root) || volume.empty()) return reject("root-or-guid");
   const auto root = product_root / L"cef";
   const auto logs = root / L"logs";
   if (!Same(supplied.root.native(), root.native()) ||
       !Same(supplied.cache.native(), (root / L"cache").native()) ||
       !Same(supplied.scratch.native(), (root / L"temp").native()) ||
-      !Same(supplied.log.native(), (logs / L"cef.log").native())) return false;
+      !Same(supplied.log.native(), (logs / L"cef.log").native())) return reject("layout");
   for (const auto& dir : {product_root, supplied.root, supplied.cache, supplied.scratch, logs})
-    if (!VerifyEntry(dir, true, volume)) return false;
+    if (!VerifyEntry(dir, true, volume, failure)) return false;
   const DWORD log_attrs = GetFileAttributesW(supplied.log.c_str());
   if (log_attrs == INVALID_FILE_ATTRIBUTES)
-    return GetLastError() == ERROR_FILE_NOT_FOUND;
-  return VerifyEntry(supplied.log, false, volume);
+    return GetLastError() == ERROR_FILE_NOT_FOUND ? true : reject("log-attributes");
+  return VerifyEntry(supplied.log, false, volume, failure);
 }
 }  // namespace veil_cef
