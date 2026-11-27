@@ -995,7 +995,8 @@ static bool IsFixtureLoginFillPage(const std::wstring& origin, const std::wstrin
                           L"/tabs-login-fill-existing", L"/tabs-login-fill-other",
                           L"/tabs-login-fill-denied", L"/tabs-login-fill-duplicate",
                           L"/tabs-login-fill-switch", L"/tabs-login-fill-navigation",
-                          L"/tabs-login-fill-destination"})
+                          L"/tabs-login-fill-destination", L"/tabs-login-fill-closing",
+                          L"/tabs-login-fill-reopened"})
     if (page == origin + path) return true;
   return false;
 }

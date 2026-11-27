@@ -161,3 +161,5 @@ CEF 제품 IEngineLoginForms 미구현 유지. 명시적 탭 fixture의 127.0.0.
 ### 추가 구현: CEF 합성 로그인 작업의 재진입 및 수명 가드 (검증 대기)
 
 관리 어댑터의 작업 슬롯과 컨텍스트 generation을 추가하고 권한 콜백 전후 동일 generation을 확인한다. 탐색 명령/탐색 콜백/주소 변경/renderer 오류/뷰 해제 및 탭 선택·닫기에서 이전 권한을 무효화한다. 네이티브 탐색 및 닫기 명령에서도 기존 observation을 즉시 무효화한다. 중복 호출은 최초 작업의 슬롯을 정리하지 않으며, A-B-A 탭 변경 및 native dispatch 권한 콜백 내부 탐색의 결과를 합성 폼 상태 검사로 검증한다. 테스트 시간 상한 조정. 실제 Windows 실행 NOT RUN. 이미 발행된 CDP mutation 취소/롤백 보장 없음, renderer 종료 및 닫기 중 실제 실행 검증 별도 필요. CEF 제품 credential capability 미구현 유지.
+
+#217 CI 보완: Windows 소스 검사의 기존 hard reload 및 monotonic identity 단언을 새 선행 invalidation 순서를 반드시 요구하도록 갱신했다. 닫기 중 권한 콜백이 true를 반환해도 이전 generation 무효화, 닫힌 native ID 직접 재사용 거부, 새 ID의 빈 양식 확인 회귀를 추가했다. renderer 오류 invalidation은 기존 소스 검사 수준이며 실제 crash 재현 미실행. 실제 계정 연동 전 필수: 표준 사용자 Windows에서 전체 fixture 및 protected profile 격리/쓰기 추적, HTTPS 최상위 문서와 실제 document lifetime 검증, 명시적 인증/사용자 동의, bounded secret 전달 및 로그·크래시·디스크 노출 검증, renderer 종료/닫기/탐색 경쟁, 실패 시 fail-closed, 제품 release gate 재검토. 실제 Windows 실행 NOT RUN; CEF credential capability 미구현 유지.

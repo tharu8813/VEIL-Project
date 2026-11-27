@@ -51,6 +51,7 @@ internal sealed class TabbedDevelopmentHost
     private Task<bool?>? loginProbe, duplicateLoginProbe;
     private Tab? loginSpare;
     private int lifetimeAuthorizationChecks;
+    private ulong closingLoginId;
     private int loginProbeIndex, loginValuesIndex, loginFillIndex;
     private static readonly string[] LoginFillPaths = ["/tabs-login-fill-empty", "/tabs-login-fill-matching",
         "/tabs-login-fill-existing", "/tabs-login-fill-other", "/tabs-login-fill-denied"];
@@ -942,6 +943,72 @@ internal sealed class TabbedDevelopmentHost
         {
             if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result != true) { Fail(); return; }
             Log("Navigation during native authorization rejected fill and preserved destination form");
+            phase = 72;
+        }
+        else if (phase == 72 && CefNative.VeilCefLiveViewCount() == 1 && retired.Count == 0)
+        {
+            loginSpare = AddTab();
+            if (loginSpare is null) { Fail(); return; }
+            phase = 73;
+        }
+        else if (phase == 73 && loginSpare is { } closingTab && closingTab.View.NativeHandle != 0)
+        {
+            closingLoginId = closingTab.View.NativeHandle;
+            if (closingLoginId == firstId) { Fail(); return; }
+            address.Text = Url("/tabs-login-fill-closing");
+            NavigateAddress();
+            phase = 74;
+        }
+        else if (phase == 74 && loginSpare is { } closingTarget &&
+                 closingTarget.View.DocumentTitle == "TAB_LOGIN_LIFETIME_CLOSING" && !closingTarget.View.IsFixtureLoading)
+        {
+            var page = Url("/tabs-login-fill-closing");
+            if (closingTarget.View.Source != page || closingTarget.View.NativeHandle != closingLoginId) { Fail(); return; }
+            lifetimeAuthorizationChecks = 0;
+            loginProbe = closingTarget.View.FillFixtureLoginAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page, () =>
+            {
+                if (++lifetimeAuthorizationChecks == 2) RequestClose(closingTarget);
+                // Intentionally return true: closing must invalidate the
+                // captured generation even if the caller fails to revoke.
+                return true;
+            });
+            phase = 75;
+        }
+        else if (phase == 75 && loginProbe is { IsCompleted: true } &&
+                 CefNative.VeilCefClosed(closingLoginId) != 0 && retired.Count == 0)
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is not null || lifetimeAuthorizationChecks != 2 ||
+                active != first || first!.View.NativeHandle != firstId || CefNative.VeilCefLiveViewCount() != 1)
+            { Fail(); return; }
+            var page = Url("/tabs-login-fill-closing");
+            CefNative.CookieDeleteAuthorization allow = _ => 1;
+            if (CefNative.VeilCefStartLoginFill(closingLoginId, new Uri(page).GetLeftPart(UriPartial.Authority), page, allow) != 0 ||
+                CefNative.VeilCefLoginProbeStatus(closingLoginId) != -1) { Fail(); return; }
+            Log("Closing login target invalidated authorization and retired native identity");
+            loginSpare = AddTab();
+            if (loginSpare is null) { Fail(); return; }
+            phase = 76;
+        }
+        else if (phase == 76 && loginSpare is { } reopenedTab && reopenedTab.View.NativeHandle != 0)
+        {
+            if (reopenedTab.View.NativeHandle <= closingLoginId) { Fail(); return; }
+            address.Text = Url("/tabs-login-fill-reopened");
+            NavigateAddress();
+            phase = 77;
+        }
+        else if (phase == 77 && loginSpare is { } newTarget &&
+                 newTarget.View.DocumentTitle == "TAB_LOGIN_LIFETIME_REOPENED" && !newTarget.View.IsFixtureLoading)
+        {
+            var page = Url("/tabs-login-fill-reopened");
+            if (newTarget.View.Source != page) { Fail(); return; }
+            loginProbe = newTarget.View.CheckFixtureLoginFillStateAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page,
+                () => active == newTarget && !newTarget.Closing && !shuttingDown);
+            phase = 78;
+        }
+        else if (phase == 78 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result != true) { Fail(); return; }
+            Log("Reopened login view retained new identity and empty form");
             result = 0;
             BeginShutdown();
         }

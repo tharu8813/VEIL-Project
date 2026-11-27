@@ -277,8 +277,8 @@ test('hard reload and find use narrow engine operations with stale result guards
     assert.doesNotMatch(hardReload, /CoreWebView2|CallDevToolsProtocolMethodAsync/);
     assert.match(webView2, /CallDevToolsProtocolMethodAsync\("Page\.reload", "\{\\"ignoreCache\\":true\}"\)/);
     assert.match(webView2, /JsonSerializer\.Serialize\(query\)[\s\S]*?Core\.ExecuteScriptAsync\(\$"window\.find\(\{text\}, false, \{reverse\}, true\)"\)/);
-    assert.match(cefView, /RequireView\(\);\s*CefNative\.VeilCefReloadIgnoringCache\(NativeHandle\)/);
-    assert.match(cefNative, /VeilCefReloadIgnoringCache\(uint64_t id\) \{\s*const auto browser = LookupBrowser\(id\);\s*if \(browser\) browser->ReloadIgnoreCache\(\);/);
+    assert.match(cefView, /RequireView\(\);\s*InvalidateFixtureLoginContext\(\);\s*CefNative\.VeilCefReloadIgnoringCache\(NativeHandle\)/);
+    assert.match(cefNative, /VeilCefReloadIgnoringCache\(uint64_t id\) \{\s*if \(const auto state = LookupView\(id\)\) state->InvalidateLoginProbe\(\);\s*const auto browser = LookupBrowser\(id\);\s*if \(browser\) browser->ReloadIgnoreCache\(\);/);
     assert.match(cefView, /FindTextAsync\(string query, bool backwards\) => Task\.FromResult<bool\?>\(null\)/);
     assert.match(browser, /null => "현재 엔진에서는 페이지 검색을 지원하지 않습니다."/);
 });
@@ -303,7 +303,10 @@ test('CEF view operations require a nonzero matching monotonic identity', () => 
     assert.match(cefNative, /VeilCefResize\(uint64_t id, HWND parent\)[\s\S]*?state->parent == parent && browser/);
     assert.match(cefView, /NativeHandle = CefNative\.VeilCefOpen\(hwnd,/);
     assert.match(cefView, /VeilCefDetachCallbacks\(NativeHandle, window\.Handle\);\s*NativeHandle = 0;/);
-    for (const name of ['Navigate','SetMuted','GoBack','GoForward','Reload','ReloadIgnoringCache','Stop','SetZoomLevel','TryClose','StartOwnedAttachment','ClickFixtureAttachment']) {
+    for (const name of ['Navigate','GoBack','GoForward','Reload','ReloadIgnoringCache','Stop']) {
+        assert.match(cefNative, new RegExp('VeilCef' + name + '\\(uint64_t id[^)]*\\) \\{\\s*if \\(const auto state = LookupView\\(id\\)\\) state->InvalidateLoginProbe\\(\\);\\s*const auto browser = LookupBrowser\\(id\\);'));
+    }
+    for (const name of ['SetMuted','SetZoomLevel','TryClose','StartOwnedAttachment','ClickFixtureAttachment']) {
         assert.match(cefNative, new RegExp('VeilCef' + name + '\\(uint64_t id[^)]*\\) \\{\\s*const auto browser = LookupBrowser\\(id\\);'));
     }
 });
@@ -675,4 +678,15 @@ test('CEF login operations reject reentrant duplicate and stale navigation or se
     assert.match(cefTabbed, /Select\(loginSpare!\);\s*Select\(first\);/);
     assert.match(cefTabbed, /first\.View\.Navigate\(Url\("\/tabs-login-fill-destination"\)\)/);
     assert.match(runner, /Duplicate login operation rejected without releasing original slot[\s\S]*A-B-A tab switch invalidated login authorization and preserved empty form[\s\S]*Navigation during native authorization rejected fill and preserved destination form/);
+});
+
+
+test('CEF login target closing revokes the old operation and identity', async () => {
+    const runner = await readFile('tests/cef/tabs-smoke.mjs', 'utf8');
+    assert.match(cefTabbed, /tab\.Closing = true;\s*tab\.View\.InvalidateFixtureLoginContext\(\);/);
+    assert.match(cefTabbed, /if \(\+\+lifetimeAuthorizationChecks == 2\) RequestClose\(closingTarget\);[\s\S]*?return true;/);
+    assert.match(cefTabbed, /CefNative\.VeilCefStartLoginFill\(closingLoginId,[\s\S]*?CefNative\.VeilCefLoginProbeStatus\(closingLoginId\) != -1/);
+    assert.match(cefTabbed, /reopenedTab\.View\.NativeHandle <= closingLoginId/);
+    assert.match(cefTabbed, /newTarget\.View\.CheckFixtureLoginFillStateAsync/);
+    assert.match(runner, /Closing login target invalidated authorization and retired native identity[\s\S]*Reopened login view retained new identity and empty form/);
 });
