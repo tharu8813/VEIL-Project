@@ -156,6 +156,52 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         return state.TotalProcesses == 1 && state.ActiveProcesses == 1;
     }
 
+    // P2-03 observation primitive, not a launch grant. The serialized broker
+    // must supply retained process handles obtained from its own observations.
+    // This verifies one job only, not the second job, module pins, role
+    // policy, or events between observations. No handles are transferred.
+    internal ClientIdentity[] ObserveRetainedMembers(
+        IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(members);
+        if (!bound || members.Count == 0 || (uint)members.Count > activeLimit)
+            throw new UnauthorizedAccessException("CEF job observation unavailable.");
+
+        // Freeze caller's list within the serialized broker operation.
+        var retained = members.ToArray();
+        var before = Accounting();
+        if (before.ActiveProcesses != (uint)retained.Length)
+            throw new UnauthorizedAccessException("Incomplete CEF job membership.");
+
+        var pids = new HashSet<int>();
+        foreach (var member in retained)
+        {
+            if (member.Identity is null || member.Handle is null ||
+                !pids.Add(member.Identity.ProcessId))
+                throw new UnauthorizedAccessException("Invalid CEF job observation.");
+            CheckRetainedMember(member.Identity, member.Handle);
+        }
+        foreach (var member in retained)
+            CheckRetainedMember(member.Identity, member.Handle);
+
+        var after = Accounting();
+        if (after.ActiveProcesses != before.ActiveProcesses ||
+            after.TotalProcesses != before.TotalProcesses ||
+            after.TotalTerminatedProcesses != before.TotalTerminatedProcesses)
+            throw new UnauthorizedAccessException("CEF job membership changed during observation.");
+
+        return retained.Select(member => member.Identity).ToArray();
+    }
+
+    private void CheckRetainedMember(ClientIdentity identity, SafeProcessHandle handle)
+    {
+        if (!Native.IsRunning(handle) || Native.ObserveProcess(handle) != identity ||
+            !IsProcessInJob(handle, job, out bool inside) || !inside ||
+            Native.ObserveProcess(handle) != identity)
+            throw new UnauthorizedAccessException("CEF retained job member did not match.");
+    }
+
     internal bool HasNoActiveProcesses()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
