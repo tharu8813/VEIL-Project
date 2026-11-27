@@ -4,13 +4,14 @@ using System.IO;
 namespace Veil.VolumeBroker;
 
 // Provisional disk inventory observation, never a mapped-code or sandbox verdict.
-internal sealed record CefModuleInventoryObservation(int ApplicationModules, int UnverifiedSystemModules);
+internal sealed record CefModuleInventoryObservation(int ApplicationModules, int UnverifiedSystemModules,
+    int PinnedSignedSystemModules = 0);
 
 internal static class CefModuleInventoryPolicy
 {
     internal static CefModuleInventoryObservation Verify(string registeredImage, string systemDirectory,
         IReadOnlyList<string> observed, Action<IEnumerable<string>> verifyApplicationModules,
-        Func<string[]> observeAgain)
+        Func<string[]> observeAgain, Action<IEnumerable<string>>? verifySystemModules = null)
     {
         ArgumentNullException.ThrowIfNull(observed);
         ArgumentNullException.ThrowIfNull(verifyApplicationModules);
@@ -25,7 +26,7 @@ internal static class CefModuleInventoryPolicy
             throw new UnauthorizedAccessException("Invalid CEF module inventory.");
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var application = new List<string>();
-        int system = 0;
+        var system = new List<string>();
         foreach (string module in observed)
         {
             if (!CanonicalLocalPath(module) || !paths.Add(module))
@@ -36,7 +37,7 @@ internal static class CefModuleInventoryPolicy
                 (dll || string.Equals(module, registeredImage, StringComparison.OrdinalIgnoreCase)))
                 application.Add(module);
             else if (dll && string.Equals(parent, systemDirectory, StringComparison.OrdinalIgnoreCase))
-                system++; // Candidate system DLL only; no signer or hash verdict.
+                system.Add(module);
             else
                 throw new UnauthorizedAccessException("Unexpected CEF module location or type.");
         }
@@ -46,10 +47,12 @@ internal static class CefModuleInventoryPolicy
         // Existing lease checks the original SHA-256-pinned disk object,
         // canonical path and retained read-only file handles.
         verifyApplicationModules(application);
+        verifySystemModules?.Invoke(system);
         string[] after = observeAgain();
         if (after.Length != paths.Count || !paths.SetEquals(after))
             throw new UnauthorizedAccessException("CEF module inventory changed during observation.");
-        return new(application.Count, system);
+        return verifySystemModules is null ? new(application.Count, system.Count) :
+            new(application.Count, 0, system.Count);
     }
 
     private static bool CanonicalLocalPath(string path) =>
