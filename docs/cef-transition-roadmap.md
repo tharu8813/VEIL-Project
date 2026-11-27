@@ -243,3 +243,7 @@ RegisteredBootstrap은 별도의 신뢰된 admin 등록 root/volume GUID/volume 
 ### 추가 구현: detached signed CEF candidate evidence (검증 대기)
 
 별도 cef-candidate.json / cef-candidate.p7s evidence format에 exact file inventory + source commit + pinned archive identifier를 기록하고 SHA-256 CMS 서명, independent thumbprint/commit, existing ACL 및 product EXE/DLL Authenticode 검사, 모든 파일 이름/길이/hash/누락/추가 검증을 제공한다. 후보와 evidence 디렉터리는 분리되고 installable=false/startupEnabled=false 고정. 현재 format 1 설치 패키지 및 설치/업데이트에는 연결하지 않는다. 관리자는 이미 서명된 EXE/DLL과 보호 디렉터리를 제공해야 한다. synthetic CI는 in-memory certificate로 CMS signature math 및 변조/누락/추가/다른 signer/commit 등을 검사하며 certificate chain/ACL/Authenticode는 모의 처리한다. manifest의 archive identifier는 실제 archive provenance 증명이 아니며 strict JSON parser, hardlink/ADS/TOCTOU 및 loader dependency pin, 실제 서명/설치/BitLocker NOT RUN. WebView2 유지.
+
+### 추가 구현: isolated signed candidate staging (검증 대기)
+
+기존 유지보수의 restricted directory / signed inventory 방식을 이용하되 설치 트리와 기존 update journal은 변경하지 않는다. stage-cef-candidate.ps1은 고정 Program Files/VEIL.cef-candidate-staging sibling에만 후보/evidence를 별도 복사한다. 원본 서명·인벤토리 검증이 먼저이며 실제 열거된 이름을 사용하고 덮어쓰기 없이 복사, 대상 전체 서명/파일 검증 및 최초 manifest 비교, 원본 재검증. 기존 staging은 변경하지 않고 실패/중단 잔재는 관리자 검토용 보존. 합성 테스트는 실제 CMS math 및 파일 복사를 실행하고 ACL/chain/Authenticode만 모의 처리한다. 현재 후보는 installable=false/startupEnabled=false; 실제 운영 설치/업데이트/복구 활성화, 관리자 ACL/ancestor/TOCTOU 및 signed package/BitLocker NOT RUN. WebView2 유지.
