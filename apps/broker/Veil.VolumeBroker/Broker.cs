@@ -12,10 +12,11 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private ClientIdentity? authenticatedOwner;
     private SafeProcessHandle? authenticatedOwnerHandle;
     private CefPendingChild? pendingCefChild;
-    private sealed record CandidateStop(SafeProcessHandle Child, CefBrokerOwnedJob? Job);
+    private sealed record CandidateStop(SafeProcessHandle Child, CefBrokerOwnedJob? Job, IDisposable? Image, IDisposable? Runtime);
     private readonly List<CandidateStop> unresolvedCefStops = [];
     private bool cefStopRetryRunning;
-    private sealed record CompletedPreflight(object Generation, SafeProcessHandle Child, CefBrokerOwnedJob Job, long Issued);
+    private sealed record CompletedPreflight(object Generation, SafeProcessHandle Child, CefBrokerOwnedJob Job,
+        IDisposable? Image, IDisposable? Runtime, long Issued);
     private CompletedPreflight? completedPreflight;
     private static bool Expired(CompletedPreflight receipt) =>
         System.Diagnostics.Stopwatch.GetElapsedTime(receipt.Issued) >= TimeSpan.FromSeconds(15);
@@ -208,7 +209,9 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     retained.Dispose();
                     return Protocol.Error("CefChildRejected");
                 }
-                var receipt = new CompletedPreflight(generation, retained, job, System.Diagnostics.Stopwatch.GetTimestamp());
+                var pins = pending.DetachFilePins();
+                var receipt = new CompletedPreflight(generation, retained, job, pins.Image, pins.Runtime,
+                    System.Diagnostics.Stopwatch.GetTimestamp());
                 completedPreflight = receipt;
                 _ = MonitorCompletedPreflightAsync(receipt);
                 return Protocol.CefChildVerified();
@@ -327,7 +330,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     }
                     var candidate = CefChildPreflight.Stage(client, stagingOwner,
                         request.ChildHandle!.Value, stagePath, stageHash, generation,
-                        (child, job) => StopOrRetain(new CandidateStop(child, job)));
+                        (child, job, image, runtime) => StopOrRetain(new CandidateStop(child, job, image, runtime)));
                     try
                     {
                         status = backend.Status();
@@ -382,12 +385,9 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     }
                     finally
                     {
-                        if (confirmed)
-                        {
-                            try { receipt.Job.Dispose(); }
-                            finally { receipt.Child.Dispose(); }
-                        }
-                        else StopOrRetain(new CandidateStop(receipt.Child, receipt.Job));
+                        var resources = new CandidateStop(receipt.Child, receipt.Job, receipt.Image, receipt.Runtime);
+                        if (confirmed) DisposeStoppedCandidate(resources);
+                        else StopOrRetain(resources);
                     }
                     break;
                 case BrokerCommand.Attach when status.Attached:
@@ -529,7 +529,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     {
         var receipt = completedPreflight;
         completedPreflight = null;
-        if (receipt is not null) StopOrRetain(new CandidateStop(receipt.Child, receipt.Job));
+        if (receipt is not null) StopOrRetain(new CandidateStop(receipt.Child, receipt.Job, receipt.Image, receipt.Runtime));
     }
 
     private void StopPendingChild(CefPendingChild pending)
@@ -537,7 +537,10 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         var resource = pending.DetachRevokedProcess();
         var job = pending.DetachJob();
         if (resource is SafeProcessHandle child)
-            StopOrRetain(new CandidateStop(child, job as CefBrokerOwnedJob));
+        {
+            var pins = pending.DetachFilePins();
+            StopOrRetain(new CandidateStop(child, job as CefBrokerOwnedJob, pins.Image, pins.Runtime));
+        }
         else
         {
             try { job?.Dispose(); }
@@ -585,8 +588,18 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
 
     private static void DisposeStoppedCandidate(CandidateStop candidate)
     {
-        try { candidate.Job?.Dispose(); }
-        finally { candidate.Child.Dispose(); }
+        // Called only after confirmed process exit and empty job. Keep the
+        // executable and complete runtime inventory pinned until that point.
+        try { candidate.Runtime?.Dispose(); }
+        finally
+        {
+            try { candidate.Image?.Dispose(); }
+            finally
+            {
+                try { candidate.Job?.Dispose(); }
+                finally { candidate.Child.Dispose(); }
+            }
+        }
     }
 
     private void RetryUnresolvedCefStops()

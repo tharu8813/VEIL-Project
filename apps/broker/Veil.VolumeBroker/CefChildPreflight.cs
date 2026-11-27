@@ -71,7 +71,7 @@ internal static class CefChildPreflight
     // and any privately created job to the caller's stop recovery on failure.
     internal static CefPendingChild Stage(ClientIdentity owner, SafeProcessHandle ownerHandle,
         long nominatedHandle, string registeredPath, string sha256, object generation,
-        Action<SafeProcessHandle, CefBrokerOwnedJob?> stopRejected)
+        Action<SafeProcessHandle, CefBrokerOwnedJob?, IDisposable?, IDisposable?> stopRejected)
     {
         ArgumentNullException.ThrowIfNull(stopRejected);
         var binding = Native.DuplicateNominatedChild(owner, ownerHandle, new IntPtr(nominatedHandle));
@@ -110,9 +110,13 @@ internal static class CefChildPreflight
                     // was ambiguous. Never reopen a PID or issue a grant.
                     var rejected = termination;
                     var rejectedJob = job;
+                    var rejectedImage = image;
+                    var rejectedRuntime = runtime;
                     termination = null;
                     job = null;
-                    stopRejected(rejected, rejectedJob);
+                    image = null;
+                    runtime = null;
+                    stopRejected(rejected, rejectedJob, rejectedImage, rejectedRuntime);
                 }
             }
             finally

@@ -7,8 +7,8 @@ internal sealed class CefPendingChild : IDisposable
 {
     private readonly CefChildAdmission admission;
     private IDisposable? process;
-    private readonly IDisposable image;
-    private readonly IDisposable? runtime;
+    private IDisposable? image;
+    private IDisposable? runtime;
     private IDisposable? job;
     private bool disposed;
 
@@ -45,8 +45,19 @@ internal sealed class CefPendingChild : IDisposable
         job = null;
         return retained;
     }
-    internal IDisposable ImageResource => image;
+    internal IDisposable? ImageResource => image;
     internal IDisposable? RuntimeResource => runtime;
+
+    // Transfer the file pins as one lease. After transfer, pending disposal
+    // must not release them while the candidate or a failed stop is alive.
+    internal (IDisposable? Image, IDisposable? Runtime) DetachFilePins()
+    {
+        admission.Revoke();
+        var pins = (image, runtime);
+        image = null;
+        runtime = null;
+        return pins;
+    }
 
     internal bool TryRedeem(ClientIdentity owner, ClientIdentity child, object generation,
         bool ownerAlive, bool childAlive, bool imageVerified, bool volumeProtected) =>
@@ -61,7 +72,7 @@ internal sealed class CefPendingChild : IDisposable
         try { runtime?.Dispose(); }
         finally
         {
-            try { image.Dispose(); }
+            try { image?.Dispose(); }
             finally
             {
                 try { job?.Dispose(); }

@@ -579,12 +579,19 @@ using (var slot = new Veil.VolumeBroker.CefPendingChild(detachedPolicy, detached
         slot.DetachRevokedProcess() is null && ReferenceEquals(slot.DetachJob(), detachedJob) &&
         slot.DetachJob() is null && !slot.MatchesChild(childIdentity) &&
         !Redeem(detachedPolicy), "Detached stop handle remained eligible for redemption.");
+    var filePins = slot.DetachFilePins();
+    var repeated = slot.DetachFilePins();
+    Check(ReferenceEquals(filePins.Image, detachedImage) && ReferenceEquals(filePins.Runtime, detachedRuntime) &&
+        repeated.Image is null && repeated.Runtime is null, "File pins transferred more than once.");
 }
-Check(detachedProcess.Disposals == 0 && detachedJob.Disposals == 0 && detachedImage.Disposals == 1 && detachedRuntime.Disposals == 1,
-    "Pending disposal closed transferred stop handle or leaked inventory.");
+Check(detachedProcess.Disposals == 0 && detachedJob.Disposals == 0 && detachedImage.Disposals == 0 && detachedRuntime.Disposals == 0,
+    "Pending disposal released resources that belong to unresolved stop recovery.");
 detachedProcess.Dispose();
 detachedJob.Dispose();
-Check(detachedProcess.Disposals == 1 && detachedJob.Disposals == 1, "Transferred stop handle not released exactly once.");
+detachedImage.Dispose();
+detachedRuntime.Dispose();
+Check(detachedProcess.Disposals == 1 && detachedJob.Disposals == 1 && detachedImage.Disposals == 1 &&
+    detachedRuntime.Disposals == 1, "Transferred resources not released exactly once.");
 Console.WriteLine("PASS: pending CEF child resource ownership and retirement");
 
 // The scoped slot can be redeemed only by the designated generation.
