@@ -30,15 +30,24 @@ internal sealed class CefBrokerOwnedJob : IDisposable
     // production build can select this two-process limit.
     internal static CefBrokerOwnedJob CreateMultiprocessFixture() => Create(2);
 
-    internal bool ContainsFixtureRoot(ClientIdentity child, SafeProcessHandle childHandle)
+    internal bool ContainsFixtureRoot(ClientIdentity child, SafeProcessHandle childHandle) =>
+        FixtureRootRefusal(child, childHandle) is null;
+
+    private string? FixtureRootRefusal(ClientIdentity child, SafeProcessHandle childHandle)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        if (activeLimit != 2 || !bound || !Native.IsRunning(childHandle) ||
-            Native.ObserveProcess(childHandle) != child ||
-            !IsProcessInJob(childHandle, job, out bool inside) || !inside) return false;
+        if (activeLimit != 2 || !bound) return "root-job-not-bound";
+        if (!Native.IsRunning(childHandle)) return "root-exited";
+        if (Native.ObserveProcess(childHandle) != child) return "root-identity";
+        if (!IsProcessInJob(childHandle, job, out bool inside))
+            return $"root-membership-query: win32={Marshal.GetLastWin32Error()}";
+        if (!inside) return "root-not-in-broker-job";
         var state = Accounting();
-        return state.ActiveProcesses is >= 1 and <= 2;
+        return state.ActiveProcesses is >= 1 and <= 2 ? null : $"root-accounting: {FormatAccounting(state)}";
     }
+
+    private static string FormatAccounting(AccountingInfo state) =>
+        $"active={state.ActiveProcesses}, total={state.TotalProcesses}, terminated={state.TotalTerminatedProcesses}";
 
     // Stable synthetic pair only. Retain handles and verify identities on
     // either side of accounting; a PID in a marker is not membership proof.
@@ -51,7 +60,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
     internal string? FixturePairRefusal(ClientIdentity root, SafeProcessHandle rootHandle,
         ClientIdentity descendant, SafeProcessHandle descendantHandle)
     {
-        if (!ContainsFixtureRoot(root, rootHandle)) return "root-membership";
+        if (FixtureRootRefusal(root, rootHandle) is { } rootRefusal) return rootRefusal;
         if (root.ProcessId == descendant.ProcessId) return "duplicate-process";
         if (root.SessionId != descendant.SessionId) return "session";
         if (root.UserSid != descendant.UserSid) return "user";
@@ -63,8 +72,8 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         if (!inside) return "descendant-not-in-broker-job";
         var state = Accounting();
         if (!(state.ActiveProcesses == 2 && state.TotalProcesses == 2))
-            return $"accounting: active={state.ActiveProcesses}, total={state.TotalProcesses}, terminated={state.TotalTerminatedProcesses}";
-        if (!ContainsFixtureRoot(root, rootHandle)) return "root-recheck";
+            return $"accounting: {FormatAccounting(state)}";
+        if (FixtureRootRefusal(root, rootHandle) is { } recheckRefusal) return $"recheck: {recheckRefusal}";
         if (!Native.IsRunning(descendantHandle)) return "descendant-exited-recheck";
         if (Native.ObserveProcess(descendantHandle) != descendant) return "descendant-identity-recheck";
         if (!IsProcessInJob(descendantHandle, job, out inside) || !inside) return "membership-recheck";

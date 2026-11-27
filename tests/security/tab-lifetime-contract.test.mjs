@@ -330,7 +330,7 @@ test('CEF fixture observations and attachment handoff are scoped to the originat
     assert.match(cefNative, /state_->response_matches\.store/);
     assert.match(cefNative, /state_->attachment_filtered_bytes\.store/);
     assert.match(cefNative, /fixture_enabled && !state_->armed_page_attachment\.empty\(\) && url == state_->armed_page_attachment/);
-    assert.match(cefNative, /if \(!state->page_attachment_intercepted \|\| url != state->armed_page_attachment\) return 0;/);
+    assert.match(cefNative, /if \(!state->page_attachment_intercepted \|\| url != state->armed_page_attachment \|\|\s*frame->GetURL\(\) != state->armed_attachment_source\) return 0;\s*state->page_attachment_intercepted = false;\s*state->armed_page_attachment\.clear\(\);\s*state->armed_attachment_source\.clear\(\);/);
     for (const name of ['PopupsBlocked','DownloadsBlocked','BlobDownloadsBlocked','PermissionsDenied','MediaPermissionsDenied','ResponseMatches','AttachmentFilteredBytes','PageAttachmentIntercepted']) {
         assert.match(cefNative, new RegExp('VeilCef' + name + '\\(uint64_t id\\) \\{\\s*const auto state = LookupView\\(id\\);'));
         assert.match(cefView, new RegExp('VeilCef' + name + '\\(ulong id\\)'));
@@ -396,7 +396,7 @@ test('CEF managed view reservations are reclaimed only after disposal and native
 
 test('CEF parallel fixture cancels only its own stream and waits for both vault workers', () => {
     assert.match(cefNative, /const bool parallel = path == "\/wpf-owned-parallel-keep" \|\| path == "\/wpf-owned-parallel-cancel";/);
-    assert.match(cefNative, /if \(parallel\) \{[\s\S]*?CefString\(&source\.origin\) != CefString\(&parts\.origin\)/);
+    assert.match(cefNative, /if \(!frame \|\| !CefParseURL\(frame->GetURL\(\), source\) \|\|\s*CefString\(&source\.origin\) != CefString\(&parts\.origin\)\) return 0;\s*if \(parallel\) \{\s*const CefString source_path\(&source\.path\);\s*if \(\(path == "\/wpf-owned-parallel-keep" && source_path != "\/wpf-first"\) \|\|\s*\(path == "\/wpf-owned-parallel-cancel" && source_path != "\/wpf-isolation-reopened"\)\) return 0;/);
     assert.match(cefSmoke, /VeilCefStartOwnedAttachment\(browser\.NativeHandle, keepUrl, keep\.ChunkCallback\)[\s\S]*?VeilCefStartOwnedAttachment\(secondaryHandle, cancelUrl, cancel\.ChunkCallback\)/);
     assert.match(cefSmoke, /parallelKeep!\.ReceivedBytes > 0 && parallelCancel!\.ReceivedBytes > 0/);
     assert.match(cefSmoke, /canceledByteCount = parallelCancel\.ReceivedBytes;\s*CefNative\.VeilCefCancelOwnedAttachment\(secondaryHandle\);\s*parallelCancel\.Complete\(false\);/);

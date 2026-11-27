@@ -21,7 +21,7 @@
 
 [#228](https://github.com/tharu8813/VEIL-Project/pull/228)은 #226에 이미 통합된 이력으로, main에 별도로 병합하지 않는다. #222~#225와 #227의 정확한 head가 #226의 조상임을 비교 API로 확인했지만 최종 통합 내용이 모든 기능을 보존하는지는 리뷰로 검증한다. 현재 승인된 독립 리뷰 없음. Copilot quota 실패는 승인 아님.
 
-- [ ] P0-01: [최신 실패 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45960862547)의 합성 다중 프로세스 시험 실패를 해결한다. 로그: `Fixture pair refused (mode 1): root-membership`. root process handle 신원 재관측, 실제 Job 소속, active/total/terminated accounting 각각을 분리 진단한다. nested Job이 descendant의 별도 job 생성/상속과 호환되는지 실제 Windows에서 확인한다. 검사 삭제, timeout/오류의 PASS 변환, production cap=1 완화 금지.
+- [x] P0-01: [#226 합성 다중 프로세스 시험 실패](https://github.com/tharu8813/VEIL-Project/actions/runs/45960862547)를 로컬 Windows에서 재현하고 수정했다. root handle 신원과 Job 소속은 정상이고, `CREATE_NO_WINDOW`로 자식을 시작했을 때 `conhost`까지 포함되어 accounting이 active=3, total=3, terminated=0이었다. 자식이 루트의 콘솔을 상속하도록 수정한 뒤 기존 검사와 production cap=1을 유지한 상태로 통과했다. 별도 Job을 생성하는 실제 CEF는 P2-01에서 검증한다.
 - [ ] P0-02: #226의 최신 정확한 head에서 일반 CI와 native CI 모두 PASS. 합성 root/descendant 쌍, 외부 PID, 변조 생성시각, cap=1, 두 Job 종료/강제 종료, 프로세스 핸들 보존을 검사한다.
 - [ ] P0-03: 통합 범위와 기존 PR 변경의 보존 여부를 독립 리뷰. 승인 리뷰를 가장하지 않는다. 사용자 결정으로 이번 통합은 독립 리뷰 전에 수행하며, 이후 보안 검토 및 제품 활성화 기준은 유지한다.
 - [ ] P0-04: 통합된 #180/#181 다운로드 fixture의 충돌 해소 코드 검증: 합성 GET/redirect/401/HttpOnly cookie/취소/원본 hash 및 Rust 금고 회귀, 기존 per-view 및 parallel 동작. 새 통합 결과는 미검증; 실제 CEF 테스트는 별도 기록.
@@ -89,3 +89,10 @@
 - #226 일반 CI 45960862547 FAIL: `Fixture pair refused (mode 1): root-membership` (CefContainmentCheck/Program.cs:180). 정확한 원인은 아직 미확정. Rust/.NET/소스 검사 통과, 해당 job 시험 실패. native CI 45960862278 PASS (compile 및 제한된 검사, 실제 브라우저 실행 아님).
 - #180/#181의 오래된 전역 상태와 최신 per-view 소유 요청 구현 간 충돌을 수동 해소. 통합 후 native/managed compile 및 소스 계약, 실제 Windows CEF 테스트는 NOT RUN. 최신 runtime wrapper를 유지했으므로 기존 `-ReuseExtractedCef` 옵션은 도입하지 않는다.
 - 독립 리뷰 없음. 실제 BitLocker/SCM/HKLM/CEF 실행, OS 쓰기 추적, Gate A~E는 미검증. 기존 WebView2와 startupEnabled=false 유지.
+
+## 통합 후 P0 검증 기록 (2026-11-27 KST)
+
+- 기준 커밋 `66b4c8221563ef8d905e3ee0b77ba10fcdef543b`. [#226](https://github.com/tharu8813/VEIL-Project/pull/226)은 이 커밋으로 병합됐고, PR head는 `e48f6bebb0918c58a3fad58021325406f27244fd`다. PR 일반 CI FAIL, native compile CI PASS, 승인 리뷰 없음.
+- [기준 커밋의 일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45962004465) FAIL. 다운로드 handoff와 parallel fixture의 소스 계약 두 개가 통합 전 코드 형태를 검사하고 있었다. `tests/security/tab-lifetime-contract.test.mjs`에서 현재의 동일 출처 검사, parallel별 원본 경로, handoff의 원본 URL 및 일회성 상태 초기화를 검사한다. 로컬 소스 계약 139개 PASS.
+- 로컬 미커밋 수정으로 `apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs`에 시험 전용 거절 진단을 추가하고, `tests/security/CefContainmentCheck/Program.cs`에서 자식의 콘솔 상속과 두 Job 각각의 명시적 강제 종료를 검증했다. Windows 합성 시험 PASS. 프로세스 핸들을 보존해 두 프로세스의 종료와 강제 종료 코드 35를 확인했다.
+- 로컬 Rust 금고 회귀 PASS, CEF WPF 관리 코드 Release compile PASS. 수정본의 원격 일반/native CI, 실제 CEF 다운로드·nested sandbox 실행과 보호 VM 검증은 NOT RUN. P0-02~P0-05는 열린 상태로 유지한다.
