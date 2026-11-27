@@ -416,3 +416,15 @@ test('disabled candidate requires creation-time image mitigations and restricts 
     assert.match(native, /CreateToolhelp32Snapshot\(TH32CS_SNAPMODULE \| TH32CS_SNAPMODULE32/);
     assert.match(product, /RestrictAndObserveLoadedModules\(\)[\s\S]*?RunProductPreflight/);
 });
+
+
+test('native disabled candidate checks image mapping type and backing filenames before and after receipt', async () => {
+    const native = await readFile('apps/cef-smoke/product_module_policy.cc', 'utf8');
+    const product = await readFile('apps/cef-smoke/product_candidate.cc', 'utf8');
+    assert.match(native, /VirtualQuery\(module, &region, sizeof\(region\)\)[\s\S]*?region.Type != MEM_IMAGE/);
+    assert.match(native, /GetMappedFileNameW\(GetCurrentProcess\(\), module, mapped, 32768\)/);
+    assert.match(native, /GetFinalPathNameByHandleW\(file.get\(\), device, 32768,\s*FILE_NAME_NORMALIZED \| VOLUME_NAME_NT\)/);
+    assert.match(native, /!Same\(std::wstring\(mapped, mapped_length\), std::wstring\(device, device_length\)\)/);
+    assert.match(native, /ObserveImageBacking\(entry.hModule, module_path, local\)/);
+    assert.match(product, /RunProductPreflight\(allowed,[\s\S]*?result == veil_cef::ProductPreflightExit::kVerifiedButDisabled &&\s*!veil_cef::RestrictAndObserveLoadedModules\(\)/);
+});

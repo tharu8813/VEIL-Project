@@ -14,6 +14,10 @@ int RunWinMain(HINSTANCE, LPWSTR command_line, int, void* sandbox_info,
       command_line != nullptr && command_line[0] == L'\0' &&
       IsProcessInJob(GetCurrentProcess(), nullptr, &in_job) && in_job &&
       veil_cef::RestrictAndObserveLoadedModules();
-  return static_cast<int>(veil_cef::RunProductPreflight(allowed,
-      veil_cef::LoadRegisteredBootstrap, veil_cef::VerifyRegisteredBootstrap));
+  const auto result = veil_cef::RunProductPreflight(allowed,
+      veil_cef::LoadRegisteredBootstrap, veil_cef::VerifyRegisteredBootstrap);
+  if (result == veil_cef::ProductPreflightExit::kVerifiedButDisabled &&
+      !veil_cef::RestrictAndObserveLoadedModules())
+    return static_cast<int>(veil_cef::ProductPreflightExit::kInvocationRejected);
+  return static_cast<int>(result);
 }

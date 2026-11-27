@@ -58,7 +58,7 @@ jobs:
           $work = Join-Path $env:RUNNER_TEMP "veil-cef-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           & (Join-Path $work "build/Release/veil-cef-product-preflight-test.exe")
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Synthetic native loaded module directory policy (no browser)
+      - name: Native synthetic module directory and actual image mapping name checks (no browser)
         shell: pwsh
         run: |
           $work = Join-Path $env:RUNNER_TEMP "veil-cef-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
