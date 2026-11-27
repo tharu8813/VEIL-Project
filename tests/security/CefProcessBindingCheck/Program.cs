@@ -4,13 +4,14 @@ using Veil.VolumeBroker;
 using Veil.Desktop;
 using System.Text.Json;
 
-if (args is ["--child"])
+if (args is ["--child"] or ["--child", "--type=renderer"])
 {
     Console.WriteLine("ready");
     return Console.ReadLine() == "exit" ? 0 : 1;
 }
 
 CefRoleTokenPolicyTests.Run();
+CefCommandRoleTests.Run();
 
 // Exercise the actual production parser with no broker or volume access.
 using (var parsed = Protocol.Parse("""{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"123"}"""u8))
@@ -89,7 +90,7 @@ using var child = Process.Start(new ProcessStartInfo
     UseShellExecute = false,
     RedirectStandardInput = true,
     RedirectStandardOutput = true,
-    ArgumentList = { "--child" },
+    ArgumentList = { "--child", "--type=renderer" },
     CreateNoWindow = true,
 }) ?? throw new InvalidOperationException("Test child did not start.");
 
@@ -118,6 +119,17 @@ try
         child.SafeHandle.DangerousGetHandle());
     using var retained = binding.Handle;
     Check(binding.Identity == expected && Native.IsRunning(retained), "Child identity not retained.");
+    var roleObservation = CefCommandRoleObserver.Observe(retained, expected, identity);
+    Check(roleObservation.Identity == expected && roleObservation.Role == CefObservedRole.Renderer,
+        "Retained command role observation did not recognize synthetic renderer.");
+    Check(roleObservation == CefCommandRoleObserver.Observe(child.SafeHandle, expected, identity),
+        "Independent handles returned different command role observations.");
+    Check(CefCommandRoleObserver.Observe(retained, expected, expected).Role == CefObservedRole.Unknown,
+        "Renderer arguments accepted as browser root.");
+    Reject(() => CefCommandRoleObserver.Observe(owner.SafeHandle, expected, identity));
+    Reject(() => CefCommandRoleObserver.Observe(retained,
+        expected with { CreatedFileTime = expected.CreatedFileTime + 1 }, identity));
+    Console.WriteLine("PASS: retained process command role observation");
     var tokenObservation = CefProcessTokenObserver.Observe(retained, expected);
     Check(tokenObservation.Identity == expected &&
         tokenObservation.ElevationType is >= 1 and <= 3, "Retained token observation invalid.");
@@ -152,6 +164,7 @@ try
     await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
     Check(child.ExitCode == 0, $"Synthetic child returned unexpected exit code {child.ExitCode}.");
     Check(!Native.IsRunning(retained), "Signaled retained child still considered live.");
+    Reject(() => CefCommandRoleObserver.Observe(retained, expected, identity));
     Reject(() => CefProcessTokenObserver.Observe(retained, expected));
     Check(!Native.SameLiveProcess(retained, child.SafeHandle), "Exited process objects matched as live.");
     Reject(() => Native.SnapshotModulePaths(retained, expected));

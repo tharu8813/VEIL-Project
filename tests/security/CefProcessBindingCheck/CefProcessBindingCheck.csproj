@@ -11,6 +11,7 @@
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs" Link="CefProcessTokenObserver.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs" Link="CefSessionObservationPolicy.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefRoleTokenPolicy.cs" Link="CefRoleTokenPolicy.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefCommandRoleObserver.cs" Link="CefCommandRoleObserver.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs" Link="CefBrokerOwnedJob.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/ClientIdentity.cs" Link="ClientIdentity.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/Protocol.cs" Link="Protocol.cs" />
