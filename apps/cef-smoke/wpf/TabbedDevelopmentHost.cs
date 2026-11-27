@@ -49,7 +49,9 @@ internal sealed class TabbedDevelopmentHost
     private Task<bool>? storageClear, httpCacheClear;
     private Task<int>? knownOriginClear;
     private Task<bool?>? loginProbe;
-    private int loginProbeIndex, loginValuesIndex;
+    private int loginProbeIndex, loginValuesIndex, loginFillIndex;
+    private static readonly string[] LoginFillPaths = ["/tabs-login-fill-empty", "/tabs-login-fill-matching",
+        "/tabs-login-fill-existing", "/tabs-login-fill-other", "/tabs-login-fill-denied"];
     private static readonly string[] LoginValuesPaths = ["/tabs-login-read", "/tabs-login-read-empty", "/tabs-login-read-mismatch"];
     private static readonly string[] LoginProbePaths = ["/tabs-login-valid", "/tabs-login-hidden", "/tabs-login-ambiguous", "/tabs-login-cross-origin", "/tabs-login-iframe", "/tabs-login-new"];
     private int deletionAuthorizationChecks;
@@ -778,14 +780,60 @@ internal sealed class TabbedDevelopmentHost
             if (++loginValuesIndex == LoginValuesPaths.Length)
             {
                 Log("Synthetic login values equality accepted matching markers and rejected empty and mismatched markers");
-                result = 0;
-                BeginShutdown();
+                var page = Url(LoginValuesPaths[^1]);
+                loginProbe = first!.View.FillFixtureLoginAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page, () => true);
+                phase = 59;
             }
             else
             {
                 address.Text = Url(LoginValuesPaths[loginValuesIndex]);
                 NavigateAddress();
                 phase = 56;
+            }
+        }
+        else if (phase == 59 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is not null) { Fail(); return; }
+            address.Text = Url(LoginFillPaths[0]);
+            NavigateAddress();
+            phase = 60;
+        }
+        else if (phase == 60 && first?.View.DocumentTitle == "TAB_LOGIN_FILL_" + loginFillIndex &&
+                 !first.View.IsFixtureLoading)
+        {
+            var page = Url(LoginFillPaths[loginFillIndex]);
+            if (first.View.Source != page || first.View.NativeHandle != firstId) { Fail(); return; }
+            var origin = new Uri(page).GetLeftPart(UriPartial.Authority);
+            deletionAuthorizationChecks = 0;
+            loginProbe = first.View.FillFixtureLoginAsync(origin, page,
+                () => active == first && !first.Closing && !shuttingDown &&
+                    (loginFillIndex != 4 || ++deletionAuthorizationChecks == 1));
+            phase = 61;
+        }
+        else if (phase == 61 && loginProbe is { IsCompleted: true })
+        {
+            bool? expected = loginFillIndex == 4 ? null : loginFillIndex < 2;
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result != expected ||
+                (loginFillIndex == 4 && deletionAuthorizationChecks != 2)) { Fail(); return; }
+            var page = Url(LoginFillPaths[loginFillIndex]);
+            loginProbe = first!.View.CheckFixtureLoginFillStateAsync(new Uri(page).GetLeftPart(UriPartial.Authority),
+                page, () => active == first && !first.Closing && !shuttingDown);
+            phase = 62;
+        }
+        else if (phase == 62 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result != true) { Fail(); return; }
+            if (++loginFillIndex == LoginFillPaths.Length)
+            {
+                Log("Synthetic login fill verified exact markers, input/change events, existing values and revoked dispatch without submission");
+                result = 0;
+                BeginShutdown();
+            }
+            else
+            {
+                address.Text = Url(LoginFillPaths[loginFillIndex]);
+                NavigateAddress();
+                phase = 60;
             }
         }
     }

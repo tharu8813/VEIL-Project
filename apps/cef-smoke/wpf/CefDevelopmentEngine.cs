@@ -170,16 +170,25 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
     // product credential capability. The native route allowlist is authoritative.
     internal bool IsFixtureLoading => NativeHandle == 0 || CefNative.VeilCefFixtureLoading(NativeHandle) != 0;
 
+    private enum FixtureLoginOperation { Probe, CheckValues, Fill, CheckFillState }
+
     internal Task<bool?> ProbeFixtureLoginFormAsync(string origin, string page, Func<bool> stillAuthorized) =>
-        ObserveFixtureLoginAsync(origin, page, stillAuthorized, checkValues: false);
+        ObserveFixtureLoginAsync(origin, page, stillAuthorized, FixtureLoginOperation.Probe);
 
     // Synthetic marker equality only. No username/password payload crosses
     // this boundary, and the product credential capability stays absent.
     internal Task<bool?> CheckFixtureLoginValuesAsync(string origin, string page, Func<bool> stillAuthorized) =>
-        ObserveFixtureLoginAsync(origin, page, stillAuthorized, checkValues: true);
+        ObserveFixtureLoginAsync(origin, page, stillAuthorized, FixtureLoginOperation.CheckValues);
+
+    // Fixed test markers only. A null after dispatch cannot imply rollback.
+    internal Task<bool?> FillFixtureLoginAsync(string origin, string page, Func<bool> stillAuthorized) =>
+        ObserveFixtureLoginAsync(origin, page, stillAuthorized, FixtureLoginOperation.Fill);
+
+    internal Task<bool?> CheckFixtureLoginFillStateAsync(string origin, string page, Func<bool> stillAuthorized) =>
+        ObserveFixtureLoginAsync(origin, page, stillAuthorized, FixtureLoginOperation.CheckFillState);
 
     private async Task<bool?> ObserveFixtureLoginAsync(string origin, string page,
-        Func<bool> stillAuthorized, bool checkValues)
+        Func<bool> stillAuthorized, FixtureLoginOperation operation)
     {
         Dispatcher.VerifyAccess();
         RequireView();
@@ -193,9 +202,14 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
             try { return handle == id && Dispatcher.CheckAccess() && Current() ? 1 : 0; }
             catch (Exception) { return 0; }
         };
-        int started = checkValues
-            ? CefNative.VeilCefStartLoginValuesCheck(id, origin, page, authorize)
-            : CefNative.VeilCefStartLoginProbe(id, origin, page);
+        int started = operation switch
+        {
+            FixtureLoginOperation.Probe => CefNative.VeilCefStartLoginProbe(id, origin, page),
+            FixtureLoginOperation.CheckValues => CefNative.VeilCefStartLoginValuesCheck(id, origin, page, authorize),
+            FixtureLoginOperation.Fill => CefNative.VeilCefStartLoginFill(id, origin, page, authorize),
+            FixtureLoginOperation.CheckFillState => CefNative.VeilCefStartLoginFillState(id, origin, page, authorize),
+            _ => 0
+        };
         // Native invokes the callback synchronously and never retains it.
         GC.KeepAlive(authorize);
         if (started != 1) return null;
@@ -586,6 +600,10 @@ internal static class CefNative
     internal static extern int VeilCefStartLoginProbe(ulong id, string origin, string page);
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
     internal static extern int VeilCefStartLoginValuesCheck(ulong id, string origin, string page, CookieDeleteAuthorization authorize);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern int VeilCefStartLoginFill(ulong id, string origin, string page, CookieDeleteAuthorization authorize);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern int VeilCefStartLoginFillState(ulong id, string origin, string page, CookieDeleteAuthorization authorize);
     [DllImport(Module)] internal static extern int VeilCefFixtureLoading(ulong id);
     [DllImport(Module)] internal static extern int VeilCefLoginProbeStatus(ulong id);
     [DllImport(Module)] internal static extern void VeilCefEndLoginProbe(ulong id);

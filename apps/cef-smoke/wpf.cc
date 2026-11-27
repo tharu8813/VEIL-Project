@@ -980,11 +980,34 @@ static bool IsFixtureLoginValuesPage(const std::wstring& origin, const std::wstr
          page == origin + L"/tabs-login-read-mismatch";
 }
 
+// Separate fixed operations and exact routes. No arbitrary credential or
+// script parameter is accepted by these fixture exports.
+enum class FixtureLoginOperation { Probe, CheckValues, Fill, CheckFillState };
+static bool IsFixtureLoginFillPage(const std::wstring& origin, const std::wstring& page) {
+  if (!IsFixtureStorageOrigin(origin) || origin.rfind(L"http://127.0.0.1:", 0) != 0) return false;
+  for (const auto* path : {L"/tabs-login-fill-empty", L"/tabs-login-fill-matching",
+                          L"/tabs-login-fill-existing", L"/tabs-login-fill-other",
+                          L"/tabs-login-fill-denied"})
+    if (page == origin + path) return true;
+  return false;
+}
+
 static int StartFixtureLoginObservation(uint64_t id, const wchar_t* origin,
-    const wchar_t* page, bool check_values, CookieDeleteAuthorization authorize) {
+    const wchar_t* page, FixtureLoginOperation operation, CookieDeleteAuthorization authorize) {
   if (!CefCurrentlyOn(TID_UI) || !origin || !page) return 0;
-  if (check_values ? (!authorize || !IsFixtureLoginValuesPage(origin, page)) :
-                     !IsFixtureLoginPage(origin, page)) return 0;
+  switch (operation) {
+    case FixtureLoginOperation::Probe:
+      if (!IsFixtureLoginPage(origin, page)) return 0;
+      break;
+    case FixtureLoginOperation::CheckValues:
+      if (!authorize || !IsFixtureLoginValuesPage(origin, page)) return 0;
+      break;
+    case FixtureLoginOperation::Fill:
+    case FixtureLoginOperation::CheckFillState:
+      if (!authorize || !IsFixtureLoginFillPage(origin, page)) return 0;
+      break;
+    default: return 0;
+  }
   const auto state = LookupView(id);
   const auto browser = LookupBrowser(id);
   if (!state || !browser || state->closing || state->login_probe || browser->IsLoading() ||
@@ -1026,11 +1049,44 @@ static int StartFixtureLoginObservation(uint64_t id, const wchar_t* origin,
       const user=explicit.length===1?explicit[0]:explicit.length===0&&users.length===1?users[0]:null;
       if(!user)return false;
       )JS";
-  // Only the values fixture selects this fixed suffix; detection never reads
-  // input values. Even a hostile page result is accepted only as a boolean.
-  expression += check_values
-      ? "return user.value==='veil-synthetic-user'&&pass.value==='veil-synthetic-marker';"
-      : "return true;";
+  // Detection never reads values. Fill uses only fixed synthetic markers,
+  // refuses to overwrite existing passwords or a different account, and
+  // never submits. The separate state observation tests actual DOM effects.
+  switch (operation) {
+    case FixtureLoginOperation::Probe:
+      expression += "return true;";
+      break;
+    case FixtureLoginOperation::CheckValues:
+      expression += "return user.value==='veil-synthetic-user'&&pass.value==='veil-synthetic-marker';";
+      break;
+    case FixtureLoginOperation::Fill:
+      expression += R"JS(
+        if(pass.value||(user.value&&user.value!=='veil-synthetic-user'))return false;
+        const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+        set.call(user,'veil-synthetic-user');
+        set.call(pass,'veil-synthetic-marker');
+        for(const el of [user,pass]){
+          el.dispatchEvent(new Event('input',{bubbles:true}));
+          el.dispatchEvent(new Event('change',{bubbles:true}));
+        }
+        return user.value==='veil-synthetic-user'&&pass.value==='veil-synthetic-marker';
+      )JS";
+      break;
+    case FixtureLoginOperation::CheckFillState:
+      expression += R"JS(
+        const route=location.pathname;
+        const filled=route==='/tabs-login-fill-empty'||route==='/tabs-login-fill-matching';
+        const expectedUser=filled||route==='/tabs-login-fill-existing'?'veil-synthetic-user':
+          route==='/tabs-login-fill-other'?'other-synthetic-user':'';
+        const expectedPass=filled?'veil-synthetic-marker':
+          route==='/tabs-login-fill-existing'?'existing-synthetic-marker':'';
+        const events=filled?'2':'0';
+        return user.value===expectedUser&&pass.value===expectedPass&&
+          form.dataset.inputs===events&&form.dataset.changes===events&&form.dataset.submits==='0';
+      )JS";
+      break;
+    default: return 0;
+  }
   expression += "}catch{return null;}})()";
   const auto probe = std::make_shared<LoginProbe>();
   state->login_probe = probe;
@@ -1042,7 +1098,7 @@ static int StartFixtureLoginObservation(uint64_t id, const wchar_t* origin,
     parameters->SetBool("silent", true);
     // Authorize immediately before a value observation, and revalidate after
     // the managed callback in case it re-enters the host.
-    const bool allowed = !check_values || authorize(id) != 0;
+    const bool allowed = operation == FixtureLoginOperation::Probe || authorize(id) != 0;
     const auto current = LookupBrowser(id);
     if (allowed && LookupView(id) == state && !state->closing &&
         state->login_probe == probe && probe->status == 0 && current == browser &&
@@ -1067,11 +1123,19 @@ static int StartFixtureLoginObservation(uint64_t id, const wchar_t* origin,
 }
 extern "C" __declspec(dllexport) int VeilCefStartLoginProbe(
     uint64_t id, const wchar_t* origin, const wchar_t* page) {
-  return StartFixtureLoginObservation(id, origin, page, false, nullptr);
+  return StartFixtureLoginObservation(id, origin, page, FixtureLoginOperation::Probe, nullptr);
 }
 extern "C" __declspec(dllexport) int VeilCefStartLoginValuesCheck(
     uint64_t id, const wchar_t* origin, const wchar_t* page, CookieDeleteAuthorization authorize) {
-  return StartFixtureLoginObservation(id, origin, page, true, authorize);
+  return StartFixtureLoginObservation(id, origin, page, FixtureLoginOperation::CheckValues, authorize);
+}
+extern "C" __declspec(dllexport) int VeilCefStartLoginFill(
+    uint64_t id, const wchar_t* origin, const wchar_t* page, CookieDeleteAuthorization authorize) {
+  return StartFixtureLoginObservation(id, origin, page, FixtureLoginOperation::Fill, authorize);
+}
+extern "C" __declspec(dllexport) int VeilCefStartLoginFillState(
+    uint64_t id, const wchar_t* origin, const wchar_t* page, CookieDeleteAuthorization authorize) {
+  return StartFixtureLoginObservation(id, origin, page, FixtureLoginOperation::CheckFillState, authorize);
 }
 extern "C" __declspec(dllexport) int VeilCefFixtureLoading(uint64_t id) {
   if (!CefCurrentlyOn(TID_UI)) return 1;
