@@ -180,6 +180,31 @@ try
                 var descendantIdentity = Native.ObserveProcess(descendantHandle);
                 string? refusal = brokerJob.FixturePairRefusal(binding.Identity, retained, descendantIdentity, descendantHandle);
                 Check(refusal is null, $"Fixture pair refused (mode {mode}): {refusal}");
+
+                // A real retained-object snapshot of the broker-owned job.
+                // The external owner and a reused identity must not pass
+                // even if the number of supplied handles is correct.
+                var snapshot = brokerJob.ObserveRetainedMembers([
+                    (binding.Identity, retained), (descendantIdentity, descendantHandle)]);
+                Check(snapshot.Length == 2 && snapshot[0] == binding.Identity &&
+                    snapshot[1] == descendantIdentity, "Retained job snapshot mismatch.");
+                void RefuseObservation(Action observe)
+                {
+                    try { observe(); }
+                    catch (UnauthorizedAccessException) { return; }
+                    throw new InvalidOperationException("Invalid retained job observation accepted.");
+                }
+                RefuseObservation(() => brokerJob.ObserveRetainedMembers([(binding.Identity, retained)]));
+                RefuseObservation(() => brokerJob.ObserveRetainedMembers([
+                    (binding.Identity, retained), (binding.Identity, retained)]));
+                RefuseObservation(() => brokerJob.ObserveRetainedMembers([
+                    (binding.Identity, retained), (identity, owner.SafeHandle)]));
+                RefuseObservation(() => brokerJob.ObserveRetainedMembers([
+                    (binding.Identity, retained),
+                    (descendantIdentity with { CreatedFileTime = descendantIdentity.CreatedFileTime + 1 }, descendantHandle)]));
+                RefuseObservation(() => brokerJob.ObserveRetainedMembers([
+                    (binding.Identity, retained), (descendantIdentity, retained)]));
+
                 Check(!brokerJob.ContainsVerifiedCandidate(binding.Identity, retained),
                     "Multiprocess fixture confused with disabled admission.");
                 Check(!brokerJob.ContainsFixturePair(binding.Identity, retained, identity, owner.SafeHandle),
