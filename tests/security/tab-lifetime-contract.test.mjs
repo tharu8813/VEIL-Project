@@ -603,5 +603,28 @@ test('login form capability permits only fixed host operations on the exact live
     assert.match(webView2, /core\.ExecuteScriptAsync\(LoginFormPolicy\.Probe\(origin, page\)\);\s*return ReferenceEquals\(core, LoginCore\(origin, page, stillAuthorized\)\) && result == "true";/);
     assert.match(webView2, /core\.ExecuteScriptAsync\(LoginFormPolicy\.Read\(origin, page\)\);\s*if \(!ReferenceEquals\(core, LoginCore\(origin, page, stillAuthorized\)\)\) return null;\s*return LoginFormPolicy\.Decode\(origin, json\);/);
     assert.match(webView2, /core\.ExecuteScriptAsync\(LoginFormPolicy\.Fill\(login, page\)\);\s*return ReferenceEquals\(core, LoginCore\(login\.Origin, page, stillAuthorized\)\) && result == "true";/);
-    assert.doesNotMatch(cefView, /IEngineLoginForms|ReadLoginFormAsync|FillLoginFormAsync/);
+    assert.doesNotMatch(cefView, /:\s*HwndHost[^\n]*IEngineLoginForms|ReadLoginFormAsync|FillLoginFormAsync/);
+});
+
+
+test('CEF login fixture exposes only a bounded boolean observation', async () => {
+    const runner = await readFile('tests/cef/tabs-smoke.mjs', 'utf8');
+    assert.match(cefNative, /!IsFixtureStorageOrigin\(origin\) \|\| origin\.rfind\(L"http:\/\/127\.0\.0\.1:", 0\) != 0/);
+    assert.match(cefNative, /if \(page == origin \+ path\) return true;/);
+    assert.match(cefNative, /state->page_source != page \|\| browser->GetMainFrame\(\)->GetURL\(\)\.ToWString\(\) != page/);
+    assert.match(cefNative, /remote->GetString\("type"\) != "boolean" \|\| remote->GetType\("value"\) != VTYPE_BOOL/);
+    assert.match(cefNative, /probe_->status = remote->GetBool\("value"\) \? 1 : 2;/);
+    assert.match(cefNative, /if \(frame->IsMain\(\)\) state_->InvalidateLoginProbe\(\);/);
+    const probe = cefNative.slice(cefNative.indexOf('int VeilCefStartLoginProbe('), cefNative.indexOf('int VeilCefFixtureLoading('));
+    assert.doesNotMatch(probe, /(?:user|pass)\.value|\.submit\(|\.requestSubmit\(/);
+    assert.match(probe, /ExecuteDevToolsMethod\(0, "Runtime\.evaluate", parameters\)/);
+    assert.match(cefView, /if \(!Current\(\)\) return null;\s*return status switch \{ 1 => true, 2 => false, _ => null \};\s*\}\s*finally \{ CefNative\.VeilCefEndLoginProbe\(id\); \}/);
+    assert.match(probe, /expected_list->SetString\(0, CefString\(page\)\);\s*expected->SetList\(expected_list\);\s*const auto quoted_page = CefWriteJSON\(expected, JSON_WRITER_DEFAULT\)/);
+    assert.match(probe, /\}catch\{return null;\}/);
+    assert.match(cefTabbed, /loginProbe\.Result is null \|\|\s*loginProbe\.Result\.Value != \(loginProbeIndex == 0\)/);
+    assert.match(cefTabbed, /loginProbe\.Result is not null \|\| deletionAuthorizationChecks < 2/);
+    assert.match(runner, /f\.contentDocument\.querySelector/);
+    assert.match(runner, /requests\.filter\(x => x === '\/tabs-login-frame-child'\)\.length, 1/);
+    assert.match(cefTabbed, /Login probe discarded result after authorization expired/);
+    assert.match(runner, /assert\.ok\(!requests\.includes\('\/unused-login'\)/);
 });

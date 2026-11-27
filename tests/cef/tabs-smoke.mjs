@@ -14,6 +14,14 @@ const requests = [];
 const cookieChecks = new Map();
 let httpCacheRequests = 0;
 const titles = new Map([['/tabs-first', 'TAB_FIRST'], ['/tabs-second', 'TAB_SECOND'], ['/tabs-after-close', 'TAB_AFTER_CLOSE'], ['/tabs-preserved', 'TAB_PRESERVED'], ['/tabs-reseed', 'TAB_RESEEDED'], ['/tabs-cleared-first', 'TAB_CLEARED_FIRST'], ['/tabs-cleared-second', 'TAB_CLEARED_SECOND'], ['/tabs-storage-reseed', 'TAB_STORAGE_RESEEDED'], ['/tabs-storage-denied', 'TAB_STORAGE_DENIED'], ['/tabs-storage-deleted', 'TAB_STORAGE_DELETED'], ['/tabs-storage-kept', 'TAB_STORAGE_KEPT'], ['/tabs-http-cache-first', 'TAB_HTTP_CACHE_FIRST'], ['/tabs-http-cache-reused', 'TAB_HTTP_CACHE_REUSED'], ['/tabs-http-cache-cleared', 'TAB_HTTP_CACHE_CLEARED'], ['/tabs-http-cache-cookie', 'TAB_HTTP_CACHE_COOKIE'], ['/tabs-batch-seed-first', 'TAB_BATCH_SEED_FIRST'], ['/tabs-batch-denied', 'TAB_BATCH_DENIED'], ['/tabs-batch-first-deleted', 'TAB_BATCH_FIRST_DELETED'], ['/tabs-batch-kept', 'TAB_BATCH_KEPT'], ['/tabs-batch-reseed-first', 'TAB_BATCH_RESEED_FIRST'], ['/tabs-batch-final-first', 'TAB_BATCH_FINAL_FIRST'], ['/tabs-batch-second-deleted', 'TAB_BATCH_SECOND_DELETED'], ['/tabs-isolation-seed', 'TAB_ISOLATION_SEEDED']]);
+const loginFixtures = new Map([
+  ['/tabs-login-valid', '<form action="/unused-login"><input autocomplete="username"><input type="password"></form>'],
+  ['/tabs-login-hidden', '<form hidden><input><input type="password"></form>'],
+  ['/tabs-login-ambiguous', '<form><input><input type="password"><input type="password"></form>'],
+  ['/tabs-login-cross-origin', '<form action="http://example.invalid/"><input><input type="password"></form>'],
+  ['/tabs-login-iframe', '<iframe id="fixture-frame" src="/tabs-login-frame-child"></iframe>'],
+  ['/tabs-login-new', '<form><input><input type="password" autocomplete="new-password"></form>'],
+]);
 const server = http.createServer((request, response) => {
   requests.push(request.url);
   if (request.url === '/fixture-http-cache-resource') {
@@ -30,6 +38,23 @@ const server = http.createServer((request, response) => {
     response.end('<!doctype html><title>WAITING</title><script>(async()=>{' +
       'if(localStorage.getItem("veil-isolation-marker")===null&&!await caches.has("veil-isolation-cache"))' +
       'document.title="TAB_FRESH_PROFILE";})();</script>');
+    return;
+  }
+  if (request.url === '/tabs-login-frame-child') {
+    response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+    response.end('<!doctype html><form><input><input type="password"></form>');
+    return;
+  }
+  if (loginFixtures.has(request.url)) {
+    const index = [...loginFixtures.keys()].indexOf(request.url);
+    response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+    if (request.url === '/tabs-login-iframe') {
+      // Require the real same-origin child form to exist before reporting ready.
+      response.end('<!doctype html><title>WAITING</title><script>' +
+        'addEventListener("load",()=>{const f=document.getElementById("fixture-frame");' +
+        'if(f.contentDocument.querySelector(\'input[type="password"]\'))document.title="TAB_LOGIN_' + index + '";});' +
+        '</script>' + loginFixtures.get(request.url));
+    } else response.end('<!doctype html><title>TAB_LOGIN_' + index + '</title>' + loginFixtures.get(request.url));
     return;
   }
   if (!titles.has(request.url)) { response.writeHead(404).end(); return; }
@@ -120,7 +145,7 @@ async function runFixture(fresh) {
       const killed = spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 });
       if (killed.status !== 0) child.kill();
     }
-  }, fresh ? 30000 : 90000);
+  }, fresh ? 45000 : 90000);
   try {
     const [code] = await once(child, 'exit');
     const profile = join(runTemp, 'veil-cef-wpf-profile-' + child.pid);
@@ -197,6 +222,10 @@ try {
   assert.equal(requests.filter(route => route === '/tabs-fresh-probe').length, 1);
   assert.equal(cookieChecks.get('/tabs-fresh-probe'), '', 'Fresh profile leaked earlier cookies');
   assert.match(fresh.evidence, /Fresh fixture cookie scan returned an empty list[\s\S]*Fresh process saw no earlier LocalStorage or CacheStorage[\s\S]*Tabbed host registry drained/);
+  for (const route of loginFixtures.keys()) assert.equal(requests.filter(x => x === route).length, 1, route);
+  assert.equal(requests.filter(x => x === '/tabs-login-frame-child').length, 1, 'Child form must actually load');
+  assert.ok(!requests.includes('/unused-login'), 'Probe must never submit a form');
+  assert.match(fresh.evidence, /Login probe discarded result after authorization expired[\s\S]*Boolean-only login probe accepted one form and rejected hidden, ambiguous, cross-origin, iframe and new-password forms/);
   assertNoFixtureProcesses();
   // Only delete the unique directory created by this runner. Preserve failed
   // evidence and refuse to recurse into an unexpected root link.

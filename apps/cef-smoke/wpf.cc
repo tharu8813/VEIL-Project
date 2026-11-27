@@ -158,6 +158,35 @@ class StorageClearObserver final : public CefDevToolsMessageObserver {
   IMPLEMENT_REFCOUNTING(StorageClearObserver);
 };
 
+// Boolean-only fixture observation. Never return DOM or credential values.
+struct LoginProbe {
+  int message_id = 0;
+  int status = 0;  // pending=0, detected=1, not detected=2, failed=-1
+};
+class LoginProbeObserver final : public CefDevToolsMessageObserver {
+ public:
+  explicit LoginProbeObserver(std::shared_ptr<LoginProbe> probe) : probe_(std::move(probe)) {}
+  void OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int message_id, bool success,
+                             const void* result, size_t result_size) override {
+    if (probe_->status != 0 || probe_->message_id <= 0 || message_id != probe_->message_id) return;
+    probe_->status = -1;
+    if (!success || !result || result_size == 0 || result_size > 4096) return;
+    const auto value = CefParseJSON(CefString(std::string(static_cast<const char*>(result), result_size)), JSON_PARSER_RFC);
+    if (!value || value->GetType() != VTYPE_DICTIONARY) return;
+    const auto response = value->GetDictionary();
+    if (!response || response->HasKey("exceptionDetails")) return;
+    const auto remote = response->GetDictionary("result");
+    if (!remote || remote->GetString("type") != "boolean" || remote->GetType("value") != VTYPE_BOOL) return;
+    probe_->status = remote->GetBool("value") ? 1 : 2;
+  }
+  void OnDevToolsAgentDetached(CefRefPtr<CefBrowser>) override {
+    probe_->status = -1;
+  }
+ private:
+  const std::shared_ptr<LoginProbe> probe_;
+  IMPLEMENT_REFCOUNTING(LoginProbeObserver);
+};
+
 // Owned by the CEF client; accessed on the browser UI thread only.
 // Registration belongs to the same view lifetime as its metadata.
 struct ViewState {
@@ -176,6 +205,11 @@ struct ViewState {
     storage_usage.reset();
     storage_clear_registration = nullptr;
     storage_clear.reset();
+    login_probe_registration = nullptr;
+    login_probe.reset();
+  }
+  void InvalidateLoginProbe() {
+    if (login_probe) login_probe->status = -1;
   }
 
   const uint64_t id;
@@ -208,6 +242,8 @@ struct ViewState {
   CefRefPtr<CefRegistration> storage_usage_registration;
   std::shared_ptr<StorageClearRequest> storage_clear;
   CefRefPtr<CefRegistration> storage_clear_registration;
+  std::shared_ptr<LoginProbe> login_probe;
+  CefRefPtr<CefRegistration> login_probe_registration;
 };
 
 // Registry is browser-UI-thread confined. Keep one view until fixture-wide
@@ -480,6 +516,7 @@ class Client final : public CefClient,
                       CefRefPtr<CefRequest> request, bool, bool redirect) override {
     if (state_->closing) return true;
     const CefString url = request->GetURL();
+    if (frame->IsMain()) state_->InvalidateLoginProbe();
     if (url == "about:blank") return false;
     CefURLParts parts;
     const bool parsed = CefParseURL(url, parts);
@@ -519,6 +556,7 @@ class Client final : public CefClient,
   void OnAddressChange(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
                        const CefString& value) override {
     if (!frame->IsMain()) return;
+    state_->InvalidateLoginProbe();
     state_->page_source = value.ToWString();
     if (state_->page_state_changed) state_->page_state_changed(1);
   }
@@ -537,6 +575,7 @@ class Client final : public CefClient,
                                  int error_code, const CefString&) override {
     // A renderer is a child process. The browser/managed host is still alive.
     // Release any serialized navigation so a user-directed retry can proceed.
+    state_->InvalidateLoginProbe();
     Complete(false, false, ERR_FAILED);
     if (state_->render_process_failed) state_->render_process_failed(error_code);
   }
@@ -924,6 +963,91 @@ static bool IsFixtureStorageOrigin(const std::wstring& origin) {
   if (port.empty() || port.find_first_not_of(L"0123456789") != std::wstring::npos) return false;
   return origin == L"http://127.0.0.1:" + port || origin == L"http://localhost:" + port;
 }
+// Only predeclared synthetic routes; no caller-supplied JavaScript.
+bool IsFixtureLoginPage(const std::wstring& origin, const std::wstring& page) {
+  if (!IsFixtureStorageOrigin(origin) || origin.rfind(L"http://127.0.0.1:", 0) != 0) return false;
+  for (const auto* path : {L"/tabs-login-valid", L"/tabs-login-hidden", L"/tabs-login-ambiguous",
+                          L"/tabs-login-cross-origin", L"/tabs-login-iframe", L"/tabs-login-new"})
+    if (page == origin + path) return true;
+  return false;
+}
+extern "C" __declspec(dllexport) int VeilCefStartLoginProbe(
+    uint64_t id, const wchar_t* origin, const wchar_t* page) {
+  if (!CefCurrentlyOn(TID_UI) || !origin || !page || !IsFixtureLoginPage(origin, page)) return 0;
+  const auto state = LookupView(id);
+  const auto browser = LookupBrowser(id);
+  if (!state || !browser || state->closing || state->login_probe || browser->IsLoading() ||
+      state->page_source != page || browser->GetMainFrame()->GetURL().ToWString() != page) return 0;
+  const auto host = browser->GetHost();
+  // CefWriteJSON documents a dictionary/list root. Encode as an array, not a
+  // primitive. The page has already passed the exact fixture route allowlist.
+  const auto expected = CefValue::Create();
+  const auto expected_list = CefListValue::Create();
+  expected_list->SetString(0, CefString(page));
+  expected->SetList(expected_list);
+  const auto quoted_page = CefWriteJSON(expected, JSON_WRITER_DEFAULT);
+  if (quoted_page.empty()) return 0;
+  const std::string expression = "(()=>{try{if(window!==window.top||location.href!==(" +
+      quoted_page.ToString() + R"JS()[0]||document.visibilityState!=='visible')return false;
+      const visible=el=>{
+        if(!el.isConnected||el.matches(':disabled')||el.readOnly||
+           el.closest('[hidden], [inert], [aria-hidden="true"]'))return false;
+        const rect=el.getBoundingClientRect();
+        if(rect.width<=0||rect.height<=0)return false;
+        for(let node=el;node;node=node.parentElement){
+          const style=getComputedStyle(node);
+          if(style.visibility!=='visible'||style.display==='none'||Number(style.opacity)===0||
+             style.contentVisibility==='hidden')return false;
+        }
+        return true;
+      };
+      const token=(el,t)=>el.autocomplete.toLowerCase().split(/\s+/).includes(t);
+      const passwords=[...document.querySelectorAll('input[type="password"]')];
+      if(passwords.length!==1||!visible(passwords[0]))return false;
+      const pass=passwords[0],form=pass.form;
+      if(!form||token(pass,'new-password')||token(pass,'one-time-code')||
+         new URL(form.action,location.href).origin!==location.origin||
+         [...form.elements].some(el=>el.hasAttribute('formaction')&&
+           new URL(el.getAttribute('formaction'),location.href).origin!==location.origin))return false;
+      const users=[...form.elements].filter(el=>el instanceof HTMLInputElement&&visible(el)&&
+        ['text','email','tel'].includes(el.type)&&!token(el,'one-time-code'));
+      const explicit=users.filter(el=>token(el,'username'));
+      return explicit.length===1||(explicit.length===0&&users.length===1);
+      }catch{return null;}})())JS";
+  const auto probe = std::make_shared<LoginProbe>();
+  state->login_probe = probe;
+  state->login_probe_registration = host->AddDevToolsMessageObserver(new LoginProbeObserver(probe));
+  if (state->login_probe_registration) {
+    const auto parameters = CefDictionaryValue::Create();
+    parameters->SetString("expression", expression);
+    parameters->SetBool("returnByValue", true);
+    parameters->SetBool("silent", true);
+    probe->message_id = host->ExecuteDevToolsMethod(0, "Runtime.evaluate", parameters);
+    if (probe->message_id > 0) return 1;
+  }
+  state->login_probe_registration = nullptr;
+  state->login_probe.reset();
+  return 0;
+}
+extern "C" __declspec(dllexport) int VeilCefFixtureLoading(uint64_t id) {
+  if (!CefCurrentlyOn(TID_UI)) return 1;
+  const auto browser = LookupBrowser(id);
+  return !browser || browser->IsLoading() ? 1 : 0;
+}
+extern "C" __declspec(dllexport) int VeilCefLoginProbeStatus(uint64_t id) {
+  if (!CefCurrentlyOn(TID_UI)) return -1;
+  const auto state = LookupView(id);
+  return !state || state->closing || !state->login_probe ? -1 : state->login_probe->status;
+}
+extern "C" __declspec(dllexport) void VeilCefEndLoginProbe(uint64_t id) {
+  if (!CefCurrentlyOn(TID_UI)) return;
+  const auto state = LookupView(id);
+  if (state) {
+    state->login_probe_registration = nullptr;
+    state->login_probe.reset();
+  }
+}
+
 extern "C" __declspec(dllexport) int VeilCefStartStorageUsage(uint64_t id, const wchar_t* origin) {
   if (!CefCurrentlyOn(TID_UI) || !origin || !IsFixtureStorageOrigin(origin)) return 0;
   const auto state = LookupView(id);

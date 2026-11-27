@@ -48,6 +48,9 @@ internal sealed class TabbedDevelopmentHost
     private Task<double?>? firstUsage, secondUsage, rejectedUsage;
     private Task<bool>? storageClear, httpCacheClear;
     private Task<int>? knownOriginClear;
+    private Task<bool?>? loginProbe;
+    private int loginProbeIndex;
+    private static readonly string[] LoginProbePaths = ["/tabs-login-valid", "/tabs-login-hidden", "/tabs-login-ambiguous", "/tabs-login-cross-origin", "/tabs-login-iframe", "/tabs-login-new"];
     private int deletionAuthorizationChecks;
     private int phase, result;
     private bool shuttingDown, windowClosed, allowWindowClose;
@@ -679,8 +682,55 @@ internal sealed class TabbedDevelopmentHost
             if (!freshProfileProbe || first.View.NativeHandle != firstId ||
                 first.View.Source != Url("/tabs-fresh-probe")) { Fail(); return; }
             Log("Fresh process saw no earlier LocalStorage or CacheStorage");
-            result = 0;
-            BeginShutdown();
+            if ((IBrowserEngineView)first.View is IEngineLoginForms) { Fail(); return; }
+            address.Text = Url(LoginProbePaths[0]);
+            NavigateAddress();
+            phase = 52;
+        }
+        else if (phase == 52 && first?.View.DocumentTitle == "TAB_LOGIN_" + loginProbeIndex &&
+                 !first.View.IsFixtureLoading)
+        {
+            var page = Url(LoginProbePaths[loginProbeIndex]);
+            if (first.View.Source != page) { Fail(); return; }
+            var origin = new Uri(page).GetLeftPart(UriPartial.Authority);
+            loginProbe = first.View.ProbeFixtureLoginFormAsync(origin, page,
+                () => active == first && !first.Closing && !shuttingDown);
+            phase = 53;
+        }
+        else if (phase == 53 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is null ||
+                loginProbe.Result.Value != (loginProbeIndex == 0)) { Fail(); return; }
+            if (loginProbeIndex == 0)
+            {
+                var page = Url(LoginProbePaths[0]);
+                var origin = new Uri(page).GetLeftPart(UriPartial.Authority);
+                deletionAuthorizationChecks = 0;
+                loginProbe = first!.View.ProbeFixtureLoginFormAsync(origin, page, () => ++deletionAuthorizationChecks == 1);
+                phase = 54;
+                return;
+            }
+            if (++loginProbeIndex == LoginProbePaths.Length)
+            {
+                Log("Boolean-only login probe accepted one form and rejected hidden, ambiguous, cross-origin, iframe and new-password forms");
+                result = 0;
+                BeginShutdown();
+            }
+            else
+            {
+                address.Text = Url(LoginProbePaths[loginProbeIndex]);
+                NavigateAddress();
+                phase = 52;
+            }
+        }
+        else if (phase == 54 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is not null || deletionAuthorizationChecks < 2) { Fail(); return; }
+            Log("Login probe discarded result after authorization expired");
+            loginProbeIndex = 1;
+            address.Text = Url(LoginProbePaths[loginProbeIndex]);
+            NavigateAddress();
+            phase = 52;
         }
     }
 }
