@@ -27,7 +27,7 @@ internal sealed class CefContainedProcess : IDisposable
         this.thread = thread;
     }
 
-#if VEIL_CEF_NESTED_SMOKE
+#if VEIL_CEF_NESTED_SMOKE || VEIL_CEF_CONTAINMENT_TEST
     internal SafeFileHandle FixtureJobHandle => job;
 
     internal bool ContainsFixtureMember(SafeProcessHandle member)
