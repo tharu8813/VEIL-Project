@@ -93,6 +93,10 @@ jobs:
         shell: powershell
         run: .\tests\install\bitlocker-recovery.test.ps1
 
+      - name: Test CEF registration consistency plan without installation
+        shell: powershell
+        run: .\tests\install\cef-registration-plan.test.ps1
+
       # SEC-004: the Procmon trace analyzer is pure parsing; the capture itself runs only in the VM.
       - name: Check local-write evidence analyzers
         shell: pwsh
