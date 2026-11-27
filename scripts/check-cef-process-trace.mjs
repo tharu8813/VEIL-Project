@@ -25,14 +25,27 @@ export function compareProcessTrace(events, { runnerPid, image, sample }) {
     const ended = new Set();
     const unexpectedImagePids = [];
     const ambiguousPids = new Set();
+    const invalidTreeEvents = [];
     let rootMatches = 0;
-    for (const event of events) {
+    for (const [index, event] of events.entries()) {
         const pid = Number(event.PID);
         const processName = event['Process Name']?.toLowerCase();
-        if (!isPid(pid) || !processName) continue;
+        if (!isPid(pid)) continue;
+        const tracked = active.has(pid);
+        // A malformed lifecycle record for an active member must not disappear
+        // from the comparison, even if the remaining PID sets agree.
+        if (tracked && (event.Operation === 'Process Create' || event.Operation === 'Process Exit') &&
+            active.get(pid) !== processName) {
+            invalidTreeEvents.push({ row: index + 1, pid, reason: 'process-name-mismatch' });
+            continue;
+        }
+        if (!processName) continue;
         if (event.Operation === 'Process Create' && event.Result === 'SUCCESS') {
             const created = Number(/^PID:\s*(\d+)(?:,|$)/.exec(event.Detail ?? '')?.[1]);
-            if (!isPid(created) || !event.Path) continue;
+            if (!isPid(created) || !event.Path) {
+                if (tracked) invalidTreeEvents.push({ row: index + 1, pid, reason: 'malformed-create' });
+                continue;
+            }
             const root = pid === runnerPid && processName === 'cefnestedsmoke.exe' &&
                 created === sample.rootPid && pathKey(event.Path) === expectedImage;
             if (root) rootMatches++;
@@ -45,8 +58,8 @@ export function compareProcessTrace(events, { runnerPid, image, sample }) {
             active.set(created, win32.basename(event.Path).toLowerCase());
             if (pathKey(event.Path) !== expectedImage) unexpectedImagePids.push(created);
         } else if (event.Operation === 'Process Exit' && active.has(pid)) {
-            if (active.get(pid) !== processName) {
-                ambiguousPids.add(pid);
+            if (event.Result !== 'SUCCESS') {
+                invalidTreeEvents.push({ row: index + 1, pid, reason: 'unsuccessful-exit' });
                 continue;
             }
             active.delete(pid);
@@ -71,7 +84,9 @@ export function compareProcessTrace(events, { runnerPid, image, sample }) {
     const sampled = new Set([sample.rootPid, ...sample.observed.map(entry => entry.Pid)]);
     const retainedExits = sample.schema === 5 ? new Set(sample.handleExits.map(entry => entry.Pid)) : null;
     const unobservedSamples = difference(sampled, seen);
+    const retainedWithoutTrace = retainedExits ? difference(retainedExits, ended) : null;
     const agrees = rootMatches === 1 && active.size === 0 && unexpectedImagePids.length === 0 &&
+        invalidTreeEvents.length === 0 && (retainedWithoutTrace === null || retainedWithoutTrace.length === 0) &&
         ambiguousPids.size === 0 && unobservedSamples.length === 0 &&
         Object.values(unmatched).every(job => Object.values(job).every(ids => ids.length === 0));
     return {
@@ -83,7 +98,8 @@ export function compareProcessTrace(events, { runnerPid, image, sample }) {
         liveSamplesWithoutTraceStart: unobservedSamples,
         missingExitPids: sorted(active.keys()),
         traceExitsWithoutRetainedHandle: retainedExits ? difference(ended, retainedExits) : null,
-        retainedHandleExitsWithoutTrace: retainedExits ? difference(retainedExits, ended) : null,
+        retainedHandleExitsWithoutTrace: retainedWithoutTrace,
+        invalidTreeEvents,
         unexpectedImagePids: sorted(unexpectedImagePids),
         ambiguousPids: sorted(ambiguousPids),
         unmatched,
