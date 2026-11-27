@@ -341,3 +341,7 @@ Prior exact head af172b3 passed general and native CI. Pending admission now tra
 ### 추가 구현: 잠금 요청 거부 시에도 CEF 인증 철회 (검증 대기)
 
 Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 먼저 CEF 인증 소유자와 자식 admission/receipt를 철회한다. 후보 정리 예외가 발생해도 인증은 먼저 제거되며 기존 unlockOwner crash-relock 감시 토큰은 보존한다. 비강제 잠금이 열린 핸들로 거부되어 볼륨이 아직 unlocked여도 새 CEF 준비는 재인증 전 거부한다. 가짜 backend 회귀에 Detach 거부/HandlesOpen, 새 unlock 후 권한 회복 및 재잠금 성공을 추가했다. 일반 Status 및 실제 잠금 오류 의미, 기존 WebView2 startup은 유지한다. 외부 OS 잠금/재잠금의 미관측 상태 전이, 실제 설치형 broker 및 BitLocker, CEF 실행은 별도 검증 필요. 작성 시 테스트 NOT RUN. 제품 startup disabled.
+
+### 통합: nested smoke 증거 결합 (#228)
+
+정확한 head 475d11a의 일반/네이티브 CI는 PASS (45946397415 / 45946397389), artifact `cef-nested-smoke-56b556458a45625c49b9c15d7a36f43cc62821db` 생성 확인. #226의 잠금 권한 철회 커밋 ce73c94와 변경 경로가 겹치지 않음을 확인하여 두 부모를 유지한 draft 통합 커밋으로 결합한다. 실제 파싱 stdout 원본 SHA-256, 최초 manifest hash 및 inventory 검증을 포함하며 이전 보고서 호환을 위해 검사를 약화하지 않는다. 통합 head CI와 독립 리뷰는 별도 필수. 실제 standard-user nested CEF 및 BitLocker runtime NOT RUN; 제품 startup disabled, WebView2 및 출시 게이트 유지.
