@@ -8,6 +8,32 @@ if (args is ["--child"])
     return Console.ReadLine() == "exit" ? 0 : 1;
 }
 
+// Exercise the actual production parser with no broker or volume access.
+using (var parsed = Protocol.Parse("""{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"123"}"""u8))
+{
+    Check(parsed.Command == BrokerCommand.CheckCefChild && parsed.ChildHandle == 123 &&
+        parsed.Secret is null, "Valid CEF preflight wire request rejected.");
+}
+foreach (string bad in new[] {
+    """{"command":"CheckCefChild","volumeId":"synthetic"}""",
+    """{"command":"CheckCefChild","volumeId":"synthetic","childHandle":123}""",
+    """{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"0"}""",
+    """{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"01"}""",
+    """{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"-1"}""",
+    """{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"9223372036854775808"}""",
+    """{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"1","childHandle":"2"}""",
+    """{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"1","secret":"synthetic"}""",
+    """{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"1","path":"synthetic"}""",
+    """{"command":"Status","volumeId":"synthetic","childHandle":"1"}"""
+})
+{
+    bool rejected = false;
+    try { using var _ = Protocol.Parse(System.Text.Encoding.UTF8.GetBytes(bad)); }
+    catch (ProtocolException error) { rejected = error.Code == "BadRequest"; }
+    Check(rejected, "Malformed CEF preflight wire request accepted.");
+}
+Console.WriteLine("PASS: strict CEF preflight protocol parsing");
+
 using var owner = Process.GetCurrentProcess();
 var identity = Native.ObserveProcess(owner.SafeHandle);
 using var child = Process.Start(new ProcessStartInfo

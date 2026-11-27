@@ -97,6 +97,8 @@ try {
     const a = await startBroker('a', config('a'));
     assert.deepEqual((await command(a, 'Status')).status.attached, false);
     assert.deepEqual(await command(a, 'AuthenticatedOwner'), { ok: false, error: 'NotAuthenticatedOwner' });
+    assert.deepEqual(await command(a, 'CheckCefChild', { childHandle: '1' }),
+        { ok: false, error: 'NotAuthenticatedOwner' });
     const malformed = {
         notJson: 'not json\n',
         extraPath: { command: 'Status', volumeId, path: 'C:\\Windows' },
@@ -108,6 +110,10 @@ try {
         statusWithSecret: { command: 'Status', volumeId, secret },
         ownerWithSecret: { command: 'AuthenticatedOwner', volumeId, secret },
         ownerWithPid: { command: 'AuthenticatedOwner', volumeId, pid: process.pid },
+        cefMissingHandle: { command: 'CheckCefChild', volumeId },
+        cefNumericHandle: { command: 'CheckCefChild', volumeId, childHandle: 1 },
+        cefHandleOnStatus: { command: 'Status', volumeId, childHandle: '1' },
+        cefWithSecret: { command: 'CheckCefChild', volumeId, childHandle: '1', secret },
         oversized: JSON.stringify({ command: 'Status', volumeId: 'x'.repeat(5000) }) + '\n',
         trailing: `{"command":"Status","volumeId":"${volumeId}"} {}\n`,
     };
@@ -131,6 +137,8 @@ try {
     assert.match(evidence.unsignedDesktop.error, /ProfileLocationException: .*ClientRejected/);
     assert.equal((await command(a, 'Unlock', { secret })).status.unlocked, true);
     assert.equal((await command(a, 'AuthenticatedOwner')).status.unlocked, true);
+    assert.deepEqual(await command(a, 'CheckCefChild', { childHandle: '1' }),
+        { ok: false, error: 'CefUnavailable' });
     const ownerCheckScript = `const s=require('net').connect(process.argv[1]);s.on('connect',()=>s.write(JSON.stringify({command:'AuthenticatedOwner',volumeId:'${volumeId}'})+'\\n'));s.on('data',d=>{process.stdout.write(d);process.exit(0);});`;
     const otherOwner = await run(process.execPath, ['-e', ownerCheckScript, `\\\\.\\pipe\\${a.settings.pipeName}`]);
     assert.deepEqual(JSON.parse(otherOwner.stdout), { ok: false, error: 'NotAuthenticatedOwner' });

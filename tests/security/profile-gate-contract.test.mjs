@@ -206,6 +206,24 @@ test('CEF launch nomination retains a duplicated live handle without treating pa
     assert.match(binding, /!HasReportedParent\(identity\.ProcessId, owner\.ProcessId\)/);
     assert.match(binding, /ObserveProcess\(originalOwner\) != owner \|\| ObserveProcess\(child\) != identity/);
     assert.match(binding, /return \(child, identity\);\s*\}\s*catch\s*\{\s*child\.Dispose\(\);/);
-    assert.doesNotMatch(broker, /DuplicateNominatedChild/);
+    assert.doesNotMatch(broker, /DuplicateNominatedChild/); // Only the scoped preflight helper calls it.
     assert.doesNotMatch(protocol, /NominatedChild|GrantChild|RedeemChild/);
+});
+
+
+test('CEF preflight command is owner-only, separately pinned and never grants child pipe rights', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const config = await readFile('apps/broker/Veil.VolumeBroker/BrokerConfig.cs', 'utf8');
+    const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
+    const preflight = await readFile('apps/broker/Veil.VolumeBroker/CefChildPreflight.cs', 'utf8');
+    const command = broker.slice(broker.indexOf('case BrokerCommand.CheckCefChild:'), broker.indexOf('case BrokerCommand.Attach'));
+    assert.match(command, /authenticatedOwner != client[\s\S]*?code = "NotAuthenticatedOwner";[\s\S]*?config\.Development[\s\S]*?code = "CefUnavailable";[\s\S]*?CefChildPreflight\.Check/);
+    assert.match(command, /status = backend\.Status\(\);[\s\S]*?!Native\.IsRunning\(preflightOwner\)/);
+    assert.doesNotMatch(command, /backend\.(Attach|Unlock|Lock|Detach)\(|CefChildAdmission|GrantChild|RedeemChild/);
+    const reject = broker.slice(broker.indexOf('private string? Reject('), broker.indexOf('private async Task<byte[]> Execute'));
+    assert.doesNotMatch(reject, /CefChildImage|CefChildSha256|CheckCefChild/);
+    assert.match(config, /if \(CefChildImage is not null \|\| CefChildSha256 is not null\)[\s\S]*?if \(development \|\|/);
+    assert.match(protocol, /\(parsed == BrokerCommand\.CheckCefChild\) != childHandle\.HasValue/);
+    assert.match(preflight, /using var child = binding\.Handle;\s*using var image = CefPinnedImage\.OpenVerified/);
+    assert.match(preflight, /Native\.ObserveProcess\(ownerHandle\) != owner \|\|\s*Native\.ObserveProcess\(child\) != binding\.Identity/);
 });

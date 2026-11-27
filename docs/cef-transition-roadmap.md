@@ -203,3 +203,7 @@ CefImageDigest는 정확한 64자 SHA-256과 전체 스트림 검사를 요구�
 ### 추가 구현: CEF launch nomination 및 Windows process handle 회귀 (검증 대기)
 
 Native.ObserveProcess는 실제 live process handle에서 PID/생성 시각/image/SID/session을 관측하며 기존 pipe의 PID/session과 일치시킨다. 미연결 DuplicateNominatedChild는 기존 owner handle과 재개방한 generation 일치 owner process를 요구하고 owner가 명시한 원본 child handle을 query/synchronize 권한만으로 복제한다. child의 SID/session/생성 시각, Toolhelp reported parent, 양쪽 생존 및 신원을 다시 확인하고 실패 시 handle을 닫는다. reported parent는 생성자가 지정할 수 있는 메타데이터라 단독 인증 증거가 아니며 이 helper도 생성 이벤트/실제 creator 증명이나 launch authority가 아니다. 실제 authenticated broker 요청, 등록 실행 파일 pin 및 one-shot admission 연결과 suspended launch/containment는 후속. 새 CI에서 합성 child 실제 프로세스를 실행하여 handle/세대/종료 및 잘못된 handle 거부를 검증하도록 추가. Windows test 결과 대기; 실제 CEF/BitLocker/서비스/표준 사용자 실측 NOT RUN. 기존 broker 명령 및 WebView2 유지.
+
+### 추가 구현: owner-only CEF broker 사전 검증 명령 (검증 대기)
+
+CheckCefChild 명령은 기존 인증 및 allowlist를 통과한 실제 unlock owner만 요청 가능하다. 엄격한 decimal string childHandle만 허용하고 기존 명령과 secret/path/PID 입력을 분리한다. admin-only 생산 설정의 별도 CefChildImage/CefChildSha256 pin이 모두 등록되어야 하며 미등록/개발 모드에서는 CefUnavailable. 실제 handle 복제, child 파일 경로/서명/hash 검증, owner/child 및 볼륨 재확인 후 일반 status만 반환한다. handle은 요청 종료 시 폐기하며 위임 grant, 자식 pipe 권한, 실행 승인은 절대 생성하지 않는다. 현재 installer/desktop/native 제품 startup 미연결. 순수 실제 parser 회귀와 fake broker 거부 시나리오 추가; fake broker 및 실제 production pin/BitLocker 실행 NOT RUN. 다음 단계는 broker 소유의 retained handle/grant lifecycle 및 별도 child redemption 프로토콜과 native 검증 연결.

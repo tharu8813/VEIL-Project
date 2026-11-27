@@ -9,5 +9,7 @@
   <ItemGroup>
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/Native.cs" Link="Native.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/ClientIdentity.cs" Link="ClientIdentity.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/Protocol.cs" Link="Protocol.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/BackendStatus.cs" Link="BackendStatus.cs" />
   </ItemGroup>
 </Project>

@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Veil.VolumeBroker;
 
-internal enum BrokerCommand { Status, Attach, Unlock, Lock, Detach, AuthenticatedOwner }
+internal enum BrokerCommand { Status, Attach, Unlock, Lock, Detach, AuthenticatedOwner, CheckCefChild }
 
 /// <summary>One parsed request. The secret is held in a clearable buffer, never in a string.</summary>
 internal sealed class BrokerRequest : IDisposable
@@ -12,6 +12,7 @@ internal sealed class BrokerRequest : IDisposable
     internal required string VolumeId { get; init; }
     internal char[]? Secret { get; init; }
     internal int SecretLength { get; init; }
+    internal long? ChildHandle { get; init; }
     internal ReadOnlySpan<char> SecretSpan => Secret.AsSpan(0, SecretLength);
 
     public void Dispose()
@@ -36,6 +37,7 @@ internal static class Protocol
         string? command = null, volumeId = null;
         char[]? secret = null;
         int secretLength = 0;
+        long? childHandle = null;
         try
         {
             var reader = new Utf8JsonReader(json, new JsonReaderOptions { MaxDepth = 2 });
@@ -49,6 +51,16 @@ internal static class Protocol
                 {
                     case "command" when command is null: command = reader.GetString(); break;
                     case "volumeId" when volumeId is null: volumeId = reader.GetString(); break;
+                    case "childHandle" when childHandle is null:
+                        // Decimal string avoids JSON numeric precision loss in clients.
+                        string raw = reader.GetString()!;
+                        if (raw.Length is 0 or > 19 || raw[0] == '0' ||
+                            !raw.All(c => c is >= '0' and <= '9') ||
+                            !long.TryParse(raw, System.Globalization.NumberStyles.None,
+                                System.Globalization.CultureInfo.InvariantCulture, out long handle) || handle <= 0)
+                            throw new ProtocolException("BadRequest");
+                        childHandle = handle;
+                        break;
                     case "secret" when secret is null:
                         if (reader.HasValueSequence || reader.ValueSpan.Length > MaxSecretChars * 6)
                             throw new ProtocolException("BadRequest");
@@ -64,7 +76,9 @@ internal static class Protocol
                 !Enum.IsDefined(parsed) || command != parsed.ToString() || volumeId is null)
                 throw new ProtocolException("BadRequest");
             if ((parsed == BrokerCommand.Unlock) != (secret is not null)) throw new ProtocolException("BadRequest");
-            return new BrokerRequest { Command = parsed, VolumeId = volumeId, Secret = secret, SecretLength = secretLength };
+            if ((parsed == BrokerCommand.CheckCefChild) != childHandle.HasValue) throw new ProtocolException("BadRequest");
+            return new BrokerRequest { Command = parsed, VolumeId = volumeId, Secret = secret,
+                SecretLength = secretLength, ChildHandle = childHandle };
         }
         catch (Exception error) when (error is JsonException or InvalidOperationException or ProtocolException)
         {

@@ -163,6 +163,31 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                         authenticatedOwnerHandle is not { } liveHandle || !Native.IsRunning(liveHandle))
                         code = "NotAuthenticatedOwner";
                     break;
+                case BrokerCommand.CheckCefChild:
+                    // This is an owner-only preflight, not a grant or launch
+                    // command. No child is added to the normal pipe allowlist.
+                    if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
+                        !status.ProtectionOn || !status.ProtectorPresent ||
+                        unlockOwner is null || authenticatedOwner != client ||
+                        authenticatedOwnerHandle is not { } preflightOwner || !Native.IsRunning(preflightOwner))
+                    {
+                        code = "NotAuthenticatedOwner";
+                        break;
+                    }
+                    if (config.Development || config.CefChildImage is not { } childPath ||
+                        config.CefChildSha256 is not { } childHash)
+                    {
+                        code = "CefUnavailable";
+                        break;
+                    }
+                    CefChildPreflight.Check(client, preflightOwner, request.ChildHandle!.Value,
+                        childPath, childHash);
+                    status = backend.Status();
+                    if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
+                        !status.ProtectionOn || !status.ProtectorPresent ||
+                        !Native.IsRunning(preflightOwner))
+                        code = "NotAuthenticatedOwner";
+                    break;
                 case BrokerCommand.Attach when status.Attached:
                     code = "AlreadyAttached"; break;
                 case BrokerCommand.Attach:
