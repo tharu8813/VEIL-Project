@@ -91,3 +91,23 @@ test('future CEF protected profile preflight is read-only and refuses unverified
     assert.match(session, /EngineHost \{ get; \} = new WebView2BrowserEngine\(\);/);
     assert.doesNotMatch(startup, /CefProtectedProfilePreflight|CefDevelopmentEngine/);
 });
+
+
+test('broker authenticated-owner snapshot is live, read-only and granted only after verified unlock', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
+    const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
+    const client = await readFile('apps/desktop/BrokerClient.cs', 'utf8');
+    const owner = broker.slice(broker.indexOf('case BrokerCommand.AuthenticatedOwner:'), broker.indexOf('case BrokerCommand.Attach'));
+    assert.match(owner, /!Registered\(status\) \|\| !status\.Unlocked \|\| !status\.FullyEncrypted/);
+    assert.match(owner, /!status\.ProtectionOn \|\| !status\.ProtectorPresent/);
+    assert.match(owner, /unlockOwner is null \|\| authenticatedOwner != client/);
+    assert.match(owner, /authenticatedOwnerHandle is not \{ \} liveHandle \|\| !Native\.IsRunning\(liveHandle\)/);
+    assert.doesNotMatch(owner, /backend\.(Attach|Unlock|Lock|Detach)\(/);
+    assert.match(broker, /if \(!Registered\(status\) \|\| !status\.Unlocked \|\| !status\.FullyEncrypted \|\|[\s\S]*?authenticatedOwner = client;/);
+    assert.match(broker, /private void Watch\(int pid, SafeProcessHandle handle\)\s*\{\s*ClearAuthenticatedOwner\(\);/);
+    assert.match(broker, /if \(!ReferenceEquals\(unlockOwner, ownership\)\) return;\s*ClearAuthenticatedOwner\(\);/);
+    assert.match(native, /WaitForSingleObject\(handle, 0\) == 0x102/);
+    assert.match(protocol, /\(parsed == BrokerCommand\.Unlock\) != \(secret is not null\)/);
+    assert.match(client, /QueryAuthenticatedOwner\(\) => QueryVolume\("AuthenticatedOwner"\)/);
+});

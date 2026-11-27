@@ -96,6 +96,7 @@ try {
     // A: signed clients only, lock/unlock life cycle, malformed requests, secret handling.
     const a = await startBroker('a', config('a'));
     assert.deepEqual((await command(a, 'Status')).status.attached, false);
+    assert.deepEqual(await command(a, 'AuthenticatedOwner'), { ok: false, error: 'NotAuthenticatedOwner' });
     const malformed = {
         notJson: 'not json\n',
         extraPath: { command: 'Status', volumeId, path: 'C:\\Windows' },
@@ -105,6 +106,8 @@ try {
         duplicate: `{"command":"Status","command":"Lock","volumeId":"${volumeId}"}\n`,
         unlockWithoutSecret: { command: 'Unlock', volumeId },
         statusWithSecret: { command: 'Status', volumeId, secret },
+        ownerWithSecret: { command: 'AuthenticatedOwner', volumeId, secret },
+        ownerWithPid: { command: 'AuthenticatedOwner', volumeId, pid: process.pid },
         oversized: JSON.stringify({ command: 'Status', volumeId: 'x'.repeat(5000) }) + '\n',
         trailing: `{"command":"Status","volumeId":"${volumeId}"} {}\n`,
     };
@@ -127,6 +130,10 @@ try {
     assert.equal(evidence.unsignedDesktop.exitCode, 1);
     assert.match(evidence.unsignedDesktop.error, /ProfileLocationException: .*ClientRejected/);
     assert.equal((await command(a, 'Unlock', { secret })).status.unlocked, true);
+    assert.equal((await command(a, 'AuthenticatedOwner')).status.unlocked, true);
+    const ownerCheckScript = `const s=require('net').connect(process.argv[1]);s.on('connect',()=>s.write(JSON.stringify({command:'AuthenticatedOwner',volumeId:'${volumeId}'})+'\\n'));s.on('data',d=>{process.stdout.write(d);process.exit(0);});`;
+    const otherOwner = await run(process.execPath, ['-e', ownerCheckScript, `\\\\.\\pipe\\${a.settings.pipeName}`]);
+    assert.deepEqual(JSON.parse(otherOwner.stdout), { ok: false, error: 'NotAuthenticatedOwner' });
     assert.deepEqual(await command(a, 'Unlock', { secret }), { ok: false, error: 'AlreadyUnlocked' },
         'an unlocked volume must not silently accept another Unlock');
     assert.deepEqual(await command(a, 'Detach'), { ok: false, error: 'MustBeLocked' });
@@ -135,6 +142,7 @@ try {
     assert.equal((await command(a, 'Status')).status.unlocked, true, 'refused lock must not report locked');
     await rm(marker);
     assert.equal((await command(a, 'Lock')).status.unlocked, false);
+    assert.deepEqual(await command(a, 'AuthenticatedOwner'), { ok: false, error: 'NotAuthenticatedOwner' });
 
     // The client that unlocked exits without locking: the broker locks on its behalf.
     const clientScript = `const s=require('net').connect(process.argv[1]);s.on('connect',()=>s.write(JSON.stringify({command:'Unlock',volumeId:'${volumeId}',secret:process.argv[2]})+'\\n'));s.on('data',d=>{process.stdout.write(d);process.exit(0);});`;
@@ -146,6 +154,7 @@ try {
         if (!relocked) await delay(250);
     }
     assert.ok(relocked, 'volume stayed unlocked after the unlocking client exited');
+    assert.deepEqual(await command(a, 'AuthenticatedOwner'), { ok: false, error: 'NotAuthenticatedOwner' });
     assert.equal((await command(a, 'Detach')).status.attached, false);
 
     // The fake OS unlocks, then throws before returning its result. The child
@@ -163,6 +172,7 @@ try {
         if (!ambiguousRelocked) await delay(250);
     }
     assert.ok(ambiguousRelocked, 'ambiguous unlock remained open after client exit');
+    assert.deepEqual(await command(ambiguous, 'AuthenticatedOwner'), { ok: false, error: 'NotAuthenticatedOwner' });
     assert.match(ambiguous.stdout, /"event":"client-exit-lock"[^\n]*"result":"ok"/);
     assert.equal((await command(ambiguous, 'Detach')).status.attached, false);
 
@@ -238,6 +248,7 @@ try {
     assert.equal((await command(unprotected, 'Attach')).status.readyToUnlock, true);
     assert.deepEqual(await command(unprotected, 'Unlock', { secret }), { ok: false, error: 'NotProtected' });
     assert.equal((await command(unprotected, 'Status')).status.unlocked, false, 'failed verification must relock');
+    assert.deepEqual(await command(unprotected, 'AuthenticatedOwner'), { ok: false, error: 'NotAuthenticatedOwner' });
 
     // F: client executable not registered. G: pipe ACL for another user.
     const f = await startBroker('f', config('f', { clientImages: [desktopExe] }));

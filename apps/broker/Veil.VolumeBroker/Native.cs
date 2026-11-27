@@ -54,6 +54,18 @@ internal static class Native
 
     internal static SafeProcessHandle OpenForWait(int pid) => OpenProcess(Synchronize, false, (uint)pid);
 
+    // The crash watcher may dispose the handle concurrently after process exit.
+    // A closed, signaled, invalid or failed wait never attests a live owner.
+    internal static bool IsRunning(SafeProcessHandle handle)
+    {
+        if (handle.IsClosed || handle.IsInvalid) return false;
+        try { return WaitForSingleObject(handle, 0) == 0x102 /* WAIT_TIMEOUT */; }
+        catch (ObjectDisposedException) { return false; }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
+
     internal static void AttachRegisteredImage(string path, string userSid)
     {
         // Keep the backing file admin-only while the mounted device grants access to the registered user.

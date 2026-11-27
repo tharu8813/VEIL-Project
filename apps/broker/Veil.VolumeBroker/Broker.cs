@@ -9,6 +9,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private readonly SemaphoreSlim serial = new(1, 1);
     private int unlockFailures;
     private object? unlockOwner;
+    private ClientIdentity? authenticatedOwner;
+    private SafeProcessHandle? authenticatedOwnerHandle;
 
     internal async Task RunAsync(CancellationToken stop, Action? ready = null)
     {
@@ -48,6 +50,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             backend.Detach();
             if (backend.Status().Attached) throw new InvalidOperationException("The registered image remains attached.");
             unlockOwner = null;
+            ClearAuthenticatedOwner();
         }
         finally { serial.Release(); }
     }
@@ -151,6 +154,15 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             {
                 case BrokerCommand.Status:
                     break;
+                case BrokerCommand.AuthenticatedOwner:
+                    // Status alone does not establish that this process unlocked
+                    // the volume. Never grant this to another allowed image/PID.
+                    if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
+                        !status.ProtectionOn || !status.ProtectorPresent ||
+                        unlockOwner is null || authenticatedOwner != client ||
+                        authenticatedOwnerHandle is not { } liveHandle || !Native.IsRunning(liveHandle))
+                        code = "NotAuthenticatedOwner";
+                    break;
                 case BrokerCommand.Attach when status.Attached:
                     code = "AlreadyAttached"; break;
                 case BrokerCommand.Attach:
@@ -201,6 +213,13 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                                 log.Write("rejected-unlock-lock", new { result = LockCode(backend.Lock()) ?? "ok" });
                             code = "NotProtected";
                         }
+                        else
+                        {
+                            // Only a fully verified, successful unlock grants ownership.
+                            // The watcher owns the handle; a signaled/closed handle refuses.
+                            authenticatedOwner = client;
+                            authenticatedOwnerHandle = ownerHandle;
+                        }
                     }
                     else
                     {
@@ -213,6 +232,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 case BrokerCommand.Lock when !status.Attached:
                     code = "NotAttached"; break;
                 case BrokerCommand.Lock when !status.Unlocked:
+                    ClearAuthenticatedOwner();
+                    unlockOwner = null;
                     break;
                 case BrokerCommand.Lock:
                     code = LockCode(backend.Lock());
@@ -220,16 +241,20 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     {
                         status = backend.Status();
                         if (!Registered(status) || status.Unlocked) code = "LockRefused";
-                        else unlockOwner = null;
+                        else { unlockOwner = null; ClearAuthenticatedOwner(); }
                     }
                     break;
                 case BrokerCommand.Detach when status.Attached && status.Unlocked:
                     code = "MustBeLocked"; break;
                 case BrokerCommand.Detach when status.Attached:
+                    ClearAuthenticatedOwner();
+                    unlockOwner = null;
                     backend.Detach();
                     status = backend.Status();
                     break;
                 case BrokerCommand.Detach:
+                    ClearAuthenticatedOwner();
+                    unlockOwner = null;
                     break;
             }
             log.Write("command", new { client.ProcessId, command, result = code ?? "ok" });
@@ -250,8 +275,15 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     };
 
     /// <summary>Locks the volume when the client that unlocked it exits without locking.</summary>
+    private void ClearAuthenticatedOwner()
+    {
+        authenticatedOwner = null;
+        authenticatedOwnerHandle = null;
+    }
+
     private void Watch(int pid, SafeProcessHandle handle)
     {
+        ClearAuthenticatedOwner();
         var ownership = new object();
         unlockOwner = ownership;
         _ = Task.Run(async () =>
@@ -265,6 +297,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 try
                 {
                     if (!ReferenceEquals(unlockOwner, ownership)) return;
+                    ClearAuthenticatedOwner();
                     var status = backend.Status();
                     if (!status.Attached) { unlockOwner = null; return; }
                     if (!string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase))

@@ -54,13 +54,19 @@ internal sealed record BrokerClientConfig
 /// <summary>Queries the volume broker's Status over its named pipe (ADR-0003). Any failure stops startup.</summary>
 internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolumeBroker
 {
-    public VolumeStatus? QueryRegisteredVolume()
+    public VolumeStatus? QueryRegisteredVolume() => QueryVolume("Status");
+
+    // Read-only snapshot for the authenticated desktop owner itself. Not
+    // authorization for a different CEF child or an inherited environment.
+    internal VolumeStatus? QueryAuthenticatedOwner() => QueryVolume("AuthenticatedOwner");
+
+    private VolumeStatus? QueryVolume(string command)
     {
         try
         {
-            using var reply = SendCommand("Status");
+            using var reply = SendCommand(command);
             var root = reply.RootElement;
-            RequireSuccess(root, "Status");
+            RequireSuccess(root, command);
             var status = root.GetProperty("status");
             if (!status.GetProperty("attached").GetBoolean()) return null;
             return new VolumeStatus(status.GetProperty("volumeGuid").GetString() ?? "",
@@ -177,7 +183,7 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
             VerifyServer(pipe);
             // A mutation can take longer than a status query, especially when Windows
             // mounts a cold VHDX and BitLocker discovers the volume.
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(command == "Status" ? 8 : 45));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(command is "Status" or "AuthenticatedOwner" ? 8 : 45));
             pipe.WriteAsync(wire.AsMemory(0, checked((int)request.Length)), timeout.Token)
                 .AsTask().GetAwaiter().GetResult();
             byte[] newline = [10];
