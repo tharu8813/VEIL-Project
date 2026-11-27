@@ -381,3 +381,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: 검증용 전체 패키지 스테이징 및 등록 핀 계획
 
 정확한 head 342b6cd 일반 CI 45951446755 PASS, native CI 확인 시 진행 중. 기존 설치/등록/서비스가 없는 깨끗한 VM에서만 고정 별도 staging에 전체 검증용 payload와 두 CMS 증거를 관리자 제한 ACL로 복사하는 준비 도구 추가. 복사 전 검증, 원본 증거 해시 및 복사본 비교, 원본/복사본 재검증 후 Desktop/Broker/CEF SHA-256 및 runtime pins 계획을 출력한다. 기존/부분 staging은 자동 삭제·재사용하지 않는다. 등록/설치/서비스/볼륨 변경 없음. 합성 테스트 추가, 신규 CI 및 실제 ACL/서명/VM NOT RUN. 설치 게시·복구·실제 BitLocker 검증은 남아 있음.
+
+### 추가 구현: 보호 볼륨 등록 초안 및 준비 기록
+
+정확한 head 12c4661 일반 CI 45951965294 PASS, native CI 확인 시 진행 중. 별도 staging을 재검증하고 Desktop/Broker/CEF 이미지 핀과 명시된 시험 볼륨/보호기/사용자 SID를 연결하는 broker.json/client.json/cef-runtime-pins.json 초안 생성. 실제 실행 시 기존 복구 확인 루틴으로 명시적 기존 보호기 확인, 비강제 재잠금과 분리 후 재검증하며 실제 VHDX를 일시 mount/unlock할 수 있다. 비밀번호를 기록하지 않는다. 고정 별도 Program Files 디렉터리에 CreateNew/Flush(true)/재조회 후 파일 해시와 prepared-only journal을 마지막에 작성. 기존/부분 초안 보존. 합성 핀·입력 거부·파일 충돌 테스트 추가. 설치/서비스/실제 등록 변경 없음. 신규 CI, 실제 복구/ACL/VM/전원 차단 및 독립 리뷰 NOT RUN; 초안 재검증 및 게시/복구 상태 기계는 미구현.

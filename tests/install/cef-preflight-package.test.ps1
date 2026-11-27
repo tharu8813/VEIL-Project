@@ -15,6 +15,14 @@ $stageSource = [IO.File]::ReadAllText((Join-Path $dir 'cef-preflight-staging.ps1
 $import = ". (Join-Path " + '$PSScriptRoot' + " 'cef-preflight-package.ps1')"
 if (-not $stageSource.Contains($import)) { throw 'Staging import changed.' }
 . ([scriptblock]::Create($stageSource.Replace($import,'')))
+$registration = [IO.File]::ReadAllText((Join-Path $dir 'cef-preflight-registration.ps1'))
+foreach ($name in @('cef-preflight-staging.ps1','cef-registration-plan.ps1')) {
+    $import = ". (Join-Path " + '$PSScriptRoot' + " '$name')"
+    if (-not $registration.Contains($import)) { throw 'Registration import changed.' }
+    $registration = $registration.Replace($import,'')
+}
+. (Join-Path $dir 'cef-registration-plan.ps1')
+. ([scriptblock]::Create($registration))
 function New-VeilRestrictedDirectory([string]$Path) {
     if (Test-Path -LiteralPath $Path) { throw 'Already exists.' }
     [void][IO.Directory]::CreateDirectory($Path)
@@ -94,6 +102,55 @@ try {
     }
     Reject { Copy-VeilVerifiedPreflightPackage $root $cefEvidence $packageEvidence $stage $cert.Thumbprint $commit }
     [void](Get-VeilPreflightStagePlan $stage $cert.Thumbprint $commit)
+    $volumeGuid = [guid]'11111111-1111-1111-1111-111111111111'
+    $primary = [guid]'22222222-2222-2222-2222-222222222222'
+    $recovery = [guid]'33333333-3333-3333-3333-333333333333'
+    $sid = 'S-1-5-21-100-200-300-1001'
+    $bin = 'C:\Program Files\VEIL'
+    $image = 'C:\Program Files\VEIL-test-volume\profile.vhdx'
+    $profile = 'V:\VEIL\profile'
+    $draft = New-VeilPreflightRegistrationDraft $plan $bin $image $profile $volumeGuid $primary $recovery $sid 'synthetic'
+    if ($draft['broker.json'].clientSha256 -cne $plan.desktopSha256 -or
+        $draft['broker.json'].cefChildSha256 -cne $plan.cefChildSha256 -or
+        $draft['broker.json'].clientImages.Count -ne 1 -or
+        $draft['broker.json'].clientImages[0] -ne (Join-Path $bin 'Desktop\Veil.Desktop.exe') -or
+        $draft['broker.json'].allowUnsignedClients -or $draft['broker.json'].development -or
+        -not $draft['client.json'].requireWindowsService -or $draft['cef-runtime-pins.json'].startupEnabled) {
+        throw 'Invalid registration draft.'
+    }
+    Reject { New-VeilPreflightRegistrationDraft $plan $bin $image $profile $volumeGuid $primary $primary $sid 'synthetic' }
+    Reject { New-VeilPreflightRegistrationDraft $plan $bin $image $profile ([guid]::Empty) $primary $recovery $sid 'synthetic' }
+    Reject { New-VeilPreflightRegistrationDraft $plan $bin $image $profile $volumeGuid $primary $recovery 'S-1-5-18' 'synthetic' }
+    Reject { New-VeilPreflightRegistrationDraft $plan $bin $image 'V:\' $volumeGuid $primary $recovery $sid 'synthetic' }
+    Reject { New-VeilPreflightRegistrationDraft $plan $bin $image $profile $volumeGuid $primary $recovery $sid 'bad/id' }
+    $originalHash = $plan.cefChildSha256
+    $plan.cefChildSha256 = '0'*64
+    Reject { New-VeilPreflightRegistrationDraft $plan $bin $image $profile $volumeGuid $primary $recovery $sid 'synthetic' }
+    $plan.cefChildSha256 = $originalHash
+    $destination = Join-Path $work 'registration'
+    $journal = Write-VeilPreflightRegistrationDraft $destination $draft $plan
+    if ($journal.state -cne 'prepared-only' -or $journal.installable -or $journal.startupEnabled -or
+        $journal.files.Count -ne 3 -or @(Get-ChildItem -LiteralPath $destination -Force).Count -ne 4) {
+        throw 'Invalid preparation marker.'
+    }
+    foreach ($file in $journal.files) {
+        if ((Get-FileHash -LiteralPath (Join-Path $destination $file.name)).Hash -ne $file.sha256) { throw 'Registration hash mismatch.' }
+    }
+    $journalPath = Join-Path $destination 'preparation.json'
+    $journalHash = (Get-FileHash -LiteralPath $journalPath).Hash
+    Reject { Write-VeilPreflightRegistrationDraft $destination $draft $plan }
+    if ((Get-FileHash -LiteralPath $journalPath).Hash -ne $journalHash) { throw 'Existing preparation changed.' }
+    # Inject a deterministic file creation conflict after creating a fresh
+    # preparation directory. No complete marker may follow the failed write.
+    $partial = Join-Path $work 'partial-registration'
+    function New-VeilRestrictedDirectory([string]$Path) {
+        [void][IO.Directory]::CreateDirectory($Path)
+        [IO.File]::WriteAllText((Join-Path $Path 'client.json'),'preserve')
+    }
+    Reject { Write-VeilPreflightRegistrationDraft $partial $draft $plan }
+    if ((Test-Path -LiteralPath (Join-Path $partial 'preparation.json')) -or
+        [IO.File]::ReadAllText((Join-Path $partial 'client.json')) -cne 'preserve') { throw 'Partial registration not preserved.' }
+    Write-Host 'PASS: preflight registration draft, hash marker and interrupted preparation refusal'
     $stageDll = Join-Path $stage 'payload/Desktop/Veil.Desktop.dll'
     [IO.File]::AppendAllText($stageDll,'changed')
     Reject { Get-VeilPreflightStagePlan $stage $cert.Thumbprint $commit }
