@@ -52,6 +52,8 @@ internal sealed class TabbedDevelopmentHost
     private Tab? loginSpare;
     private int lifetimeAuthorizationChecks;
     private ulong closingLoginId;
+    private bool expectLoginRendererFailure;
+    private int loginRendererFailures;
     private int loginProbeIndex, loginValuesIndex, loginFillIndex;
     private static readonly string[] LoginFillPaths = ["/tabs-login-fill-empty", "/tabs-login-fill-matching",
         "/tabs-login-fill-existing", "/tabs-login-fill-other", "/tabs-login-fill-denied"];
@@ -142,9 +144,18 @@ internal sealed class TabbedDevelopmentHost
             // Native and managed loopback restrictions remain in force.
             request.Cancel = tab.Closing || shuttingDown;
         };
-        view.ProcessFailed += (_, _) =>
+        view.ProcessFailed += (_, failure) =>
         {
             status.Text = "CEF child process failed.";
+            if (freshProfileProbe && expectLoginRendererFailure && phase == 81 && tab == first &&
+                view.NativeHandle == firstId && failure.Scope == EngineFailureScope.PageOrChildProcess &&
+                CefNative.VeilCefLoginProbeStatus(firstId) == -1 && loginRendererFailures == 0)
+            {
+                loginRendererFailures++;
+                expectLoginRendererFailure = false;
+                Log("Expected renderer failure invalidated the pending login observation");
+                return;
+            }
             if (fixture is not null) { result = 41; window.Dispatcher.BeginInvoke(new Action(BeginShutdown)); }
         };
         tabs.Add(tab);
@@ -1009,6 +1020,51 @@ internal sealed class TabbedDevelopmentHost
         {
             if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result != true) { Fail(); return; }
             Log("Reopened login view retained new identity and empty form");
+            RequestClose(loginSpare!);
+            phase = 79;
+        }
+        else if (phase == 79 && CefNative.VeilCefLiveViewCount() == 1 && retired.Count == 0 && active == first)
+        {
+            address.Text = Url("/tabs-login-renderer-failure");
+            NavigateAddress();
+            phase = 80;
+        }
+        else if (phase == 80 && first?.View.DocumentTitle == "TAB_LOGIN_RENDERER_FAILURE" && !first.View.IsFixtureLoading)
+        {
+            var page = Url("/tabs-login-renderer-failure");
+            if (first.View.Source != page || first.View.NativeHandle != firstId) { Fail(); return; }
+            expectLoginRendererFailure = true;
+            phase = 81;
+            loginProbe = first.View.AwaitFixtureLoginRendererFailureAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page,
+                () => active == first && !first.Closing && !shuttingDown);
+        }
+        else if (phase == 81 && loginRendererFailures == 1 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is not null ||
+                first!.View.NativeHandle != firstId || CefNative.VeilCefLiveViewCount() != 1)
+            { Fail(); return; }
+            var page = Url("/tabs-login-renderer-failure");
+            var origin = new Uri(page).GetLeftPart(UriPartial.Authority);
+            CefNative.CookieDeleteAuthorization allow = _ => 1;
+            if (CefNative.VeilCefStartLoginRendererWait(firstId, origin, page, allow) != 0) { Fail(); return; }
+            Log("Failed renderer refused another login observation before recovery");
+            address.Text = Url("/tabs-login-fill-renderer-recovered");
+            NavigateAddress();
+            phase = 82;
+        }
+        else if (phase == 82 && first?.View.DocumentTitle == "TAB_LOGIN_RENDERER_RECOVERED" && !first.View.IsFixtureLoading)
+        {
+            var page = Url("/tabs-login-fill-renderer-recovered");
+            if (first.View.Source != page || first.View.NativeHandle != firstId) { Fail(); return; }
+            loginProbe = first.View.CheckFixtureLoginFillStateAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page,
+                () => active == first && !first.Closing && !shuttingDown);
+            phase = 83;
+        }
+        else if (phase == 83 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result != true || loginRendererFailures != 1)
+            { Fail(); return; }
+            Log("Explicit recovery navigation restored login observation on the same view with empty form");
             result = 0;
             BeginShutdown();
         }
