@@ -122,16 +122,18 @@ SCM에 고정 경로의 Veil.VolumeBroker를 LocalSystem / Disabled / Stopped �
 
 명시적 -RunProbe를 추가하면 복구 자격 증명을 다시 확인한 뒤 서비스 probe intent를 만들고 Manual 전환, SCM Running 및 분리 상태를 확인한다. 정상·오류 모두 finally에서 정확한 서비스의 Disabled 전환 및 정상 Stop, 분리 상태를 확인한다. 모든 검증이 통과해야 running-then-stopped 기록을 남긴다. SCM Running 관측은 실제 일반 사용자 브라우저 연결 검증이 아니다. 프로세스 강제 종료 및 강제 볼륨 분리 금지. 전원 차단으로 finally를 실행하지 못하거나 서비스 정지/분리 확인 실패 시 기존 상태를 보존하고 관리자가 VM을 검사해야 한다. 자동 재개 없음. 실제 SCM/BitLocker 시험은 NOT RUN.
 
-## 12. 일반 사용자 사전 검사 전 차단점
+## 12. 일반 사용자 보호 프로필 사전 검사 세션
 
-전용 파일 게시, 제한된 재개, 비활성 서비스 등록 및 일회성 시작/정지 시험 코드는 마련했지만 실제 VM 시험과 일반 사용자 사전 검사 세션 조정은 아직 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
-
-후속 구현은 실제 VM에서 SCM 상태와 일회성 시험을 검증하고 일반 사용자 보호 프로필 검사 세션을 별도 조정해야 한다. 그 뒤에만 고정 설치 경로의 일반 사용자 검증 명령을 실행한다.
+위 서비스 시작/정지 시험을 통과하고 비활성 상태로 복귀한 폐기용 VM에서만 진행한다. 관리자 대화형 데스크톱과 별도 활성화된 로컬 일반 사용자 계정이 필요하다. 표준 계정의 Windows 로그인 암호를 Get-Credential로 받으며 등록된 SID와 비교한다. 관리자 그룹 직접 구성원과 현재 관리자 계정은 거부한다. 운영자는 간접 관리자 권한도 없는 계정을 준비해야 한다. Windows Secondary Logon 및 대화형 자격 증명 실행 호환성은 실제 VM에서 확인해야 한다.
 
 ~~~powershell
-# 전용 등록 절차 완료 후에만 실행. 현재 실행하지 않는다.
-$p = Start-Process -FilePath "$env:ProgramFiles\VEIL\Desktop\Veil.Desktop.exe" -ArgumentList '--cef-protected-preflight' -PassThru -Wait
-$p.ExitCode
+.\scripts\test-cef-protected-session.ps1 -DisposableVm -RunProtectedSession -SignerThumbprint $pin -SourceCommit $commit -ImagePath $testImage -ProfilePath $testProfile -VolumeGuid $volumeGuid -ProtectorId $primaryId -RecoveryProtectorId $recoveryId -UserSid $testUserSid
 ~~~
 
-29는 등록된 보호 프로필의 비활성 사전 검사 및 재잠금 확인을 뜻하며 실제 CEF 브라우징 성공이 아니다. 1/2 및 기타 종료 코드는 통과가 아니다. 실제 설치 서비스, 보호 볼륨, 잠금/절전, CEF 초기화, 출시 게이트는 별도로 검증한다.
+등록 및 이전 서비스 시험 저널을 다시 검증하고 복구 자격 증명을 확인한 뒤 수동 시작한 서비스에 연결한다. 관리자가 서명된 고정 Desktop EXE를 지정된 표준 계정 자격 증명으로 --cef-protected-preflight 인자만 사용하여 실행한다. 브라우저 자체가 상승 권한을 거부하고 브로커가 등록 SID를 확인한다. 앱의 시험용 볼륨 암호 입력창에만 볼륨 암호를 입력한다. Windows 로그인 암호와 볼륨 암호는 별개이며 파일, 명령행 또는 로그에 기록하지 않는다.
+
+관리자 측 프로세스 객체에서 최대 5분 동안 종료를 관측한다. 종료 코드 29, 동일 브로커 PID 및 볼륨 분리를 확인한 뒤 서비스 Disabled/Stopped, 재분리 및 등록 재검증을 요구한다. 별도 보호 세션 저널에 시험 결과를 기록한다. 1/2, 다른 코드, timeout, 브로커 교체 또는 분리 실패는 성공이 아니다. Timeout 시 브라우저 강제 종료 없이 서비스 정상 정리를 시도하므로 시험 창을 닫고 VM을 확인해야 한다. 이 절차는 계정 로그인/실제 프로세스 토큰·독립 OS write trace의 완전한 증명이 아니며 일반 사용자 결과를 신뢰된 실행 관측과 함께 확인해야 한다. 실제 Windows/BitLocker/CEF 시험은 NOT RUN이다.
+
+## 13. 남은 차단점
+
+관리자와 일반 사용자가 분리된 실제 폐기용 VM에서 서명, 전체 설치, 서비스 등록, 일반 사용자 사전 검사를 수행하고 재잠금·분리를 실측해야 한다. 기존 제품 설치 또는 실사용 데이터를 변경하지 않는다. 종료 코드 29는 보호된 비활성 자식 사전 검사와 정리를 뜻할 뿐 실제 CEF 초기화나 브라우징 성공이 아니다. 실제 CEF 런타임 활성화, OS 기록 추적, 잠금/절전 및 출시 게이트는 별도 검증한다.

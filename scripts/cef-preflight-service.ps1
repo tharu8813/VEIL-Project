@@ -109,7 +109,8 @@ function Assert-VeilPreflightServiceIdentity($Service,[string]$Command) {
 
 function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
     [scriptblock]$VerifyRegistration,[scriptblock]$ReadService,[scriptblock]$ReadDacl,
-    [scriptblock]$SetManual,[scriptblock]$Start,[scriptblock]$Disable,[scriptblock]$Stop,[scriptblock]$RequireDetached) {
+    [scriptblock]$SetManual,[scriptblock]$Start,[scriptblock]$Disable,[scriptblock]$Stop,[scriptblock]$RequireDetached,
+    [scriptblock]$Exercise) {
     if (Test-Path -LiteralPath $ProbeRoot) { throw 'Existing or interrupted probe must be preserved.' }
     $registrationEvidence = & $VerifyRegistration
     if ($registrationEvidence.state -cne 'registered-disabled' -or $registrationEvidence.startupEnabled -isnot [bool] -or
@@ -148,6 +149,20 @@ function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
         [void](Write-VeilPreflightDraftFile (Join-Path $ProbeRoot '02-running-observed.json') ([ordered]@{
             state='running-observed';intentSha256=$intentHash;startupEnabled=$false
         }))
+        if ($null -ne $Exercise) {
+            $exitCode = & $Exercise
+            if ($exitCode -isnot [int] -or $exitCode -ne 29) { throw 'Protected preflight did not exit verified-but-disabled.' }
+            $after = & $ReadService
+            Assert-VeilPreflightServiceIdentity $after $Command
+            Assert-VeilPreflightServiceDacl (& $ReadDacl)
+            if ($after.State -ne 'Running' -or $after.StartMode -ne 'Manual' -or $after.ProcessId -ne $running.ProcessId) {
+                throw 'Broker changed during protected preflight.'
+            }
+            & $RequireDetached
+            [void](Write-VeilPreflightDraftFile (Join-Path $ProbeRoot '02a-protected-preflight.json') ([ordered]@{
+                state='protected-preflight-exit-observed';intentSha256=$intentHash;exitCode=29;startupEnabled=$false
+            }))
+        }
     }
     finally {
         $current = & $ReadService
@@ -171,4 +186,25 @@ function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
     }
     [void](Write-VeilPreflightDraftFile (Join-Path $ProbeRoot '03-stopped-verified.json') $final)
     return $final
+}
+
+
+function Assert-VeilCompletedServiceProbe([string]$ProbeRoot,$RegistrationEvidence) {
+    Assert-VeilAdminPath $ProbeRoot
+    $items = @(Get-ChildItem -LiteralPath $ProbeRoot -Force)
+    if ($items.Count -ne 3 -or @($items | Where-Object {
+        $_.PSIsContainer -or $_.Name -cnotin @('01-probe-intent.json','02-running-observed.json','03-stopped-verified.json')
+    }).Count -ne 0) { throw 'Complete isolated service probe required.' }
+    $intent = [ordered]@{
+        kind='cef-preflight-service-probe';format=1;state='probe-intent'
+        sourceCommit=$RegistrationEvidence.sourceCommit;registrationSha256=$RegistrationEvidence.registrationSha256;startupEnabled=$false
+    }
+    $digest = Assert-VeilPreflightDraftBytes (Read-VeilPreflightDraftBytes (Join-Path $ProbeRoot '01-probe-intent.json')) $intent
+    [void](Assert-VeilPreflightDraftBytes (Read-VeilPreflightDraftBytes (Join-Path $ProbeRoot '02-running-observed.json')) ([ordered]@{
+        state='running-observed';intentSha256=$digest;startupEnabled=$false
+    }))
+    [void](Assert-VeilPreflightDraftBytes (Read-VeilPreflightDraftBytes (Join-Path $ProbeRoot '03-stopped-verified.json')) ([ordered]@{
+        kind='cef-preflight-service-probe';format=1;state='running-then-stopped'
+        intentSha256=$digest;sourceCommit=$RegistrationEvidence.sourceCommit;startupEnabled=$false
+    }))
 }

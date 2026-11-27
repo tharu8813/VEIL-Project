@@ -267,6 +267,40 @@ try {
     Assert-VeilDisabledPreflightService $script:fakeService $command
     if (-not (Test-Path -LiteralPath (Join-Path $failedProbe '01-probe-intent.json')) -or
         (Test-Path -LiteralPath (Join-Path $failedProbe '03-stopped-verified.json'))) { throw 'Failed probe incorrectly completed.' }
+    # The service-only probe is a prerequisite, not evidence of the user
+    # preflight. A separate synthetic exercise returns the actual exit-code type.
+    Assert-VeilCompletedServiceProbe $probeRoot (& $verifyService)
+    Reject { Assert-VeilCompletedServiceProbe $failedProbe (& $verifyService) }
+    $probeFinalPath = Join-Path $probeRoot '03-stopped-verified.json'
+    $probeFinalBytes = [IO.File]::ReadAllBytes($probeFinalPath)
+    [IO.File]::AppendAllText($probeFinalPath,' ')
+    Reject { Assert-VeilCompletedServiceProbe $probeRoot (& $verifyService) }
+    [IO.File]::WriteAllBytes($probeFinalPath,$probeFinalBytes)
+    $sessionRoot = Join-Path $work 'protected-session'
+    $exercise = {
+        if ($script:fakeService.State -ne 'Running') { throw 'Exercise without broker.' }
+        return [int]29
+    }
+    $sessionResult = Invoke-VeilPreflightServiceProbe $sessionRoot $command $verifyService $readService $readDacl $manual $startProbe $disabled $stopProbe {} $exercise
+    if ($sessionResult.state -cne 'running-then-stopped' -or $sessionResult.startupEnabled -or
+        @(Get-ChildItem -LiteralPath $sessionRoot -Force).Count -ne 4) { throw 'Protected session not completed.' }
+    $exerciseRecord = Get-Content -LiteralPath (Join-Path $sessionRoot '02a-protected-preflight.json') -Raw | ConvertFrom-Json
+    if ($exerciseRecord.exitCode -ne 29 -or $exerciseRecord.startupEnabled) { throw 'Unexpected exercise result.' }
+    Reject { Assert-VeilCompletedServiceProbe $sessionRoot (& $verifyService) }
+    Assert-VeilDisabledPreflightService $script:fakeService $command
+    $index = 0
+    foreach ($badExercise in @({ return [int]1 },{ return '29' },{ throw 'Synthetic user timeout.' },
+        { $script:fakeService.ProcessId = 101; return [int]29 })) {
+        $index++
+        $badSession = Join-Path $work ('bad-protected-session-' + $index)
+        Reject { Invoke-VeilPreflightServiceProbe $badSession $command $verifyService $readService $readDacl $manual $startProbe $disabled $stopProbe {} $badExercise }
+        Assert-VeilDisabledPreflightService $script:fakeService $command
+        if ((Test-Path -LiteralPath (Join-Path $badSession '02a-protected-preflight.json')) -or
+            (Test-Path -LiteralPath (Join-Path $badSession '03-stopped-verified.json'))) {
+            throw 'Failed protected session recorded success.'
+        }
+    }
+    Write-Host 'PASS: protected session callback, exact exit code, broker continuity and cleanup'
     Write-Host 'PASS: service journal revalidation and synthetic start/stop/failure cleanup'
     $script:fakeService = $null
     $badPublication = { [pscustomobject]@{state='publish-registration';startupEnabled=$false;serviceCreated=$false} }

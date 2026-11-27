@@ -405,3 +405,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: 서비스 등록 재검증 및 일회성 시작/정지 시험
 
 정확한 head 1f765d0 일반 CI 45954697017 PASS, native CI 확인 시 진행 중. 별도 등록 저널과 실제 Disabled/Stopped SCM identity/DACL 및 게시 증거 재검증. 명시적 RunProbe에만 복구 자격 증명 재확인 후 Manual 및 Running 관측, finally에서 Disabled/정상 Stop/분리 확인. 실패 기록 보존, 완료 기록은 정상 전체 시험에서만 생성. 실제 서비스와 볼륨은 실행하지 않았으며 강제 종료/분리 및 자동 재개 없음. 합성 시작/정지·시작 응답 실패 후 정리 테스트 추가. 신규 CI 및 실제 SCM/ACL/BitLocker/전원 차단/독립 리뷰 NOT RUN. 일반 사용자 사전 검사 세션 및 CEF 초기화는 남아 있음.
+
+### 추가 구현: 일반 사용자 보호 프로필 검증 세션
+
+정확한 head cea72bb 일반 CI 45955235904 PASS, native CI 확인 시 진행 중. 비활성 등록과 이전 서비스 전용 probe 저널을 재구성해 확인한 뒤 명시적 폐기용 VM/RunProtectedSession 옵션으로 별도 시험 계정의 Windows 자격 증명을 요청, 등록 SID와 일치 확인. 서비스 제한 시작 중 고정 서명 Desktop EXE를 해당 계정으로 --cef-protected-preflight만 실행, 관리자 측 Process에서 최대 5분 종료 관측, 정확한 int 29/동일 서비스 PID/시험 VHDX 분리 확인 후 Disabled/Stopped 및 등록 재검증. 별도 저널 기록. 실패/timeout은 강제 종료 없이 정상 정리 시도 및 상태 보존. 합성 callback 테스트 추가. 실제 Windows Secondary Logon/토큰/SCM/BitLocker/서명/VM/독립 리뷰 NOT RUN; 일반 사용자 계정 구성과 독립 OS trace는 별도 확인 필요. 29는 CEF 활성화/브라우징이 아님. 신규 CI 대기.
