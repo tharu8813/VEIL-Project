@@ -690,3 +690,22 @@ test('CEF login target closing revokes the old operation and identity', async ()
     assert.match(cefTabbed, /newTarget\.View\.CheckFixtureLoginFillStateAsync/);
     assert.match(runner, /Closing login target invalidated authorization and retired native identity[\s\S]*Reopened login view retained new identity and empty form/);
 });
+
+
+test('CEF login renderer fault is a single-view fixed fixture and requires explicit recovery', async () => {
+    const runner = await readFile('tests/cef/tabs-smoke.mjs', 'utf8');
+    assert.match(cefNative, /static bool IsFixtureLoginRendererPage[\s\S]*?IsFixtureStorageOrigin\(origin\)[\s\S]*?page == origin \+ L"\/tabs-login-renderer-failure";/);
+    assert.match(cefNative, /if \(!authorize \|\| views\.size\(\) != 1 \|\| !IsFixtureLoginRendererPage\(origin, page\)\) return 0;/);
+    assert.match(cefNative, /expression \+= "return new Promise\(\(\)=>\{\}\);";/);
+    assert.match(cefNative, /if \(probe->renderer_wait\) parameters->SetBool\("awaitPromise", true\);/);
+    const crash = cefNative.slice(cefNative.indexOf('int VeilCefCrashFixtureLoginRenderer('), cefNative.indexOf('int VeilCefFixtureLoading('));
+    assert.match(crash, /views\.size\(\) != 1[\s\S]*?IsFixtureLoginRendererPage\(origin, page\)/);
+    assert.match(crash, /state->login_probe->crash_requested \|\| state->login_probe->message_id <= 0 \|\|\s*state->login_probe->status != 0/);
+    assert.match(crash, /ExecuteDevToolsMethod\(0, "Page\.crash", nullptr\)/);
+    assert.match(cefNative, /state_->login_renderer_failed = true;\s*state_->InvalidateLoginProbe\(\);\s*Complete\(false, false, ERR_FAILED\);/);
+    assert.match(cefNative, /if \(loaded\) state_->login_renderer_failed = false;/);
+    assert.match(cefView, /operation == FixtureLoginOperation\.AwaitRendererFailure &&[\s\S]*?CefNative\.VeilCefCrashFixtureLoginRenderer\(id, origin, page\) != 1/);
+    assert.match(cefTabbed, /freshProfileProbe && expectLoginRendererFailure && phase == 81 && tab == first/);
+    assert.match(cefTabbed, /CefNative\.VeilCefStartLoginRendererWait\(firstId, origin, page, allow\) != 0/);
+    assert.match(runner, /Expected renderer failure invalidated the pending login observation[\s\S]*Failed renderer refused another login observation before recovery[\s\S]*Explicit recovery navigation restored login observation on the same view with empty form/);
+});

@@ -179,7 +179,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
     // product credential capability. The native route allowlist is authoritative.
     internal bool IsFixtureLoading => NativeHandle == 0 || CefNative.VeilCefFixtureLoading(NativeHandle) != 0;
 
-    private enum FixtureLoginOperation { Probe, CheckValues, Fill, CheckFillState }
+    private enum FixtureLoginOperation { Probe, CheckValues, Fill, CheckFillState, AwaitRendererFailure }
 
     internal Task<bool?> ProbeFixtureLoginFormAsync(string origin, string page, Func<bool> stillAuthorized) =>
         ObserveFixtureLoginAsync(origin, page, stillAuthorized, FixtureLoginOperation.Probe);
@@ -195,6 +195,9 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
 
     internal Task<bool?> CheckFixtureLoginFillStateAsync(string origin, string page, Func<bool> stillAuthorized) =>
         ObserveFixtureLoginAsync(origin, page, stillAuthorized, FixtureLoginOperation.CheckFillState);
+
+    internal Task<bool?> AwaitFixtureLoginRendererFailureAsync(string origin, string page, Func<bool> stillAuthorized) =>
+        ObserveFixtureLoginAsync(origin, page, stillAuthorized, FixtureLoginOperation.AwaitRendererFailure);
 
     private async Task<bool?> ObserveFixtureLoginAsync(string origin, string page,
         Func<bool> stillAuthorized, FixtureLoginOperation operation)
@@ -226,12 +229,16 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
                 FixtureLoginOperation.CheckValues => CefNative.VeilCefStartLoginValuesCheck(id, origin, page, authorize),
                 FixtureLoginOperation.Fill => CefNative.VeilCefStartLoginFill(id, origin, page, authorize),
                 FixtureLoginOperation.CheckFillState => CefNative.VeilCefStartLoginFillState(id, origin, page, authorize),
+                FixtureLoginOperation.AwaitRendererFailure => CefNative.VeilCefStartLoginRendererWait(id, origin, page, authorize),
                 _ => 0
             };
             // Native invokes the callback synchronously and never retains it.
             GC.KeepAlive(authorize);
             started = nativeStart == 1;
             if (!started) return null;
+            if (operation == FixtureLoginOperation.AwaitRendererFailure &&
+                (!Current() || CefNative.VeilCefCrashFixtureLoginRenderer(id, origin, page) != 1))
+                return null;
             var deadline = System.Diagnostics.Stopwatch.StartNew();
             int status;
             while ((status = CefNative.VeilCefLoginProbeStatus(id)) == 0)
@@ -629,6 +636,10 @@ internal static class CefNative
     internal static extern int VeilCefStartLoginFill(ulong id, string origin, string page, CookieDeleteAuthorization authorize);
     [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
     internal static extern int VeilCefStartLoginFillState(ulong id, string origin, string page, CookieDeleteAuthorization authorize);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern int VeilCefStartLoginRendererWait(ulong id, string origin, string page, CookieDeleteAuthorization authorize);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern int VeilCefCrashFixtureLoginRenderer(ulong id, string origin, string page);
     [DllImport(Module)] internal static extern int VeilCefFixtureLoading(ulong id);
     [DllImport(Module)] internal static extern int VeilCefLoginProbeStatus(ulong id);
     [DllImport(Module)] internal static extern void VeilCefEndLoginProbe(ulong id);

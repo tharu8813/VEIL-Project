@@ -160,6 +160,8 @@ class StorageClearObserver final : public CefDevToolsMessageObserver {
 
 // Boolean-only fixture observation. Never return DOM or credential values.
 struct LoginProbe {
+  bool renderer_wait = false;
+  bool crash_requested = false;
   int message_id = 0;
   int status = 0;  // pending=0, detected=1, not detected=2, failed=-1
 };
@@ -217,6 +219,7 @@ struct ViewState {
   std::wstring title;
   std::wstring page_source = L"about:blank";
   bool page_fullscreen = false;
+  bool login_renderer_failed = false;
   bool closing = false;
   BeforeBrowse before_browse;
   NavigationComplete navigation_complete;
@@ -545,8 +548,11 @@ class Client final : public CefClient,
     return false;
   }
   void OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, int http_status) override {
-    if (frame->IsMain() && frame->GetURL() == active_url_)
-      Complete(http_status >= 200 && http_status < 400, false, http_status);
+    if (frame->IsMain() && frame->GetURL() == active_url_) {
+      const bool loaded = http_status >= 200 && http_status < 400;
+      if (loaded) state_->login_renderer_failed = false;
+      Complete(loaded, false, http_status);
+    }
   }
   void OnLoadError(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
                    ErrorCode error, const CefString&, const CefString& failed_url) override {
@@ -575,6 +581,7 @@ class Client final : public CefClient,
                                  int error_code, const CefString&) override {
     // A renderer is a child process. The browser/managed host is still alive.
     // Release any serialized navigation so a user-directed retry can proceed.
+    state_->login_renderer_failed = true;
     state_->InvalidateLoginProbe();
     Complete(false, false, ERR_FAILED);
     if (state_->render_process_failed) state_->render_process_failed(error_code);
@@ -988,7 +995,7 @@ static bool IsFixtureLoginValuesPage(const std::wstring& origin, const std::wstr
 
 // Separate fixed operations and exact routes. No arbitrary credential or
 // script parameter is accepted by these fixture exports.
-enum class FixtureLoginOperation { Probe, CheckValues, Fill, CheckFillState };
+enum class FixtureLoginOperation { Probe, CheckValues, Fill, CheckFillState, AwaitRendererFailure };
 static bool IsFixtureLoginFillPage(const std::wstring& origin, const std::wstring& page) {
   if (!IsFixtureStorageOrigin(origin) || origin.rfind(L"http://127.0.0.1:", 0) != 0) return false;
   for (const auto* path : {L"/tabs-login-fill-empty", L"/tabs-login-fill-matching",
@@ -996,9 +1003,16 @@ static bool IsFixtureLoginFillPage(const std::wstring& origin, const std::wstrin
                           L"/tabs-login-fill-denied", L"/tabs-login-fill-duplicate",
                           L"/tabs-login-fill-switch", L"/tabs-login-fill-navigation",
                           L"/tabs-login-fill-destination", L"/tabs-login-fill-closing",
-                          L"/tabs-login-fill-reopened"})
+                          L"/tabs-login-fill-reopened", L"/tabs-login-fill-renderer-recovered"})
     if (page == origin + path) return true;
   return false;
+}
+
+// No caller-selected crash URL or script. Both the pending observation and
+// fault injection are confined to the single-view synthetic renderer fixture.
+static bool IsFixtureLoginRendererPage(const std::wstring& origin, const std::wstring& page) {
+  return IsFixtureStorageOrigin(origin) && origin.rfind(L"http://127.0.0.1:", 0) == 0 &&
+         page == origin + L"/tabs-login-renderer-failure";
 }
 
 static int StartFixtureLoginObservation(uint64_t id, const wchar_t* origin,
@@ -1015,11 +1029,15 @@ static int StartFixtureLoginObservation(uint64_t id, const wchar_t* origin,
     case FixtureLoginOperation::CheckFillState:
       if (!authorize || !IsFixtureLoginFillPage(origin, page)) return 0;
       break;
+    case FixtureLoginOperation::AwaitRendererFailure:
+      if (!authorize || views.size() != 1 || !IsFixtureLoginRendererPage(origin, page)) return 0;
+      break;
     default: return 0;
   }
   const auto state = LookupView(id);
   const auto browser = LookupBrowser(id);
-  if (!state || !browser || state->closing || state->login_probe || browser->IsLoading() ||
+  if (!state || !browser || state->closing || state->login_renderer_failed ||
+      state->login_probe || browser->IsLoading() ||
       state->page_source != page || browser->GetMainFrame()->GetURL().ToWString() != page) return 0;
   const auto host = browser->GetHost();
   // CefWriteJSON documents a dictionary/list root. Encode as an array, not a
@@ -1095,10 +1113,16 @@ static int StartFixtureLoginObservation(uint64_t id, const wchar_t* origin,
           form.dataset.inputs===events&&form.dataset.changes===events&&form.dataset.submits==='0';
       )JS";
       break;
+    case FixtureLoginOperation::AwaitRendererFailure:
+      // No input reads or mutations. A pending promise is interrupted by the
+      // renderer failure or the bounded managed deadline, not a success result.
+      expression += "return new Promise(()=>{});";
+      break;
     default: return 0;
   }
   expression += "}catch{return null;}})()";
   const auto probe = std::make_shared<LoginProbe>();
+  probe->renderer_wait = operation == FixtureLoginOperation::AwaitRendererFailure;
   state->login_probe = probe;
   state->login_probe_registration = host->AddDevToolsMessageObserver(new LoginProbeObserver(probe));
   if (state->login_probe_registration) {
@@ -1106,11 +1130,13 @@ static int StartFixtureLoginObservation(uint64_t id, const wchar_t* origin,
     parameters->SetString("expression", expression);
     parameters->SetBool("returnByValue", true);
     parameters->SetBool("silent", true);
+    if (probe->renderer_wait) parameters->SetBool("awaitPromise", true);
     // Authorize immediately before a value observation, and revalidate after
     // the managed callback in case it re-enters the host.
     const bool allowed = operation == FixtureLoginOperation::Probe || authorize(id) != 0;
     const auto current = LookupBrowser(id);
     if (allowed && LookupView(id) == state && !state->closing &&
+        !state->login_renderer_failed && (!probe->renderer_wait || views.size() == 1) &&
         state->login_probe == probe && probe->status == 0 && current == browser &&
         !browser->IsLoading() && state->page_source == page &&
         browser->GetMainFrame()->GetURL().ToWString() == page) {
@@ -1146,6 +1172,27 @@ extern "C" __declspec(dllexport) int VeilCefStartLoginFill(
 extern "C" __declspec(dllexport) int VeilCefStartLoginFillState(
     uint64_t id, const wchar_t* origin, const wchar_t* page, CookieDeleteAuthorization authorize) {
   return StartFixtureLoginObservation(id, origin, page, FixtureLoginOperation::CheckFillState, authorize);
+}
+extern "C" __declspec(dllexport) int VeilCefStartLoginRendererWait(
+    uint64_t id, const wchar_t* origin, const wchar_t* page, CookieDeleteAuthorization authorize) {
+  return StartFixtureLoginObservation(id, origin, page, FixtureLoginOperation::AwaitRendererFailure, authorize);
+}
+extern "C" __declspec(dllexport) int VeilCefCrashFixtureLoginRenderer(
+    uint64_t id, const wchar_t* origin, const wchar_t* page) {
+  if (!CefCurrentlyOn(TID_UI) || !origin || !page || views.size() != 1 ||
+      !IsFixtureLoginRendererPage(origin, page)) return 0;
+  const auto state = LookupView(id);
+  const auto browser = LookupBrowser(id);
+  if (!state || !browser || state->closing || state->login_renderer_failed ||
+      browser->IsLoading() || state->page_source != page ||
+      browser->GetMainFrame()->GetURL().ToWString() != page ||
+      !state->login_probe || !state->login_probe->renderer_wait ||
+      state->login_probe->crash_requested || state->login_probe->message_id <= 0 ||
+      state->login_probe->status != 0) return 0;
+  state->login_probe->crash_requested = true;
+  // Fixed diagnostic command for this synthetic renderer only, never a
+  // general DevTools endpoint. A returned ID is dispatch, not crash evidence.
+  return browser->GetHost()->ExecuteDevToolsMethod(0, "Page.crash", nullptr) > 0 ? 1 : 0;
 }
 extern "C" __declspec(dllexport) int VeilCefFixtureLoading(uint64_t id) {
   if (!CefCurrentlyOn(TID_UI)) return 1;

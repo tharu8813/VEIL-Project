@@ -39,6 +39,7 @@ const loginFillFixtures = new Map([
   ['/tabs-login-fill-destination', ['', '']],
   ['/tabs-login-fill-closing', ['', '']],
   ['/tabs-login-fill-reopened', ['', '']],
+  ['/tabs-login-fill-renderer-recovered', ['', '']],
 ]);
 const server = http.createServer((request, response) => {
   requests.push(request.url);
@@ -63,10 +64,16 @@ const server = http.createServer((request, response) => {
     response.end('<!doctype html><form><input><input type="password"></form>');
     return;
   }
+  if (request.url === '/tabs-login-renderer-failure') {
+    response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+    response.end('<!doctype html><title>TAB_LOGIN_RENDERER_FAILURE</title><form><input><input type="password"></form>');
+    return;
+  }
   if (loginFillFixtures.has(request.url)) {
     const index = [...loginFillFixtures.keys()].indexOf(request.url);
     const [user, pass] = loginFillFixtures.get(request.url);
-    const title = index < 5 ? 'TAB_LOGIN_FILL_' + index :
+    const title = request.url === '/tabs-login-fill-renderer-recovered' ? 'TAB_LOGIN_RENDERER_RECOVERED' :
+      index < 5 ? 'TAB_LOGIN_FILL_' + index :
       'TAB_LOGIN_LIFETIME_' + ['DUPLICATE', 'SWITCH', 'NAVIGATION', 'DESTINATION', 'CLOSING', 'REOPENED'][index - 5];
     response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
     response.end('<!doctype html><title>' + title + '</title>' +
@@ -272,6 +279,8 @@ try {
   assert.match(fresh.evidence, /Synthetic login fill verified exact markers, input\/change events, existing values and revoked dispatch without submission/);
   assert.match(fresh.evidence, /Duplicate login operation rejected without releasing original slot[\s\S]*A-B-A tab switch invalidated login authorization and preserved empty form[\s\S]*Navigation during native authorization rejected fill and preserved destination form/);
   assert.match(fresh.evidence, /Closing login target invalidated authorization and retired native identity[\s\S]*Reopened login view retained new identity and empty form/);
+  assert.equal(requests.filter(x => x === '/tabs-login-renderer-failure').length, 1);
+  assert.match(fresh.evidence, /Expected renderer failure invalidated the pending login observation[\s\S]*Failed renderer refused another login observation before recovery[\s\S]*Explicit recovery navigation restored login observation on the same view with empty form/);
   assert.match(fresh.evidence, /Synthetic values check rejected authorization at native dispatch[\s\S]*Synthetic login values equality accepted matching markers and rejected empty and mismatched markers/);
   assert.ok(!fresh.evidence.includes('veil-synthetic-user') && !fresh.evidence.includes('veil-synthetic-marker'), 'Synthetic input values must not appear in diagnostic output');
   assert.match(fresh.evidence, /Login probe discarded result after authorization expired[\s\S]*Boolean-only login probe accepted one form and rejected hidden, ambiguous, cross-origin, iframe and new-password forms/);
