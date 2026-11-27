@@ -549,13 +549,13 @@ Console.WriteLine("PASS: CEF executable SHA-256 pin and changed bytes refusal");
 var retainedPolicy = Grant();
 var retainedProcess = new SyntheticRetainedResource();
 var retainedImage = new SyntheticRetainedResource();
-using (var pending = new Veil.VolumeBroker.CefPendingChild(retainedPolicy, retainedProcess, retainedImage))
+using (var stagedChildResource = new Veil.VolumeBroker.CefPendingChild(retainedPolicy, retainedProcess, retainedImage))
 {
-    Check(!pending.IsExpired, "new pending child expired immediately");
+    Check(!stagedChildResource.IsExpired, "new pending child expired immediately");
     admissionClock.Advance(TimeSpan.FromSeconds(15));
-    Check(pending.IsExpired, "pending child did not expire");
-    pending.Dispose();
-    pending.Dispose();
+    Check(stagedChildResource.IsExpired, "pending child did not expire");
+    stagedChildResource.Dispose();
+    stagedChildResource.Dispose();
     Check(retainedProcess.Disposals == 1 && retainedImage.Disposals == 1 &&
         !Redeem(retainedPolicy), "pending child disposal failed to retire resources");
 }
