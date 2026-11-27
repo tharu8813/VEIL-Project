@@ -353,3 +353,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 검증: 잠금 거부 후 owner 종료 및 자동 재잠금 회귀
 
 정확한 head 82ce76c 일반 CI 45947832401 PASS (직전 실패했던 CefProcessBindingCheck, containment, runtime inventory 포함); native CI 확인 시 진행 중. 표준 사용자 fake-backend suite에 같은 별도 owner process가 Unlock/AuthenticatedOwner/Lock(HandlesOpen)/AuthenticatedOwner 및 Stage 거부를 차례로 받고 종료하는 시나리오를 추가한다. watcher의 실제 HandlesOpen 로그를 먼저 요구한 다음 synthetic marker 제거, 자동 relock, 권한 거부 및 Detach를 확인한다. SYSTEM/elevated/session 0/noninteractive 실행을 테스트 시작 전에 거부한다. README에 CEF 빌드 없이 실행할 방법과 증거 필드를 문서화했다. 이 회귀는 hosted CI에서 문법만 검사되고 실제 Windows broker 실행 NOT RUN. 실제 BitLocker, CEF, 독립 리뷰 및 출시 검증은 별도. Product startup disabled; WebView2 unchanged.
+
+### 추가 검증: disabled preflight와 양쪽 job 및 종료 객체 확인 통합 회귀
+
+정확한 head edff03c 일반 CI 45948372574 PASS, native CI 확인 시 진행 중. 기존 CefContainmentCheck에 실제 Windows synthetic apphost를 사용하여 desktop atomic job, broker-owned single candidate job, retained process handle, CefDisabledPreflight.Run 및 Native.MatchesExitedNomination을 하나의 순서로 묶는 두 시나리오를 추가했다. 정상 exit 29와 두 job 종료 확인 후에도 잘못된 owner handle을 nomination으로 제시하면 성공을 반환하지 않음을 요구한다. 확인 실패를 강제 종료로 성공 처리하지 않고 정확한 객체의 자연 종료를 유지한다. callback은 합성 broker dispatch이며 실제 pipe/service, signed runtime, BitLocker 또는 CEF 실행이 아니다. 최신 CI NOT RUN; product startup disabled, WebView2 unchanged.

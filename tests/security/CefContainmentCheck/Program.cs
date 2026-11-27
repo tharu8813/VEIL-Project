@@ -124,6 +124,64 @@ try
         Reject(() => CefDisabledPreflight.Run(denied, () => throw new InvalidOperationException("Synthetic denial"), () => true, () => throw new Exception("Unexpected confirmation")));
         Check(!File.Exists(markerPath) && !denied.IsAlive, "Denied preflight ran.");
     }
+    // Exercise the actual disabled coordinator runner, both independently
+    // owned jobs, and the production exited-object check in one sequence.
+    // The callbacks simulate broker dispatch; no service, signed candidate,
+    // real volume or CEF runtime is involved.
+    using (var owner = Process.GetCurrentProcess())
+    {
+        var identity = Native.ObserveProcess(owner.SafeHandle);
+        foreach (bool denyConfirmation in new[] { false, true })
+        {
+            using var candidate = CefContainedProcess.CreateSuspended(image, environment);
+            using var brokerJob = CefBrokerOwnedJob.CreateDisabledCandidate();
+            var binding = Native.DuplicateNominatedChild(identity, owner.SafeHandle,
+                new IntPtr(candidate.NominatedHandle));
+            using var retained = binding.Handle;
+            int stageCalls = 0, confirmCalls = 0;
+            bool confirmed = false;
+            uint RunBoundCandidate() => CefDisabledPreflight.Run(candidate, () =>
+            {
+                Check(++stageCalls == 1 && !File.Exists(markerPath),
+                    "Bound preflight staged twice or after execution.");
+                brokerJob.AssignVerifiedCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+                Check(brokerJob.ContainsVerifiedCandidate(binding.Identity, retained),
+                    "Bound preflight job membership missing.");
+            }, () => true, () =>
+            {
+                Check(++confirmCalls == 1 && brokerJob.HasNoActiveProcesses(),
+                    "Bound preflight confirmed twice or before broker job emptied.");
+                long nomination = denyConfirmation ? owner.SafeHandle.DangerousGetHandle().ToInt64() : candidate.ExitedHandle;
+                // Deliberately mismatched object must never succeed, even
+                // when the actual candidate exited normally with code 29.
+                bool matches = Native.MatchesExitedNomination(identity, owner.SafeHandle,
+                    nomination, retained, CefDisabledPreflight.VerifiedButDisabled);
+                if (denyConfirmation)
+                {
+                    Check(!matches, "Wrong exited nomination was accepted.");
+                    throw new UnauthorizedAccessException("Synthetic broker confirmation denied.");
+                }
+                Check(matches, "Exact exited nomination was refused.");
+                confirmed = true;
+            });
+            if (denyConfirmation)
+            {
+                bool rejected = false;
+                try { _ = RunBoundCandidate(); }
+                catch (UnauthorizedAccessException) { rejected = true; }
+                Check(rejected && !confirmed, "Denied confirmation returned verified success.");
+            }
+            else
+                Check(RunBoundCandidate() == CefDisabledPreflight.VerifiedButDisabled && confirmed,
+                    "Bound disabled preflight failed.");
+            Check(stageCalls == 1 && confirmCalls == 1 &&
+                !candidate.IsAlive && brokerJob.HasNoActiveProcesses() &&
+                candidate.ReadExitCode() == CefDisabledPreflight.VerifiedButDisabled &&
+                File.Exists(markerPath), "Bound candidate exit or accounting mismatch.");
+            File.Delete(markerPath);
+        }
+    }
+    Console.WriteLine("PASS: synthetic bound disabled preflight exact exit confirmation and wrong-object refusal");
     environment.Remove("VEIL_SYNTHETIC_EXIT");
     // A revoked running candidate must not reach broker confirmation.
     using (var revoked = CefContainedProcess.CreateSuspended(image, environment))
