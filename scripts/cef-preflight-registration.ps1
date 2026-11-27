@@ -76,17 +76,85 @@ function Write-VeilPreflightRegistrationDraft([string]$Destination,$Draft,$Stage
     }
     # Last record is only preparation evidence, not a commit/activation marker.
     # Partial writes remain preserved; no automatic resume or deletion.
-    $journal = [ordered]@{
-        kind='cef-preflight-registration-journal'; format=1; state='prepared-only'
-        sourceCommit=$StagePlan.sourceCommit; installable=$false; startupEnabled=$false
-        desktopSha256=$StagePlan.desktopSha256; brokerSha256=$StagePlan.brokerSha256
-        cefChildSha256=$StagePlan.cefChildSha256; files=$files
-    }
+    $journal = New-VeilPreflightPreparationJournal $StagePlan $files
     foreach ($file in $files) {
         if ((Get-FileHash -LiteralPath (Join-Path $Destination $file.name) -Algorithm SHA256).Hash -ne $file.sha256) {
             throw 'Registration draft changed before preparation marker.'
         }
     }
     [void](Write-VeilPreflightDraftFile (Join-Path $Destination 'preparation.json') $journal)
+    return $journal
+}
+
+
+function New-VeilPreflightPreparationJournal($StagePlan,[object[]]$Files) {
+    return [ordered]@{
+        kind='cef-preflight-registration-journal'; format=1; state='prepared-only'
+        sourceCommit=$StagePlan.sourceCommit; installable=$false; startupEnabled=$false
+        desktopSha256=$StagePlan.desktopSha256; brokerSha256=$StagePlan.brokerSha256
+        cefChildSha256=$StagePlan.cefChildSha256; files=$Files
+    }
+}
+
+function Read-VeilPreflightDraftBytes([string]$Path) {
+    Assert-VeilAdminPath $Path
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.PSIsContainer) { throw 'Expected a registration file.' }
+    $stream = [IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+    try {
+        if ($stream.Length -le 0 -or $stream.Length -gt 4MB) { throw 'Invalid registration draft length.' }
+        $bytes = [byte[]]::new([int]$stream.Length)
+        $offset = 0
+        while ($offset -lt $bytes.Length) {
+            $count = $stream.Read($bytes,$offset,$bytes.Length-$offset)
+            if ($count -le 0) { throw 'Incomplete registration draft read.' }
+            $offset += $count
+        }
+        if ($stream.ReadByte() -ne -1) { throw 'Registration draft length changed.' }
+        return ,$bytes
+    } finally { $stream.Dispose() }
+}
+
+function Assert-VeilPreflightDraftBytes([byte[]]$Actual,$Expected) {
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($Expected | ConvertTo-Json -Depth 10))
+    # Compare the exact writer format: duplicate keys, unknown fields and
+    # alternate encodings cannot be accepted via a permissive JSON parser.
+    if ([Convert]::ToBase64String($Actual) -cne [Convert]::ToBase64String($bytes)) {
+        throw 'Registration draft differs from independently reconstructed content.'
+    }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($Actual))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Read-VeilPreflightRegistrationDraft([string]$Directory,$StagePlan,[string]$BinRoot,[string]$ImagePath,[string]$ProfilePath,
+    [guid]$VolumeGuid,[guid]$ProtectorId,[guid]$RecoveryProtectorId,[string]$UserSid) {
+    Assert-VeilAdminPath $Directory
+    $names = @('broker.json','client.json','cef-runtime-pins.json','preparation.json')
+    $items = @(Get-ChildItem -LiteralPath $Directory -Force)
+    if ($items.Count -ne 4 -or @($items | Where-Object { $_.PSIsContainer -or $_.Name -cnotin $names }).Count -ne 0) {
+        throw 'Incomplete or unexpected registration preparation. Preserve it for inspection.'
+    }
+    $observed = @{}
+    foreach ($name in $names) { $observed[$name] = Read-VeilPreflightDraftBytes (Join-Path $Directory $name) }
+    # Only the generated opaque volume ID is recovered from disk. Every
+    # security-sensitive field comes from independently supplied inputs and
+    # a newly verified stage. The ID is validated by the draft constructor.
+    $broker = [Text.UTF8Encoding]::new($false,$true).GetString($observed['broker.json']) | ConvertFrom-Json
+    if ($broker.volumeId -isnot [string]) { throw 'Missing prepared volume ID.' }
+    $draft = New-VeilPreflightRegistrationDraft $StagePlan $BinRoot $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid $broker.volumeId
+    $files = @()
+    foreach ($name in @('broker.json','client.json','cef-runtime-pins.json')) {
+        $digest = Assert-VeilPreflightDraftBytes $observed[$name] $draft[$name]
+        $files += [ordered]@{name=$name;sha256=$digest}
+    }
+    $journal = New-VeilPreflightPreparationJournal $StagePlan $files
+    [void](Assert-VeilPreflightDraftBytes $observed['preparation.json'] $journal)
+    # Check a second observation for ordinary concurrent changes. This is
+    # still a read-only snapshot, not retained file handles or launch authority.
+    foreach ($name in $names) {
+        if ([Convert]::ToBase64String((Read-VeilPreflightDraftBytes (Join-Path $Directory $name))) -cne
+            [Convert]::ToBase64String($observed[$name])) { throw 'Registration changed during inspection.' }
+    }
     return $journal
 }

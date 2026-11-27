@@ -68,7 +68,17 @@ $stagePlan = .\scripts\stage-cef-preflight-package.ps1 -PayloadRoot $payload -Ce
 
 고정 Program Files\VEIL.cef-preflight-registration 에 broker.json, client.json, cef-runtime-pins.json을 새 파일로 기록하고 flush 및 재조회한 뒤 preparation.json(각 등록 파일 해시, 소스 커밋, 세 이미지 핀, prepared-only 상태)을 마지막에 작성한다. 기존/부분 초안은 덮어쓰지 않는다. 기록은 설치 성공 또는 복구 완료를 뜻하지 않는다. 시험 프로필 경로와 사용자 권한의 실측 및 초안 재검증/게시 트랜잭션은 다음 단계이며 전원 차단 내구성은 NOT RUN이다.
 
-## 7. 등록 전 차단점
+## 7. 등록 초안 읽기 전용 재검증
+
+동일한 시험 환경과 별도로 확인한 볼륨·보호기·사용자 입력을 사용한다. 등록 초안의 내용을 그대로 입력으로 신뢰하지 않는다.
+
+~~~powershell
+.\scripts\check-cef-preflight-registration.ps1 -SignerThumbprint $pin -SourceCommit $commit -ImagePath $testImage -ProfilePath $testProfile -VolumeGuid $volumeGuid -ProtectorId $primaryId -RecoveryProtectorId $recoveryId -UserSid $testUserSid
+~~~
+
+검증된 staging과 독립 입력으로 세 등록 JSON의 원래 바이트를 재구성하고 preparation.json의 정확한 파일 목록·해시·상태를 대조한다. 추가·누락·변조된 파일, 다른 독립 입력, 새 해시를 붙인 잘못된 등록, 설치 흔적, 연결된 시험 볼륨은 모두 거부한다. 부분 초안은 자동 수정·삭제하지 않는다. 이 결과는 읽기 전용 일관성 검사이며, 저널은 서명된 증거 또는 복구 자격 증명 검증의 독립 증명이 아니다. 실제 게시 직전에는 시험 볼륨과 복구 자격 증명을 다시 검증해야 한다.
+
+## 8. 등록 전 차단점
 
 전체 설치 트리의 서명 인벤토리 검증 도구는 마련했지만 CefPreflight 데스크톱의 pin, 브로커 pin 및 CEF 런타임 계획을 안전하게 함께 게시하는 전용 설치/복구 트랜잭션이 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
 

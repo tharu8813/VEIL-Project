@@ -385,3 +385,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: 보호 볼륨 등록 초안 및 준비 기록
 
 정확한 head 12c4661 일반 CI 45951965294 PASS, native CI 확인 시 진행 중. 별도 staging을 재검증하고 Desktop/Broker/CEF 이미지 핀과 명시된 시험 볼륨/보호기/사용자 SID를 연결하는 broker.json/client.json/cef-runtime-pins.json 초안 생성. 실제 실행 시 기존 복구 확인 루틴으로 명시적 기존 보호기 확인, 비강제 재잠금과 분리 후 재검증하며 실제 VHDX를 일시 mount/unlock할 수 있다. 비밀번호를 기록하지 않는다. 고정 별도 Program Files 디렉터리에 CreateNew/Flush(true)/재조회 후 파일 해시와 prepared-only journal을 마지막에 작성. 기존/부분 초안 보존. 합성 핀·입력 거부·파일 충돌 테스트 추가. 설치/서비스/실제 등록 변경 없음. 신규 CI, 실제 복구/ACL/VM/전원 차단 및 독립 리뷰 NOT RUN; 초안 재검증 및 게시/복구 상태 기계는 미구현.
+
+### 추가 구현: 준비 저널 및 독립 등록 입력 재검증
+
+정확한 head 9b15df5 일반 CI 45952554083 PASS, native CI 확인 시 진행 중. 읽기 전용 check-cef-preflight-registration.ps1은 고정 staging/준비 디렉터리, 설치 부재, 분리된 시험 VHDX 및 독립 운영자 입력을 사용한다. 등록 JSON에서 생성된 opaque volume ID만 읽고 나머지는 서명 검증 stage와 독립 입력으로 재구성한다. 바이트 수준 정확한 writer 형식 및 파일별 해시, prepared-only journal 대조; 누락/추가/변조/재해시된 잘못된 정책/다른 SID/보호기/프로필 거부. 부분 준비와 실제 설치 흔적을 구분하여 보존, 자동 복구 없음. 저널은 서명 또는 실제 복구 검증 증명이 아니며 TOCTOU를 제거하는 보유 핸들도 아니다. 합성 회귀 추가, 신규 CI 및 실제 VM/독립 리뷰 NOT RUN. 실제 게시 및 서비스 등록/장애 복구 상태 기계는 미구현.

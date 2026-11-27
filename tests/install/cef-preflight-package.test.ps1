@@ -140,6 +140,42 @@ try {
     $journalHash = (Get-FileHash -LiteralPath $journalPath).Hash
     Reject { Write-VeilPreflightRegistrationDraft $destination $draft $plan }
     if ((Get-FileHash -LiteralPath $journalPath).Hash -ne $journalHash) { throw 'Existing preparation changed.' }
+    function Inspect-Draft([string]$Directory) {
+        Read-VeilPreflightRegistrationDraft $Directory $plan $bin $image $profile $volumeGuid $primary $recovery $sid
+    }
+    $verifiedJournal = Inspect-Draft $destination
+    if ($verifiedJournal.state -cne 'prepared-only' -or $verifiedJournal.files.Count -ne 3) { throw 'Invalid read-only inspection.' }
+    Reject { Read-VeilPreflightRegistrationDraft $destination $plan $bin $image 'V:\Other\profile' $volumeGuid $primary $recovery $sid }
+    Reject { Read-VeilPreflightRegistrationDraft $destination $plan $bin $image $profile $volumeGuid $primary $recovery 'S-1-5-21-100-200-300-1002' }
+    Reject { Read-VeilPreflightRegistrationDraft $destination $plan $bin $image $profile $volumeGuid $recovery $primary $sid }
+    foreach ($name in @('broker.json','client.json','cef-runtime-pins.json','preparation.json')) {
+        $path = Join-Path $destination $name
+        $originalBytes = [IO.File]::ReadAllBytes($path)
+        [IO.File]::AppendAllText($path,' ')
+        Reject { Inspect-Draft $destination }
+        [IO.File]::WriteAllBytes($path,$originalBytes)
+        Remove-Item -LiteralPath $path
+        Reject { Inspect-Draft $destination }
+        [IO.File]::WriteAllBytes($path,$originalBytes)
+    }
+    $extra = Join-Path $destination 'extra.json'
+    [IO.File]::WriteAllText($extra,'{}')
+    Reject { Inspect-Draft $destination }
+    Remove-Item -LiteralPath $extra
+    # A fresh, internally consistent journal with altered security settings
+    # must still fail because the independently supplied inputs disagree.
+    $forged = Join-Path $work 'forged-registration'
+    $wrongDraft = New-VeilPreflightRegistrationDraft $plan $bin $image 'V:\Other\profile' $volumeGuid $primary $recovery $sid 'synthetic'
+    [void](Write-VeilPreflightRegistrationDraft $forged $wrongDraft $plan)
+    Reject { Inspect-Draft $forged }
+    $wrongDraft = New-VeilPreflightRegistrationDraft $plan $bin $image $profile $volumeGuid $primary $recovery $sid 'synthetic'
+    $wrongDraft['broker.json'].allowUnsignedClients = $true
+    $forgedBroker = Join-Path $work 'forged-broker'
+    [void](Write-VeilPreflightRegistrationDraft $forgedBroker $wrongDraft $plan)
+    Reject { Inspect-Draft $forgedBroker }
+    [void](Inspect-Draft $destination)
+    if ((Get-FileHash -LiteralPath $journalPath).Hash -ne $journalHash) { throw 'Inspection changed preparation.' }
+    Write-Host 'PASS: exact registration reconstruction, independent inputs, forged journal and partial file refusal'
     # Inject a deterministic file creation conflict after creating a fresh
     # preparation directory. No complete marker may follow the failed write.
     $partial = Join-Path $work 'partial-registration'
@@ -150,6 +186,7 @@ try {
     Reject { Write-VeilPreflightRegistrationDraft $partial $draft $plan }
     if ((Test-Path -LiteralPath (Join-Path $partial 'preparation.json')) -or
         [IO.File]::ReadAllText((Join-Path $partial 'client.json')) -cne 'preserve') { throw 'Partial registration not preserved.' }
+    Reject { Inspect-Draft $partial }
     Write-Host 'PASS: preflight registration draft, hash marker and interrupted preparation refusal'
     $stageDll = Join-Path $stage 'payload/Desktop/Veil.Desktop.dll'
     [IO.File]::AppendAllText($stageDll,'changed')
