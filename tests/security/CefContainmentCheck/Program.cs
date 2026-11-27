@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 using System.Diagnostics;
 using Veil.Desktop;
+using Veil.VolumeBroker;
 
 // Child mode uses only an isolated synthetic marker, never a browser/profile.
 if (Environment.GetEnvironmentVariable("VEIL_SYNTHETIC_CHILD_MARKER") is { } marker)
@@ -71,6 +72,36 @@ try
         Check(observer.WaitForExit(10000), "Child survived job close.");
     }
     File.Delete(markerPath);
+    // Actual nested-job integration: desktop atomically creates a suspended
+    // child, then broker retains a second job without exporting its handle.
+    // Test both independent containment owners; no CEF or BitLocker.
+    using (var owner = Process.GetCurrentProcess())
+    {
+        var ownerIdentity = Native.ObserveProcess(owner.SafeHandle);
+        foreach (bool closeBrokerFirst in new[] { true, false })
+        {
+            using var candidate = CefContainedProcess.CreateSuspended(image, environment);
+            using var brokerJob = CefBrokerOwnedJob.CreateDisabledCandidate();
+            var nomination = Native.DuplicateNominatedChild(ownerIdentity, owner.SafeHandle,
+                new IntPtr(candidate.NominatedHandle));
+            using var observed = nomination.Handle;
+            int pid = GetProcessId(new IntPtr(candidate.NominatedHandle));
+            using var observer = Process.GetProcessById(pid);
+            _ = observer.SafeHandle;
+            Check(!File.Exists(markerPath) && candidate.IsAlive, "Nested candidate not suspended.");
+            brokerJob.AssignVerifiedCandidate(ownerIdentity, owner.SafeHandle, nomination.Identity, observed);
+            Check(brokerJob.ContainsVerifiedCandidate(nomination.Identity, observed) &&
+                !File.Exists(markerPath), "Broker did not bind suspended candidate.");
+            candidate.ResumeAfterVerification(() => brokerJob.ContainsVerifiedCandidate(nomination.Identity, observed));
+            Check(SpinWait.SpinUntil(() => File.Exists(markerPath), TimeSpan.FromSeconds(10)),
+                "Nested candidate did not resume.");
+            if (closeBrokerFirst) brokerJob.Dispose();
+            else candidate.Dispose();
+            Check(observer.WaitForExit(10000), "Candidate survived closing either owning job.");
+            if (!closeBrokerFirst) Check(brokerJob.HasNoActiveProcesses(), "Broker job did not become empty.");
+            File.Delete(markerPath);
+        }
+    }
     environment["VEIL_SYNTHETIC_EXIT"] = "29";
     using (var preflight = CefContainedProcess.CreateSuspended(image, environment))
     {

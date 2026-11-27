@@ -282,6 +282,21 @@ internal static class Native
         catch { handle.Dispose(); throw; }
     }
 
+    // Broker-only job assignment needs PROCESS_SET_QUOTA and
+    // PROCESS_TERMINATE. Verify the exact retained process object again.
+    internal static SafeProcessHandle OpenCefAssignmentHandle(ClientIdentity child, SafeProcessHandle observed)
+    {
+        var handle = OpenProcess(QueryLimitedInformation | Synchronize | 0x0100 | 0x0001,
+            false, (uint)child.ProcessId);
+        try
+        {
+            if (!SameLiveProcess(observed, handle) || ObserveProcess(handle) != child)
+                throw new UnauthorizedAccessException("CEF job assignment process changed.");
+            return handle;
+        }
+        catch { handle.Dispose(); throw; }
+    }
+
     internal static bool TerminateCefChildAndWait(SafeProcessHandle child)
     {
         if (child.IsClosed || child.IsInvalid) return false;

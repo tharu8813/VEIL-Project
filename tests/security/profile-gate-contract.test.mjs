@@ -499,3 +499,15 @@ test('future broker-owned disabled job is created internally and never accepts c
     assert.match(job, /TerminateJobObject\(job, 35\)[\s\S]*?while \(!HasNoActiveProcesses\(\)\)/);
     assert.doesNotMatch(broker, /CefBrokerOwnedJob/);
 });
+
+
+test('broker can bind a desktop-contained child without exporting job assignment rights', async () => {
+    const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
+    const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
+    const integration = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    const direct = job.slice(job.indexOf('internal void AssignVerifiedCandidate'), job.indexOf('internal void BindSingleCandidate'));
+    assert.match(direct, /Accounting\(\).TotalProcesses != 0[\s\S]*?Native.OpenCefAssignmentHandle\(child, childHandle\)[\s\S]*?AssignProcessToJobObject\(job, assignment\)[\s\S]*?BindSingleCandidate/);
+    assert.doesNotMatch(direct, /IssueAssignmentHandle|DuplicateCefJobAssignment/);
+    assert.match(native, /OpenCefAssignmentHandle[\s\S]*?0x0100 \| 0x0001[\s\S]*?!SameLiveProcess\(observed, handle\)/);
+    assert.match(integration, /CefContainedProcess.CreateSuspended\(image, environment\)[\s\S]*?brokerJob.AssignVerifiedCandidate[\s\S]*?candidate.ResumeAfterVerification[\s\S]*?if \(closeBrokerFirst\) brokerJob.Dispose\(\);\s*else candidate.Dispose\(\);[\s\S]*?observer.WaitForExit/);
+});

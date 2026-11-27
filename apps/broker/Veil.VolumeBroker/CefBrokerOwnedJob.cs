@@ -44,6 +44,25 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         return Native.DuplicateCefJobAssignment(job, owner, observedOwner);
     }
 
+    // Prefer broker-side assignment over transferring assignment rights to
+    // the desktop. Caller must already have verified the nominated child's
+    // signed image, runtime registration, and authenticated owner. The local
+    // desktop job has already been installed atomically at suspended creation.
+    internal void AssignVerifiedCandidate(ClientIdentity owner, SafeProcessHandle ownerHandle,
+        ClientIdentity child, SafeProcessHandle childHandle)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (assignmentIssued || bound || Accounting().TotalProcesses != 0 ||
+            owner.ProcessId == child.ProcessId || Native.ObserveProcess(ownerHandle) != owner ||
+            Native.ObserveProcess(childHandle) != child ||
+            !IsProcessInJob(ownerHandle, job, out bool ownerInside) || ownerInside)
+            throw new UnauthorizedAccessException("CEF job assignment was not authorized.");
+        using var assignment = Native.OpenCefAssignmentHandle(child, childHandle);
+        assignmentIssued = true; // No retry or alternate job after failure.
+        if (!AssignProcessToJobObject(job, assignment)) throw new Win32Exception();
+        BindSingleCandidate(owner, ownerHandle, child, childHandle);
+    }
+
     internal void BindSingleCandidate(ClientIdentity owner, SafeProcessHandle ownerHandle,
         ClientIdentity child, SafeProcessHandle childHandle)
     {
@@ -58,6 +77,15 @@ internal sealed class CefBrokerOwnedJob : IDisposable
             Native.ObserveProcess(ownerHandle) != owner || Native.ObserveProcess(childHandle) != child)
             throw new UnauthorizedAccessException("CEF job membership changed.");
         bound = true;
+    }
+
+    internal bool ContainsVerifiedCandidate(ClientIdentity child, SafeProcessHandle childHandle)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!bound || !Native.IsRunning(childHandle) || Native.ObserveProcess(childHandle) != child ||
+            !IsProcessInJob(childHandle, job, out bool inside) || !inside) return false;
+        var state = Accounting();
+        return state.TotalProcesses == 1 && state.ActiveProcesses == 1;
     }
 
     internal bool HasNoActiveProcesses()
@@ -142,4 +170,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool TerminateJobObject(SafeFileHandle job, uint code);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AssignProcessToJobObject(SafeFileHandle job, SafeProcessHandle process);
 }

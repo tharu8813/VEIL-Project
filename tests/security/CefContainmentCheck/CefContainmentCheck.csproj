@@ -9,5 +9,8 @@
   <ItemGroup>
     <Compile Include="../../../apps/desktop/Engine/CefContainedProcess.cs" Link="CefContainedProcess.cs" />
     <Compile Include="../../../apps/desktop/Engine/CefDisabledPreflight.cs" Link="CefDisabledPreflight.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/Native.cs" Link="BrokerNative.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/ClientIdentity.cs" Link="ClientIdentity.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs" Link="CefBrokerOwnedJob.cs" />
   </ItemGroup>
 </Project>
