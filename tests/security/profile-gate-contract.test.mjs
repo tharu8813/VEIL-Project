@@ -545,7 +545,7 @@ test('nested CEF runtime experiment remains isolated from production admission',
     assert.match(job, /CreateDisabledCandidate\(\) => Create\(1\);/);
     assert.match(job, /#if VEIL_CEF_CONTAINMENT_TEST[\s\S]*?CreateMultiprocessFixture\(\) => Create\(2\);[\s\S]*?#endif/);
     assert.match(job, /ContainsVerifiedCandidate[\s\S]*?if \(activeLimit != 1 \|\| !bound/);
-    assert.match(job, /ContainsFixturePair[\s\S]*?Native.ObserveProcess\(descendantHandle\) != descendant[\s\S]*?IsProcessInJob\(descendantHandle, job,[\s\S]*?state.ActiveProcesses == 2 && state.TotalProcesses == 2/);
+    assert.match(job, /ContainsFixturePair[\s\S]*?FixturePairRefusal[\s\S]*?Native.ObserveProcess\(descendantHandle\) != descendant[\s\S]*?IsProcessInJob\(descendantHandle, job,[\s\S]*?state.ActiveProcesses == 2 && state.TotalProcesses == 2/);
     assert.match(integration, /ContainsFixturePair\(binding.Identity, retained, identity, owner.SafeHandle\)/);
     assert.doesNotMatch(brokerProject, /VEIL_CEF_CONTAINMENT_TEST/);
     assert.match(testProject, /<DefineConstants>[^<]*VEIL_CEF_CONTAINMENT_TEST<\/DefineConstants>/);

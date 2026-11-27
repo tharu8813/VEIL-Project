@@ -176,16 +176,17 @@ try
                 using var descendant = Process.GetProcessById(descendantPid);
                 var descendantHandle = descendant.SafeHandle;
                 var descendantIdentity = Native.ObserveProcess(descendantHandle);
-                Check(brokerJob.ContainsFixturePair(binding.Identity, retained, descendantIdentity, descendantHandle) &&
-                    !brokerJob.ContainsVerifiedCandidate(binding.Identity, retained),
-                    "Fixture pair membership/identity missing, or disabled admission confused.");
+                string? refusal = brokerJob.FixturePairRefusal(binding.Identity, retained, descendantIdentity, descendantHandle);
+                Check(refusal is null, $"Fixture pair refused (mode {mode}): {refusal}");
+                Check(!brokerJob.ContainsVerifiedCandidate(binding.Identity, retained),
+                    "Multiprocess fixture confused with disabled admission.");
                 Check(!brokerJob.ContainsFixturePair(binding.Identity, retained, identity, owner.SafeHandle),
                     "Outside process accepted as fixture descendant.");
                 Check(!brokerJob.ContainsFixturePair(binding.Identity, retained, binding.Identity, retained),
                     "Root accepted as its own descendant.");
-                Check(!brokerJob.ContainsFixturePair(binding.Identity, retained,
-                    descendantIdentity with { CreatedFileTime = descendantIdentity.CreatedFileTime + 1 }, descendantHandle),
-                    "Altered descendant identity accepted.");
+                Check(brokerJob.FixturePairRefusal(binding.Identity, retained,
+                    descendantIdentity with { CreatedFileTime = descendantIdentity.CreatedFileTime + 1 }, descendantHandle)
+                    == "descendant-identity", "Altered descendant identity not specifically refused.");
                 if (mode == 1) brokerJob.Dispose();
                 else candidate.Dispose();
                 Check(descendant.WaitForExit(10000), "Descendant survived closing a containing job.");

@@ -43,19 +43,32 @@ internal sealed class CefBrokerOwnedJob : IDisposable
     // Stable synthetic pair only. Retain handles and verify identities on
     // either side of accounting; a PID in a marker is not membership proof.
     internal bool ContainsFixturePair(ClientIdentity root, SafeProcessHandle rootHandle,
+        ClientIdentity descendant, SafeProcessHandle descendantHandle) =>
+        FixturePairRefusal(root, rootHandle, descendant, descendantHandle) is null;
+
+    // Diagnostic only in the synthetic test build. Refusal categories contain
+    // no paths, user identifiers, or process handles; do not weaken a check.
+    internal string? FixturePairRefusal(ClientIdentity root, SafeProcessHandle rootHandle,
         ClientIdentity descendant, SafeProcessHandle descendantHandle)
     {
-        if (!ContainsFixtureRoot(root, rootHandle) || root.ProcessId == descendant.ProcessId ||
-            root.SessionId != descendant.SessionId || root.UserSid != descendant.UserSid ||
-            !string.Equals(root.ImagePath, descendant.ImagePath, StringComparison.OrdinalIgnoreCase) ||
-            descendant.CreatedFileTime < root.CreatedFileTime ||
-            !Native.IsRunning(descendantHandle) || Native.ObserveProcess(descendantHandle) != descendant ||
-            !IsProcessInJob(descendantHandle, job, out bool inside) || !inside) return false;
+        if (!ContainsFixtureRoot(root, rootHandle)) return "root-membership";
+        if (root.ProcessId == descendant.ProcessId) return "duplicate-process";
+        if (root.SessionId != descendant.SessionId) return "session";
+        if (root.UserSid != descendant.UserSid) return "user";
+        if (!string.Equals(root.ImagePath, descendant.ImagePath, StringComparison.OrdinalIgnoreCase)) return "image";
+        if (descendant.CreatedFileTime < root.CreatedFileTime) return "creation-order";
+        if (!Native.IsRunning(descendantHandle)) return "descendant-exited";
+        if (Native.ObserveProcess(descendantHandle) != descendant) return "descendant-identity";
+        if (!IsProcessInJob(descendantHandle, job, out bool inside)) return "membership-query";
+        if (!inside) return "descendant-not-in-broker-job";
         var state = Accounting();
-        return state.ActiveProcesses == 2 && state.TotalProcesses == 2 &&
-            ContainsFixtureRoot(root, rootHandle) && Native.IsRunning(descendantHandle) &&
-            Native.ObserveProcess(descendantHandle) == descendant &&
-            IsProcessInJob(descendantHandle, job, out inside) && inside;
+        if (!(state.ActiveProcesses == 2 && state.TotalProcesses == 2))
+            return $"accounting: active={state.ActiveProcesses}, total={state.TotalProcesses}, terminated={state.TotalTerminatedProcesses}";
+        if (!ContainsFixtureRoot(root, rootHandle)) return "root-recheck";
+        if (!Native.IsRunning(descendantHandle)) return "descendant-exited-recheck";
+        if (Native.ObserveProcess(descendantHandle) != descendant) return "descendant-identity-recheck";
+        if (!IsProcessInJob(descendantHandle, job, out inside) || !inside) return "membership-recheck";
+        return null;
     }
 #endif
 
