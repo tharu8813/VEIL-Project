@@ -222,6 +222,7 @@ struct ViewState {
   bool page_fullscreen = false;
   bool login_renderer_failed = false;
   bool closing = false;
+  bool tab_close_ready = false;
   BeforeBrowse before_browse;
   NavigationComplete navigation_complete;
   PageStateChanged page_state_changed;
@@ -587,6 +588,14 @@ class Client final : public CefClient,
     Complete(false, false, ERR_FAILED);
     if (state_->render_process_failed) state_->render_process_failed(error_code);
   }
+  bool DoClose(CefRefPtr<CefBrowser>) override {
+    if (!tabbed_development_enabled) return false;
+    // The WPF pump disposes the individual HWND host after this notification.
+    // CEF's default notification targets the shared top-level window.
+    state_->closing = true;
+    state_->tab_close_ready = true;
+    return true;
+  }
   // Normal shutdown is not a crash notification. The host process cannot
   // report its own abrupt termination through this in-process callback.
   void OnBeforeClose(CefRefPtr<CefBrowser>) override {
@@ -653,7 +662,7 @@ extern "C" __declspec(dllexport) void VeilCefDetachCallbacks(uint64_t id, HWND p
     const auto browser = LookupBrowser(id);
     // HwndHost is disposing: finish this browser even if normal close was
     // never requested. Keep the registry entry until OnBeforeClose.
-    if (browser && !browser->GetHost()->IsReadyToBeClosed())
+    if (browser && !state->tab_close_ready && !browser->GetHost()->IsReadyToBeClosed())
       browser->GetHost()->CloseBrowser(true);
   }
 }
@@ -1302,7 +1311,7 @@ extern "C" __declspec(dllexport) int VeilCefStartHttpCacheClear(
   const auto host = browser->GetHost();
   const auto context = host->GetRequestContext();
   if (!context || profile_root.empty() ||
-      context->GetCachePath().ToWString() != (std::filesystem::path(profile_root) / L"tab-fixture-cache").wstring())
+      context->GetCachePath().ToWString() != (std::filesystem::path(profile_root) / L"Default").wstring())
     return 0;
   const auto request = std::make_shared<StorageClearRequest>();
   state->storage_clear = request;
@@ -1341,8 +1350,9 @@ extern "C" __declspec(dllexport) unsigned VeilCefLiveViewCount() {
   return static_cast<unsigned>(views.size());
 }
 extern "C" __declspec(dllexport) int VeilCefReadyToClose(uint64_t id) {
+  const auto state = LookupView(id);
   const auto browser = LookupBrowser(id);
-  return !LookupView(id) || (browser && browser->GetHost()->IsReadyToBeClosed());
+  return !state || state->tab_close_ready || (browser && browser->GetHost()->IsReadyToBeClosed());
 }
 extern "C" __declspec(dllexport) void VeilCefPump() { CefDoMessageLoopWork(); }
 extern "C" __declspec(dllexport) int VeilCefTryClose(uint64_t id) {
@@ -1386,9 +1396,10 @@ int RunWinMain(HINSTANCE instance, LPWSTR, int, void* sandbox_info, cef_version_
   tabbed_development_enabled =
       GetEnvironmentVariableW(L"VEIL_CEF_WPF_TABS", tabs_mode, 2) == 1 && tabs_mode[0] == L'1';
   // Never enable persistent storage for the ordinary development host or the
-  // download fixture. The tab runner uses a freshly created synthetic root.
+  // download fixture. The tab runner uses a fresh synthetic root and CEF's
+  // global request context stores its profile in the Default child directory.
   if (fixture_enabled && tabbed_development_enabled)
-    CefString(&settings.cache_path) = (profile / L"tab-fixture-cache").wstring();
+    CefString(&settings.cache_path) = profile.wstring();
   if (fixture_enabled)
     app = new FixtureApp();
   if (!CefInitialize(args, settings, app, sandbox_info)) {

@@ -11,6 +11,6 @@ if (-not [Environment]::Is64BitProcess -or $PSVersionTable.PSEdition -ne 'Deskto
     throw 'Use elevated 64-bit Windows PowerShell 5.1.'
 }
 . (Join-Path $PSScriptRoot 'cef-candidate-evidence.ps1')
-$stage = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'VEIL.cef-candidate-staging'
+$candidate = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'VEIL.cef-candidate-staging\candidate'
 # No file writes. Never redirect directly into the live VEIL registration.
-Get-VeilCefVerifiedRuntimePinPlan $stage $EvidenceDirectory $SignerThumbprint $SourceCommit
+Get-VeilCefVerifiedRuntimePinPlan $candidate $EvidenceDirectory $SignerThumbprint $SourceCommit

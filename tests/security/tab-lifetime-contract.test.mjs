@@ -330,7 +330,7 @@ test('CEF fixture observations and attachment handoff are scoped to the originat
     assert.match(cefNative, /state_->response_matches\.store/);
     assert.match(cefNative, /state_->attachment_filtered_bytes\.store/);
     assert.match(cefNative, /fixture_enabled && !state_->armed_page_attachment\.empty\(\) && url == state_->armed_page_attachment/);
-    assert.match(cefNative, /if \(!state->page_attachment_intercepted \|\| url != state->armed_page_attachment\) return 0;/);
+    assert.match(cefNative, /if \(!state->page_attachment_intercepted \|\| url != state->armed_page_attachment \|\|\s*frame->GetURL\(\) != state->armed_attachment_source\) return 0;\s*state->page_attachment_intercepted = false;\s*state->armed_page_attachment\.clear\(\);\s*state->armed_attachment_source\.clear\(\);/);
     for (const name of ['PopupsBlocked','DownloadsBlocked','BlobDownloadsBlocked','PermissionsDenied','MediaPermissionsDenied','ResponseMatches','AttachmentFilteredBytes','PageAttachmentIntercepted']) {
         assert.match(cefNative, new RegExp('VeilCef' + name + '\\(uint64_t id\\) \\{\\s*const auto state = LookupView\\(id\\);'));
         assert.match(cefView, new RegExp('VeilCef' + name + '\\(ulong id\\)'));
@@ -355,7 +355,7 @@ test('owned download requests have per-transfer lifetime and cancel before relea
 test('CEF close is scoped to a view and host shutdown waits for the native registry', () => {
     assert.match(cefNative, /VeilCefClosed\(uint64_t id\) \{ return LookupView\(id\) \? 0 : 1; \}/);
     assert.match(cefNative, /VeilCefLiveViewCount\(\) \{\s*return static_cast<unsigned>\(views\.size\(\)\);/);
-    assert.match(cefNative, /void VeilCefDetachCallbacks\([\s\S]*?state->closing = true;\s*state->DetachCallbacks\(\);[\s\S]*?if \(browser && !browser->GetHost\(\)->IsReadyToBeClosed\(\)\)\s*browser->GetHost\(\)->CloseBrowser\(true\);/);
+    assert.match(cefNative, /void VeilCefDetachCallbacks\([\s\S]*?state->closing = true;\s*state->DetachCallbacks\(\);[\s\S]*?if \(browser && !state->tab_close_ready && !browser->GetHost\(\)->IsReadyToBeClosed\(\)\)\s*browser->GetHost\(\)->CloseBrowser\(true\);/);
     assert.match(cefNative, /bool OnBeforeBrowse\([\s\S]*?if \(state_->closing\) return true;/);
     assert.match(cefNative, /const bool ready = browser->GetHost\(\)->TryCloseBrowser\(\);\s*if \(ready\) state->closing = true;/);
     assert.match(cefNative, /while \(!views\.empty\(\) && GetTickCount64\(\) - drain_started < 5000\)[\s\S]*?if \(!views\.empty\(\)\) \{[\s\S]*?std::quick_exit\(27\);[\s\S]*?CefShutdown\(\);/);
@@ -396,7 +396,7 @@ test('CEF managed view reservations are reclaimed only after disposal and native
 
 test('CEF parallel fixture cancels only its own stream and waits for both vault workers', () => {
     assert.match(cefNative, /const bool parallel = path == "\/wpf-owned-parallel-keep" \|\| path == "\/wpf-owned-parallel-cancel";/);
-    assert.match(cefNative, /if \(parallel\) \{[\s\S]*?CefString\(&source\.origin\) != CefString\(&parts\.origin\)/);
+    assert.match(cefNative, /if \(!frame \|\| !CefParseURL\(frame->GetURL\(\), source\) \|\|\s*CefString\(&source\.origin\) != CefString\(&parts\.origin\)\) return 0;\s*if \(parallel\) \{\s*const CefString source_path\(&source\.path\);\s*if \(\(path == "\/wpf-owned-parallel-keep" && source_path != "\/wpf-first"\) \|\|\s*\(path == "\/wpf-owned-parallel-cancel" && source_path != "\/wpf-isolation-reopened"\)\) return 0;/);
     assert.match(cefSmoke, /VeilCefStartOwnedAttachment\(browser\.NativeHandle, keepUrl, keep\.ChunkCallback\)[\s\S]*?VeilCefStartOwnedAttachment\(secondaryHandle, cancelUrl, cancel\.ChunkCallback\)/);
     assert.match(cefSmoke, /parallelKeep!\.ReceivedBytes > 0 && parallelCancel!\.ReceivedBytes > 0/);
     assert.match(cefSmoke, /canceledByteCount = parallelCancel\.ReceivedBytes;\s*CefNative\.VeilCefCancelOwnedAttachment\(secondaryHandle\);\s*parallelCancel\.Complete\(false\);/);
@@ -413,6 +413,8 @@ test('CEF opt-in tab shell keeps native views parented and routes commands to th
     assert.match(cefTabbed, /ReferenceEquals\(item, active\) \? Visibility\.Visible : Visibility\.Hidden/);
     assert.match(cefTabbed, /private void NavigateAddress\(\) => WithActive\(view => view\.Navigate\(address\.Text\)\);/);
     assert.match(cefTabbed, /tab\.Closing && CefNative\.VeilCefReadyToClose\(tab\.ClosingId\) != 0[\s\S]*?tab\.View\.Dispose\(\);[\s\S]*?pages\.Children\.Remove/);
+    assert.match(cefNative, /bool DoClose\(CefRefPtr<CefBrowser>\) override \{\s*if \(!tabbed_development_enabled\) return false;[\s\S]*?state_->tab_close_ready = true;\s*return true;/);
+    assert.match(cefNative, /int VeilCefReadyToClose\(uint64_t id\) \{[\s\S]*?return !state \|\| state->tab_close_ready \|\|/);
     assert.match(cefTabbed, /shuttingDown && tabs\.Count == 0 && retired\.Count == 0 && CefNative\.VeilCefLiveViewCount\(\) == 0/);
 });
 
@@ -534,9 +536,9 @@ test('CEF origin storage clear has a fixed allowlist and authorization before di
 
 
 test('CEF HTTP cache clear is confined to the explicit disk-backed synthetic fixture and fixed command', () => {
-    assert.match(cefNative, /if \(fixture_enabled && tabbed_development_enabled\)\s*CefString\(&settings\.cache_path\) = \(profile \/ L"tab-fixture-cache"\)\.wstring\(\);/);
+    assert.match(cefNative, /if \(fixture_enabled && tabbed_development_enabled\)\s*CefString\(&settings\.cache_path\) = profile\.wstring\(\);/);
     assert.match(cefNative, /VeilCefStartHttpCacheClear\([\s\S]*?if \(!CefCurrentlyOn\(TID_UI\) \|\| !fixture_enabled \|\| !tabbed_development_enabled \|\| !authorize\) return 0;/);
-    assert.match(cefNative, /context->GetCachePath\(\)\.ToWString\(\) != \(std::filesystem::path\(profile_root\) \/ L"tab-fixture-cache"\)\.wstring\(\)/);
+    assert.match(cefNative, /context->GetCachePath\(\)\.ToWString\(\) != \(std::filesystem::path\(profile_root\) \/ L"Default"\)\.wstring\(\)/);
     assert.match(cefNative, /const bool allowed = authorize\(id\) != 0;\s*if \(allowed && LookupView\(id\) == state && !state->closing && state->storage_clear == request\)\s*\{\s*request->message_id = host->ExecuteDevToolsMethod\(0, "Network\.clearBrowserCache", nullptr\);/);
     assert.match(cefView, /if \(kinds == EngineProfileDataKinds\.DiskCache\)\s*return await ClearHttpCacheAsync\(stillAuthorized\);\s*throw new NotSupportedException/);
     assert.match(cefView, /int start = CefNative\.VeilCefStartHttpCacheClear\(id, cookieDeleteAuthorization\);\s*if \(start == -2\) return false;/);

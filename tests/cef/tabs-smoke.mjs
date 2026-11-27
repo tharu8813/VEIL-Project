@@ -261,7 +261,7 @@ try {
   assert.match(evidence, /Seeded persistent synthetic storage for next-process isolation probe[\s\S]*Persistent synthetic cookie present before shutdown/);
   // The first profile remains on disk during the second run. A new profile at
   // the same HTTP origin must not inherit its cookie or storage markers.
-  assert.ok((await stat(join(profile, 'tab-fixture-cache'))).isDirectory(), 'Disk-backed fixture cache is missing');
+  assert.ok((await stat(join(profile, 'Default'))).isDirectory(), 'Disk-backed fixture cache is missing');
   assertNoFixtureProcesses();
   const fresh = await runFixture(true);
   assert.equal(fresh.timedOut, false, fresh.evidence);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { watch } from 'node:fs';
 import { mkdtemp, readFile, readdir } from 'node:fs/promises';
@@ -117,8 +118,10 @@ const server = http.createServer((request, response) => {
   if (['/wpf-owned-attachment', '/wpf-owned-truncated', '/wpf-owned-saturated', '/wpf-owned-redirect-target'].includes(request.url)) {
     if (request.url === '/wpf-owned-attachment') {
       const authenticated = hasSessionCookie(request);
-      pageAttachmentRequests.push([request.method, request.headers['x-veil-fixture-handoff'], authenticated]);
-      if (!authenticated) {
+      // Reject the first explicit handoff even when its cookie is present.
+      const status = authenticated && pageAttachmentRequests.length > 0 ? 200 : 401;
+      pageAttachmentRequests.push([request.method, request.headers['x-veil-fixture-handoff'], authenticated, status]);
+      if (status === 401) {
         response.writeHead(401, { 'Content-Length': 0, 'Cache-Control': 'no-store' }).end();
         return;
       }
@@ -216,7 +219,7 @@ try {
   assert.equal(requests.filter(request => request === '/wpf-attachment').length, 1, 'The attachment must not be replayed');
   assert.equal(requests.filter(request => request === '/wpf-response').length, 1, 'The body must come from the original request');
   assert.ok(!requests.includes('/wpf-owned-redirect-target'), 'Owned attachment followed a redirect');
-  for (const route of ['/wpf-owned-truncated', '/wpf-owned-redirect', '/wpf-owned-saturated', '/wpf-owned-attachment']) {
+  for (const route of ['/wpf-owned-truncated', '/wpf-owned-redirect', '/wpf-owned-saturated']) {
     assert.equal(requests.filter(request => request === route).length, 1, `${route} must not be replayed`);
   }
   assert.match(evidence, /Development adapter rejected unsupported profile, network and navigation inputs[\s\S]*Navigation request canceled before HTTP[\s\S]*Observed JavaScript title[\s\S]*Observed matched redirect, completion, and back and forward navigation[\s\S]*Observed HTTP failure completion[\s\S]*Observed rejected HTTP and Blob downloads, geolocation and media permissions[\s\S]*WPF window closed[\s\S]*CEF browser closed[\s\S]*WPF dispatcher stopped/);
@@ -227,8 +230,8 @@ try {
   assert.match(evidence, /Observed mandatory native popup denial/);
   assert.ok(!requests.includes('/wpf-popup-target'), 'Denied popup must not reach HTTP');
   assert.match(evidence, /Intercepted the page attachment before browser navigation reached HTTP/);
-  assert.deepEqual(pageAttachmentRequests, [['GET', '1', true]],
-    'Only the native same-origin handoff may send the authenticated attachment request');
+  assert.deepEqual(pageAttachmentRequests, [['GET', '1', true, 401], ['GET', '1', true, 200]],
+    'Each native same-origin handoff must send exactly one GET with the fixture cookie');
   assert.deepEqual(anonymousCredentialObservations, [
     ['/wpf-owned-truncated', false], ['/wpf-owned-redirect', false], ['/wpf-owned-saturated', false],
   ], 'Anonymous fixture requests must not receive the session cookie');
@@ -243,7 +246,12 @@ try {
     const ciphertext = await readFile(join(fixtureTemp, object));
     assert.ok(!ciphertext.includes(body.subarray(0, 512)), 'The stored object contains a plaintext fixture segment');
   }
-  assert.match(evidence, /Rust vault aborted the truncated stream without publishing an object[\s\S]*CEF refused the redirect and Rust vault published no object or response bytes[\s\S]*CEF canceled the saturated stream and Rust vault published no object[\s\S]*Rust vault streamed and restored all 786432 bytes/);
+  assert.match(evidence, /Rust vault aborted the truncated stream without publishing an object[\s\S]*CEF refused the redirect and Rust vault published no object or response bytes[\s\S]*CEF canceled the saturated stream and Rust vault published no object[\s\S]*CEF rejected the unauthorized attachment and Rust vault published no object or response bytes[\s\S]*Rust vault streamed and restored all 786432 bytes/);
+  const expectedSha256 = createHash('sha256').update(streamedBody).digest('hex').toUpperCase();
+  for (const transfer of ['Parallel', 'Authenticated']) {
+    const restored = new RegExp('^' + transfer + ' restored SHA-256: ([A-F0-9]{64})\\r?$', 'm').exec(evidence);
+    assert.equal(restored?.[1], expectedSha256, transfer + ' restored SHA-256 must match the original response');
+  }
   const observed = /Verified 98304 response bytes in memory\. Blocked attachment passed (\d+) bytes to the filter\./.exec(evidence);
   assert.ok(observed);
   assert.ok(Number(observed[1]) < body.length, 'The delayed attachment should be canceled before the full body arrives');

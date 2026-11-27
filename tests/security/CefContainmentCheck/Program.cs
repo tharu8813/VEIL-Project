@@ -10,9 +10,11 @@ if (Environment.GetEnvironmentVariable("VEIL_SYNTHETIC_CHILD_MARKER") is { } mar
     {
         // Only synthetic test descendants, same apphost; no browser or
         // protected profile. Do not use breakaway or shell execution.
+        // Inherit the root's console. CREATE_NO_WINDOW can add a conhost
+        // to the nested jobs and invalidate the two-process fixture.
         var info = new ProcessStartInfo(Environment.ProcessPath!)
         {
-            UseShellExecute = false, CreateNoWindow = true
+            UseShellExecute = false
         };
         info.Environment.Remove("VEIL_SYNTHETIC_SPAWN");
         info.Environment["VEIL_SYNTHETIC_CHILD_MARKER"] = marker + ".descendant";
@@ -131,12 +133,12 @@ try
     }
     // Compare a disabled single-process job to a test-only multi-process
     // job, without granting product activation. Either job must drain both
-    // the root and descendant when its last handle closes.
+    // processes on last-handle close or explicit termination.
     environment["VEIL_SYNTHETIC_SPAWN"] = "1";
     using (var owner = Process.GetCurrentProcess())
     {
         var identity = Native.ObserveProcess(owner.SafeHandle);
-        foreach (int mode in new[] { 0, 1, 2 })
+        foreach (int mode in new[] { 0, 1, 2, 3, 4 })
         {
             using var candidate = CefContainedProcess.CreateSuspended(image, environment);
             using var brokerJob = mode == 0 ? CefBrokerOwnedJob.CreateDisabledCandidate() :
@@ -187,11 +189,19 @@ try
                 Check(brokerJob.FixturePairRefusal(binding.Identity, retained,
                     descendantIdentity with { CreatedFileTime = descendantIdentity.CreatedFileTime + 1 }, descendantHandle)
                     == "descendant-identity", "Altered descendant identity not specifically refused.");
-                if (mode == 1) brokerJob.Dispose();
-                else candidate.Dispose();
-                Check(descendant.WaitForExit(10000), "Descendant survived closing a containing job.");
-                Check(rootObserver.WaitForExit(10000), "Root survived closing a containing job.");
-                if (mode == 2) Check(SpinWait.SpinUntil(brokerJob.HasNoActiveProcesses, TimeSpan.FromSeconds(5)), "Broker fixture job did not drain.");
+                switch (mode)
+                {
+                    case 1: brokerJob.Dispose(); break;
+                    case 2: candidate.Dispose(); break;
+                    case 3: Check(brokerJob.TerminateAndDrain(5000), "Broker fixture termination did not drain."); break;
+                    case 4: candidate.TerminateAndDrain(5000); break;
+                }
+                Check(descendant.WaitForExit(10000), $"Descendant survived fixture cleanup (mode {mode}).");
+                Check(rootObserver.WaitForExit(10000), $"Root survived fixture cleanup (mode {mode}).");
+                if (mode >= 3)
+                    Check(rootObserver.ExitCode == CefContainedProcess.ForcedTerminationExit &&
+                        descendant.ExitCode == CefContainedProcess.ForcedTerminationExit, "Unexpected forced exit code.");
+                if (mode != 1) Check(SpinWait.SpinUntil(brokerJob.HasNoActiveProcesses, TimeSpan.FromSeconds(5)), "Broker fixture job did not drain.");
             }
             File.Delete(markerPath);
             if (File.Exists(markerPath + ".descendant")) File.Delete(markerPath + ".descendant");

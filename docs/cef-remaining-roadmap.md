@@ -21,10 +21,10 @@
 
 [#228](https://github.com/tharu8813/VEIL-Project/pull/228)은 #226에 이미 통합된 이력으로, main에 별도로 병합하지 않는다. #222~#225와 #227의 정확한 head가 #226의 조상임을 비교 API로 확인했지만 최종 통합 내용이 모든 기능을 보존하는지는 리뷰로 검증한다. 현재 승인된 독립 리뷰 없음. Copilot quota 실패는 승인 아님.
 
-- [ ] P0-01: [최신 실패 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45960862547)의 합성 다중 프로세스 시험 실패를 해결한다. 로그: `Fixture pair refused (mode 1): root-membership`. root process handle 신원 재관측, 실제 Job 소속, active/total/terminated accounting 각각을 분리 진단한다. nested Job이 descendant의 별도 job 생성/상속과 호환되는지 실제 Windows에서 확인한다. 검사 삭제, timeout/오류의 PASS 변환, production cap=1 완화 금지.
-- [ ] P0-02: #226의 최신 정확한 head에서 일반 CI와 native CI 모두 PASS. 합성 root/descendant 쌍, 외부 PID, 변조 생성시각, cap=1, 두 Job 종료/강제 종료, 프로세스 핸들 보존을 검사한다.
+- [x] P0-01: [#226 합성 다중 프로세스 시험 실패](https://github.com/tharu8813/VEIL-Project/actions/runs/45960862547)를 로컬 Windows에서 재현하고 수정했다. root handle 신원과 Job 소속은 정상이고, `CREATE_NO_WINDOW`로 자식을 시작했을 때 `conhost`까지 포함되어 accounting이 active=3, total=3, terminated=0이었다. 자식이 루트의 콘솔을 상속하도록 수정한 뒤 기존 검사와 production cap=1을 유지한 상태로 통과했다. 별도 Job을 생성하는 실제 CEF는 P2-01에서 검증한다.
+- [x] P0-02: #226의 CI 실패 이력을 보존하고, 후속 [#229](https://github.com/tharu8813/VEIL-Project/pull/229)의 검증 커밋에서 일반 CI와 native compile CI가 모두 PASS했다. 합성 root/descendant 쌍, 외부 PID, 변조 생성시각, cap=1, 두 Job 종료/강제 종료, 프로세스 핸들 보존을 검사했다.
 - [ ] P0-03: 통합 범위와 기존 PR 변경의 보존 여부를 독립 리뷰. 승인 리뷰를 가장하지 않는다. 사용자 결정으로 이번 통합은 독립 리뷰 전에 수행하며, 이후 보안 검토 및 제품 활성화 기준은 유지한다.
-- [ ] P0-04: 통합된 #180/#181 다운로드 fixture의 충돌 해소 코드 검증: 합성 GET/redirect/401/HttpOnly cookie/취소/원본 hash 및 Rust 금고 회귀, 기존 per-view 및 parallel 동작. 새 통합 결과는 미검증; 실제 CEF 테스트는 별도 기록.
+- [x] P0-04: 통합된 #180/#181의 합성 GET/redirect/401/HttpOnly cookie/취소/원본 hash, 기존 per-view 및 parallel 동작을 실제 CEF로 검증했다. Rust 금고 회귀도 통과했다.
 - [ ] P0-05: 이번 통합 후 정확한 main SHA의 CI 및 PR 상태 확인. 실패를 삭제하거나 성공으로 바꾸지 않고 해결 작업 기록. 이후 일반 병합에는 CI/리뷰/충돌 검사 기준 적용. 브랜치/PR 이력 및 실패 증거 보존.
 
 **완료 조건:** 통합 코드가 main에 있고 필수 CI 성공 및 필요한 검토 기록이 존재하며, 기존 WebView2 제품이 회귀하지 않는다. 제품 CEF 활성화는 여전히 금지.
@@ -43,8 +43,8 @@
 
 ## 2. CEF 다중 프로세스와 샌드박스 (P1)
 
-- [ ] P2-01: 이미 작성된 nested Win32 smoke bundle을 일반 사용자 Windows에서 실제 실행. 두 Job containment, renderer token 제한 및 종료를 실측. native compile 또는 CI artifact를 런타임 PASS로 처리하지 않는다.
-- [ ] P2-02: CEF browser/renderer/GPU/utility/network 등의 공식 bootstrap 역할과 실제 프로세스/모듈 목록을 조사. role별 제한 token, integrity, AppContainer/job, site isolation, command-line 및 실행 경로를 관측한다. 단순 PID/부모 metadata나 sampling만으로 전체 수명을 보증하지 않는다.
+- [x] P2-01: 일반 사용자 Windows에서 nested Win32 smoke를 실제 실행해 제한 토큰과 낮은 무결성의 renderer 표본을 확인하고, 두 Job이 정상 종료 후 비었음을 검증했다. 역할별 전체 수명 검증은 P2-02 이후에 남아 있다.
+- [x] P2-02: CEF browser/renderer/GPU/utility/network의 역할, 모듈, 토큰, AppContainer 및 Job 소속을 합성 실행에서 관측했다. 교차 사이트 renderer 분리와 오프라인 VM의 독립 Procmon 추적을 확인했다. 이 결과는 시험한 실행에 한정되며, 제품 전체 수명 보증은 P2-03/P2-04에 남아 있다.
 - [ ] P2-03: 등록된 image와 runtime lease 및 broker 세션 generation을 전체 브라우저 수명에 결합하는 별도 다중 프로세스 admission 설계. 하위 프로세스마다 동일 계정/세션 및 적절한 sandbox 권한/역할, retained object, 모듈 핀을 검증. unknown role/image, breakaway, sandbox disable, 권한 철회/재인증 실패를 fail closed 처리. 기존 one-shot disabled candidate와 별도 protocol 및 tests.
 - [ ] P2-04: 보호 세션 권한 철회/desktop 또는 broker crash 때 모든 프로세스와 runtime lease 정리, job empty 확인 후 relock. timeout/강제 정리를 정상 종료와 구별.
 - [ ] P2-05: 별도 시험 빌드에서 제한된 보호 경로와 로컬 합성 페이지로 실제 CefInitialize/CefExecuteProcess/CefShutdown 연결. 암호화 볼륨 부재 또는 초기화 오류 시 시작 차단, 임시 프로필 fallback 금지.
@@ -89,3 +89,61 @@
 - #226 일반 CI 45960862547 FAIL: `Fixture pair refused (mode 1): root-membership` (CefContainmentCheck/Program.cs:180). 정확한 원인은 아직 미확정. Rust/.NET/소스 검사 통과, 해당 job 시험 실패. native CI 45960862278 PASS (compile 및 제한된 검사, 실제 브라우저 실행 아님).
 - #180/#181의 오래된 전역 상태와 최신 per-view 소유 요청 구현 간 충돌을 수동 해소. 통합 후 native/managed compile 및 소스 계약, 실제 Windows CEF 테스트는 NOT RUN. 최신 runtime wrapper를 유지했으므로 기존 `-ReuseExtractedCef` 옵션은 도입하지 않는다.
 - 독립 리뷰 없음. 실제 BitLocker/SCM/HKLM/CEF 실행, OS 쓰기 추적, Gate A~E는 미검증. 기존 WebView2와 startupEnabled=false 유지.
+
+## 통합 후 P0 검증 기록 (2026-11-27 KST)
+
+- 기준 커밋 `66b4c8221563ef8d905e3ee0b77ba10fcdef543b`. [#226](https://github.com/tharu8813/VEIL-Project/pull/226)은 이 커밋으로 병합됐고, PR head는 `e48f6bebb0918c58a3fad58021325406f27244fd`다. PR 일반 CI FAIL, native compile CI PASS, 승인 리뷰 없음.
+- [기준 커밋의 일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45962004465) FAIL. 다운로드 handoff와 parallel fixture의 소스 계약 두 개가 통합 전 코드 형태를 검사하고 있었다. `tests/security/tab-lifetime-contract.test.mjs`에서 현재의 동일 출처 검사, parallel별 원본 경로, handoff의 원본 URL 및 일회성 상태 초기화를 검사한다. 로컬 소스 계약 139개 PASS.
+- 로컬 미커밋 수정으로 `apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs`에 시험 전용 거절 진단을 추가하고, `tests/security/CefContainmentCheck/Program.cs`에서 자식의 콘솔 상속과 두 Job 각각의 명시적 강제 종료를 검증했다. Windows 합성 시험 PASS. 프로세스 핸들을 보존해 두 프로세스의 종료와 강제 종료 코드 35를 확인했다.
+- 로컬 Rust 금고 회귀 PASS, CEF WPF 관리 코드 Release compile PASS. 수정본의 원격 일반/native CI, 실제 CEF 다운로드·nested sandbox 실행과 보호 VM 검증은 NOT RUN. P0-02~P0-05는 열린 상태로 유지한다.
+
+## 후속 PR 및 CEF 실행 기록 (2026-11-27 KST)
+
+- [초안 #229](https://github.com/tharu8813/VEIL-Project/pull/229), `d378a5eda5e5d4b27f5423b68beebe32961be802`. [일반 CI PASS](https://github.com/tharu8813/VEIL-Project/actions/runs/45963056358), [native compile CI PASS](https://github.com/tharu8813/VEIL-Project/actions/runs/45963053759). #226 및 #180/#181과 #222~#225/#227의 로드맵 head가 통합 커밋의 조상임을 재확인했다. 독립 승인 리뷰는 대기 중이다.
+- 같은 SHA의 로컬 Windows 일반 사용자 합성 실행에서 native/managed build, Rust 금고 빌드, Win32, nested Win32 및 WPF 다운로드 PASS. 다운로드는 한 번의 인증 GET, HttpOnly 쿠키 전송, 익명 요청의 자격 증명 부재, redirect 미추적, 잘림·포화·병렬 취소, 각 정상 응답을 복호화한 전체 바이트와 예상 원본의 일치를 확인했다. 명시적 SHA-256 비교와 인증 실패 401 응답의 실제 CEF 경로는 별도 증거가 필요하다.
+- nested Win32는 종료 코드 0, 두 Job 정리 및 낮은 무결성의 제한 토큰 표본을 기록했다. 프로세스 역할별 표본 대응과 전체 수명 검증은 남아 있다.
+- 전체 로컬 실행 FAIL. 긴 임시 경로에서 탭 단계 2의 CacheStorage.open이 내부 오류로 실패했다. 짧은 경로를 사용한 진단에서는 양쪽 저장소 초기화와 쿠키 검증을 통과했으나 활성 탭 닫기에서 종료가 완료되지 않았다. 실패 로그와 실행 증거는 로컬 임시 디렉터리 `veil-cef-p0-d378a5e-17dd7ad5b9124af3b3f869781ba6468a/evidence`에 보존했다. 보호 VM과 제품 게이트는 NOT RUN.
+- P0-04 후속 변경은 인증 handoff를 두 번 명시적으로 요청해 각각 401/200을 한 번씩 관측한다. 401에서는 응답 바이트와 금고 객체가 없고, 성공한 인증 및 병렬 전송에서는 금고에서 복원한 SHA-256이 HTTP 원본과 일치한다. 새 WPF 합성 다운로드 시험 PASS, 소스 계약 139개 PASS. 변경 파일은 `apps/cef-smoke/wpf/FixtureVault.cs`, `apps/cef-smoke/wpf/WpfSmoke.cs`, `tests/cef/wpf-smoke.mjs`다. 전용 시험의 실행 로그는 같은 evidence 폴더의 `download-auth-wpf.stdout.log`에 보존했다.
+- 기준 `00427191d80bcf1bd8e49fe9ebc18cddd8e9de5a`에서 [일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45965912473) 및 [native compile CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45965912543) PASS. 후속 탭 수정은 CEF의 개별 탭 닫기 준비 알림을 WPF 호스트에 전달하고, 디스크 캐시 삭제를 합성 전용 `Default` 요청 컨텍스트로 제한한다. 짧은 임시 경로의 전용 탭 실행 PASS. 러너는 빌드 폴더와 별도로 짧은 임시 경로를 만들고 결과 JSON에 기록한다.
+- 탭 수정 커밋 `5947ea2410f6f864e09f0a3f480380832c7f0fc0`의 [일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45967544723), [native compile CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45967544558), 일반 사용자 전체 합성 실행 PASS. `veil-cef-5947ea2-f7fec5ef81164bef8df495524f519f75/evidence/result.json` SHA-256은 `88E4783BEC79AB28B2D9992C833ED971DE84E416EF2E4D30B6740A26C1BC11C8`이다.
+- 독립 nested 번들의 첫 실행은 종료 코드 0 및 양쪽 Job 정리 후, Windows 캐시 파일이 번들 안에 생성되어 인벤토리 FAIL. `CefNestedSmoke`의 시험 전용 자식 환경에서 Windows 캐시 경로를 scratch로 고정한 뒤 번들 실행과 전후 인벤토리 PASS. 역할별 renderer 토큰 대응과 제품 보호 VM 검증은 남아 있다.
+- 기준 `abd3af3e1647ddfbfa27c38e65a32d6b8ab5c024`의 [일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45968280506), [native compile CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45968280510), 전체 Windows 합성 실행 및 독립 nested 번들 PASS. 후속 nested 러너는 한 프로세스 핸들에서 역할·토큰을 대조해 renderer, GPU, network, utility 및 AppContainer 여부를 기록한다. 일반 사용자 로컬 실행에서 무결성 RID 0의 제한 renderer를 확인했다. 원본 명령행은 기록하지 않으며, Windows 내부 명령행 조회를 사용할 수 없으면 해당 역할을 unknown으로 취급한다. 새 증거는 제한된 renderer 표본을 요구하고 이전 증거에는 renderer 판정을 부여하지 않는다.
+- 역할 시험 커밋 `699450ed873f90bcb9d6f461e1f95be572dab617`의 [일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45974362401), [native compile CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45974362240), 일반 사용자 nested 번들 및 증거 검사 PASS.
+- P2-02 진행: 시험용 러너에서 살아 있는 process handle로 각 표본이 양쪽 Job에 속하는지 확인한다. browser와 descendant의 모듈 기본 파일명 및 실행 경로 기준 분류(runtime/Windows/other)를 기록하고, 조회가 불가능하면 목록을 null로 남긴다. 실제 실행에서 browser, renderer, GPU, utility, network 표본과 런타임 디렉터리의 `libcef.dll` 로드를 확인했다. 이는 모듈 해시 핀이나 전체 수명 보증이 아니다. 사이트 간 renderer 분리와 전체 수명 관측은 미검증이다.
+- 모듈 관측 커밋 `ec1f16a38627833fbf1377f8f434c28dd6a935ed`의 [일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45982006989), [native compile CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45982007022), 일반 사용자 nested 번들 및 증거 검사 PASS.
+- P2-02 사이트 격리 시험: CEF Win32 smoke가 `127.0.0.1` 상위 페이지에 동일 사이트 프레임과 `localhost` 교차 사이트 프레임을 실제 로드했다. 로컬 CDP 호출에서 교차 사이트 프레임의 정확한 URL에 해당하는 out-of-process iframe target 한 개와 동일 사이트 대조군의 target 부재를 확인했다. 전용 런타임 시험 PASS. 제품 구성 및 전체 renderer 수명 관측은 남아 있다.
+- 사이트 격리 시험 커밋 `affd601e7bd6c2587b5085b5e7e5a24697df68d1`의 [일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45983496116), [native compile CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45983496193), 일반 사용자 전체 합성 실행 8단계 PASS.
+- P2-02 수명 관측: root가 정지된 상태에서 두 Job을 완료 포트에 연결해 시작·종료·비어 있음 알림을 수집한다. 일반 사용자 초기 실행에서 두 Job 각각 시작 10건, 종료 10건, 비어 있음 1건을 확인했다. 증거 검사기는 알림에만 나타난 PID, 시작 또는 종료 알림에 없는 표본, 짝이 없는 시작·종료를 표시한다. Windows의 Job 알림은 전달을 보장하지 않고 PID를 전달하므로, 최종 종료 판정은 기존 root 핸들과 양쪽 Job의 실제 상태 확인을 사용한다. 완전한 수명 추적 및 독립 OS 증거는 남아 있다.
+- Job 관측 커밋 `6728ba8aa8c617059e0dc12b810ac0b8544e8426`의 [일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45993327625), [native CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45993327493), 일반 사용자 전체 합성 실행 8단계 및 독립 nested 번들 PASS. 두 Job에서 알림으로만 관측한 PID는 각각 3개였다.
+- 독립 OS 추적 준비: 호스트 일반 사용자 세션의 CEF 전용 WMI 시작 이벤트 구독이 거부됐다. 오프라인 `Veil-VM-TESTER`는 확인 당시 전원이 꺼져 있었다. Procmon CSV와 번들 증거를 대조하는 분석기에 대해 일치, 누락, 다른 이미지, PID 재사용을 합성 시험했다. 실제 관리자 VM Procmon 수집은 NOT RUN.
+
+### P2-02 Procmon 대조 실행
+
+폐기용 오프라인 VM의 관리자 세션에서 Procmon으로 프로세스 활동을 캡처한다. 일반 사용자 세션에서 같은 SHA의 nested 번들을 한 번 실행한다. 번들 실행 전에 수집을 시작하고 종료 후 수집을 멈춘다. 하위 프로세스 이름이나 경로로 수집 단계에서 제외하면 예기치 않은 자식이 빠질 수 있다. 내보낼 때 `Process Create`와 `Process Exit`를 유지하고, 영어 열 이름과 원래 이벤트 순서를 보존한다.
+
+```powershell
+node scripts/check-cef-process-trace.mjs <commit> <bundle-manifest.json> <bundle-evidence-dir> <trace.csv> <guest-smoke-exe-path>
+```
+
+원본 PML, 내보낸 CSV, 번들 매니페스트, `result.json`과 `stdout.json`을 같은 실행의 증거로 보존한다. 분석기는 root 생성과 각 종료, 두 Job과의 불일치, 살아 있는 표본이 없는 PID, PID 재사용 모호성을 출력한다. `MATCHED_CAPTURE`는 내보낸 추적의 대조 결과이며, 수집 손실 확인과 제품 게이트 판정은 별개다.
+
+**실제 오프라인 VM 결과.** 커밋 `60b4f37b87f3d5f7202afd2e65b648437f11de01`의 nested 번들을 일반 사용자로 실행하고, 별도 관리자 셸의 Procmon으로 동시에 수집했다. 번들 PASS, 두 Job 종료 후 비어 있음 확인. Procmon은 root와 자식 7개의 시작 및 종료를 모두 기록했고, 모든 시작은 두 Job 알림과 일치했다. GPU PID 2844의 정상 종료는 Procmon에만 있었으며 두 Job의 종료 알림에는 없었다. 그 외 종료 불일치, 다른 실행 이미지 및 PID 모호성은 관측되지 않았다. 분석기 결과 `INCOMPLETE_OR_MISMATCHED_CAPTURE`를 보존했다. 알림 누락 원인과 제품 게이트는 미검증이다.
+
+호스트 로컬 증거는 임시 폴더 `veil-cef-guest-export-dc3e1303`의 `trace.pml`, `trace.csv`, `comparison.json`, `manifest.json`, `evidence/result.json`, `evidence/stdout.json`에 있다. CSV SHA-256은 `371B69CA2931D8218A1E0AF7303C87D5524A07607D3DBBA8D28B8AB896783BD7`이고, PML SHA-256은 `7DF40EBFC993213447651BAFF29D4BD3EAF5E68783874F9B3E3EAB4F2CF7F5AA`다. 호스트의 시험 전용 임시 VirtualBox 공유는 내보낸 뒤 해제했다.
+
+GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기록만으로 완료 포트 알림이 생성되지 않았는지 또는 전달 과정에서 빠졌는지는 판단할 수 없다. 후속 시험 러너는 살아 있을 때 검증한 각 프로세스의 핸들을 보존하고, 반복 표본의 핸들이 동일한 객체인지 확인한 뒤 정상 정리 후 각 핸들의 종료 신호와 종료 코드를 기록한다. 로컬 CEF 실행에서 표본 7개의 종료 코드 0과 두 Job의 정리를 확인했다. 새 증거 검사는 핸들로 확인한 종료와 Procmon 종료의 차이를 별도로 표시한다. 이전 VM의 Job 알림 불일치는 보존한다.
+
+**보존 핸들 검증 후속 VM 실행.** 커밋 `308e8e832b6b5e7beb91ad452ff9c054923105ff`의 번들을 일반 사용자로 실행했다. Procmon 시작·종료 각 7건과 두 Job의 알림이 일치했고, 관측한 7개 프로세스 모두 보존 핸들에서 종료 코드 0을 확인했다. 두 Job은 비었으며, 분석기 결과는 `MATCHED_CAPTURE`다. 이전 실행의 GPU 종료 알림 누락 원인은 여전히 미확정이다. 호스트 임시 폴더 `veil-cef-retained-guest-308e8e8-r`에 증거를 보존했다. CSV SHA-256 `55282378DB9DE91D11284A86B9E14BA0DE81AA7AD9088A4F4B55BF2C55B4F266`, PML SHA-256 `849C887024EE2EED79F4608CE1AA33B0F70A9DD16173EDEA03B4463720E27CD0`. VirtualBox 임시 공유는 내보낸 뒤 해제했으며, 보호 VM 설치·제품 게이트는 NOT RUN이다.
+
+### P1 보호 VM 준비 기록
+
+- 커밋 `308e8e832b6b5e7beb91ad452ff9c054923105ff`의 소스 아카이브로 Desktop CefPreflight, Broker Release와 CEF 비활성 후보를 빌드했다. 네이티브 후보 인벤토리 234개 PASS. 빌드에서 나온 PDB와 WebView2 API XML 문서는 전달본에서 제외했다. 비서명 묶음 SHA-256은 `2678F22C4B3D74855CAC782EF1D369874F2ADF9988536980B46E381327D72EB2`다.
+- 오프라인 `Veil-VM-TESTER`의 기존 VEIL 서비스, Program Files/ProgramData 설치 폴더 및 HKLM 등록 키가 없는 것을 확인했다. 게스트에서 아카이브 해시와 CefPreflight 빌드 표식을 확인하고 `C:\Users\vboxuser\VeilPreflight308Input`에 풀었다. 임시 공유를 해제했다.
+- 폐기용 자체 서명 코드 서명 인증서의 개인 키는 게스트 관리자 계정의 반출 불가 저장소에 두고, 공개 인증서는 오프라인 게스트의 신뢰 저장소에 등록했다. 인증서 지문은 `016D4ED89AE4F7ACADFACEFBCDEC8AF1E2CE45AE`다. 관리자 제한 ACL에서 데스크톱, 브로커, CEF 후보의 EXE/DLL 6개 Authenticode 검증 PASS. 시험 서명에는 타임스탬프를 사용하지 않았다.
+- CEF 후보 CMS 및 후보 스테이징 재검증 PASS. 독립 런타임 핀 계획의 최초 실행은 상위 staging 폴더까지 열거해 CMS 확장자를 후보 파일로 처리하면서 FAIL. `scripts/plan-cef-runtime-pins.ps1`의 대상 경로를 실제 `candidate` 하위 폴더로 수정했다.
+- 수정한 도구의 해시를 게스트에서 대조한 뒤 독립 런타임 핀 계획, 전체 payload 분리 CMS, 제한 ACL 전체 스테이징 및 복사본 재검증 PASS. 계획의 `startupEnabled=false`와 `installable=false`를 확인했다. VM 결과 화면은 호스트 임시 폴더 `veil-preflight-308e8e8-7704bf5e/vm-media/staging-result.png`에 보존했다.
+- 게스트의 제한 ACL 폴더에 동적 2 GiB 시험 VHDX `C:\Program Files\VEIL.cef-preflight-test-media\profile-test.vhdx`를 생성하고 GPT/NTFS로 초기화했다. 볼륨 레이블 `VEILCEFTEST`, 관측한 볼륨 GUID `4e366859-18a3-4bf4-8d77-620faef2bb8b`, 분리 상태 `Attached=False`를 확인했다. 결과 화면은 같은 호스트 임시 폴더의 `vhdx-ntfs.png`에 보존했다.
+- 게스트에서 별도 로컬 계정 `VeilCefTest`를 임의 암호로 생성했다. 계정 활성 상태와 Users 직접 구성원을 확인했고 Administrators 직접 구성원 검사도 통과했다. 임시 DPAPI 파일의 삭제를 확인하고 운영자가 시험용 Windows 암호를 직접 설정할 보안 프롬프트를 열었다. BitLocker PowerShell 명령의 존재와 VHDX 분리 상태를 확인했다. 보호기 설정, 게시, HKLM/SCM 등록 및 보호 세션 실행은 NOT RUN.
+- VHDX를 다시 연결하여 동일 GUID를 Windows `Win32_EncryptableVolume`에서 확인했다. 드라이브 문자 없음, `ProtectionStatus=0`, 검사 후 `Attached=False`. 운영자 Windows 암호 및 별도 BitLocker 암호의 연속 보안 입력을 열었다. 보호기 생성 스크립트는 호스트 임시 폴더에서 구문 검사를 통과했다.
+- 운영자 입력 후 시험 VHDX의 BitLocker 암호화 100%, 보호 활성, 잠금 및 분리 상태를 확인했다. 초기 복구 암호가 콘솔 경고에 출력되어 해당 보호기를 교체하고 그 값이 담긴 임시 화면 파일을 삭제했다. 현재 Password 보호기 ID는 `3131BE9A-0075-4896-8B84-35EA659A1776`, RecoveryPassword 보호기 ID는 `89ED40F1-D12C-4C40-9229-8A33F09BC225`다. 기본 암호로 잠금 해제한 뒤 볼륨의 `VeilProfile`에 SYSTEM/Administrators FullControl 및 `VeilCefTest` Modify ACL을 확인하고 재잠금·분리했다. 등록 초안 도구의 운영자 외부 복구 백업 및 확인은 진행 중이다.
+- 최초 등록 초안 실행은 GUID 형식의 프로필 경로를 거부했다. 실제 권한을 확인한 드라이브 문자 경로 `E:\VeilProfile`와 별도 볼륨 GUID로 재실행하여 기본 암호 보안 프롬프트에 도달했다. 외부 복구 백업 검증 및 초안 재검증은 대기 중이다.

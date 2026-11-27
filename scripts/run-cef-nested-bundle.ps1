@@ -63,6 +63,7 @@ $report = [ordered]@{
     sourceCommit = $ExpectedCommit
     manifestSha256 = $manifestDigest
     stdoutSha256 = $null
+    runnerPid = $null
     status = 'NOT RUN'
     productReleaseGates = 'NOT RUN'
 }
@@ -73,6 +74,7 @@ try {
     $scratch = Join-Path $evidence 'scratch'
     foreach ($arg in @($smoke, $scratch)) { if ($arg.Contains('"') -or $arg.EndsWith('\')) { throw 'Invalid fixture path.' } }
     $child = Start-Process -FilePath $program -ArgumentList @('"' + $smoke + '"', '"' + $scratch + '"') -WorkingDirectory $root -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $evidence 'stdout.json') -RedirectStandardError (Join-Path $evidence 'stderr.log')
+    $report.runnerPid = $child.Id
     try {
         if (-not $child.WaitForExit(60000)) {
             # The isolated runner owns kill-on-close jobs. Kill only the
@@ -92,8 +94,15 @@ try {
     $sampleBytes = [IO.File]::ReadAllBytes($samplePath)
     if ($sampleBytes.Length -ne $sampleInfo.Length) { throw 'Smoke sample size changed.' }
     $sample = [Text.Encoding]::UTF8.GetString($sampleBytes).TrimStart([char]0xFEFF) | ConvertFrom-Json
-    if ($sample.scope -cne 'nested-win32-smoke-only' -or $sample.exit -ne 0 -or
-        $sample.outerEmpty -ne $true -or $sample.innerEmpty -ne $true -or $sample.restricted -ne $true) {
+    $rendererSamples = @($sample.observed | Where-Object {
+        $_.Role -ceq 'renderer' -and $_.Restricted -eq $true -and $_.IntegrityRid -le 0x1000
+    })
+    if ($sample.schema -ne 5 -or $sample.scope -cne 'nested-win32-smoke-only' -or $sample.exit -ne 0 -or
+        $sample.browser.Role -cne 'browser' -or $sample.browser.Pid -ne $sample.rootPid -or
+        $sample.jobNotifications -isnot [array] -or $sample.jobNotifications.Count -gt 512 -or
+        $sample.handleExits -isnot [array] -or $sample.handleExits.Count -ne ($sample.observed.Count + 1) -or
+        $sample.outerEmpty -ne $true -or $sample.innerEmpty -ne $true -or $sample.restricted -ne $true -or
+        $sample.rendererRestrictedLow -ne $true -or $rendererSamples.Count -eq 0) {
         throw 'Missing required fixture evidence.'
     }
     $report.stdoutSha256 = Get-BytesDigest $sampleBytes

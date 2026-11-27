@@ -26,6 +26,8 @@ Directory.CreateDirectory(temp);
 var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
 {
     ["TEMP"] = temp, ["TMP"] = temp,
+    // Expand the Windows cache path into fixture-owned scratch storage.
+    ["SystemDrive"] = temp,
     ["SystemRoot"] = Environment.GetFolderPath(Environment.SpecialFolder.Windows),
     ["WINDIR"] = Environment.GetFolderPath(Environment.SpecialFolder.Windows),
     ["PATH"] = Environment.SystemDirectory,
@@ -39,16 +41,21 @@ var initial = second.Members();
 if (initial.Length != 1 || initial[0] != rootPid)
     throw new InvalidOperationException("Unexpected initial job membership.");
 var observed = new Dictionary<uint, FixtureJob.TokenSample>();
+FixtureJob.TokenSample? browser = null;
 var timer = Stopwatch.StartNew();
+using var notifications = new FixtureJobNotifications(child.FixtureJobHandle, second.Handle);
 try
 {
     child.ResumeAfterVerification(() => second.Contains(root));
     while (true)
     {
+        notifications.Drain();
         foreach (uint pid in second.Members())
         {
-            if (pid == rootPid) continue;
-            if (second.TrySample(pid, image, out var sample))
+            if (!second.TrySample(pid, image, child, out var sample)) continue;
+            if (pid == rootPid)
+                browser = sample with { Role = "browser" };
+            else
                 observed[pid] = sample;
         }
         if (child.WaitForExit(0)) break;
@@ -59,15 +66,23 @@ try
     uint exit = child.ReadExitCode();
     bool outerEmpty = child.WaitForNaturalJobExit(5000);
     bool innerEmpty = second.Members().Length == 0;
+    var handleExits = second.ObserveRetainedExits();
+    notifications.Drain(100);
     bool restricted = observed.Values.Any(s => s.Restricted && s.IntegrityRid <= 0x1000);
+    bool rendererRestrictedLow = observed.Values.Any(s =>
+        s.Role == "renderer" && s.Restricted && s.IntegrityRid <= 0x1000);
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         scope = "nested-win32-smoke-only",
-        rootPid, exit, outerEmpty, innerEmpty, restricted,
+        schema = 5,
+        rootPid, exit, outerEmpty, innerEmpty, restricted, rendererRestrictedLow,
+        browser,
         observed = observed.Values.OrderBy(s => s.Pid),
-        limitations = "Sampled token evidence only; no subprocess role, full site isolation, product authorization or OS write trace."
+        jobNotifications = notifications.Events,
+        handleExits,
+        limitations = "Exit codes are from handles retained for live samples. Unsampled processes are outside handle coverage; Job notifications are best-effort."
     }));
-    if (exit != 0 || !outerEmpty || !innerEmpty || !restricted)
+    if (exit != 0 || !outerEmpty || !innerEmpty || !rendererRestrictedLow || browser is null)
         throw new InvalidOperationException("Nested CEF fixture did not establish required evidence.");
     return 0;
 }
@@ -83,6 +98,8 @@ finally
 sealed class FixtureJob : IDisposable
 {
     private readonly SafeFileHandle job;
+    private readonly Dictionary<uint, SafeProcessHandle> retained = [];
+    internal SafeFileHandle Handle => job;
     internal FixtureJob()
     {
         job = CreateJobObjectW(IntPtr.Zero, null);
@@ -138,9 +155,12 @@ sealed class FixtureJob : IDisposable
         finally { Marshal.FreeHGlobal(buffer); }
     }
 
-    internal sealed record TokenSample(uint Pid, uint IntegrityRid, bool Restricted);
+    internal sealed record ModuleSample(string Name, string Location);
+    internal sealed record TokenSample(uint Pid, uint IntegrityRid, bool Restricted, string Role, bool AppContainer,
+        ModuleSample[]? Modules);
+    internal sealed record HandleExit(uint Pid, uint ExitCode);
 
-    internal bool TrySample(uint pid, string image, out TokenSample sample)
+    internal bool TrySample(uint pid, string image, CefContainedProcess outerJob, out TokenSample sample)
     {
         sample = null!;
         using var process = OpenProcess(0x1000 | 0x00100000, false, pid);
@@ -167,15 +187,138 @@ sealed class FixtureJob : IDisposable
                 if (count == 0) return false;
                 uint rid = unchecked((uint)Marshal.ReadInt32(GetSidSubAuthority(sid, (uint)(count - 1))));
                 bool restricted = IsTokenRestricted(token);
+                if (!GetTokenInformation(token, 29, buffer, needed, out uint appContainerBytes) ||
+                    appContainerBytes != sizeof(uint)) return false;
+                bool appContainer = Marshal.ReadInt32(buffer) != 0;
+                string role = ReadRole(process);
+                var modules = ObserveModules(pid, Path.GetDirectoryName(image)!);
                 if (!Contains(process) || WaitForSingleObject(process, 0) != 0x102) return false;
-                sample = new TokenSample(pid, rid, restricted);
+                if (!outerJob.ContainsFixtureMember(process))
+                    throw new InvalidOperationException("Live fixture member is missing from the outer job.");
+                RetainSample(pid, process);
+                sample = new TokenSample(pid, rid, restricted, role, appContainer, modules);
                 return true;
             }
             finally { Marshal.FreeHGlobal(buffer); }
         }
     }
 
-    public void Dispose() => job.Dispose();
+    private static ModuleSample[]? ObserveModules(uint pid, string runtimeDirectory)
+    {
+        try
+        {
+            // The caller keeps the original process handle live across this PID-based query.
+            using var process = Process.GetProcessById(checked((int)pid));
+            var modules = process.Modules;
+            if (modules.Count is 0 or > 512) return null;
+            string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows) + Path.DirectorySeparatorChar;
+            string runtime = runtimeDirectory + Path.DirectorySeparatorChar;
+            return modules.Cast<ProcessModule>().Select(module =>
+            {
+                string path = module.FileName;
+                string location = path.StartsWith(runtime, StringComparison.OrdinalIgnoreCase) ? "runtime" :
+                    path.StartsWith(windows, StringComparison.OrdinalIgnoreCase) ? "windows" : "other";
+                return new ModuleSample(Path.GetFileName(path), location);
+            }).ToArray();
+        }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static string ReadRole(SafeProcessHandle process)
+    {
+        // ProcessCommandLineInformation is used only for smoke diagnostics.
+        // Read it from the same process object as the token and log only a role.
+        const int commandLineInformation = 60;
+        const int headerSize = 16; // x64 UNICODE_STRING
+        NtQueryInformationProcess(process, commandLineInformation, IntPtr.Zero, 0, out uint needed);
+        if (needed < headerSize || needed > 131072) return "unknown";
+        IntPtr data = Marshal.AllocHGlobal((int)needed);
+        try
+        {
+            if (NtQueryInformationProcess(process, commandLineInformation, data, needed, out uint returned) != 0 ||
+                returned < headerSize || returned > needed) return "unknown";
+            int bytes = unchecked((ushort)Marshal.ReadInt16(data));
+            IntPtr value = Marshal.ReadIntPtr(data, 8);
+            long offset = value.ToInt64() - data.ToInt64();
+            if (bytes == 0 || bytes % 2 != 0 || offset < headerSize || offset > returned - bytes)
+                return "unknown";
+            string? commandLine = Marshal.PtrToStringUni(value, bytes / 2);
+            if (string.IsNullOrEmpty(commandLine) || commandLine.Contains('\0')) return "unknown";
+            IntPtr args = CommandLineToArgvW(commandLine, out int count);
+            if (args == IntPtr.Zero) return "unknown";
+            try
+            {
+                string? type = null;
+                string? utility = null;
+                for (int i = 1; i < count; i++)
+                {
+                    string? arg = Marshal.PtrToStringUni(Marshal.ReadIntPtr(args, i * IntPtr.Size));
+                    if (arg == "--") break;
+                    if (arg?.StartsWith("--type=", StringComparison.Ordinal) == true)
+                    {
+                        if (type is not null) return "unknown";
+                        type = arg[7..];
+                    }
+                    if (arg?.StartsWith("--utility-sub-type=", StringComparison.Ordinal) == true)
+                        utility = arg[19..];
+                }
+                return type switch
+                {
+                    "renderer" => "renderer",
+                    "gpu-process" => "gpu",
+                    "utility" when utility == "network.mojom.NetworkService" => "network",
+                    "utility" => "utility",
+                    _ => "unknown",
+                };
+            }
+            finally { LocalFree(args); }
+        }
+        finally { Marshal.FreeHGlobal(data); }
+    }
+
+    private void RetainSample(uint pid, SafeProcessHandle process)
+    {
+        if (retained.TryGetValue(pid, out var previous))
+        {
+            if (!CompareObjectHandles(process, previous))
+                throw new InvalidOperationException("A sampled PID identifies a different process object.");
+            return;
+        }
+        if (retained.Count >= 128)
+            throw new InvalidOperationException("Too many sampled process objects.");
+        nint current = new(-1);
+        if (!DuplicateHandle(current, process, current, out var retainedHandle, 0, false, 2))
+        {
+            var error = new Win32Exception();
+            retainedHandle?.Dispose();
+            throw error;
+        }
+        retained.Add(pid, retainedHandle);
+    }
+
+    internal HandleExit[] ObserveRetainedExits()
+    {
+        var wait = Stopwatch.StartNew();
+        var exits = new List<HandleExit>(retained.Count);
+        foreach (var (pid, process) in retained)
+        {
+            uint remaining = (uint)Math.Max(0, 5000 - wait.ElapsedMilliseconds);
+            uint result = WaitForSingleObject(process, remaining);
+            if (result == 0x102) throw new TimeoutException("A retained fixture process did not exit.");
+            if (result != 0 || !GetExitCodeProcess(process, out uint exitCode)) throw new Win32Exception();
+            exits.Add(new HandleExit(pid, exitCode));
+        }
+        return exits.OrderBy(exit => exit.Pid).ToArray();
+    }
+
+    public void Dispose()
+    {
+        job.Dispose();
+        foreach (var process in retained.Values) process.Dispose();
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct BasicLimits
@@ -217,6 +360,22 @@ sealed class FixtureJob : IDisposable
     private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint WaitForSingleObject(SafeProcessHandle process, uint ms);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(SafeProcessHandle process, out uint exitCode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DuplicateHandle(nint sourceProcess, SafeProcessHandle source, nint targetProcess,
+        out SafeProcessHandle target, uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint options);
+    [DllImport("kernelbase.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CompareObjectHandles(SafeProcessHandle first, SafeProcessHandle second);
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(SafeProcessHandle process, int infoClass, IntPtr data, uint bytes, out uint returned);
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern IntPtr CommandLineToArgvW(string commandLine, out int count);
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr memory);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool QueryFullProcessImageNameW(SafeProcessHandle process, uint flags, StringBuilder path, ref uint length);

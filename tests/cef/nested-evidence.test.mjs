@@ -41,8 +41,65 @@ test('valid unsigned smoke record stays explicitly non-product and non-attested'
     assert.equal(result.status, 'CONSISTENT_REPORTED_SMOKE_PASS');
     assert.equal(result.observedDescendants, 2);
     assert.equal(result.restrictedLowDescendants, 1);
+    assert.equal(result.restrictedLowRenderers, null);
     assert.equal(result.independentRuntimeVerification, 'NOT ESTABLISHED');
     assert.equal(result.productReleaseGates, 'NOT RUN');
+});
+test('role-aware evidence requires a restricted low-integrity renderer sample', () => {
+    const f = fixture();
+    f.sample.schema = 2;
+    f.sample.rendererRestrictedLow = true;
+    Object.assign(f.sample.observed[0], { Role: 'renderer', AppContainer: false });
+    Object.assign(f.sample.observed[1], { Role: 'network', AppContainer: false });
+    assert.equal(check(f).restrictedLowRenderers, 1);
+    f.sample.observed[0].Role = 'gpu';
+    assert.throws(() => check(f), /Renderer token assertion/);
+    f.sample.observed[0].Role = 'renderer';
+    delete f.sample.observed[0].AppContainer;
+    assert.throws(() => check(f), /AppContainer sample/);
+});
+test('module inventory is scoped to named modules on the sampled fixture processes', () => {
+    const f = fixture();
+    f.sample.schema = 3;
+    f.sample.rendererRestrictedLow = true;
+    f.sample.browser = { Pid: 100, Role: 'browser', IntegrityRid: 8192, Restricted: false,
+        AppContainer: false, Modules: [{ Name: 'libcef.dll', Location: 'runtime' }] };
+    Object.assign(f.sample.observed[0], { Role: 'renderer', AppContainer: false, Modules: null });
+    Object.assign(f.sample.observed[1], { Role: 'network', AppContainer: false, Modules: null });
+    assert.equal(check(f).processesWithModuleInventory, 1);
+    f.sample.browser.Modules[0].Name = '../libcef.dll';
+    assert.throws(() => check(f), /Invalid module inventory/);
+    f.sample.browser.Pid++;
+    assert.throws(() => check(f), /Invalid browser process sample/);
+});
+test('best-effort Job notifications expose gaps without replacing live samples', () => {
+    const f = fixture();
+    Object.assign(f.sample, { schema: 4, rendererRestrictedLow: true,
+        browser: { Pid: 100, Role: 'browser', IntegrityRid: 8192, Restricted: false, AppContainer: false, Modules: null },
+        jobNotifications: [{ Job: 'outer', Kind: 'start', Pid: 101 },
+            { Job: 'outer', Kind: 'start', Pid: 103 }, { Job: 'inner', Kind: 'empty', Pid: 0 }] });
+    Object.assign(f.sample.observed[0], { Role: 'renderer', AppContainer: false, Modules: null });
+    Object.assign(f.sample.observed[1], { Role: 'network', AppContainer: false, Modules: null });
+    assert.deepEqual(check(f).jobNotifications.outer.sampledPidsWithoutStart, [100, 102]);
+    assert.deepEqual(check(f).jobNotifications.outer.startPidsWithoutLiveSample, [103]);
+    assert.deepEqual(check(f).jobNotifications.outer.startPidsWithoutExit, [101, 103]);
+    assert.deepEqual(check(f).jobNotifications.inner.sampledPidsWithoutExit, [100, 101, 102]);
+    f.sample.jobNotifications[2].Pid = 101;
+    assert.throws(() => check(f), /Invalid job notification/);
+});
+test('retained handles prove exits for every live sample even without Job notifications', () => {
+    const f = fixture();
+    Object.assign(f.sample, { schema: 5, rendererRestrictedLow: true,
+        browser: { Pid: 100, Role: 'browser', IntegrityRid: 8192, Restricted: false, AppContainer: false, Modules: null },
+        jobNotifications: [], handleExits: [{ Pid: 100, ExitCode: 0 },
+            { Pid: 101, ExitCode: 0 }, { Pid: 102, ExitCode: 1 }] });
+    Object.assign(f.sample.observed[0], { Role: 'renderer', AppContainer: false, Modules: null });
+    Object.assign(f.sample.observed[1], { Role: 'network', AppContainer: false, Modules: null });
+    assert.equal(check(f).retainedHandleExitCount, 3);
+    f.sample.handleExits[2].Pid = 101;
+    assert.throws(() => check(f), /Invalid retained-handle exit/);
+    f.sample.handleExits.pop();
+    assert.throws(() => check(f), /Missing retained-handle exit/);
 });
 test('reject wrong checkout, manifest hash, scope and release claim', () => {
     assert.throws(() => check(fixture(), { expectedCommit: 'c'.repeat(40) }), /commit mismatch/);
