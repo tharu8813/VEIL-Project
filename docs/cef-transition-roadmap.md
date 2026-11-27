@@ -175,3 +175,7 @@ IEngineLoginForms에 Unavailable/SyntheticFixture/Product 범위 선언을 추�
 ### 추가 구현: 표준 사용자 Windows 합성 통합 실행 스크립트 (검증 대기)
 
 main의 컴파일 전용 helper와 분리한 `scripts/test-cef-wpf.ps1`을 추가한다. clean commit, x64/non-elevated interactive session, 새 작업 폴더, 고정 CEF archive 해시 및 locked Rust build, fixture TEMP/TMP, 제한 시간, test executable 잔여 프로세스 확인을 요구한다. Win32 → 단일 WPF/금고 → 다중 탭/사이트 데이터/로그인 회귀를 순서대로 실행하고 commit·바이너리 SHA-256·단계별 결과·로그를 보존한다. 일반 사용자 실행의 필요조건만 확인하며 실제 desktop 활성 여부나 token sandbox 보안을 독립 측정하지 않는다. 통합 실행 NOT RUN. 보호 볼륨에서 CEF 데이터 보존, 볼륨 외 쓰기 추적, sandbox/site isolation, 네트워크 경로, 업데이트/패키징, Gate A~E는 별도 증거 필수. 제품 엔진 WebView2 유지.
+
+### 추가 구현: CEF 보호 프로필 읽기 전용 사전 검사 (검증 대기)
+
+제품 브로커 기반 ProfileGate를 재사용하는 CefProtectedProfilePreflight 및 별도 CefProfileLayout을 추가한다. 고정 제품 root/cef 아래 cache, temp, logs 및 cef.log 경로를 분리하며 WebView2 프로필이나 기존 temp를 사용하지 않는다. 실제 등록된 암호화/보호/잠금 해제/보호기 상태 및 동일 볼륨 GUID를 기존 root와 존재하는 디렉터리에 요구하고 재분석 지점·파일 충돌·권한 오류를 거부한다. 초기/종료 root 검증, 기존 CEF 하위 경로 검사, 순수 레이아웃 회귀 포함. 읽기 전용: 생성, 환경 변경, 엔진 시작, 암호화 보장 또는 launch permission 없음. 기존 CEF smoke는 CefInitialize 이후 WPF 진입이므로 이 검사에 통과해도 보호 엔진 연결은 불가하다. 후속은 broker 인증 완료 후, 보호 경로 생성/재검증, 자식 bootstrap 시작 전 TEMP/TMP/로그 경로 전달, bootstrap 측 native 초기화 이전 독립 검증 및 종료/재잠금 조율. 검사와 사용 사이 TOCTOU, 볼륨 외 쓰기, renderer sandbox/사이트 격리 및 실제 BitLocker VM 실행 미검증. 제품 엔진 WebView2 유지.

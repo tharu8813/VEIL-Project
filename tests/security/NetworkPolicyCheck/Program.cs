@@ -408,6 +408,25 @@ Check(LoginFormAccess.ProductForms(new object(), false) is null &&
     LoginFormAccess.ProductForms(null, false) is null, "missing login interface admitted");
 Console.WriteLine("PASS: product-only login scope admission and revocation");
 
+// Pure layout test: no profile directory or broker is touched.
+string layoutRoot = Path.Combine(Path.GetTempPath(), "veil-cef-layout-" + Guid.NewGuid().ToString("N"));
+var cefLayout = new CefProfileLayout(layoutRoot + Path.DirectorySeparatorChar);
+Check(cefLayout.ProductRoot == layoutRoot && cefLayout.EngineRoot == Path.Combine(layoutRoot, "cef"),
+    "CEF layout failed to normalize root");
+Check(cefLayout.Cache == Path.Combine(layoutRoot, "cef", "cache") &&
+    cefLayout.Scratch == Path.Combine(layoutRoot, "cef", "temp") &&
+    cefLayout.Logs == Path.Combine(layoutRoot, "cef", "logs") &&
+    cefLayout.LogFile == Path.Combine(cefLayout.Logs, "cef.log"), "unexpected CEF layout");
+Check(cefLayout.Directories.Distinct().Count() == 4 &&
+    cefLayout.Directories.All(path => path.StartsWith(cefLayout.EngineRoot, StringComparison.Ordinal)),
+    "CEF directories overlap or escape engine root");
+Check(!Directory.Exists(layoutRoot), "layout planning created a profile");
+bool relativeRejected = false;
+try { _ = new CefProfileLayout("relative-profile"); }
+catch (ArgumentException) { relativeRejected = true; }
+Check(relativeRejected, "relative CEF root accepted");
+Console.WriteLine("PASS: separate CEF profile layout without filesystem side effects");
+
 file sealed class SyntheticLoginCapability : IEngineLoginForms
 {
     public LoginFormScope LoginScope { get; set; }
