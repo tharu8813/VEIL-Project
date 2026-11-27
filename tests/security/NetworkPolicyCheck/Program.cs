@@ -520,6 +520,31 @@ foreach (var invalidChild in new[] {
 }
 Console.WriteLine("PASS: CEF child one-shot admission policy, generation, expiry, revocation and identity");
 
+// Pure digest pin tests use synthetic bytes, not real signed executables.
+byte[] syntheticImage = [0, 1, 2, 3, 4, 255];
+string syntheticDigest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(syntheticImage));
+var imagePin = new Veil.VolumeBroker.CefImageDigest(syntheticDigest.ToLowerInvariant());
+using (var bytes = new MemoryStream(syntheticImage))
+    Check(imagePin.Matches(bytes), "matching CEF digest rejected");
+using (var bytes = new MemoryStream([0, 1, 2, 3, 4, 254]))
+    Check(!imagePin.Matches(bytes), "modified CEF image accepted");
+using (var bytes = new MemoryStream(syntheticImage))
+{
+    bytes.Position = 1;
+    bool rejected = false;
+    try { _ = imagePin.Matches(bytes); }
+    catch (ArgumentException) { rejected = true; }
+    Check(rejected, "partial CEF image hash accepted");
+}
+foreach (string invalidPin in new[] { "", "00", new string('g', 64), new string('0', 65) })
+{
+    bool rejected = false;
+    try { _ = new Veil.VolumeBroker.CefImageDigest(invalidPin); }
+    catch (ArgumentException) { rejected = true; }
+    Check(rejected, "invalid CEF digest pin accepted");
+}
+Console.WriteLine("PASS: CEF executable SHA-256 pin and changed bytes refusal");
+
 file sealed class SyntheticAdmissionClock : TimeProvider
 {
     private long timestamp;

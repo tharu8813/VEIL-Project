@@ -195,3 +195,7 @@ main의 컴파일 전용 helper와 분리한 `scripts/test-cef-wpf.ps1`을 추�
 ### 추가 구현: 프로세스 세대 확인 및 CEF 자식 위임 정책 모델 (검증 대기)
 
 Named pipe에서 확인한 ClientIdentity에 OS GetProcessTimes의 생성 시각을 포함하고, unlock crash watcher handle을 열 때 PID와 생성 시각 및 생존 상태를 일치시킨다. 별도 순수 CefChildAdmission 모델은 인증된 owner/child의 전체 identity, 동일 SID/session, unlock 세대 객체, 15초 단조 시간, 단일 사용 및 명시 철회를 요구한다. 미래 broker가 직접 관측한 child image 검증·생존·보호 상태만 전달할 계약이며 현재 protocol/제품에는 연결되지 않는다. 실제 parent-child launch binding, 서명/해시 pin, 원본 handle 보유, pipe 인증, 자식 종료/relock, Windows/BitLocker 실측은 미완료. 기존 broker client allowlist와 WebView2 제품 시작을 유지한다. 순수 회귀 및 소스 계약 검사 추가.
+
+### 추가 구현: CEF 실행 파일 pin 검증 (검증 대기)
+
+CefImageDigest는 정확한 64자 SHA-256과 전체 스트림 검사를 요구한다. 미연결 CefPinnedImage.OpenVerified는 별도 등록 경로와 실제 child process handle의 PID/생성 시각/image path, 관리자 소유 및 쓰기 제한 파일·직접 directory, reparse ancestor, read-only share로 유지한 파일 handle의 canonical path 및 single link, SHA-256/Authenticode, 검사 후 재검증을 요구한다. 성공 시 파일 handle을 반환하여 호출자가 수명을 유지할 수 있다. 프로세스 메모리/로드된 DLL, 상위 directory ACL 전부, 경로 race, 실제 parent-child 관계, 별도 제품 pin 등록 및 배포·서명, native bootstrap/IPC 권한 위임은 아직 미완료. 현재 브로커 allowlist와 명령, 기존 WebView2 startup은 변경하지 않는다. 순수 hash 회귀 및 source contract 추가; 실제 Windows signature/ACL/process/BitLocker 실측 NOT RUN.

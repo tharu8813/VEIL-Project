@@ -176,3 +176,19 @@ test('broker process generation binds the crash watcher and child admission stay
     assert.doesNotMatch(broker, /CefChildAdmission/);
     assert.doesNotMatch(protocol, /CefChildAdmission|RedeemChild|GrantChild/);
 });
+
+
+test('future CEF executable checks use a retained file handle and do not extend broker permissions', async () => {
+    const pin = await readFile('apps/broker/Veil.VolumeBroker/CefPinnedImage.cs', 'utf8');
+    const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
+    const admin = await readFile('apps/shared/AdminOnlyFile.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    assert.match(pin, /!Native\.MatchesLiveProcessImage\(process, child\)/);
+    assert.match(pin, /AdminOnlyFile\.RequireProtectedExecutable\(registeredPath\);\s*var image = new FileStream\(registeredPath, FileMode\.Open, FileAccess\.Read, FileShare\.Read\)/);
+    assert.match(pin, /Native\.RequireCanonicalSingleLinkImage\(image\.SafeFileHandle, registeredPath\);\s*if \(!digest\.Matches\(image\) \|\| !Native\.IsSigned\(registeredPath\)\)/);
+    assert.match(pin, /if \(!Native\.MatchesLiveProcessImage\(process, child\)\)[\s\S]*?return image;\s*\}\s*catch\s*\{\s*image\.Dispose\(\);\s*throw;/);
+    assert.match(native, /GetProcessId\(process\) != \(uint\)expected\.ProcessId[\s\S]*?created != expected\.CreatedFileTime/);
+    assert.match(native, /GetFinalPathNameByHandleW\(file, resolved,[\s\S]*?info\.Links != 1/);
+    assert.match(admin, /Require\(file\.GetAccessControl\(\), "executable"\);\s*Require\(file\.Directory!\.GetAccessControl\(\), "executable directory"\);/);
+    assert.doesNotMatch(broker, /CefPinnedImage|CefImageDigest/);
+});

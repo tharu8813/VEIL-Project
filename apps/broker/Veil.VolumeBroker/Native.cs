@@ -107,6 +107,51 @@ internal static class Native
         }
     }
 
+    // The process handle must be the original observed live child handle.
+    // Verify its generation and image name; this is not a measurement of
+    // loaded code, mapped DLLs or an actual parent/child relationship.
+    internal static bool MatchesLiveProcessImage(SafeProcessHandle process, ClientIdentity expected)
+    {
+        if (!IsRunning(process) || GetProcessId(process) != (uint)expected.ProcessId ||
+            !GetProcessTimes(process, out long created, out _, out _, out _) ||
+            created != expected.CreatedFileTime) return false;
+        var image = new StringBuilder(32768);
+        int length = image.Capacity;
+        return QueryFullProcessImageNameW(process, 0, image, ref length) &&
+            string.Equals(image.ToString(), expected.ImagePath, StringComparison.OrdinalIgnoreCase) &&
+            IsRunning(process);
+    }
+
+    internal static void RequireCanonicalSingleLinkImage(SafeFileHandle file, string path)
+    {
+        var resolved = new StringBuilder(32768);
+        uint length = GetFinalPathNameByHandleW(file, resolved, (uint)resolved.Capacity, 0);
+        if (length == 0 || length >= resolved.Capacity ||
+            !string.Equals(resolved.ToString(), @"\\?\" + path, StringComparison.OrdinalIgnoreCase) ||
+            !GetFileInformationByHandle(file, out var info) ||
+            (info.Attributes & ((uint)FileAttributes.ReparsePoint | (uint)FileAttributes.Directory)) != 0 ||
+            info.Links != 1)
+            throw new UnauthorizedAccessException("CEF executable is not a canonical single-link file.");
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ImageFileInformation
+    {
+        public uint Attributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME Creation, Access, Write;
+        public uint VolumeSerial, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetProcessId(SafeProcessHandle process);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(SafeFileHandle file, StringBuilder path, uint length, uint flags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandle(SafeFileHandle file, out ImageFileInformation info);
+
     internal static bool MatchesSha256(string path, string expected)
     {
         try
