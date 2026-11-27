@@ -94,3 +94,32 @@ function Read-VeilCefCandidateEvidence([string]$Root,[string]$Evidence,[string]$
     Assert-VeilCefCandidateSigner $Root $Thumbprint
     return $manifest
 }
+
+
+# Derive the runtime parser's exact contract ONLY from freshly verified
+# detached CMS evidence and matching restricted candidate files. The result
+# is a plan; it does not publish any registration or authorize startup.
+function Get-VeilCefVerifiedRuntimePinPlan([string]$Root,[string]$Evidence,[string]$Thumbprint,[string]$ExpectedCommit) {
+    $manifest = Read-VeilCefCandidateEvidence $Root $Evidence $Thumbprint $ExpectedCommit
+    if ($manifest.files.Count -lt 4 -or $manifest.files.Count -gt 4096) { throw 'Invalid runtime pin count.' }
+    $files = @()
+    foreach ($entry in $manifest.files) {
+        foreach ($part in $entry.path.Split('/')) {
+            if ($part -match '\A(veil-cef-smoke|veil-cef-wpf|Veil\.Cef\.WpfSmoke)' -or $part -match '-test\.') {
+                throw 'Development fixture refused in runtime pin plan.'
+            }
+        }
+        $files += [ordered]@{ path=$entry.path; bytes=[long]$entry.bytes; sha256=$entry.sha256.ToLowerInvariant() }
+    }
+    foreach ($required in @('veil-cef-product.exe','veil-cef-product.dll','libcef.dll','icudtl.dat')) {
+        if (@($files | Where-Object { $_.path -ceq $required }).Count -ne 1) { throw 'Required exact runtime pin missing.' }
+    }
+    $plan = [ordered]@{
+        kind='cef-admin-runtime-pins'; format=1; architecture='win-x64'
+        sourceCommit=$manifest.sourceCommit; cefArchiveSha256=$manifest.cefArchiveSha256
+        startupEnabled=$false; files=$files
+    }
+    $json = $plan | ConvertTo-Json -Depth 6
+    if ([Text.Encoding]::UTF8.GetByteCount($json) -gt 4MB) { throw 'Runtime pin plan too large.' }
+    return $json
+}

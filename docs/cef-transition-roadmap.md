@@ -369,3 +369,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: 정확한 인증 볼륨의 종료 확인 (검증 대기)
 
 정확한 head 00d8370 일반 CI 45949822918 PASS, native CI 확인 시 진행 중. CefPreflight 전용 성공 경로에 명시적 cleanup을 추가: 원래 인증 GUID와 현재 볼륨 일치 요구, 비강제 Lock 응답 성공, 같은 GUID 및 잠금/ReadyToUnlock 상태 재조회, 이번 실행에서 Attach한 경우 Detach 성공 및 분리 상태 재조회. 잠긴 메타데이터의 FullyEncrypted/ProtectionOn은 attestation이 아니므로 요구하지 않는다. 오류/부재/다른 GUID/잠금 거부/분리 실패는 검증 성공 불가, 기존 Dispose와 broker crash watcher는 best-effort 정리만 수행. 원래부터 attached였으면 분리하지 않는다. 순수 synthetic 12개 시나리오 및 source contract 추가, 기존 Debug/Release Dispose 정책 변경 없음. 새 head CI, 실제 broker/BitLocker/CEF, 독립 리뷰 NOT RUN. 알림 및 외부 OS 상태 변화의 관측 한계는 유지. Product startup disabled.
+
+### 추가 구현: 서명 증거에서 비활성 런타임 핀 계획 생성
+
+정확한 head 38acf5b 일반 CI 45950466353 PASS, native CI 확인 시 진행 중. 기존 별도 CMS 서명·Authenticode·제한 ACL·정확한 후보 인벤토리 검증을 재사용해 C# runtime registration parser 계약의 JSON을 생성하는 읽기 전용 계획 도구를 추가한다. 고정 staging만 읽고 stdout에 계획만 반환; 설치 경로/ProgramData/서비스/볼륨 변경 없음. startupEnabled=false 유지, source commit·archive hash·파일별 길이/SHA-256 유지. 기존 evidence 합성 CI에 정상 계획 및 잘못된 signer/commit/파일/manifest 거부 추가. 폐기용 VM 준비 런북에 별도 Desktop 구성, 서명 및 후보 staging, 등록 계획 검토와 실제 게시 미구현 차단점을 명시. 신규 CI 및 실제 서명/서비스 등록/BitLocker NOT RUN; 제품 활성화 금지.

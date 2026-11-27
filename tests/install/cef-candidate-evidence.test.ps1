@@ -32,6 +32,19 @@ try {
     }
     Write-VeilCefCandidateEvidence $root $evidence $commit $cert
     $manifest = Verify
+    function Plan { Get-VeilCefVerifiedRuntimePinPlan $root $evidence $cert.Thumbprint $commit }
+    $plan = (Plan) | ConvertFrom-Json
+    if ($plan.kind -cne 'cef-admin-runtime-pins' -or $plan.format -ne 1 -or
+        $plan.architecture -cne 'win-x64' -or $plan.startupEnabled -isnot [bool] -or $plan.startupEnabled -or
+        $plan.sourceCommit -cne $commit -or $plan.cefArchiveSha256 -cne $manifest.cefArchiveSha256 -or
+        @($plan.PSObject.Properties).Count -ne 7 -or @($plan.files).Count -ne 4) { throw 'Invalid runtime pin plan.' }
+    foreach ($file in $plan.files) {
+        if ($file.sha256 -cnotmatch '\A[0-9a-f]{64}\z' -or
+            $file.sha256 -ne (Get-FileHash -LiteralPath (Join-Path $root $file.path)).Hash -or
+            $file.bytes -ne (Get-Item -LiteralPath (Join-Path $root $file.path)).Length) { throw 'Wrong runtime pin.' }
+    }
+    Reject { Get-VeilCefVerifiedRuntimePinPlan $root $evidence ('0'*40) $commit }
+    Reject { Get-VeilCefVerifiedRuntimePinPlan $root $evidence $cert.Thumbprint ('b'*40) }
     if ($manifest.installable -or $manifest.startupEnabled -or @($manifest.files).Count -ne 4) { throw 'Invalid manifest.' }
     Reject { Read-VeilCefCandidateEvidence $root $evidence ('0'*40) $commit }
     Reject { Read-VeilCefCandidateEvidence $root $evidence $cert.Thumbprint ('b'*40) }
@@ -39,6 +52,7 @@ try {
     $dll = Join-Path $root 'libcef.dll'
     [IO.File]::WriteAllText($dll,'modified!')
     Reject { Verify }
+    Reject { Plan }
     [IO.File]::WriteAllText($dll,'synthetic')
     $extra = Join-Path $root 'extra.dll'
     [IO.File]::WriteAllText($extra,'synthetic')
@@ -51,6 +65,7 @@ try {
     $original = [IO.File]::ReadAllBytes($json)
     [IO.File]::AppendAllText($json,' ')
     Reject { Verify }
+    Reject { Plan }
     [IO.File]::WriteAllBytes($json,$original)
     [void](Verify)
     Write-Host 'PASS: detached CMS signature and exact candidate inventory synthetic tests'
