@@ -219,3 +219,7 @@ RedeemCefChild는 기존 client allowlist의 image 거부 중 별도 admin pin�
 ### 추가 구현: CEF native broker 검증 통신 모듈 (검증 대기)
 
 별도 broker_verification 모듈은 고정 설치 service/pipe, SCM running PID와 pipe server PID 및 live process handle 일치 전후 확인, 제한된 ASCII volume ID, 고정 RedeemCefChild 요청, LF 프레임 및 정확한 compact boolean receipt만 허용한다. Overlapped I/O의 8초 예산과 취소/완료 정리, 실패 후 retry 없음. SCM 호출 및 cancellation drain은 엄격한 전체 wall-clock deadline 보장이 아니다. Native wire synthetic CI에서 invalid ID/부분 응답/추가 필드/거부/중복 필드 등을 검증하며 실제 서비스에는 접속하지 않는다. 기존 native smoke startup 및 CefInitialize 미연결, #225 경로 검증 별도, 실제 service/pipe transport·signed package·launch containment·BitLocker NOT RUN. receipt는 초기화 허가가 아니다. 고정 pipe 및 제한된 ID는 향후 installer registration 계약과 맞춰야 한다. WebView2 유지.
+
+### 추가 구현: native 경로 및 broker wire 검증 통합 (검증 대기)
+
+#225의 정확한 head 2a9370fe512b6ac4dadb1dba2f456a7ab7a201c9를 #226에 통합한다. 기존 native wire CI와 synthetic path CI를 모두 유지하며 기존 두 smoke host는 product 경로 환경이 존재하면 CefExecuteProcess 이전에 즉시 거부한다. 경로/볼륨 문자열 비교에 길이 제한과 embedded NUL 거부를 추가하고 아직 존재하지 않는 log를 포함해 모든 supplied path의 canonical drive 형식을 먼저 확인한다. synthetic NUL regression 추가. 두 모듈을 동일 브랜치에서 빌드/검증하는 단계이며 실제 native bootstrap의 broker auth + registered paths 결합, 권한 수명/containment 및 BitLocker는 NOT RUN. WebView2 제품 및 release gate 유지.

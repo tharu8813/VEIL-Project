@@ -281,3 +281,15 @@ test('native CEF receipt helper does not authorize smoke startup', async () => {
     assert.doesNotMatch(impl, /GetEnvironmentVariable|CefInitialize/);
     assert.doesNotMatch(smoke + wpf, /RequestChildVerification|broker_verification\.h/);
 });
+
+
+test('native development hosts refuse product configuration before any CEF execution', async () => {
+    const paths = await readFile('apps/cef-smoke/protected_paths.h', 'utf8');
+    for (const file of ['smoke.cc', 'wpf.cc']) {
+        const host = await readFile('apps/cef-smoke/' + file, 'utf8');
+        assert.match(host, /int RunWinMain\([\s\S]*?if \(veil_cef::HasProductEnvironment\(\)\) return 28;\s*if \(!sandbox_info\) return 10;\s*CefMainArgs args\(instance\);\s*const int subprocess = CefExecuteProcess/);
+        assert.doesNotMatch(host, /RequestChildVerification/);
+    }
+    assert.match(paths, /for \(const auto& path : \{supplied\.root, supplied\.cache, supplied\.scratch, supplied\.log\}\)\s*if \(!DriveAbsolute\(path\)\)/);
+    assert.match(paths, /a\.find\(L'\\0'\) != std::wstring::npos \|\| b\.find\(L'\\0'\) != std::wstring::npos/);
+});
