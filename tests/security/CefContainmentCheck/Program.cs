@@ -121,6 +121,20 @@ try
             brokerJob.AssignVerifiedCandidate(ownerIdentity, owner.SafeHandle, nomination.Identity, observed);
             Check(brokerJob.ContainsVerifiedCandidate(nomination.Identity, observed) &&
                 !File.Exists(markerPath), "Broker did not bind suspended candidate.");
+            var nested = brokerJob.ObserveNestedRetainedMembers(candidate.FixtureJobHandle,
+                [(nomination.Identity, observed)]);
+            Check(nested.Length == 1 && nested[0] == nomination.Identity,
+                "Suspended nested candidate observation failed.");
+            // Equal counts are insufficient: a separate Job with one
+            // suspended process must not certify the nominated candidate.
+            using (var unrelated = CefContainedProcess.CreateSuspended(image, environment))
+            {
+                bool rejected = false;
+                try { brokerJob.ObserveNestedRetainedMembers(unrelated.FixtureJobHandle,
+                    [(nomination.Identity, observed)]); }
+                catch (UnauthorizedAccessException) { rejected = true; }
+                Check(rejected, "Unrelated Job with the same count accepted.");
+            }
             candidate.ResumeAfterVerification(() => brokerJob.ContainsVerifiedCandidate(nomination.Identity, observed));
             Check(SpinWait.SpinUntil(() => File.Exists(markerPath), TimeSpan.FromSeconds(10)),
                 "Nested candidate did not resume.");
@@ -205,6 +219,15 @@ try
                 RefuseObservation(() => brokerJob.ObserveRetainedMembers([
                     (binding.Identity, retained), (descendantIdentity, retained)]));
 
+                var nestedSnapshot = brokerJob.ObserveNestedRetainedMembers(candidate.FixtureJobHandle,
+                    [(binding.Identity, retained), (descendantIdentity, descendantHandle)]);
+                Check(nestedSnapshot.SequenceEqual(snapshot), "Nested Job snapshot differs.");
+                RefuseObservation(() => brokerJob.ObserveNestedRetainedMembers(candidate.FixtureJobHandle,
+                    [(binding.Identity, retained)]));
+                RefuseObservation(() => brokerJob.ObserveSameJobFixture(
+                    [(binding.Identity, retained), (descendantIdentity, descendantHandle)]));
+                RefuseObservation(() => brokerJob.ObserveNestedRetainedMembers(candidate.FixtureJobHandle,
+                    [(binding.Identity, retained), (identity, owner.SafeHandle)]));
                 Check(!brokerJob.ContainsVerifiedCandidate(binding.Identity, retained),
                     "Multiprocess fixture confused with disabled admission.");
                 Check(!brokerJob.ContainsFixturePair(binding.Identity, retained, identity, owner.SafeHandle),
