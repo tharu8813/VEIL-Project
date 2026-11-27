@@ -9,7 +9,8 @@ namespace Veil.VolumeBroker;
 internal static class CefProcessModuleObserver
 {
     internal static CefModuleInventoryObservation Observe(SafeProcessHandle process,
-        ClientIdentity expected, CefRuntimeRegistrationLease registration)
+        ClientIdentity expected, CefRuntimeRegistrationLease registration,
+        CefSystemModuleVerifier? systemVerifier = null)
     {
         ArgumentNullException.ThrowIfNull(process);
         ArgumentNullException.ThrowIfNull(expected);
@@ -18,10 +19,11 @@ internal static class CefProcessModuleObserver
         if (!string.Equals(expected.ImagePath, image, StringComparison.OrdinalIgnoreCase) ||
             Native.ObserveProcess(process) != expected)
             throw new UnauthorizedAccessException("CEF module process identity mismatch.");
+        Action<IEnumerable<string>>? verifySystem = systemVerifier is null ? null : systemVerifier.RequireModules;
         var result = CefModuleInventoryPolicy.Verify(image, Environment.SystemDirectory,
             Native.SnapshotModulePaths(process, expected),
             registration.RequireObservedApplicationModules,
-            () => Native.SnapshotModulePaths(process, expected));
+            () => Native.SnapshotModulePaths(process, expected), verifySystem);
         registration.RequireCurrent();
         if (Native.ObserveProcess(process) != expected)
             throw new UnauthorizedAccessException("CEF module process changed.");
