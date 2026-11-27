@@ -259,6 +259,22 @@ internal sealed class ProtectedProfileSession : IDisposable
     internal static void ClearPassword(char[]? password) =>
         CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(password.AsSpan()));
 
+#if VEIL_CEF_PREFLIGHT_ONLY
+    // Success requires acknowledged commands and the exact authenticated
+    // volume. On refusal the normal finally/Dispose and crash watcher still
+    // attempt best-effort cleanup, but may never manufacture preflight PASS.
+    internal void CompleteCefPreflightCleanup()
+    {
+        if (Environment.CurrentManagedThreadId != ownerThread || disposed ||
+            !unlockAttempted || authenticatedVolumeGuid is not { } guid)
+            throw new ProfileLocationException("No authenticated CEF session to close.");
+        CefPreflightCleanup.RequireClosed(guid, attachedHere, broker.QueryRegisteredVolume,
+            broker.Lock, broker.Detach);
+        authenticatedVolumeGuid = null;
+        disposed = true;
+    }
+#endif
+
     /// <summary>Best-effort non-forced relock; broker's process-exit monitor covers crashes.</summary>
     public void Dispose()
     {

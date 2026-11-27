@@ -365,3 +365,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: 독립 STA 알림 pump (CefPreflight 전용)
 
 정확한 head a703549 일반 CI 45949344666 PASS, native CI 확인 시 진행 중. 검증 전용 entry는 owner dispatcher와 별개인 STA background thread에서 기존 WTS/power hidden HWND를 등록하고 Dispatcher.Run을 유지한다. 잠금 요청은 Interlocked로 단방향 latch, owner는 Volatile.Read로 기존 authority 체크에서 관찰한다. owner 종료 요청은 비동기 dispatch만 하며 lease/IPC/cleanup은 기존 owner thread에 유지. 등록 실패/10초 시작 제한 또는 pump 종료는 성공으로 처리하지 않으며 종료 시 dispatcher shutdown 및 제한 join. 기본 Debug/Release는 기존 owner HWND 사용 유지. 소스 계약 추가; 신규 CI, 실제 WTS/절전/BitLocker/CefPreflight 실행 NOT RUN. OS 알림 전달 자체의 지연 및 동기 broker I/O 중 즉시 중단은 보장하지 않으며 실제 제품 CEF 활성화 금지.
+
+### 추가 구현: 정확한 인증 볼륨의 종료 확인 (검증 대기)
+
+정확한 head 00d8370 일반 CI 45949822918 PASS, native CI 확인 시 진행 중. CefPreflight 전용 성공 경로에 명시적 cleanup을 추가: 원래 인증 GUID와 현재 볼륨 일치 요구, 비강제 Lock 응답 성공, 같은 GUID 및 잠금/ReadyToUnlock 상태 재조회, 이번 실행에서 Attach한 경우 Detach 성공 및 분리 상태 재조회. 잠긴 메타데이터의 FullyEncrypted/ProtectionOn은 attestation이 아니므로 요구하지 않는다. 오류/부재/다른 GUID/잠금 거부/분리 실패는 검증 성공 불가, 기존 Dispose와 broker crash watcher는 best-effort 정리만 수행. 원래부터 attached였으면 분리하지 않는다. 순수 synthetic 12개 시나리오 및 source contract 추가, 기존 Debug/Release Dispose 정책 변경 없음. 새 head CI, 실제 broker/BitLocker/CEF, 독립 리뷰 NOT RUN. 알림 및 외부 OS 상태 변화의 관측 한계는 유지. Product startup disabled.

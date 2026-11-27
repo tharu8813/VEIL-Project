@@ -35,17 +35,17 @@ internal static class CefProtectedPreflightEntry
                 password = null;
                 if (session is null || notifications.LockRequested) return 1;
                 result = CefDisabledLaunchCoordinator.RunPreflight(session);
+                if (result != CefDisabledPreflight.VerifiedButDisabled) return 1;
+                session.CompleteCefPreflightCleanup();
             }
             finally
             {
                 ProtectedProfileSession.ClearPassword(password);
                 session?.Dispose();
             }
-            // Dispose may report a lock failure without throwing. Do not
-            // publish verification success until registered status is closed.
-            var final = broker.QueryRegisteredVolume();
-            return final is not { Unlocked: true } &&
-                !notifications.LockRequested && result == CefDisabledPreflight.VerifiedButDisabled
+            // Only explicit verified cleanup above can reach this point.
+            // Best-effort Dispose alone is never sufficient for success.
+            return !notifications.LockRequested && result == CefDisabledPreflight.VerifiedButDisabled
                 ? (int)CefDisabledPreflight.VerifiedButDisabled : 1;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or

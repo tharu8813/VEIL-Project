@@ -8,6 +8,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../../apps/desktop/NetworkPolicy.cs" Link="NetworkPolicy.cs" />
+    <Compile Include="../../../apps/desktop/VolumeStatus.cs" Link="VolumeStatus.cs" />
+    <Compile Include="../../../apps/desktop/Engine/CefPreflightCleanup.cs" Link="CefPreflightCleanup.cs" />
     <Compile Include="../../../apps/desktop/AddressInputPolicy.cs" Link="AddressInputPolicy.cs" />
     <Compile Include="../../../apps/desktop/BrowserDownload.cs" Link="BrowserDownload.cs" />
     <Compile Include="../../../apps/desktop/DownloadFailurePolicy.cs" Link="DownloadFailurePolicy.cs" />

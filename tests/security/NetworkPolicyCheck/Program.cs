@@ -610,6 +610,40 @@ using (var redemptionSlot = new Veil.VolumeBroker.CefPendingChild(Grant(), redee
 Check(redeemProcess.Disposals == 1 && redeemImage.Disposals == 1, "redeemed slot leaked resources");
 Console.WriteLine("PASS: scoped pending child redemption and replay rejection");
 
+// The preflight cleanup policy runs without a real volume, broker or UI.
+var openVolume = new VolumeStatus("synthetic-volume", true, true, true, false, true);
+var lockedVolume = openVolume with { Unlocked = false, FullyEncrypted = false, ProtectionOn = false, ReadyToUnlock = true };
+void CheckCleanup(bool attachedHere, VolumeStatus?[] observations, bool shouldPass, int expectedLocks, int expectedDetaches,
+    bool refuseLock = false, bool refuseDetach = false)
+{
+    var statuses = new Queue<VolumeStatus?>(observations);
+    int locks = 0, detaches = 0;
+    bool passed = false;
+    try
+    {
+        CefPreflightCleanup.RequireClosed(openVolume.VolumeGuid, attachedHere, () => statuses.Dequeue(),
+            () => { locks++; if (refuseLock) throw new IOException("Synthetic lock refusal"); },
+            () => { detaches++; if (refuseDetach) throw new IOException("Synthetic detach refusal"); });
+        passed = true;
+    }
+    catch (Exception error) when (error is IOException or InvalidOperationException) { }
+    Check(passed == shouldPass && locks == expectedLocks && detaches == expectedDetaches,
+        "Preflight cleanup accepted unsafe state or issued an unexpected command");
+}
+CheckCleanup(false, [openVolume, lockedVolume], true, 1, 0);
+CheckCleanup(true, [openVolume, lockedVolume, null], true, 1, 1);
+CheckCleanup(false, [lockedVolume, lockedVolume], true, 1, 0);
+CheckCleanup(true, [null], false, 0, 0);
+CheckCleanup(true, [openVolume with { VolumeGuid = "other" }], false, 0, 0);
+CheckCleanup(true, [openVolume, null], false, 1, 0);
+CheckCleanup(true, [openVolume, openVolume], false, 1, 0);
+CheckCleanup(true, [openVolume, lockedVolume with { ReadyToUnlock = false }], false, 1, 0);
+CheckCleanup(true, [openVolume, lockedVolume with { VolumeGuid = "other" }], false, 1, 0);
+CheckCleanup(true, [openVolume, lockedVolume, lockedVolume], false, 1, 1);
+CheckCleanup(true, [openVolume], false, 1, 0, refuseLock: true);
+CheckCleanup(true, [openVolume, lockedVolume], false, 1, 1, refuseDetach: true);
+Console.WriteLine("PASS: exact-volume preflight cleanup, command refusal and detach observation");
+
 file sealed class SyntheticRetainedResource : IDisposable
 {
     internal int Disposals { get; private set; }

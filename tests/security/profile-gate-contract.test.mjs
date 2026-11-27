@@ -590,7 +590,7 @@ test('isolated CEF preflight entry is compile-time exclusive and never falls bac
     assert.match(entry, /ProfileGate\.RejectElevated\(\);[\s\S]*?new BrowserActivation\(\);[\s\S]*?!activation\.Primary/);
     assert.match(entry, /BrokerClientConfig\.Load\(BrokerClientConfig\.ProductPath, development: false\)/);
     assert.match(entry, /ProtectedProfileSession\.TryOpen[\s\S]*?ClearPassword\(password\);[\s\S]*?CefDisabledLaunchCoordinator\.RunPreflight/);
-    assert.match(entry, /session\?\.Dispose\(\);[\s\S]*?broker\.QueryRegisteredVolume\(\)[\s\S]*?VerifiedButDisabled/);
+    assert.match(entry, /result = CefDisabledLaunchCoordinator\.RunPreflight\(session\);[\s\S]*?session\.CompleteCefPreflightCleanup\(\);[\s\S]*?session\?\.Dispose\(\);[\s\S]*?VerifiedButDisabled/);
     assert.doesNotMatch(entry, /new BrowserWindow|CreateEngine\(|UnmanagedDevelopmentVolume|activation\.Forward|activation\.Start|GetEnvironmentVariable/);
 });
 
@@ -607,4 +607,13 @@ test('isolated preflight observes session notifications independently of synchro
     assert.match(notifications, /Volatile\.Read\(ref lockRequested\) != 0/);
     assert.match(notifications, /Interlocked\.Exchange\(ref lockRequested, 1\) == 0[\s\S]*?Dispatcher\.BeginInvoke/);
     assert.doesNotMatch(pump, /Dispatcher\.Invoke\(|PushFrame|Thread\.Abort/);
+});
+
+test('preflight success requires explicit exact-volume cleanup before best-effort disposal', async () => {
+    const session = await readFile('apps/desktop/ProtectedProfileSession.cs', 'utf8');
+    const close = await readFile('apps/desktop/Engine/CefPreflightCleanup.cs', 'utf8');
+    assert.match(session, /#if VEIL_CEF_PREFLIGHT_ONLY\s*[\s\S]*?internal void CompleteCefPreflightCleanup\(\)[\s\S]*?CefPreflightCleanup\.RequireClosed\(guid, attachedHere, broker\.QueryRegisteredVolume,\s*broker\.Lock, broker\.Detach\);[\s\S]*?disposed = true;/);
+    assert.match(close, /RequireSame\(query\(\), expectedGuid\);\s*lockVolume\(\);\s*var locked = RequireSame\(query\(\), expectedGuid\);/);
+    assert.match(close, /locked\.Unlocked \|\| !locked\.ReadyToUnlock/);
+    assert.match(close, /if \(attachedHere\)[\s\S]*?detach\(\);[\s\S]*?query\(\) is not null/);
 });
