@@ -230,6 +230,28 @@ try {
     [void](Read-VeilPreflightRegistrationDraft $publishedData $plan $publishedBin $image $profile $volumeGuid $primary $recovery $sid)
     [void](Read-VeilPreflightRegistrationDraft $publishPrepared $plan $publishedBin $image $profile $volumeGuid $primary $recovery $sid)
     Reject { Publish-VeilPreflightFiles $stage $publishPrepared $publishedBin $publishedData $transaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} }
+    # Compile the registry helper and exercise the pure plan and security
+    # descriptor checks. Hosted CI never creates HKLM keys.
+    . (Join-Path $dir 'cef-preflight-bootstrap.ps1')
+    Add-Type -Path (Join-Path $dir 'CefPreflightBootstrapRegistry.cs')
+    $bootstrapPlan = Get-VeilInstalledBootstrapPlan $publishedData $profile $volumeGuid
+    if ($bootstrapPlan.ProductRoot -cne $profile -or $bootstrapPlan.VolumeId -cne 'synthetic' -or
+        $bootstrapPlan.VolumeGuid -cne ('\\?\Volume{' + $volumeGuid.ToString() + '}\')) { throw 'Bootstrap plan mismatch.' }
+    Reject { Get-VeilInstalledBootstrapPlan $publishedData 'V:\Other\profile' $volumeGuid }
+    Reject { Get-VeilInstalledBootstrapPlan $publishedData $profile ([guid]::Empty) }
+    function DescriptorBytes([string]$Sddl) {
+        $sd = [Security.AccessControl.RawSecurityDescriptor]::new($Sddl)
+        $buffer = [byte[]]::new($sd.BinaryLength)
+        $sd.GetBinaryForm($buffer,0)
+        return ,$buffer
+    }
+    [Veil.Preflight.BootstrapRegistry]::ValidateDescriptor((DescriptorBytes 'O:BAG:BAD:P(A;;KA;;;SY)(A;;KA;;;BA)(A;;KR;;;BU)'))
+    foreach ($badDescriptor in @('O:BUG:BAD:P(A;;KA;;;SY)(A;;KA;;;BA)(A;;KR;;;BU)',
+        'O:BAG:BAD:(A;;KA;;;SY)(A;;KA;;;BA)(A;;KR;;;BU)',
+        'O:BAG:BAD:P(A;;KA;;;SY)(A;;KA;;;BA)(A;;KA;;;BU)')) {
+        Reject { [Veil.Preflight.BootstrapRegistry]::ValidateDescriptor((DescriptorBytes $badDescriptor)) }
+    }
+    Write-Host 'PASS: bootstrap plan and registry descriptor checks (no HKLM mutation)'
     # SCM is a fake here; publication, journal bytes and descriptor parsing
     # are real. Never register a privileged service on a hosted runner.
     $command = '"{0}" --service' -f (Join-Path $publishedBin 'Broker\Veil.VolumeBroker.exe')

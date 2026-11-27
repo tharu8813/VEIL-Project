@@ -427,3 +427,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: 보호 세션 기록 읽기 전용 재검증
 
 정확한 head 196ceec 일반 CI 45958003951 PASS, native CI 확인 시 진행 중. 보호 세션 관측에 broker PID를 포함하고 최종 정리 기록에 관측 SHA-256을 결합한다. 별도 검사기는 현재 전체 서명 패키지/등록/게시 기록, 서비스 전용 시험 및 Disabled/Stopped DACL/시험 볼륨 분리를 검증하고 네 보호 세션 기록을 정확한 바이트로 재구성하여 재조회한다. 누락/추가/공백 변조/다른 등록/관측 PID 교체 거부 회귀 테스트 추가. 기존 관측 해시 없는 기록 거부. 관리자 수집 기록의 일관성 검사이며 독립적인 과거 실행 증명이나 활성화 권한은 아님. 신규 CI, 실제 SCM/BitLocker/VM/CEF 및 독립 리뷰 NOT RUN.
+
+### 추가 구현: native CEF bootstrap 레지스트리와 설치 연결
+
+정확한 head 3450861 일반 CI 45958573564 PASS, native CI 조회 시 진행 중. native LoadRegisteredBootstrap은 HKLM 64-bit SOFTWARE/VEIL/CefBootstrap의 독립 등록을 요구하나 기존 설치 경로는 JSON만 게시하는 연결 누락 발견. 서명된 게시/등록 검증 및 복구 확인 후 기존 키를 채택하지 않고 제한 ACL의 부모/leaf를 생성, 세 REG_SZ를 일치시켜 재조회한다. 서비스 등록/서비스 probe/보호 세션/읽기 전용 검사에서 키와 ACL·값을 재확인. synthetic plan/descriptor 테스트와 helper 컴파일 추가; HKLM 실제 변경은 CI에서 하지 않는다. 부분 등록 보존, 자동 삭제 없음. 관리자 단일 폐기 VM 전제, 실제 registry ACL roundtrip/link/SCM/BitLocker/CEF 및 신규 CI/독립 리뷰 미검증. startupEnabled=false 및 single-process job 유지; 실제 CEF 초기화는 아직 연결하지 않음.

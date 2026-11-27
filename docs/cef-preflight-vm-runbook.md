@@ -110,6 +110,8 @@ files-published-only 상태에서만 폐기용 VM 확인 옵션과 별도 확인
 .\scripts\register-cef-preflight-service.ps1 -DisposableVm -SignerThumbprint $pin -SourceCommit $commit -ImagePath $testImage -ProfilePath $testProfile -VolumeGuid $volumeGuid -ProtectorId $primaryId -RecoveryProtectorId $recoveryId -UserSid $testUserSid
 ~~~
 
+먼저 네이티브 후보가 요구하는 64비트 HKLM\SOFTWARE\VEIL\CefBootstrap 키를 등록한다. 독립 검증된 broker/client JSON의 ProductRoot, VolumeGuid, VolumeId 세 REG_SZ만 사용한다. 부모와 자식은 관리자 소유, 상속 차단, SYSTEM/Administrators 쓰기 및 일반 사용자 읽기 전용 ACL을 생성 시 부여하고 재조회한다. 기존 키는 덮어쓰거나 채택하지 않으며 부분 등록은 보존한다. SCM 등록 이후 시험 도구는 동일한 키와 값/ACL을 재검증한다. 실제 레지스트리 생성과 링크 거부 검증은 NOT RUN이다.
+
 SCM에 고정 경로의 Veil.VolumeBroker를 LocalSystem / Disabled / Stopped 상태로 생성하고 SYSTEM·Administrators 관리 및 인증 사용자 조회 전용 DACL을 설정·재조회한다. 별도 Program Files\VEIL.cef-preflight-service 에 등록 intent와 registered-disabled 기록을 남긴다. 등록 중 실패 시 서비스나 파일을 삭제하지 않으며 기존/불명확한 SCM 등록을 재사용하지 않는다. 실제 SCM DACL roundtrip, Windows 서비스 등록 및 권한 시험은 NOT RUN. 등록 완료 기록은 서비스를 시작할 권한이나 CEF 실행 성공을 의미하지 않는다.
 
 ## 11. 비활성 등록 확인 및 일회성 서비스 시작/정지 시험

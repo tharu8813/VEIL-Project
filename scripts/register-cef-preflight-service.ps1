@@ -17,6 +17,8 @@ if (-not $DisposableVm -or -not [Environment]::Is64BitProcess -or $PSVersionTabl
     throw 'Explicit disposable VM confirmation and elevated Windows PowerShell 5.1 x64 required.'
 }
 . (Join-Path $PSScriptRoot 'cef-preflight-service.ps1')
+. (Join-Path $PSScriptRoot 'cef-preflight-bootstrap.ps1')
+Add-Type -Path (Join-Path $PSScriptRoot 'CefPreflightBootstrapRegistry.cs')
 . (Join-Path $PSScriptRoot 'bitlocker-recovery.ps1')
 $program = [Environment]::GetFolderPath('ProgramFiles')
 $data = [Environment]::GetFolderPath('CommonApplicationData')
@@ -43,14 +45,23 @@ $requireSafe = {
     $current = & $readService
     if ($null -ne $current) { Assert-VeilDisabledPreflightService $current $command }
 }
-$verifyPublication = {
+$verifyFiles = {
     Get-VeilPreflightPublicationState $stage $prepared $bin $registration $transaction $SignerThumbprint $SourceCommit $image $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid $requireSafe
 }
-$initial = & $verifyPublication
+$initial = & $verifyFiles
 if ($initial.state -cne 'files-published-only') { throw 'Complete file publication required.' }
 $verified = Register-VeilRecoveryBackup $image ('\\?\Volume{' + $VolumeGuid.ToString() + '}\') $ProtectorId $RecoveryProtectorId
 if ($verified -ne $RecoveryProtectorId) { throw 'Recovery protector verification failed.' }
 & $requireSafe
+Assert-VeilPreflightPublicationEqual (& $verifyFiles) $initial
+$bootstrap = Get-VeilInstalledBootstrapPlan $registration $ProfilePath $VolumeGuid
+[Veil.Preflight.BootstrapRegistry]::Create($bootstrap.ProductRoot,$bootstrap.VolumeGuid,$bootstrap.VolumeId)
+$verifyPublication = {
+    $verifiedFiles = & $verifyFiles
+    Assert-VeilInstalledBootstrap $registration $ProfilePath $VolumeGuid
+    return $verifiedFiles
+}
+Assert-VeilPreflightPublicationEqual (& $verifyPublication) $initial
 $sc = Join-Path ([Environment]::SystemDirectory) 'sc.exe'
 $create = {
     param($binary)
@@ -69,4 +80,4 @@ $readDacl = {
     return $descriptors[0]
 }
 [void](Register-VeilDisabledPreflightService $serviceJournal $command $verifyPublication $readService $create $setDacl $readDacl)
-Write-Host 'PASS: broker registered disabled and stopped. Service startup and CEF initialization NOT RUN.'
+Write-Host 'PASS: bootstrap registry and broker registered disabled and stopped. Service startup and CEF initialization NOT RUN.'

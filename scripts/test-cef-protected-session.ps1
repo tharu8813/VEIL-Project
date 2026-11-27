@@ -18,6 +18,8 @@ if (-not $DisposableVm -or -not $RunProtectedSession -or -not [Environment]::Is6
     throw 'Explicit disposable VM confirmation and elevated Windows PowerShell 5.1 x64 required.'
 }
 . (Join-Path $PSScriptRoot 'cef-preflight-service.ps1')
+. (Join-Path $PSScriptRoot 'cef-preflight-bootstrap.ps1')
+Add-Type -Path (Join-Path $PSScriptRoot 'CefPreflightBootstrapRegistry.cs')
 . (Join-Path $PSScriptRoot 'bitlocker-recovery.ps1')
 $program = [Environment]::GetFolderPath('ProgramFiles')
 $data = [Environment]::GetFolderPath('CommonApplicationData')
@@ -47,7 +49,9 @@ $requireSafe = {
     if ($null -ne $current) { Assert-VeilDisabledPreflightService $current $command }
 }
 $verifyPublication = {
-    Get-VeilPreflightPublicationState $stage $prepared $bin $registration $transaction $SignerThumbprint $SourceCommit $image $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid $requireSafe
+    $verifiedFiles = Get-VeilPreflightPublicationState $stage $prepared $bin $registration $transaction $SignerThumbprint $SourceCommit $image $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid $requireSafe
+    Assert-VeilInstalledBootstrap $registration $ProfilePath $VolumeGuid
+    return $verifiedFiles
 }
 $sc = Join-Path ([Environment]::SystemDirectory) 'sc.exe'
 $readDacl = {
