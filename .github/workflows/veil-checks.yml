@@ -97,6 +97,10 @@ jobs:
         shell: powershell
         run: .\tests\install\cef-registration-plan.test.ps1
 
+      - name: Test signed CEF candidate evidence without installation
+        shell: powershell
+        run: .\tests\install\cef-candidate-evidence.test.ps1
+
       # SEC-004: the Procmon trace analyzer is pure parsing; the capture itself runs only in the VM.
       - name: Check local-write evidence analyzers
         shell: pwsh
