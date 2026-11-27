@@ -346,6 +346,39 @@ try {
     $exerciseRecord = Get-Content -LiteralPath (Join-Path $sessionRoot '02a-protected-preflight.json') -Raw | ConvertFrom-Json
     if ($exerciseRecord.exitCode -ne 29 -or $exerciseRecord.startupEnabled -or -not $exerciseRecord.tokenVerified -or
         $exerciseRecord.processId -ne 200 -or $exerciseRecord.sessionId -ne 1) { throw 'Unexpected exercise result.' }
+    # Read-only reconstruction must bind the exact observation to cleanup.
+    $verifiedSession = Read-VeilCompletedProtectedSession $sessionRoot (& $verifyService)
+    if ($verifiedSession.state -cne 'verified-protected-preflight-records' -or $verifiedSession.startupEnabled -or
+        $verifiedSession.sessionSha256 -ne (Get-FileHash -LiteralPath (Join-Path $sessionRoot '03-stopped-verified.json')).Hash) {
+        throw 'Protected session verification mismatch.'
+    }
+    Reject { Read-VeilCompletedProtectedSession $probeRoot (& $verifyService) }
+    $differentRegistration = & $verifyService
+    $differentRegistration.registrationSha256 = '0'*64
+    Reject { Read-VeilCompletedProtectedSession $sessionRoot $differentRegistration }
+    foreach ($name in @('01-probe-intent.json','02-running-observed.json','02a-protected-preflight.json','03-stopped-verified.json')) {
+        $recordPath = Join-Path $sessionRoot $name
+        $savedRecord = [IO.File]::ReadAllBytes($recordPath)
+        [IO.File]::AppendAllText($recordPath,' ')
+        Reject { Read-VeilCompletedProtectedSession $sessionRoot (& $verifyService) }
+        [IO.File]::WriteAllBytes($recordPath,$savedRecord)
+        Remove-Item -LiteralPath $recordPath
+        Reject { Read-VeilCompletedProtectedSession $sessionRoot (& $verifyService) }
+        [IO.File]::WriteAllBytes($recordPath,$savedRecord)
+    }
+    $observationPath = Join-Path $sessionRoot '02a-protected-preflight.json'
+    $savedObservation = [IO.File]::ReadAllBytes($observationPath)
+    $parsedObservation = Get-Content -LiteralPath $observationPath -Raw | ConvertFrom-Json
+    $parsedObservation.processId = 201
+    [IO.File]::WriteAllBytes($observationPath,[Text.UTF8Encoding]::new($false).GetBytes(($parsedObservation | ConvertTo-Json -Depth 10)))
+    Reject { Read-VeilCompletedProtectedSession $sessionRoot (& $verifyService) }
+    [IO.File]::WriteAllBytes($observationPath,$savedObservation)
+    $unexpectedRecord = Join-Path $sessionRoot 'unexpected.json'
+    [IO.File]::WriteAllText($unexpectedRecord,'{}')
+    Reject { Read-VeilCompletedProtectedSession $sessionRoot (& $verifyService) }
+    Remove-Item -LiteralPath $unexpectedRecord
+    Assert-VeilPreflightPublicationEqual (Read-VeilCompletedProtectedSession $sessionRoot (& $verifyService)) $verifiedSession
+    Write-Host 'PASS: protected session record reconstruction and observation digest binding'
     Reject { Assert-VeilCompletedServiceProbe $sessionRoot (& $verifyService) }
     Assert-VeilDisabledPreflightService $script:fakeService $command
     $index = 0

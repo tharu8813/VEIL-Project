@@ -134,7 +134,15 @@ SCM에 고정 경로의 Veil.VolumeBroker를 LocalSystem / Disabled / Stopped �
 
 관리자 측 Process.Start가 반환한 프로세스 핸들에서 Win32 이미지 경로, 등록 SID, 동일한 비영(0이 아닌) 세션, medium integrity, elevation/default 및 관리자 그룹 부재를 검사한다. 검사에 성공한 동일 프로세스 객체에서 최대 5분 동안 종료를 관측한다. PID·세션·tokenVerified 관측 결과를 별도 저널에 남긴다. 시작 후 토큰 스냅샷이며 suspended 실행 전 검증이나 전체 실행 동안의 토큰 고정 증명은 아니다. 종료 코드 29, 동일 브로커 PID 및 볼륨 분리를 확인한 뒤 서비스 Disabled/Stopped, 재분리 및 등록 재검증을 요구한다. 별도 보호 세션 저널에 시험 결과를 기록한다. 1/2, 다른 코드, timeout, 브로커 교체 또는 분리 실패는 성공이 아니다. Timeout 시 브라우저 강제 종료 없이 서비스 정상 정리를 시도하므로 시험 창을 닫고 VM을 확인해야 한다. 이 절차는 독립 OS write trace 또는 런타임 전체 권한 불변성의 증명이 아니며 실제 VM에서 관측해야 한다. 실제 Windows/BitLocker/CEF 시험은 NOT RUN이다.
 
-## 13. 남은 차단점
+## 13. 보호 세션 결과 읽기 전용 재검증
+
+~~~powershell
+.\scripts\check-cef-protected-session.ps1 -DisposableVm -SignerThumbprint $pin -SourceCommit $commit -ImagePath $testImage -ProfilePath $testProfile -VolumeGuid $volumeGuid -ProtectorId $primaryId -RecoveryProtectorId $recoveryId -UserSid $testUserSid
+~~~
+
+전체 서명 패키지, 등록 및 게시 저널, 이전 서비스 전용 시험, 현재 Disabled/Stopped SCM 설정 및 DACL과 분리된 시험 VHDX를 다시 확인한다. 보호 세션의 네 기록을 정확한 바이트로 재구성하고 실제 관측 PID/세션/브로커 PID와 종료 코드 29, tokenVerified=true, 최종 정리 기록에 포함된 관측 SHA-256을 대조한다. 누락/추가/변조 또는 다른 등록 기록은 거부한다. 서비스 시작, 볼륨 연결, 비밀번호 요청 및 기록 수정은 하지 않는다. 이전 관측 해시가 없는 보호 세션 기록은 인정하지 않는다. 이 결과는 관리자 수집 기록의 일관성 확인이며 독립적인 과거 실행 증명, OS 기록 추적 또는 CEF 초기화/제품 활성화 허가는 아니다.
+
+## 14. 남은 차단점
 
 관리자와 일반 사용자가 분리된 실제 폐기용 VM에서 서명, 전체 설치, 서비스 등록, 일반 사용자 사전 검사를 수행하고 재잠금·분리를 실측해야 한다. 기존 제품 설치 또는 실사용 데이터를 변경하지 않는다. 종료 코드 29는 보호된 비활성 자식 사전 검사와 정리를 뜻할 뿐 실제 CEF 초기화나 브라우징 성공이 아니다. 실제 CEF 런타임 활성화, OS 기록 추적, 잠금/절전 및 출시 게이트는 별도 검증한다.
 

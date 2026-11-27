@@ -137,5 +137,6 @@ $exercise = {
 }
 try {
     [void](Invoke-VeilPreflightServiceProbe $sessionProbe $command $verifyRegistration $readService $readDacl $setManual $startService $disable $stopService $requireDetached $exercise)
+    [void](Read-VeilCompletedProtectedSession $sessionProbe (& $verifyRegistration))
 } finally { $credential = $null }
 Write-Host 'PASS: protected preflight exit 29 observed; broker disabled/stopped and volume detached. CEF browsing NOT RUN.'
