@@ -1,0 +1,221 @@
+// SPDX-License-Identifier: MPL-2.0
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+
+namespace Veil.Desktop;
+
+// Windows x64 process containment primitive, not a product launch permit.
+// A child starts suspended and cannot resume until job assignment succeeds.
+// No breakaway, shell, inherited handles, or arbitrary command-line arguments.
+internal sealed class CefContainedProcess : IDisposable
+{
+    private readonly SafeFileHandle job;
+    private readonly SafeProcessHandle process;
+    private readonly SafeFileHandle thread;
+    private bool resumed;
+    private bool disposed;
+
+    private CefContainedProcess(SafeFileHandle job, SafeProcessHandle process, SafeFileHandle thread)
+    {
+        this.job = job;
+        this.process = process;
+        this.thread = thread;
+    }
+
+    internal static CefContainedProcess CreateSuspended(string image,
+        IReadOnlyDictionary<string, string?> environment)
+    {
+        if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess)
+            throw new PlatformNotSupportedException("CEF containment requires Windows x64.");
+        if (!Path.IsPathFullyQualified(image) || image.StartsWith(@"\\", StringComparison.Ordinal) ||
+            !string.Equals(image, Path.GetFullPath(image), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(Path.GetExtension(image), ".exe", StringComparison.OrdinalIgnoreCase) ||
+            image.Contains('"') || image.Contains('\0'))
+            throw new ArgumentException("Expected an absolute local executable.", nameof(image));
+        string block = BuildEnvironmentBlock(environment);
+        var job = CreateJobObjectW(IntPtr.Zero, null);
+        if (job.IsInvalid) { job.Dispose(); throw Failure("CreateJobObject"); }
+        SafeProcessHandle? process = null;
+        SafeFileHandle? thread = null;
+        try
+        {
+            var limits = new ExtendedLimitInformation();
+            limits.Basic.LimitFlags = 0x00002000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf<ExtendedLimitInformation>()))
+                throw Failure("SetInformationJobObject");
+            var startup = new StartupInfo { Size = (uint)Marshal.SizeOf<StartupInfo>() };
+            var command = new StringBuilder("\"" + image + "\"");
+            const uint flags = 0x00000004 | 0x00000400; // CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT
+            IntPtr env = Marshal.StringToHGlobalUni(block);
+            ProcessInformation info;
+            try
+            {
+                if (!CreateProcessW(image, command, IntPtr.Zero, IntPtr.Zero, false, flags,
+                    env, Path.GetDirectoryName(image)!, ref startup, out info))
+                    throw Failure("CreateProcess");
+            }
+            finally { Marshal.FreeHGlobal(env); }
+            process = new SafeProcessHandle(info.Process, ownsHandle: true);
+            thread = new SafeFileHandle(info.Thread, ownsHandle: true);
+            if (!AssignProcessToJobObject(job, process))
+                throw Failure("AssignProcessToJobObject");
+            if (!IsProcessInJob(process, job, out bool contained) || !contained)
+                throw new InvalidOperationException("CEF child containment could not be confirmed.");
+            return new CefContainedProcess(job, process, thread);
+        }
+        catch
+        {
+            // The primary thread has never been resumed. If assignment failed,
+            // the job cannot clean up this process; terminate the owned handle.
+            if (process is { IsInvalid: false, IsClosed: false })
+                TerminateProcess(process, 29);
+            thread?.Dispose();
+            job.Dispose();
+            process?.Dispose();
+            throw;
+        }
+    }
+
+    internal static string BuildEnvironmentBlock(IReadOnlyDictionary<string, string?> environment)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var block = new StringBuilder();
+        foreach (var entry in environment.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrEmpty(entry.Key) || entry.Key.Contains('=') ||
+                entry.Key.Contains('\0') || entry.Value is null || entry.Value.Contains('\0') ||
+                !seen.Add(entry.Key))
+                throw new ArgumentException("Invalid or ambiguous child environment.", nameof(environment));
+            block.Append(entry.Key).Append('=').Append(entry.Value).Append('\0');
+            if (block.Length > 32766)
+                throw new ArgumentException("Child environment is too large.", nameof(environment));
+        }
+        if (block.Length == 0) block.Append('\0');
+        return block.Append('\0').ToString();
+    }
+
+    // The caller must keep this object alive while nominating this handle.
+    // No product broker or startup code currently invokes this primitive.
+    internal long NominatedHandle
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (resumed || !IsAlive) throw new InvalidOperationException("Child is not suspended and live.");
+            return process.DangerousGetHandle().ToInt64();
+        }
+    }
+
+    internal bool IsAlive => !disposed && WaitForSingleObject(process, 0) == 0x102;
+
+    internal void ResumeAfterVerification(Func<bool> verified)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(verified);
+        if (resumed || !IsAlive) throw new InvalidOperationException("Child cannot be resumed.");
+        try
+        {
+            if (!verified() || !IsProcessInJob(process, job, out bool contained) || !contained ||
+                ResumeThread(thread) != 1)
+                throw new InvalidOperationException("CEF child verification or resume failed.");
+            resumed = true;
+        }
+        catch
+        {
+            Dispose();
+            throw;
+        }
+    }
+
+    internal bool WaitForExit(int milliseconds)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        uint result = WaitForSingleObject(process, (uint)milliseconds);
+        if (result == 0) return true;
+        if (result == 0x102) return false;
+        throw Failure("WaitForSingleObject");
+    }
+
+    public void Dispose()
+    {
+        if (disposed) return;
+        disposed = true;
+        // Last job handle closes first. All contained processes are terminated;
+        // no assertion of graceful browser shutdown or volume relock is made.
+        job.Dispose();
+        thread.Dispose();
+        process.Dispose();
+    }
+
+    private static Win32Exception Failure(string operation) => new(Marshal.GetLastWin32Error(), operation);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BasicLimitInformation
+    {
+        public long PerProcessUserTimeLimit, PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass, SchedulingClass;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoCounters
+    {
+        public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount;
+        public ulong ReadTransferCount, WriteTransferCount, OtherTransferCount;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ExtendedLimitInformation
+    {
+        public BasicLimitInformation Basic;
+        public IoCounters Io;
+        public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed;
+    }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct StartupInfo
+    {
+        public uint Size;
+        public IntPtr Reserved, Desktop, Title;
+        public uint X, Y, XSize, YSize, XCountChars, YCountChars, FillAttribute, Flags;
+        public ushort ShowWindow, Reserved2Size;
+        public IntPtr Reserved2, StdInput, StdOutput, StdError;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessInformation
+    {
+        public IntPtr Process, Thread;
+        public uint ProcessId, ThreadId;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
+    private static extern SafeFileHandle CreateJobObjectW(IntPtr attributes, string? name);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetInformationJobObject(SafeFileHandle job, int infoClass,
+        ref ExtendedLimitInformation info, uint length);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateProcessW(string image, StringBuilder command, IntPtr processAttributes,
+        IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint flags,
+        IntPtr environment, string currentDirectory, ref StartupInfo startup, out ProcessInformation info);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AssignProcessToJobObject(SafeFileHandle job, SafeProcessHandle process);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsProcessInJob(SafeProcessHandle process, SafeFileHandle job,
+        [MarshalAs(UnmanagedType.Bool)] out bool result);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint ResumeThread(SafeFileHandle thread);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(SafeProcessHandle process, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateProcess(SafeProcessHandle process, uint exitCode);
+}

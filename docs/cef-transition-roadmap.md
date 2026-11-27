@@ -247,3 +247,7 @@ RegisteredBootstrap은 별도의 신뢰된 admin 등록 root/volume GUID/volume 
 ### 추가 구현: isolated signed candidate staging (검증 대기)
 
 기존 유지보수의 restricted directory / signed inventory 방식을 이용하되 설치 트리와 기존 update journal은 변경하지 않는다. stage-cef-candidate.ps1은 고정 Program Files/VEIL.cef-candidate-staging sibling에만 후보/evidence를 별도 복사한다. 원본 서명·인벤토리 검증이 먼저이며 실제 열거된 이름을 사용하고 덮어쓰기 없이 복사, 대상 전체 서명/파일 검증 및 최초 manifest 비교, 원본 재검증. 기존 staging은 변경하지 않고 실패/중단 잔재는 관리자 검토용 보존. 합성 테스트는 실제 CMS math 및 파일 복사를 실행하고 ACL/chain/Authenticode만 모의 처리한다. 현재 후보는 installable=false/startupEnabled=false; 실제 운영 설치/업데이트/복구 활성화, 관리자 ACL/ancestor/TOCTOU 및 signed package/BitLocker NOT RUN. WebView2 유지.
+
+### 추가 구현: Windows suspended child containment primitive (검증 대기)
+
+CefContainedProcess는 local absolute executable 및 명시적 정렬 Unicode environment block, no shell/no inherited handles/no arbitrary arguments, CREATE_SUSPENDED, unnamed KILL_ON_JOB_CLOSE job에 assign 및 membership 확인, broker nomination용 live suspended handle, verification callback 후 단일 resume, 실패 시 owned child 정리 구조를 제공한다. 실제 Windows synthetic apphost CI로 denied resume, suspended state, successful resume, independent process handle에서 job close exit 확인 예정. callback은 production broker authority가 아니며 현재 desktop startup에는 연결하지 않는다. CreateProcess와 job assignment 사이 owner crash window (atomic job assignment 필요), graceful shutdown, complete process tree drain, broker lifetime/relock, CEF sandbox nested jobs compatibility, trusted image/loaded DLL pin, Windows/BitLocker NOT RUN. 기존 product startup 및 WebView2 유지.

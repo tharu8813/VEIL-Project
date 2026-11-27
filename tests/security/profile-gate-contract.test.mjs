@@ -336,3 +336,14 @@ test('product-named CEF candidate is isolated and does not initialize CEF', asyn
     assert.doesNotMatch(packageBuild, /veil-cef-product|BuildProductCandidate/);
     assert.match(packagePolicy, /\(Desktop\|Broker\)\//);
 });
+
+
+test('CEF containment primitive starts suspended and assigns a kill-on-close job before resume', async () => {
+    const launch = await readFile('apps/desktop/Engine/CefContainedProcess.cs', 'utf8');
+    const startup = await readFile('apps/desktop/Program.cs', 'utf8');
+    assert.match(launch, /limits\.Basic\.LimitFlags = 0x00002000/);
+    assert.match(launch, /const uint flags = 0x00000004 \| 0x00000400/);
+    assert.match(launch, /CreateProcessW\(image, command, IntPtr\.Zero, IntPtr\.Zero, false, flags[\s\S]*?AssignProcessToJobObject\(job, process\)[\s\S]*?IsProcessInJob\(process, job/);
+    assert.match(launch, /!verified\(\) \|\| !IsProcessInJob\(process, job, out bool contained\) \|\| !contained \|\|\s*ResumeThread\(thread\) != 1/);
+    assert.doesNotMatch(startup, /CefContainedProcess/);
+});

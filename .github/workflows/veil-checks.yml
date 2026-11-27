@@ -123,6 +123,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/security/CefProcessBindingCheck/CefProcessBindingCheck.csproj -c Release
 
+      - name: Test suspended CEF child containment with synthetic apphost
+        shell: pwsh
+        run: dotnet run --project tests/security/CefContainmentCheck/CefContainmentCheck.csproj -c Release
+
       # Hosted runners may be elevated and do not provide an interactive desktop.
       # Running the WPF smoke suite or broker authorization test here would
       # incorrectly test the runner, not a regular Windows user's security token.
