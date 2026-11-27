@@ -427,6 +427,38 @@ catch (ArgumentException) { relativeRejected = true; }
 Check(relativeRejected, "relative CEF root accepted");
 Console.WriteLine("PASS: separate CEF profile layout without filesystem side effects");
 
+// Child environment planning is pure; no process or real profile is started.
+var inheritedCefEnvironment = new Dictionary<string, string?>(StringComparer.Ordinal) {
+    ["TEMP"] = "old-temp", ["temp"] = "old-lower-temp", ["TmP"] = "old-tmp",
+    ["veil_cef_wpf_test_url"] = "fixture-url", ["VEIL_CEF_WPF_TABS"] = "1",
+    ["VEIL_CEF_PROTECTED_ROOT"] = "old-root", ["Veil_Cef_Protected_Log_File"] = "old-log",
+    ["chrome_log_file"] = "outside-log", ["SystemRoot"] = "synthetic-system-root"
+};
+var childCefEnvironment = CefChildEnvironmentPlan.Build(cefLayout, inheritedCefEnvironment);
+Check(childCefEnvironment.Count == 6 &&
+    childCefEnvironment["temp"] == cefLayout.Scratch &&
+    childCefEnvironment["TMP"] == cefLayout.Scratch &&
+    childCefEnvironment[CefChildEnvironmentPlan.RootKey] == cefLayout.EngineRoot &&
+    childCefEnvironment[CefChildEnvironmentPlan.CacheKey] == cefLayout.Cache &&
+    childCefEnvironment[CefChildEnvironmentPlan.LogKey] == cefLayout.LogFile &&
+    childCefEnvironment["SystemRoot"] == "synthetic-system-root",
+    "CEF child environment did not replace controlled paths");
+Check(!childCefEnvironment.ContainsKey("VEIL_CEF_WPF_TEST_URL") &&
+    !childCefEnvironment.ContainsKey("VEIL_CEF_WPF_TABS") &&
+    !childCefEnvironment.ContainsKey("CHROME_LOG_FILE"), "CEF fixture/log override inherited");
+Check(inheritedCefEnvironment.Count == 9 && inheritedCefEnvironment["TEMP"] == "old-temp" &&
+    inheritedCefEnvironment["VEIL_CEF_WPF_TABS"] == "1", "Parent environment input was modified");
+bool ambiguousEnvironmentRejected = false;
+try {
+    _ = CefChildEnvironmentPlan.Build(cefLayout, new Dictionary<string, string?> {
+        ["PATH"] = "first", ["Path"] = "second"
+    });
+}
+catch (ArgumentException) { ambiguousEnvironmentRejected = true; }
+Check(ambiguousEnvironmentRejected, "Ambiguous unrelated environment accepted");
+Check(!Directory.Exists(layoutRoot), "Child environment plan created a profile");
+Console.WriteLine("PASS: isolated CEF child environment planning without launch or parent mutation");
+
 file sealed class SyntheticLoginCapability : IEngineLoginForms
 {
     public LoginFormScope LoginScope { get; set; }
