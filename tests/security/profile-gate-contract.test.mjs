@@ -401,7 +401,7 @@ test('disabled preflight requires broker confirmation of the same exited child',
     assert.match(broker, /completedPreflight = receipt;[\s\S]*?return Protocol.CefChildVerified/);
     assert.match(broker, /case BrokerCommand.ConfirmCefPreflight:[\s\S]*?completedPreflight = null;[\s\S]*?MatchesExitedNomination/);
     assert.match(native, /CompareObjectHandles\(child, retained\)[\s\S]*?GetExitCodeProcess\(child, out uint code\) && code == expectedExit/);
-    assert.match(runner, /child.TerminateAndDrain\(5000\);\s*confirm\(\);/);
+    assert.match(runner, /!child.WaitForNaturalJobExit\(250\) \|\| !Current\(\)[\s\S]*?confirm\(\);/);
 });
 
 
@@ -449,4 +449,16 @@ test('broker hashes runtime before the admission and reuses retained files in re
     assert.match(stage, /OpenInstalled\(serializedBrokerAccess: true\)[\s\S]*?new CefChildAdmission[\s\S]*?binding.Handle, image, runtime/);
     assert.match(lease, /!serializedBrokerAccess && Environment.CurrentManagedThreadId != ownerThread/);
     assert.match(lease, /foreach \(string modulePath in modulePaths\) CheckObservedApplicationModule/);
+});
+
+
+test('disabled preflight polls live authority and never confirms forced termination', async () => {
+    const runner = await readFile('apps/desktop/Engine/CefDisabledPreflight.cs', 'utf8');
+    const process = await readFile('apps/desktop/Engine/CefContainedProcess.cs', 'utf8');
+    assert.match(runner, /while \(!child.WaitForExit\(0\)\)[\s\S]*?if \(!Current\(\)\)[\s\S]*?!child.ImageLoadMitigationsActive[\s\S]*?child.WaitForExit\(Math.Min\(250, remaining\)\)/);
+    assert.match(process, /ForcedTerminationExit = 35/);
+    assert.match(process, /TerminateJobObject\(job, ForcedTerminationExit\)/);
+    const natural = process.slice(process.indexOf('internal bool WaitForNaturalJobExit'), process.indexOf('internal void TerminateAndDrain'));
+    assert.doesNotMatch(natural, /TerminateJobObject|TerminateProcess/);
+    assert.match(runner, /!child.WaitForNaturalJobExit\(250\) \|\| !Current\(\)[\s\S]*?confirm\(\);/);
 });

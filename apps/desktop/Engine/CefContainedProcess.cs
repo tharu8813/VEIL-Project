@@ -12,6 +12,8 @@ namespace Veil.Desktop;
 // No breakaway, shell, inherited handles, or arbitrary command-line arguments.
 internal sealed class CefContainedProcess : IDisposable
 {
+    // Never reuse the native verified-but-disabled exit code (29) for termination.
+    internal const uint ForcedTerminationExit = 35;
     private readonly SafeFileHandle job;
     private readonly SafeProcessHandle process;
     private readonly SafeFileHandle thread;
@@ -80,7 +82,7 @@ internal sealed class CefContainedProcess : IDisposable
             // The primary thread has never been resumed. Explicit termination
             // is defensive if post-create membership verification failed.
             if (process is { IsInvalid: false, IsClosed: false })
-                TerminateProcess(process, 29);
+                TerminateProcess(process, ForcedTerminationExit);
             thread?.Dispose();
             job.Dispose();
             process?.Dispose();
@@ -177,29 +179,40 @@ internal sealed class CefContainedProcess : IDisposable
         return code;
     }
 
-    // Check the entire job, not just its original process. This is still
-    // forced cleanup for a preflight candidate, not graceful CEF shutdown.
+    private uint ActiveProcesses()
+    {
+        if (!QueryInformationJobObject(job, 1, out var info,
+            (uint)Marshal.SizeOf<BasicAccountingInformation>(), IntPtr.Zero))
+            throw Failure("QueryInformationJobObject");
+        return info.ActiveProcesses;
+    }
+
+    // A successful disabled preflight must leave no live job member. Unlike
+    // forced cleanup, this never terminates a process to obtain success.
+    internal bool WaitForNaturalJobExit(int milliseconds)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        while (ActiveProcesses() != 0)
+        {
+            if (started.ElapsedMilliseconds >= milliseconds) return false;
+            Thread.Sleep(Math.Min(20, Math.Max(1, milliseconds -
+                (int)Math.Min(milliseconds, started.ElapsedMilliseconds))));
+        }
+        int remaining = Math.Max(0, milliseconds - (int)Math.Min(milliseconds, started.ElapsedMilliseconds));
+        return WaitForExit(remaining);
+    }
+
+    // Forced cleanup is explicitly different from natural exit verification.
     internal void TerminateAndDrain(int milliseconds)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
-        uint ActiveProcesses()
-        {
-            if (!QueryInformationJobObject(job, 1, out var info,
-                (uint)Marshal.SizeOf<BasicAccountingInformation>(), IntPtr.Zero))
-                throw Failure("QueryInformationJobObject");
-            return info.ActiveProcesses;
-        }
-        var started = System.Diagnostics.Stopwatch.StartNew();
-        if (ActiveProcesses() != 0 && !TerminateJobObject(job, 29)) throw Failure("TerminateJobObject");
-        while (ActiveProcesses() != 0)
-        {
-            if (started.ElapsedMilliseconds >= milliseconds)
-                throw new TimeoutException("CEF job drain could not be confirmed.");
-            Thread.Sleep(20);
-        }
-        int remaining = Math.Max(0, milliseconds - (int)Math.Min(milliseconds, started.ElapsedMilliseconds));
-        if (!WaitForExit(remaining)) throw new TimeoutException("CEF process exit was not confirmed.");
+        if (ActiveProcesses() != 0 && !TerminateJobObject(job, ForcedTerminationExit))
+            throw Failure("TerminateJobObject");
+        if (!WaitForNaturalJobExit(milliseconds))
+            throw new TimeoutException("CEF job drain could not be confirmed.");
     }
 
     public void Dispose()

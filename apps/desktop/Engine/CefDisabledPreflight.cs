@@ -27,14 +27,27 @@ internal static class CefDisabledPreflight
             stage();
             elapsed.Start();
             child.ResumeAfterVerification(Current);
-            int remaining = Math.Max(0, 12000 - (int)Math.Min(12000, elapsed.ElapsedMilliseconds));
-            if (!child.WaitForExit(remaining))
-                throw new TimeoutException("Disabled CEF candidate did not exit in time.");
+            // Do not block for the entire remaining budget without checking
+            // authority. Poll on the owning thread, with bounded wait slices.
+            // Current may itself block in broker/volume checks; this is not
+            // a real-time watchdog or a dispatcher message pump.
+            while (!child.WaitForExit(0))
+            {
+                if (!Current()) throw new InvalidOperationException("CEF preflight authority expired or was revoked.");
+                if (!child.ImageLoadMitigationsActive)
+                    throw new InvalidOperationException("CEF image loading policy changed.");
+                int remaining = Math.Max(0, 12000 - (int)Math.Min(12000, elapsed.ElapsedMilliseconds));
+                if (remaining == 0) throw new TimeoutException("Disabled CEF candidate did not exit in time.");
+                if (child.WaitForExit(Math.Min(250, remaining))) break;
+            }
             uint code = child.ReadExitCode();
             if (code != VerifiedButDisabled)
                 throw new InvalidOperationException("CEF disabled preflight did not report verification.");
             if (!Current()) throw new InvalidOperationException("CEF preparation changed during preflight.");
-            child.TerminateAndDrain(5000);
+            // Never manufacture a successful exit by killing the job.
+            // The candidate is not expected to leave any subprocess alive.
+            if (!child.WaitForNaturalJobExit(250) || !Current())
+                throw new InvalidOperationException("CEF candidate left a live job member or lost authority.");
             confirm();
             if (!Current()) throw new InvalidOperationException("CEF confirmation expired.");
             return code;

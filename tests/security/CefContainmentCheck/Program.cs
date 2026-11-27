@@ -94,6 +94,34 @@ try
         Check(!File.Exists(markerPath) && !denied.IsAlive, "Denied preflight ran.");
     }
     environment.Remove("VEIL_SYNTHETIC_EXIT");
+    // A revoked running candidate must not reach broker confirmation.
+    using (var revoked = CefContainedProcess.CreateSuspended(image, environment))
+    {
+        bool confirmationCalled = false;
+        int checks = 0;
+        Reject(() => CefDisabledPreflight.Run(revoked, () => { }, () =>
+        {
+            checks++;
+            return checks <= 2 || !File.Exists(markerPath);
+        }, () => confirmationCalled = true));
+        Check(!confirmationCalled && !revoked.IsAlive && File.Exists(markerPath),
+            "Running child was not revoked and drained.");
+        Check(revoked.ReadExitCode() == CefContainedProcess.ForcedTerminationExit &&
+            revoked.ReadExitCode() != CefDisabledPreflight.VerifiedButDisabled,
+            "Forced exit overlapped verified exit.");
+    }
+    File.Delete(markerPath);
+    // A live job cannot pass natural exit observation or accidentally be
+    // terminated by it. Explicit cleanup uses a distinct exit code.
+    using (var live = CefContainedProcess.CreateSuspended(image, environment))
+    {
+        live.ResumeAfterVerification(() => true);
+        Check(!live.WaitForNaturalJobExit(50) && live.IsAlive, "Live job accepted as naturally exited.");
+        live.TerminateAndDrain(5000);
+        Check(live.ReadExitCode() == CefContainedProcess.ForcedTerminationExit,
+            "Forced drain exit code mismatch.");
+    }
+    if (File.Exists(markerPath)) File.Delete(markerPath);
     var ownerInfo = new ProcessStartInfo(image)
     {
         UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true,
