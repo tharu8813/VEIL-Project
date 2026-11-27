@@ -57,7 +57,7 @@ function Verify { Read-VeilPreflightPackageEvidence $root $cefEvidence $packageE
 function Reject([scriptblock]$Action) {
     $rejected = $false
     try { [void](& $Action) } catch { $rejected = $true }
-    if (-not $rejected) { throw 'Invalid preflight package accepted.' }
+    if (-not $rejected) { throw ('Invalid preflight package accepted at line {0}: {1}' -f $Action.Ast.Extent.StartLineNumber,$Action.ToString()) }
 }
 try {
     foreach ($file in @('Desktop/Veil.Desktop.exe','Desktop/Veil.Desktop.dll','Desktop/Veil.Desktop.deps.json','Desktop/Veil.Desktop.runtimeconfig.json',
@@ -276,6 +276,186 @@ try {
     [IO.File]::AppendAllText($probeFinalPath,' ')
     Reject { Assert-VeilCompletedServiceProbe $probeRoot (& $verifyService) }
     [IO.File]::WriteAllBytes($probeFinalPath,$probeFinalBytes)
+    # Real Win32 token inspection of the current runner only. The runner is
+    # not necessarily a standard interactive user; no positive VM claim.
+    Add-Type -Path (Join-Path $dir 'CefPreflightProcessObservation.cs')
+    $self = [Diagnostics.Process]::GetCurrentProcess()
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $selfObservation = [Veil.Preflight.ProcessObservation]::Inspect($self)
+        if ($selfObservation.ProcessId -ne $PID -or $selfObservation.UserSid -cne $identity.User.Value -or
+            $selfObservation.SessionId -ne $self.SessionId -or
+            $selfObservation.ImagePath -ne $self.MainModule.FileName -or $selfObservation.IntegritySid -notmatch '^S-1-16-[0-9]+
+    $exercise = {
+        if ($script:fakeService.State -ne 'Running') { throw 'Exercise without broker.' }
+        New-SyntheticUserObservation
+    }
+    $sessionResult = Invoke-VeilPreflightServiceProbe $sessionRoot $command $verifyService $readService $readDacl $manual $startProbe $disabled $stopProbe {} $exercise
+    if ($sessionResult.state -cne 'running-then-stopped' -or $sessionResult.startupEnabled -or
+        @(Get-ChildItem -LiteralPath $sessionRoot -Force).Count -ne 4) { throw 'Protected session not completed.' }
+    $exerciseRecord = Get-Content -LiteralPath (Join-Path $sessionRoot '02a-protected-preflight.json') -Raw | ConvertFrom-Json
+    if ($exerciseRecord.exitCode -ne 29 -or $exerciseRecord.startupEnabled -or -not $exerciseRecord.tokenVerified -or
+        $exerciseRecord.processId -ne 200 -or $exerciseRecord.sessionId -ne 1) { throw 'Unexpected exercise result.' }
+    Reject { Assert-VeilCompletedServiceProbe $sessionRoot (& $verifyService) }
+    Assert-VeilDisabledPreflightService $script:fakeService $command
+    $index = 0
+    foreach ($badExercise in @({ return [int]29 },{ return '29' },{ throw 'Synthetic user timeout.' },
+        { $o = New-SyntheticUserObservation; $o.exitCode=1; $o },
+        { $o = New-SyntheticUserObservation; $o.exitCode='29'; $o },
+        { $o = New-SyntheticUserObservation; $o.tokenVerified=$false; $o },
+        { $o = New-SyntheticUserObservation; $o.sessionId=0; $o },
+        { $o = New-SyntheticUserObservation; $o.processId=0; $o },
+        { $script:fakeService.ProcessId = 101; New-SyntheticUserObservation })) {
+        $index++
+        $badSession = Join-Path $work ('bad-protected-session-' + $index)
+        Reject { Invoke-VeilPreflightServiceProbe $badSession $command $verifyService $readService $readDacl $manual $startProbe $disabled $stopProbe {} $badExercise }
+        Assert-VeilDisabledPreflightService $script:fakeService $command
+        if ((Test-Path -LiteralPath (Join-Path $badSession '02a-protected-preflight.json')) -or
+            (Test-Path -LiteralPath (Join-Path $badSession '03-stopped-verified.json'))) {
+            throw 'Failed protected session recorded success.'
+        }
+    }
+    Write-Host 'PASS: protected session callback, exact exit code, broker continuity and cleanup'
+    Write-Host 'PASS: service journal revalidation and synthetic start/stop/failure cleanup'
+    $script:fakeService = $null
+    $badPublication = { [pscustomobject]@{state='publish-registration';startupEnabled=$false;serviceCreated=$false} }
+    Reject { Register-VeilDisabledPreflightService $badServiceJournal $command $badPublication $readService $createService $setDacl $readDacl }
+    if ((Test-Path -LiteralPath $badServiceJournal) -or $script:createCalls -ne 1) { throw 'Incomplete publication created a service.' }
+    $failedServiceJournal = Join-Path $work 'failed-service-journal'
+    Reject { Register-VeilDisabledPreflightService $failedServiceJournal $command $verifyPublished $readService $createService { throw 'Synthetic SCM DACL failure.' } $readDacl }
+    if ($script:createCalls -ne 2 -or $null -eq $script:fakeService -or
+        -not (Test-Path -LiteralPath (Join-Path $failedServiceJournal '01-service-intent.json')) -or
+        (Test-Path -LiteralPath (Join-Path $failedServiceJournal '02-service-registered.json'))) { throw 'Failed SCM registration evidence not preserved.' }
+    Write-Host 'PASS: synthetic disabled service registration, identity/DACL refusal and failure preservation'
+    # Inject refusal at the boundary after binaries are published but before
+    # registration is moved. Both sources and partial transaction must survive.
+    $interruptedBin = Join-Path $work 'interrupted-bin'
+    $interruptedData = Join-Path $work 'interrupted-data'
+    $interruptedTransaction = Join-Path $work 'interrupted-publication'
+    $interruptedPrepared = Join-Path $work 'interrupted-prepared'
+    $interruptedDraft = New-VeilPreflightRegistrationDraft $plan $interruptedBin $image $profile $volumeGuid $primary $recovery $sid 'synthetic'
+    [void](Write-VeilPreflightRegistrationDraft $interruptedPrepared $interruptedDraft $plan)
+    $script:publicationChecks = 0
+    $interrupt = { $script:publicationChecks++; if ($script:publicationChecks -eq 3) { throw 'Synthetic publication interruption.' } }
+    Reject { Publish-VeilPreflightFiles $stage $interruptedPrepared $interruptedBin $interruptedData $interruptedTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid $interrupt }
+    if (-not (Test-Path -LiteralPath $interruptedBin) -or (Test-Path -LiteralPath $interruptedData) -or
+        -not (Test-Path -LiteralPath ($interruptedData + '.cef-preflight-pending')) -or
+        -not (Test-Path -LiteralPath (Join-Path $interruptedTransaction '03-binaries-published.json')) -or
+        (Test-Path -LiteralPath (Join-Path $interruptedTransaction '04-files-published.json'))) {
+        throw 'Interrupted publication state not preserved.'
+    }
+    Reject { Publish-VeilPreflightFiles $stage $interruptedPrepared $interruptedBin $interruptedData $interruptedTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} }
+    function Inspect-Publication {
+        Get-VeilPreflightPublicationState $stage $interruptedPrepared $interruptedBin $interruptedData $interruptedTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {}
+    }
+    function Resume-Publication {
+        Resume-VeilPreflightPublication $stage $interruptedPrepared $interruptedBin $interruptedData $interruptedTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {}
+    }
+    function Require-PublicationState([string]$Expected) {
+        if ((Inspect-Publication).state -cne $Expected) { throw "Expected publication state $Expected." }
+    }
+    Require-PublicationState 'publish-registration'
+    $record3 = Join-Path $interruptedTransaction '03-binaries-published.json'
+    $record4 = Join-Path $interruptedTransaction '04-files-published.json'
+    $record2 = Join-Path $interruptedTransaction '02-copies-verified.json'
+    $record3Bytes = [IO.File]::ReadAllBytes($record3)
+    [IO.File]::AppendAllText($record3,' ')
+    Reject { Inspect-Publication }
+    Reject { Resume-Publication }
+    [IO.File]::WriteAllBytes($record3,$record3Bytes)
+    $pendingData = $interruptedData + '.cef-preflight-pending'
+    $pendingBin = $interruptedBin + '.cef-preflight-pending'
+    $pendingConfig = Join-Path $pendingData 'client.json'
+    $pendingBytes = [IO.File]::ReadAllBytes($pendingConfig)
+    [IO.File]::AppendAllText($pendingConfig,' ')
+    Reject { Resume-Publication }
+    if (Test-Path -LiteralPath $interruptedData) { throw 'Invalid registration was published.' }
+    [IO.File]::WriteAllBytes($pendingConfig,$pendingBytes)
+    [void][IO.Directory]::CreateDirectory($pendingBin)
+    Reject { Inspect-Publication }
+    Remove-Item -LiteralPath $pendingBin
+    # Synthesize a crash immediately after the first rename but before
+    # its journal record, then one before the rename. Test-only rewind.
+    Remove-Item -LiteralPath $record3
+    Require-PublicationState 'record-binaries'
+    [IO.Directory]::Move($interruptedBin,$pendingBin)
+    Require-PublicationState 'publish-binaries'
+    $extraRecord = Join-Path $interruptedTransaction '04-files-published.json'
+    [IO.File]::WriteAllText($extraRecord,'{}')
+    Reject { Inspect-Publication }
+    Remove-Item -LiteralPath $extraRecord
+    $resumed = Resume-Publication
+    if ($resumed.state -cne 'files-published-only' -or $resumed.startupEnabled -or $resumed.serviceCreated) {
+        throw 'Recovery did not finish verified file publication.'
+    }
+    Require-PublicationState 'files-published-only'
+    $completedHash = (Get-FileHash -LiteralPath $record4).Hash
+    [void](Resume-Publication)
+    if ((Get-FileHash -LiteralPath $record4).Hash -ne $completedHash) { throw 'Completed recovery was not idempotent.' }
+    Remove-Item -LiteralPath $record4
+    Require-PublicationState 'record-completion'
+    [void](Resume-Publication)
+    if ((Get-FileHash -LiteralPath $record4).Hash -ne $completedHash) { throw 'Completion record differs.' }
+    # No verified-copy record is never a resumable state, even if both
+    # temporary trees happen to be complete.
+    Remove-Item -LiteralPath $record4,$record3,$record2
+    [IO.Directory]::Move($interruptedData,$pendingData)
+    [IO.Directory]::Move($interruptedBin,$pendingBin)
+    Require-PublicationState 'incomplete-copies'
+    Reject { Resume-Publication }
+    if ((Test-Path -LiteralPath $interruptedBin) -or (Test-Path -LiteralPath $interruptedData) -or
+        -not (Test-Path -LiteralPath $pendingBin) -or -not (Test-Path -LiteralPath $pendingData)) { throw 'Unverified copies were modified.' }
+    Write-Host 'PASS: publication recovery at known boundaries, tamper refusal and incomplete-copy preservation'
+    Write-Host 'PASS: verified publication copies, journal boundaries and interrupted publication preservation'
+    # Inject a deterministic file creation conflict after creating a fresh
+    # preparation directory. No complete marker may follow the failed write.
+    $partial = Join-Path $work 'partial-registration'
+    function New-VeilRestrictedDirectory([string]$Path) {
+        [void][IO.Directory]::CreateDirectory($Path)
+        [IO.File]::WriteAllText((Join-Path $Path 'client.json'),'preserve')
+    }
+    Reject { Write-VeilPreflightRegistrationDraft $partial $draft $plan }
+    if ((Test-Path -LiteralPath (Join-Path $partial 'preparation.json')) -or
+        [IO.File]::ReadAllText((Join-Path $partial 'client.json')) -cne 'preserve') { throw 'Partial registration not preserved.' }
+    Reject { Inspect-Draft $partial }
+    Write-Host 'PASS: preflight registration draft, hash marker and interrupted preparation refusal'
+    $stageDll = Join-Path $stage 'payload/Desktop/Veil.Desktop.dll'
+    [IO.File]::AppendAllText($stageDll,'changed')
+    Reject { Get-VeilPreflightStagePlan $stage $cert.Thumbprint $commit }
+    if ([IO.File]::ReadAllText($stageDll) -cne 'syntheticchanged') { throw 'Invalid staging was modified.' }
+    [IO.File]::WriteAllText($stageDll,'synthetic')
+    $stageProof = Join-Path $stage 'package-evidence/preflight-package.p7s'
+    [IO.File]::AppendAllText($stageProof,'changed')
+    # Mutate the signed JSON as well; CMS decoders may ignore trailing bytes.
+    [IO.File]::AppendAllText((Join-Path $stage 'package-evidence/preflight-package.json'),' ')
+    Reject { Get-VeilPreflightStagePlan $stage $cert.Thumbprint $commit }
+    [IO.File]::AppendAllText((Join-Path $root 'Desktop/Veil.Desktop.dll'),'changed')
+    Reject { Copy-VeilVerifiedPreflightPackage $root $cefEvidence $packageEvidence $bad $cert.Thumbprint $commit }
+    if (Test-Path -LiteralPath $bad) { throw 'Changed source created staging.' }
+    Write-Host 'PASS: verified preflight staging, exact image pins, refusal and preservation'
+    Write-Host 'PASS: separate preflight package signed inventory synthetic checks'
+}
+finally {
+    $cert.Dispose()
+    $rsa.Dispose()
+    Remove-Item -LiteralPath $work -Recurse -Force
+}
+) {
+            throw 'Win32 process observation mismatch.'
+        }
+        Reject { $selfObservation.RequireStandard($selfObservation.ImagePath,'S-1-0-0',$self.SessionId) }
+        Reject { $selfObservation.RequireStandard('C:\wrong.exe',$identity.User.Value,$self.SessionId) }
+        Reject { $selfObservation.RequireStandard($selfObservation.ImagePath,$identity.User.Value,-1) }
+        if ($selfObservation.Administrator -or $selfObservation.Elevated -or $selfObservation.ElevationType -ne 1 -or
+            $selfObservation.IntegritySid -ne 'S-1-16-8192' -or $selfObservation.SessionId -le 0) {
+            Reject { $selfObservation.RequireStandard($selfObservation.ImagePath,$identity.User.Value,$self.SessionId) }
+        } else {
+            $selfObservation.RequireStandard($selfObservation.ImagePath,$identity.User.Value,$self.SessionId)
+        }
+    } finally { $self.Dispose(); $identity.Dispose() }
+    function New-SyntheticUserObservation {
+        [pscustomobject]@{kind='standard-user-exit-observation';exitCode=[int]29;processId=[int]200;sessionId=[int]1;tokenVerified=$true}
+    }
     $sessionRoot = Join-Path $work 'protected-session'
     $exercise = {
         if ($script:fakeService.State -ne 'Running') { throw 'Exercise without broker.' }

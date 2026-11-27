@@ -106,19 +106,34 @@ $stopService = {
         $controller.WaitForStatus('Stopped',[TimeSpan]::FromMinutes(4))
     } finally { $controller.Dispose() }
 }
+Add-Type -Path (Join-Path $PSScriptRoot 'CefPreflightProcessObservation.cs')
 $desktop = Join-Path $bin 'Desktop\Veil.Desktop.exe'
+$expectedSession = (Get-Process -Id $PID).SessionId
 $exercise = {
     Assert-VeilAdminPath $desktop
     Assert-VeilSignedImage $desktop $SignerThumbprint
     # No RunAs elevation, shell command or inherited user-supplied arguments.
     # The dedicated test user enters the volume passphrase in the app dialog.
-    $child = Start-Process -FilePath $desktop -ArgumentList '--cef-protected-preflight' -WorkingDirectory (Split-Path -Parent $desktop) -Credential $credential -LoadUserProfile -PassThru
+    $start = [Diagnostics.ProcessStartInfo]::new($desktop,'--cef-protected-preflight')
+    $start.UseShellExecute = $false
+    $start.WorkingDirectory = Split-Path -Parent $desktop
+    $start.Domain = $env:COMPUTERNAME
+    $start.UserName = $localUser.Name
+    $start.Password = $credential.Password
+    $start.LoadUserProfile = $true
+    $child = [Diagnostics.Process]::Start($start)
+    if ($null -eq $child) { throw 'No desktop process returned.' }
     try {
+        $observed = [Veil.Preflight.ProcessObservation]::Inspect($child)
+        $observed.RequireStandard($desktop,$expectedSid.Value,$expectedSession)
         if (-not $child.WaitForExit(300000)) {
             throw 'Protected preflight timed out. No force-kill; close the test window and inspect the VM.'
         }
-        return [int]$child.ExitCode
-    } finally { $child.Dispose() }
+        return [pscustomobject]@{
+            kind='standard-user-exit-observation';exitCode=[int]$child.ExitCode
+            processId=$observed.ProcessId;sessionId=$observed.SessionId;tokenVerified=$true
+        }
+    } finally { $child.Dispose(); $start.Password = $null }
 }
 try {
     [void](Invoke-VeilPreflightServiceProbe $sessionProbe $command $verifyRegistration $readService $readDacl $setManual $startService $disable $stopService $requireDetached $exercise)

@@ -409,3 +409,9 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: 일반 사용자 보호 프로필 검증 세션
 
 정확한 head cea72bb 일반 CI 45955235904 PASS, native CI 확인 시 진행 중. 비활성 등록과 이전 서비스 전용 probe 저널을 재구성해 확인한 뒤 명시적 폐기용 VM/RunProtectedSession 옵션으로 별도 시험 계정의 Windows 자격 증명을 요청, 등록 SID와 일치 확인. 서비스 제한 시작 중 고정 서명 Desktop EXE를 해당 계정으로 --cef-protected-preflight만 실행, 관리자 측 Process에서 최대 5분 종료 관측, 정확한 int 29/동일 서비스 PID/시험 VHDX 분리 확인 후 Disabled/Stopped 및 등록 재검증. 별도 저널 기록. 실패/timeout은 강제 종료 없이 정상 정리 시도 및 상태 보존. 합성 callback 테스트 추가. 실제 Windows Secondary Logon/토큰/SCM/BitLocker/서명/VM/독립 리뷰 NOT RUN; 일반 사용자 계정 구성과 독립 OS trace는 별도 확인 필요. 29는 CEF 활성화/브라우징이 아님. 신규 CI 대기.
+
+### 추가 구현: 일반 사용자 실행 프로세스 토큰 직접 관측
+
+직전 head 78589ea의 일반/native CI는 작업 시작 시 실행 중. Process.Start가 반환한 프로세스 핸들에서 Win32 GetProcessId/QueryFullProcessImageName/OpenProcessToken 및 TokenSessionId/ElevationType/Elevation/IntegrityLevel을 읽고, 등록 SID·고정 실행 경로·동일 대화형 세션·medium integrity·비상승/기본 토큰·관리자 그룹 부재를 요구한다. 동일 Process 객체 종료 코드 int 29와 tokenVerified/PID/세션 관측이 있어야 protected-preflight 기록 생성. 실제 CI 자체 프로세스 토큰 읽기 및 합성 잘못된 관측 거부 시험 추가. 시작 후 스냅샷으로 실행 전 suspended 검증이나 런타임 토큰 불변성 증명이 아니며 실제 별도 사용자/VM/BitLocker/CEF NOT RUN. 신규 CI 및 독립 리뷰 대기.
+
+후속 CI 조회: 78589ea 일반 CI 45955792334 FAIL (별도 preflight package 거부 테스트), Rust PASS. 로그는 공통 Reject에서 거부되지 않은 입력만 보여주므로 정확한 케이스는 미확정. 합성 서비스 객체가 같은 참조를 공유해 PID 교체가 이전 관측에도 반영되는 결함을 발견, scalar PID 스냅샷으로 수정하고 Reject 호출 위치 진단을 추가. 신규 CI로 재확인 필요.

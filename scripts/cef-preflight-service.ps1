@@ -145,22 +145,30 @@ function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
         if ($running.State -ne 'Running' -or $running.StartMode -ne 'Manual' -or $running.ProcessId -le 0) {
             throw 'Broker did not reach expected running state.'
         }
+        $runningPid = [int]$running.ProcessId
         & $RequireDetached
         [void](Write-VeilPreflightDraftFile (Join-Path $ProbeRoot '02-running-observed.json') ([ordered]@{
             state='running-observed';intentSha256=$intentHash;startupEnabled=$false
         }))
         if ($null -ne $Exercise) {
-            $exitCode = & $Exercise
-            if ($exitCode -isnot [int] -or $exitCode -ne 29) { throw 'Protected preflight did not exit verified-but-disabled.' }
+            $observation = & $Exercise
+            if ($observation.kind -cne 'standard-user-exit-observation' -or
+                $observation.exitCode -isnot [int] -or $observation.exitCode -ne 29 -or
+                $observation.processId -isnot [int] -or $observation.processId -le 0 -or
+                $observation.sessionId -isnot [int] -or $observation.sessionId -le 0 -or
+                $observation.tokenVerified -isnot [bool] -or -not $observation.tokenVerified) {
+                throw 'Protected preflight lacks verified standard-user exit observation.'
+            }
             $after = & $ReadService
             Assert-VeilPreflightServiceIdentity $after $Command
             Assert-VeilPreflightServiceDacl (& $ReadDacl)
-            if ($after.State -ne 'Running' -or $after.StartMode -ne 'Manual' -or $after.ProcessId -ne $running.ProcessId) {
+            if ($after.State -ne 'Running' -or $after.StartMode -ne 'Manual' -or $after.ProcessId -ne $runningPid) {
                 throw 'Broker changed during protected preflight.'
             }
             & $RequireDetached
             [void](Write-VeilPreflightDraftFile (Join-Path $ProbeRoot '02a-protected-preflight.json') ([ordered]@{
                 state='protected-preflight-exit-observed';intentSha256=$intentHash;exitCode=29;startupEnabled=$false
+                processId=$observation.processId;sessionId=$observation.sessionId;tokenVerified=$true
             }))
         }
     }
