@@ -23,6 +23,7 @@ internal static class CefSystemSignatureTrust
             retained.DangerousAddRef(ref added);
             var member = retained.DangerousGetHandle();
             var file = new FileInfoNative { Size = Marshal.SizeOf<FileInfoNative>(), Path = path, File = member };
+            if (!Rewind(retained)) return false;
             if (VerifySubject(file, 1)) return true;
             return VerifyCatalog(path, retained, member);
         }
@@ -37,10 +38,10 @@ internal static class CefSystemSignatureTrust
         try
         {
             uint length = 0;
-            if (!CryptCATAdminCalcHashFromFileHandle2(admin, retained, ref length, null, 0) || length != 32)
+            if (!Rewind(retained) || !CryptCATAdminCalcHashFromFileHandle2(admin, retained, ref length, null, 0) || length != 32)
                 return false;
             byte[] hash = new byte[32];
-            if (!CryptCATAdminCalcHashFromFileHandle2(admin, retained, ref length, hash, 0) || length != 32)
+            if (!Rewind(retained) || !CryptCATAdminCalcHashFromFileHandle2(admin, retained, ref length, hash, 0) || length != 32)
                 return false;
             // Deliberately first matching catalog only. No weaker hash fallback
             // or search past a failed trust check. Additional catalogs may be
@@ -58,7 +59,7 @@ internal static class CefSystemSignatureTrust
                     CatalogPath = info.Path, MemberTag = Convert.ToHexString(hash),
                     MemberPath = path, MemberFile = member, Admin = admin
                 };
-                return VerifySubject(data, 2);
+                return Rewind(retained) && VerifySubject(data, 2);
             }
             finally { CryptCATAdminReleaseCatalogContext(admin, catalog, 0); }
         }
@@ -162,6 +163,12 @@ internal static class CefSystemSignatureTrust
     private struct ChainPolicyPara { public int Size; public uint Flags; public IntPtr Extra; }
     [StructLayout(LayoutKind.Sequential)]
     private struct ChainPolicyStatus { public int Size; public uint Error; public int ChainIndex, ElementIndex; public IntPtr Extra; }
+
+    private static bool Rewind(SafeFileHandle file) => SetFilePointerEx(file, 0, out long position, 0) && position == 0;
+
+    [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetFilePointerEx(SafeFileHandle file, long distance, out long position, uint method);
 
     [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
