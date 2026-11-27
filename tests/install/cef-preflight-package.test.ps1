@@ -287,6 +287,12 @@ try {
             $selfObservation.ImagePath -ne $self.MainModule.FileName -or $selfObservation.IntegritySid -notmatch '\AS-1-16-[0-9]+\z') {
             throw 'Win32 process observation mismatch.'
         }
+        # Cross-check enabled administrator membership through the current
+        # identity, whose normal token is distinct from the query-only handle.
+        $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+        if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) -and -not $selfObservation.Administrator) {
+            throw 'Administrator group missing from raw token observation.'
+        }
         Reject { $selfObservation.RequireStandard($selfObservation.ImagePath,'S-1-0-0',$self.SessionId) }
         Reject { $selfObservation.RequireStandard('C:\wrong.exe',$identity.User.Value,$self.SessionId) }
         Reject { $selfObservation.RequireStandard($selfObservation.ImagePath,$identity.User.Value,-1) }

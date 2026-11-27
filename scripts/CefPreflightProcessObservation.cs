@@ -39,26 +39,24 @@ namespace Veil.Preflight
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             try
             {
-                using (var identity = new WindowsIdentity(token))
+                // TOKEN_QUERY is sufficient for these observations. Do not
+                // construct WindowsIdentity/WindowsPrincipal from this handle:
+                // Framework implementations may require token duplication or
+                // impersonation rights, neither needed for this inspection.
+                var observed = new ProcessObservation
                 {
-                    bool admin = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
-                    foreach (IdentityReference group in identity.Groups)
-                        if (group.Value == "S-1-5-32-544") admin = true;
-                    var observed = new ProcessObservation
-                    {
-                        ProcessId = checked((int)pid),
-                        ImagePath = path.ToString(),
-                        UserSid = identity.User.Value,
-                        Administrator = admin,
-                        SessionId = ReadInt(token, 12), // TokenSessionId
-                        ElevationType = ReadInt(token, 18), // TokenElevationType
-                        Elevated = ReadInt(token, 20) != 0, // TokenElevation
-                        IntegritySid = ReadIntegrity(token)
-                    };
-                    if (WaitForSingleObject(handle, 0) != 258)
-                        throw new InvalidOperationException("Process exited during observation.");
-                    return observed;
-                }
+                    ProcessId = checked((int)pid),
+                    ImagePath = path.ToString(),
+                    UserSid = ReadSid(token, 1), // TokenUser
+                    Administrator = HasAdministratorGroup(token),
+                    SessionId = ReadInt(token, 12), // TokenSessionId
+                    ElevationType = ReadInt(token, 18), // TokenElevationType
+                    Elevated = ReadInt(token, 20) != 0, // TokenElevation
+                    IntegritySid = ReadSid(token, 25) // TokenIntegrityLevel
+                };
+                if (WaitForSingleObject(handle, 0) != 258)
+                    throw new InvalidOperationException("Process exited during observation.");
+                return observed;
             }
             finally { CloseHandle(token); }
         }
@@ -81,19 +79,69 @@ namespace Veil.Preflight
             return value;
         }
 
-        private static string ReadIntegrity(IntPtr token)
+        // TokenUser and TokenIntegrityLevel both begin with SID_AND_ATTRIBUTES.
+        private static string ReadSid(IntPtr token, int info)
+        {
+            return ReadVariable<string>(token, info, delegate(IntPtr buffer, int size)
+            {
+                if (size < IntPtr.Size * 2)
+                    throw new InvalidOperationException("Incomplete token SID structure.");
+                return ReadBoundedSid(buffer, size, Marshal.ReadIntPtr(buffer));
+            });
+        }
+
+        private static bool HasAdministratorGroup(IntPtr token)
+        {
+            // TOKEN_GROUPS: DWORD count followed by an aligned array of
+            // SID_AND_ATTRIBUTES (pointer + DWORD + platform padding).
+            // Inspect all groups, including deny-only Administrators in a
+            // filtered UAC token. Do not use effective membership alone.
+            return ReadVariable<bool>(token, 2, delegate(IntPtr buffer, int size)
+            {
+                if (size < IntPtr.Size)
+                    throw new InvalidOperationException("Incomplete token group structure.");
+                int count = Marshal.ReadInt32(buffer);
+                int stride = IntPtr.Size * 2;
+                if (count < 0 || count > (size - IntPtr.Size) / stride)
+                    throw new InvalidOperationException("Invalid token group count.");
+                bool administrator = false;
+                for (int i = 0; i < count; i++)
+                {
+                    IntPtr sid = Marshal.ReadIntPtr(buffer, IntPtr.Size + i * stride);
+                    if (ReadBoundedSid(buffer, size, sid) == "S-1-5-32-544")
+                        administrator = true;
+                }
+                return administrator;
+            });
+        }
+
+        private static string ReadBoundedSid(IntPtr buffer, int size, IntPtr sid)
+        {
+            long offset = sid.ToInt64() - buffer.ToInt64();
+            if (offset < 0 || offset > size - 8)
+                throw new InvalidOperationException("Token SID pointer outside query buffer.");
+            // SID header is 8 bytes; each sub-authority is a DWORD.
+            int subAuthorities = Marshal.ReadByte(sid, 1);
+            if (subAuthorities > 15 || 8 + 4 * subAuthorities > size - offset)
+                throw new InvalidOperationException("Token SID length outside query buffer.");
+            return new SecurityIdentifier(sid).Value;
+        }
+
+        private static T ReadVariable<T>(IntPtr token, int info, Func<IntPtr, int, T> read)
         {
             int size;
-            if (GetTokenInformation(token, 25, IntPtr.Zero, 0, out size) ||
-                Marshal.GetLastWin32Error() != 122 || size < IntPtr.Size || size > 65536)
-                throw new InvalidOperationException("Invalid token integrity information size.");
+            if (GetTokenInformation(token, info, IntPtr.Zero, 0, out size) ||
+                Marshal.GetLastWin32Error() != 122 || size < IntPtr.Size || size > 1024 * 1024)
+                throw new InvalidOperationException("Invalid token information size: " + info);
             IntPtr buffer = Marshal.AllocHGlobal(size);
             try
             {
                 int actual;
-                if (!GetTokenInformation(token, 25, buffer, size, out actual) || actual > size || actual < IntPtr.Size)
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
-                return new SecurityIdentifier(Marshal.ReadIntPtr(buffer)).Value;
+                if (!GetTokenInformation(token, info, buffer, size, out actual))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Token query failed: " + info);
+                if (actual < IntPtr.Size || actual > size)
+                    throw new InvalidOperationException("Invalid returned token information size.");
+                return read(buffer, actual);
             }
             finally { Marshal.FreeHGlobal(buffer); }
         }

@@ -417,3 +417,5 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 후속 CI 조회: 78589ea 일반 CI 45955792334 FAIL (별도 preflight package 거부 테스트), Rust PASS. 로그는 공통 Reject에서 거부되지 않은 입력만 보여주므로 정확한 케이스는 미확정. 합성 서비스 객체가 같은 참조를 공유해 PID 교체가 이전 관측에도 반영되는 결함을 발견, scalar PID 스냅샷으로 수정하고 Reject 호출 위치 진단을 추가. 신규 CI로 재확인 필요.
 
 후속 CI: 4e2b607 일반 CI 45956408765 FAIL. Rust PASS 및 .NET 빌드 성공 후 Windows PowerShell 5.1 파서에서 cef-preflight-package.test.ps1의 정규식 삽입 중복/문자열 파손 확인. 이전 정상 파싱 파일(78589ea) 기준으로 토큰 관측 및 거부 케이스 구간을 재구성하고 중복 제거. PID scalar snapshot 수정은 유지. 테스트 내용의 검증 조건은 완화하지 않음. 새 CI 실행 결과 및 실제 VM 확인 전 완료 처리 금지.
+
+후속 CI: 6e69f5c 일반 CI 45956868760 FAIL. Rust PASS, .NET 빌드 및 Windows PowerShell 5.1 파싱 통과. 실제 CI 자체 프로세스의 Inspect 호출에서 SecurityException Access is denied. TOKEN_QUERY 핸들을 WindowsIdentity/WindowsPrincipal로 감싸는 추가 권한 요구가 원인 후보이므로 해당 사용을 제거하고 TokenUser/TokenGroups/TokenIntegrityLevel을 GetTokenInformation으로 직접 읽도록 수정. 가변 구조체의 크기, SID 포인터와 길이, 그룹 수 및 플랫폼 정렬을 확인하며 deny-only 관리자 그룹도 거부. 기존 PID/세션/상승/무결성 검증 유지, 자체 프로세스의 활성 관리자 그룹 교차 검사 추가. 새 CI 결과 및 실제 VM은 미검증. 이전 실패의 직접 원인 확정 및 보호 세션 회귀 테스트 완료는 새 CI 확인 후 판단.
