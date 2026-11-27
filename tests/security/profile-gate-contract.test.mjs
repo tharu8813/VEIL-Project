@@ -307,3 +307,18 @@ test('native bootstrap preflight verifies environment and paths before a single 
         assert.doesNotMatch(host, /VerifyRegisteredBootstrap|CheckBootstrap|protected_bootstrap\.h/);
     }
 });
+
+
+test('native product registration is fixed machine-only read-only and not connected to startup', async () => {
+    const registration = await readFile('apps/cef-smoke/bootstrap_registration.cc', 'utf8');
+    assert.match(registration, /REG_OPTION_OPEN_LINK,\s*KEY_READ \| KEY_WOW64_64KEY/);
+    assert.match(registration, /software\.Open\(HKEY_LOCAL_MACHINE, L"SOFTWARE"\)[\s\S]*?veil\.Open\(software\.get\(\), L"VEIL"\)[\s\S]*?leaf\.Open\(veil\.get\(\), L"CefBootstrap"\)/);
+    assert.match(registration, /!TrustedSid\(owner\)[\s\S]*?SE_DACL_PROTECTED[\s\S]*?!present \|\| !acl/);
+    assert.match(registration, /ace->Mask & ~static_cast<ACCESS_MASK>\(KEY_READ\)/);
+    assert.match(registration, /CompareFileTime\(&before, &after\) != 0/);
+    assert.doesNotMatch(registration, /HKEY_CURRENT_USER|RegCreateKey|RegSetValue|GetEnvironmentVariable/);
+    for (const file of ['smoke.cc', 'wpf.cc']) {
+        const host = await readFile('apps/cef-smoke/' + file, 'utf8');
+        assert.doesNotMatch(host, /LoadRegisteredBootstrap|bootstrap_registration\.h/);
+    }
+});

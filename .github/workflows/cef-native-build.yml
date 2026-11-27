@@ -43,8 +43,14 @@ jobs:
           $work = Join-Path $env:RUNNER_TEMP "veil-cef-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           & (Join-Path $work "build/Release/veil-cef-protected-path-test.exe")
           if ($LASTEXITCODE -ne 0) { throw "Native path checks failed: $LASTEXITCODE" }
+      - name: Synthetic native registration ACL and format checks
+        shell: pwsh
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP "veil-cef-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          & (Join-Path $work "build/Release/veil-cef-registration-test.exe")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Record validation scope
         if: always()
         shell: pwsh
         run: |
-          'CEF compile and synthetic native wire/path checks. No browser or real broker was launched; runtime security and product release gates are NOT RUN.' >> $env:GITHUB_STEP_SUMMARY
+          'CEF compile and synthetic native wire/path/registration checks. No browser or real broker was launched; runtime security and product release gates are NOT RUN.' >> $env:GITHUB_STEP_SUMMARY
