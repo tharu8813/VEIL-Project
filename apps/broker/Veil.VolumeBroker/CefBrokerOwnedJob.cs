@@ -12,13 +12,36 @@ namespace Veil.VolumeBroker;
 internal sealed class CefBrokerOwnedJob : IDisposable
 {
     private readonly SafeFileHandle job;
+    private readonly uint activeLimit;
     private bool assignmentIssued;
     private bool bound;
     private bool disposed;
 
-    private CefBrokerOwnedJob(SafeFileHandle job) => this.job = job;
+    private CefBrokerOwnedJob(SafeFileHandle job, uint activeLimit)
+    {
+        this.job = job;
+        this.activeLimit = activeLimit;
+    }
 
-    internal static CefBrokerOwnedJob CreateDisabledCandidate()
+    internal static CefBrokerOwnedJob CreateDisabledCandidate() => Create(1);
+
+#if VEIL_CEF_CONTAINMENT_TEST
+    // Linked into the isolated test app only. No IPC, product option or
+    // production build can select this two-process limit.
+    internal static CefBrokerOwnedJob CreateMultiprocessFixture() => Create(2);
+
+    internal bool ContainsFixtureRoot(ClientIdentity child, SafeProcessHandle childHandle)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (activeLimit != 2 || !bound || !Native.IsRunning(childHandle) ||
+            Native.ObserveProcess(childHandle) != child ||
+            !IsProcessInJob(childHandle, job, out bool inside) || !inside) return false;
+        var state = Accounting();
+        return state.ActiveProcesses is >= 1 and <= 2;
+    }
+#endif
+
+    private static CefBrokerOwnedJob Create(uint activeLimit)
     {
         var handle = CreateJobObjectW(IntPtr.Zero, null);
         if (handle.IsInvalid) { handle.Dispose(); throw new Win32Exception(); }
@@ -27,10 +50,10 @@ internal sealed class CefBrokerOwnedJob : IDisposable
             var limits = new ExtendedLimits();
             // ACTIVE_PROCESS + KILL_ON_JOB_CLOSE. Neither breakaway flag.
             limits.Basic.Flags = 0x00000008 | 0x00002000;
-            limits.Basic.ActiveLimit = 1;
+            limits.Basic.ActiveLimit = activeLimit;
             if (!SetInformationJobObject(handle, 9, ref limits, (uint)Marshal.SizeOf<ExtendedLimits>()))
                 throw new Win32Exception();
-            return new CefBrokerOwnedJob(handle);
+            return new CefBrokerOwnedJob(handle, activeLimit);
         }
         catch { handle.Dispose(); throw; }
     }
@@ -82,7 +105,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
     internal bool ContainsVerifiedCandidate(ClientIdentity child, SafeProcessHandle childHandle)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        if (!bound || !Native.IsRunning(childHandle) || Native.ObserveProcess(childHandle) != child ||
+        if (activeLimit != 1 || !bound || !Native.IsRunning(childHandle) || Native.ObserveProcess(childHandle) != child ||
             !IsProcessInJob(childHandle, job, out bool inside) || !inside) return false;
         var state = Accounting();
         return state.TotalProcesses == 1 && state.ActiveProcesses == 1;

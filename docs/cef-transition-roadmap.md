@@ -431,3 +431,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: native CEF bootstrap 레지스트리와 설치 연결
 
 정확한 head 3450861 일반 CI 45958573564 PASS, native CI 조회 시 진행 중. native LoadRegisteredBootstrap은 HKLM 64-bit SOFTWARE/VEIL/CefBootstrap의 독립 등록을 요구하나 기존 설치 경로는 JSON만 게시하는 연결 누락 발견. 서명된 게시/등록 검증 및 복구 확인 후 기존 키를 채택하지 않고 제한 ACL의 부모/leaf를 생성, 세 REG_SZ를 일치시켜 재조회한다. 서비스 등록/서비스 probe/보호 세션/읽기 전용 검사에서 키와 ACL·값을 재확인. synthetic plan/descriptor 테스트와 helper 컴파일 추가; HKLM 실제 변경은 CI에서 하지 않는다. 부분 등록 보존, 자동 삭제 없음. 관리자 단일 폐기 VM 전제, 실제 registry ACL roundtrip/link/SCM/BitLocker/CEF 및 신규 CI/독립 리뷰 미검증. startupEnabled=false 및 single-process job 유지; 실제 CEF 초기화는 아직 연결하지 않음.
+
+### 추가 구현: 비활성 단일 프로세스와 다중 프로세스 containment 분리
+
+정확한 head f3592b0 일반 CI 45959236210 PASS, native CI 조회 시 진행 중. broker-owned job 공통 생성 경로에서 active process cap을 보존하면서 일반 제품은 CreateDisabledCandidate(1)만 제공. 테스트 프로젝트 전용 VEIL_CEF_CONTAINMENT_TEST 조건에서만 2-process fixture 생성/관측을 컴파일하고 disabled admission은 cap 1이 아니면 거부한다. 실제 합성 apphost root에서 동일 이미지의 하위 프로세스를 생성해 single-process job의 거부와 2-process nested job에서 desktop/broker 각각의 job close 후 descendant 종료를 확인하는 회귀 시험 추가. 실제 CEF 렌더러/GPU, sandbox 역할, 전체 job 멤버 인증, live broker authority와 제품 startup은 아직 미구현/미검증. 신규 CI, 실제 VM, 독립 리뷰 대기. 제품 단일 프로세스 제한 및 startupEnabled=false 유지.

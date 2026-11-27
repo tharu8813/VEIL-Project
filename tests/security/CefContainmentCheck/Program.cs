@@ -6,6 +6,33 @@ using Veil.VolumeBroker;
 // Child mode uses only an isolated synthetic marker, never a browser/profile.
 if (Environment.GetEnvironmentVariable("VEIL_SYNTHETIC_CHILD_MARKER") is { } marker)
 {
+    if (Environment.GetEnvironmentVariable("VEIL_SYNTHETIC_SPAWN") == "1")
+    {
+        // Only synthetic test descendants, same apphost; no browser or
+        // protected profile. Do not use breakaway or shell execution.
+        var info = new ProcessStartInfo(Environment.ProcessPath!)
+        {
+            UseShellExecute = false, CreateNoWindow = true
+        };
+        info.Environment.Remove("VEIL_SYNTHETIC_SPAWN");
+        info.Environment["VEIL_SYNTHETIC_CHILD_MARKER"] = marker + ".descendant";
+        try
+        {
+            using var descendant = Process.Start(info) ?? throw new InvalidOperationException("Missing test descendant.");
+            if (!SpinWait.SpinUntil(() => File.Exists(marker + ".descendant") || descendant.HasExited, TimeSpan.FromSeconds(10)))
+                return 3;
+            if (!File.Exists(marker + ".descendant") || descendant.HasExited)
+                File.WriteAllText(marker, "denied");
+            else
+                File.WriteAllText(marker, descendant.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            File.WriteAllText(marker, "denied");
+        }
+        Thread.Sleep(Timeout.Infinite);
+        return 0;
+    }
     File.WriteAllText(marker, "started");
     if (Environment.GetEnvironmentVariable("VEIL_SYNTHETIC_EXIT") == "29") return 29;
     Thread.Sleep(Timeout.Infinite);
@@ -102,6 +129,67 @@ try
             File.Delete(markerPath);
         }
     }
+    // Compare a disabled single-process job to a test-only multi-process
+    // job, without granting product activation. Either job must drain both
+    // the root and descendant when its last handle closes.
+    environment["VEIL_SYNTHETIC_SPAWN"] = "1";
+    using (var owner = Process.GetCurrentProcess())
+    {
+        var identity = Native.ObserveProcess(owner.SafeHandle);
+        foreach (int mode in new[] { 0, 1, 2 })
+        {
+            using var candidate = CefContainedProcess.CreateSuspended(image, environment);
+            using var brokerJob = mode == 0 ? CefBrokerOwnedJob.CreateDisabledCandidate() :
+                CefBrokerOwnedJob.CreateMultiprocessFixture();
+            var binding = Native.DuplicateNominatedChild(identity, owner.SafeHandle,
+                new IntPtr(candidate.NominatedHandle));
+            using var retained = binding.Handle;
+            using var rootObserver = Process.GetProcessById(checked((int)binding.Identity.ProcessId));
+            _ = rootObserver.SafeHandle;
+            brokerJob.AssignVerifiedCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+            Check(brokerJob.ContainsVerifiedCandidate(binding.Identity, retained) == (mode == 0),
+                "Fixture job was mistaken for disabled preflight admission.");
+            candidate.ResumeAfterVerification(() => mode == 0
+                ? brokerJob.ContainsVerifiedCandidate(binding.Identity, retained)
+                : brokerJob.ContainsFixtureRoot(binding.Identity, retained));
+            Check(SpinWait.SpinUntil(() => File.Exists(markerPath) &&
+                new FileInfo(markerPath).Length > 0, TimeSpan.FromSeconds(15)), "Missing synthetic spawn result.");
+            // The root is alive and writes the result only after observing
+            // descendant startup/exit. File sharing is retried on Windows.
+            string result = "";
+            Check(SpinWait.SpinUntil(() =>
+            {
+                try { result = File.ReadAllText(markerPath); return result.Length > 0; }
+                catch (IOException) { return false; }
+            }, TimeSpan.FromSeconds(5)), "Cannot read synthetic spawn result.");
+            if (mode == 0)
+            {
+                Check(result == "denied" && !File.Exists(markerPath + ".descendant"),
+                    "Disabled job permitted a descendant.");
+                candidate.TerminateAndDrain(5000);
+                Check(brokerJob.HasNoActiveProcesses(), "Disabled job not drained.");
+            }
+            else
+            {
+                Check(int.TryParse(result, out int descendantPid) && descendantPid > 0,
+                    "Multiprocess fixture descendant not observed.");
+                using var descendant = Process.GetProcessById(descendantPid);
+                _ = descendant.SafeHandle;
+                Check(!descendant.HasExited && brokerJob.ContainsFixtureRoot(binding.Identity, retained) &&
+                    !brokerJob.ContainsVerifiedCandidate(binding.Identity, retained),
+                    "Fixture root or descendant missing, or disabled admission confused.");
+                if (mode == 1) brokerJob.Dispose();
+                else candidate.Dispose();
+                Check(descendant.WaitForExit(10000), "Descendant survived closing a containing job.");
+                Check(rootObserver.WaitForExit(10000), "Root survived closing a containing job.");
+                if (mode == 2) Check(brokerJob.HasNoActiveProcesses(), "Broker fixture job did not drain.");
+            }
+            File.Delete(markerPath);
+            if (File.Exists(markerPath + ".descendant")) File.Delete(markerPath + ".descendant");
+        }
+    }
+    environment.Remove("VEIL_SYNTHETIC_SPAWN");
+    Console.WriteLine("PASS: synthetic single-process refusal and test-only nested multiprocess job drain");
     environment["VEIL_SYNTHETIC_EXIT"] = "29";
     using (var preflight = CefContainedProcess.CreateSuspended(image, environment))
     {
