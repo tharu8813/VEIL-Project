@@ -46,10 +46,16 @@ int main() {
   if (!fs::remove(paths.cache, error) || error || VerifyPaths(product, volume, paths)) return 17;
   for (const auto* key : {L"VEIL_CEF_PROTECTED_ROOT", L"VEIL_CEF_PROTECTED_CACHE",
                           L"VEIL_CEF_PROTECTED_LOG_FILE"})
-    if (!SetEnvironmentVariableW(key, nullptr)) return 18;
+    if (!SetEnvironmentVariableW(key, nullptr) &&
+        GetLastError() != ERROR_ENVVAR_NOT_FOUND) return 18;
   if (HasProductEnvironment()) return 19;
-  if (!SetEnvironmentVariableW(L"VEIL_CEF_PROTECTED_CACHE", L"synthetic") ||
-      !HasProductEnvironment()) return 20;
+  for (const auto* key : {L"VEIL_CEF_PROTECTED_ROOT", L"VEIL_CEF_PROTECTED_CACHE",
+                          L"VEIL_CEF_PROTECTED_LOG_FILE"}) {
+    if (!SetEnvironmentVariableW(key, L"synthetic") ||
+        !HasProductEnvironment() ||
+        !SetEnvironmentVariableW(key, nullptr) ||
+        HasProductEnvironment()) return 20;
+  }
   std::cout << "PASS: synthetic CEF path layout, volume identity, obstruction, hardlink and environment refusal\n";
   return 0;
 }
