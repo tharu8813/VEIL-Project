@@ -381,3 +381,14 @@ test('broker retains pipe-observed process objects and compares actual handles b
     assert.match(broker, /!Native.SameLiveProcess\(childHandle, pipeClient\)/);
     assert.match(broker, /if \(request.Command is BrokerCommand.Lock or BrokerCommand.Detach\)\s*RevokePendingCefChild\(\);[^\n]*\n\s*var status = backend.Status\(\)/);
 });
+
+
+test('disabled CEF coordinator binds profile and runtime leases before suspended preflight only', async () => {
+    const coordinator = await readFile('apps/desktop/Engine/CefDisabledLaunchCoordinator.cs', 'utf8');
+    const runner = await readFile('apps/desktop/Engine/CefDisabledPreflight.cs', 'utf8');
+    const startup = await readFile('apps/desktop/Program.cs', 'utf8');
+    assert.match(coordinator, /using var profile = session.AcquireCefPreparationLease\(\);[\s\S]*?using var runtime = profile.PrepareRegisteredRuntime\(\);[\s\S]*?using var child = CefContainedProcess.CreateSuspended\(runtime.ImagePath, minimal\);[\s\S]*?CefDisabledPreflight.Run\(child, \(\) => profile.StageSuspendedChild\(child\), Current\)/);
+    assert.match(runner, /stage\(\);\s*child.ResumeAfterVerification\(Current\);[\s\S]*?child.ReadExitCode\(\);[\s\S]*?code != VerifiedButDisabled/);
+    assert.match(runner, /finally\s*\{[\s\S]*?child.TerminateAndDrain\(5000\)/);
+    assert.doesNotMatch(startup, /CefDisabledLaunchCoordinator|CefDisabledPreflight/);
+});

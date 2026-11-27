@@ -6,6 +6,7 @@ using Veil.Desktop;
 if (Environment.GetEnvironmentVariable("VEIL_SYNTHETIC_CHILD_MARKER") is { } marker)
 {
     File.WriteAllText(marker, "started");
+    if (Environment.GetEnvironmentVariable("VEIL_SYNTHETIC_EXIT") == "29") return 29;
     Thread.Sleep(Timeout.Infinite);
     return 0;
 }
@@ -68,6 +69,25 @@ try
         Check(observer.WaitForExit(10000), "Child survived job close.");
     }
     File.Delete(markerPath);
+    environment["VEIL_SYNTHETIC_EXIT"] = "29";
+    using (var preflight = CefContainedProcess.CreateSuspended(image, environment))
+    {
+        int stages = 0;
+        uint exit = CefDisabledPreflight.Run(preflight, () =>
+        {
+            Check(preflight.NominatedHandle > 0 && !File.Exists(markerPath), "Stage did not see suspended child.");
+            stages++;
+        }, () => true);
+        Check(exit == 29 && stages == 1 && File.Exists(markerPath) && !preflight.IsAlive,
+            "Disabled preflight did not complete exactly once.");
+    }
+    File.Delete(markerPath);
+    using (var denied = CefContainedProcess.CreateSuspended(image, environment))
+    {
+        Reject(() => CefDisabledPreflight.Run(denied, () => throw new InvalidOperationException("Synthetic denial"), () => true));
+        Check(!File.Exists(markerPath) && !denied.IsAlive, "Denied preflight ran.");
+    }
+    environment.Remove("VEIL_SYNTHETIC_EXIT");
     var ownerInfo = new ProcessStartInfo(image)
     {
         UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true,

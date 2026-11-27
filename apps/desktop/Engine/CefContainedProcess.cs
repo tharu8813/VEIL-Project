@@ -148,6 +148,38 @@ internal sealed class CefContainedProcess : IDisposable
         throw Failure("WaitForSingleObject");
     }
 
+    internal uint ReadExitCode()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!WaitForExit(0) || !GetExitCodeProcess(process, out uint code))
+            throw new InvalidOperationException("CEF child exit was not verified.");
+        return code;
+    }
+
+    // Check the entire job, not just its original process. This is still
+    // forced cleanup for a preflight candidate, not graceful CEF shutdown.
+    internal void TerminateAndDrain(int milliseconds)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        uint ActiveProcesses()
+        {
+            if (!QueryInformationJobObject(job, 1, out var info,
+                (uint)Marshal.SizeOf<BasicAccountingInformation>(), IntPtr.Zero))
+                throw Failure("QueryInformationJobObject");
+            return info.ActiveProcesses;
+        }
+        if (ActiveProcesses() == 0) return;
+        if (!TerminateJobObject(job, 29)) throw Failure("TerminateJobObject");
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        while (ActiveProcesses() != 0)
+        {
+            if (started.ElapsedMilliseconds >= milliseconds)
+                throw new TimeoutException("CEF job drain could not be confirmed.");
+            Thread.Sleep(20);
+        }
+    }
+
     public void Dispose()
     {
         if (disposed) return;
@@ -160,6 +192,13 @@ internal sealed class CefContainedProcess : IDisposable
     }
 
     private static Win32Exception Failure(string operation) => new(Marshal.GetLastWin32Error(), operation);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BasicAccountingInformation
+    {
+        public long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime;
+        public uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct BasicLimitInformation
@@ -277,6 +316,16 @@ internal sealed class CefContainedProcess : IDisposable
     private static extern uint ResumeThread(SafeFileHandle thread);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint WaitForSingleObject(SafeProcessHandle process, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(SafeProcessHandle process, out uint code);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(SafeFileHandle job, int infoClass,
+        out BasicAccountingInformation info, uint length, IntPtr returned);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateJobObject(SafeFileHandle job, uint code);
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool TerminateProcess(SafeProcessHandle process, uint exitCode);

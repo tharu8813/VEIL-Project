@@ -8,5 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../../apps/desktop/Engine/CefContainedProcess.cs" Link="CefContainedProcess.cs" />
+    <Compile Include="../../../apps/desktop/Engine/CefDisabledPreflight.cs" Link="CefDisabledPreflight.cs" />
   </ItemGroup>
 </Project>
