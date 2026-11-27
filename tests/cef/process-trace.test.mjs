@@ -60,3 +60,14 @@ test('reports missing exits, differences between sources and PID reuse', () => {
     f.events.push(create('unrelated.exe', 6, 102, 'C:\\Other\\unrelated.exe'), exit(102, 'unrelated.exe'));
     assert.equal(compare(f).status, 'MATCHED_CAPTURE');
 });
+test('reports retained handle corroboration separately from Job notification gaps', () => {
+    const f = fixture();
+    f.sample.schema = 5;
+    f.sample.handleExits = [{ Pid: 100, ExitCode: 0 }, { Pid: 101, ExitCode: 0 }];
+    f.sample.jobNotifications = f.sample.jobNotifications.filter(e => !(e.Pid === 101 && e.Kind === 'exit'));
+    const result = compare(f);
+    assert.deepEqual(result.traceExitsWithoutRetainedHandle, [102]);
+    assert.deepEqual(result.retainedHandleExitsWithoutTrace, []);
+    assert.deepEqual(result.unmatched.outer.osExitsWithoutJob, [101]);
+    assert.equal(result.status, 'INCOMPLETE_OR_MISMATCHED_CAPTURE');
+});

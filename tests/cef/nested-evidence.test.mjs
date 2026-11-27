@@ -87,6 +87,20 @@ test('best-effort Job notifications expose gaps without replacing live samples',
     f.sample.jobNotifications[2].Pid = 101;
     assert.throws(() => check(f), /Invalid job notification/);
 });
+test('retained handles prove exits for every live sample even without Job notifications', () => {
+    const f = fixture();
+    Object.assign(f.sample, { schema: 5, rendererRestrictedLow: true,
+        browser: { Pid: 100, Role: 'browser', IntegrityRid: 8192, Restricted: false, AppContainer: false, Modules: null },
+        jobNotifications: [], handleExits: [{ Pid: 100, ExitCode: 0 },
+            { Pid: 101, ExitCode: 0 }, { Pid: 102, ExitCode: 1 }] });
+    Object.assign(f.sample.observed[0], { Role: 'renderer', AppContainer: false, Modules: null });
+    Object.assign(f.sample.observed[1], { Role: 'network', AppContainer: false, Modules: null });
+    assert.equal(check(f).retainedHandleExitCount, 3);
+    f.sample.handleExits[2].Pid = 101;
+    assert.throws(() => check(f), /Invalid retained-handle exit/);
+    f.sample.handleExits.pop();
+    assert.throws(() => check(f), /Missing retained-handle exit/);
+});
 test('reject wrong checkout, manifest hash, scope and release claim', () => {
     assert.throws(() => check(fixture(), { expectedCommit: 'c'.repeat(40) }), /commit mismatch/);
     let f = fixture(); f.report.manifestSha256 = 'c'.repeat(64);

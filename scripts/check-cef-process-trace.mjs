@@ -16,7 +16,7 @@ const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 // Pair events in capture order so an unrelated process reusing a PID stays outside the tree.
 export function compareProcessTrace(events, { runnerPid, image, sample }) {
     require(isPid(runnerPid) && isPid(sample.rootPid) && runnerPid !== sample.rootPid &&
-        sample.schema === 4 && Array.isArray(sample.jobNotifications), 'Missing runtime process identity');
+        [4, 5].includes(sample.schema) && Array.isArray(sample.jobNotifications), 'Missing runtime process identity');
     require(/^[a-z]:[\\/]/i.test(image) && win32.basename(image).toLowerCase() === 'veil-cef-smoke.exe',
         'Expected the absolute Windows fixture image path as recorded by Procmon');
     const expectedImage = pathKey(image);
@@ -69,6 +69,7 @@ export function compareProcessTrace(events, { runnerPid, image, sample }) {
         };
     }
     const sampled = new Set([sample.rootPid, ...sample.observed.map(entry => entry.Pid)]);
+    const retainedExits = sample.schema === 5 ? new Set(sample.handleExits.map(entry => entry.Pid)) : null;
     const unobservedSamples = difference(sampled, seen);
     const agrees = rootMatches === 1 && active.size === 0 && unexpectedImagePids.length === 0 &&
         ambiguousPids.size === 0 && unobservedSamples.length === 0 &&
@@ -81,6 +82,8 @@ export function compareProcessTrace(events, { runnerPid, image, sample }) {
         tracePidsWithoutLiveSample: difference(seen, sampled),
         liveSamplesWithoutTraceStart: unobservedSamples,
         missingExitPids: sorted(active.keys()),
+        traceExitsWithoutRetainedHandle: retainedExits ? difference(ended, retainedExits) : null,
+        retainedHandleExitsWithoutTrace: retainedExits ? difference(retainedExits, ended) : null,
         unexpectedImagePids: sorted(unexpectedImagePids),
         ambiguousPids: sorted(ambiguousPids),
         unmatched,

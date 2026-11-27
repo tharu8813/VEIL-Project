@@ -126,3 +126,9 @@ node scripts/check-cef-process-trace.mjs <commit> <bundle-manifest.json> <bundle
 ```
 
 원본 PML, 내보낸 CSV, 번들 매니페스트, `result.json`과 `stdout.json`을 같은 실행의 증거로 보존한다. 분석기는 root 생성과 각 종료, 두 Job과의 불일치, 살아 있는 표본이 없는 PID, PID 재사용 모호성을 출력한다. `MATCHED_CAPTURE`는 내보낸 추적의 대조 결과이며, 수집 손실 확인과 제품 게이트 판정은 별개다.
+
+**실제 오프라인 VM 결과.** 커밋 `60b4f37b87f3d5f7202afd2e65b648437f11de01`의 nested 번들을 일반 사용자로 실행하고, 별도 관리자 셸의 Procmon으로 동시에 수집했다. 번들 PASS, 두 Job 종료 후 비어 있음 확인. Procmon은 root와 자식 7개의 시작 및 종료를 모두 기록했고, 모든 시작은 두 Job 알림과 일치했다. GPU PID 2844의 정상 종료는 Procmon에만 있었으며 두 Job의 종료 알림에는 없었다. 그 외 종료 불일치, 다른 실행 이미지 및 PID 모호성은 관측되지 않았다. 분석기 결과 `INCOMPLETE_OR_MISMATCHED_CAPTURE`를 보존했다. 알림 누락 원인과 제품 게이트는 미검증이다.
+
+호스트 로컬 증거는 임시 폴더 `veil-cef-guest-export-dc3e1303`의 `trace.pml`, `trace.csv`, `comparison.json`, `manifest.json`, `evidence/result.json`, `evidence/stdout.json`에 있다. CSV SHA-256은 `371B69CA2931D8218A1E0AF7303C87D5524A07607D3DBBA8D28B8AB896783BD7`이고, PML SHA-256은 `7DF40EBFC993213447651BAFF29D4BD3EAF5E68783874F9B3E3EAB4F2CF7F5AA`다. 호스트의 시험 전용 임시 VirtualBox 공유는 내보낸 뒤 해제했다.
+
+GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기록만으로 완료 포트 알림이 생성되지 않았는지 또는 전달 과정에서 빠졌는지는 판단할 수 없다. 후속 시험 러너는 살아 있을 때 검증한 각 프로세스의 핸들을 보존하고, 반복 표본의 핸들이 동일한 객체인지 확인한 뒤 정상 정리 후 각 핸들의 종료 신호와 종료 코드를 기록한다. 로컬 CEF 실행에서 표본 7개의 종료 코드 0과 두 Job의 정리를 확인했다. 새 증거 검사는 핸들로 확인한 종료와 Procmon 종료의 차이를 별도로 표시한다. 이전 VM의 Job 알림 불일치는 보존한다.

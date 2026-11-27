@@ -66,6 +66,7 @@ try
     uint exit = child.ReadExitCode();
     bool outerEmpty = child.WaitForNaturalJobExit(5000);
     bool innerEmpty = second.Members().Length == 0;
+    var handleExits = second.ObserveRetainedExits();
     notifications.Drain(100);
     bool restricted = observed.Values.Any(s => s.Restricted && s.IntegrityRid <= 0x1000);
     bool rendererRestrictedLow = observed.Values.Any(s =>
@@ -73,12 +74,13 @@ try
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         scope = "nested-win32-smoke-only",
-        schema = 4,
+        schema = 5,
         rootPid, exit, outerEmpty, innerEmpty, restricted, rendererRestrictedLow,
         browser,
         observed = observed.Values.OrderBy(s => s.Pid),
         jobNotifications = notifications.Events,
-        limitations = "Job notifications have best-effort delivery and report PIDs. Live handle samples are separate; no complete process lifetime or product authorization."
+        handleExits,
+        limitations = "Exit codes are from handles retained for live samples. Unsampled processes are outside handle coverage; Job notifications are best-effort."
     }));
     if (exit != 0 || !outerEmpty || !innerEmpty || !rendererRestrictedLow || browser is null)
         throw new InvalidOperationException("Nested CEF fixture did not establish required evidence.");
@@ -96,6 +98,7 @@ finally
 sealed class FixtureJob : IDisposable
 {
     private readonly SafeFileHandle job;
+    private readonly Dictionary<uint, SafeProcessHandle> retained = [];
     internal SafeFileHandle Handle => job;
     internal FixtureJob()
     {
@@ -155,6 +158,7 @@ sealed class FixtureJob : IDisposable
     internal sealed record ModuleSample(string Name, string Location);
     internal sealed record TokenSample(uint Pid, uint IntegrityRid, bool Restricted, string Role, bool AppContainer,
         ModuleSample[]? Modules);
+    internal sealed record HandleExit(uint Pid, uint ExitCode);
 
     internal bool TrySample(uint pid, string image, CefContainedProcess outerJob, out TokenSample sample)
     {
@@ -191,6 +195,7 @@ sealed class FixtureJob : IDisposable
                 if (!Contains(process) || WaitForSingleObject(process, 0) != 0x102) return false;
                 if (!outerJob.ContainsFixtureMember(process))
                     throw new InvalidOperationException("Live fixture member is missing from the outer job.");
+                RetainSample(pid, process);
                 sample = new TokenSample(pid, rid, restricted, role, appContainer, modules);
                 return true;
             }
@@ -274,7 +279,46 @@ sealed class FixtureJob : IDisposable
         finally { Marshal.FreeHGlobal(data); }
     }
 
-    public void Dispose() => job.Dispose();
+    private void RetainSample(uint pid, SafeProcessHandle process)
+    {
+        if (retained.TryGetValue(pid, out var previous))
+        {
+            if (!CompareObjectHandles(process, previous))
+                throw new InvalidOperationException("A sampled PID identifies a different process object.");
+            return;
+        }
+        if (retained.Count >= 128)
+            throw new InvalidOperationException("Too many sampled process objects.");
+        nint current = new(-1);
+        if (!DuplicateHandle(current, process, current, out var retainedHandle, 0, false, 2))
+        {
+            var error = new Win32Exception();
+            retainedHandle?.Dispose();
+            throw error;
+        }
+        retained.Add(pid, retainedHandle);
+    }
+
+    internal HandleExit[] ObserveRetainedExits()
+    {
+        var wait = Stopwatch.StartNew();
+        var exits = new List<HandleExit>(retained.Count);
+        foreach (var (pid, process) in retained)
+        {
+            uint remaining = (uint)Math.Max(0, 5000 - wait.ElapsedMilliseconds);
+            uint result = WaitForSingleObject(process, remaining);
+            if (result == 0x102) throw new TimeoutException("A retained fixture process did not exit.");
+            if (result != 0 || !GetExitCodeProcess(process, out uint exitCode)) throw new Win32Exception();
+            exits.Add(new HandleExit(pid, exitCode));
+        }
+        return exits.OrderBy(exit => exit.Pid).ToArray();
+    }
+
+    public void Dispose()
+    {
+        job.Dispose();
+        foreach (var process in retained.Values) process.Dispose();
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct BasicLimits
@@ -316,6 +360,16 @@ sealed class FixtureJob : IDisposable
     private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint WaitForSingleObject(SafeProcessHandle process, uint ms);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(SafeProcessHandle process, out uint exitCode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DuplicateHandle(nint sourceProcess, SafeProcessHandle source, nint targetProcess,
+        out SafeProcessHandle target, uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint options);
+    [DllImport("kernelbase.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CompareObjectHandles(SafeProcessHandle first, SafeProcessHandle second);
     [DllImport("ntdll.dll")]
     private static extern int NtQueryInformationProcess(SafeProcessHandle process, int infoClass, IntPtr data, uint bytes, out uint returned);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]

@@ -58,7 +58,7 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
     require(Array.isArray(sample.observed) && sample.observed.length > 0 && sample.observed.length <= 4096,
         'Missing or excessive token samples');
     const seen = new Set();
-    require(sample.schema === undefined || sample.schema === 2 || sample.schema === 3 || sample.schema === 4,
+    require(sample.schema === undefined || [2, 3, 4, 5].includes(sample.schema),
         'Unsupported sample schema');
     const roleAware = sample.schema >= 2;
     const roles = new Set(['renderer', 'gpu', 'network', 'utility', 'unknown']);
@@ -100,7 +100,7 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
     if (roleAware)
         require(sample.rendererRestrictedLow === true && restrictedLowRenderers > 0, 'Renderer token assertion not supported by samples');
     let jobNotifications = null;
-    if (sample.schema === 4) {
+    if (sample.schema >= 4) {
         require(Array.isArray(sample.jobNotifications) && sample.jobNotifications.length <= 512,
             'Invalid job notifications');
         const summary = {
@@ -129,6 +129,19 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
             }];
         }));
     }
+    let retainedHandleExitCount = null;
+    if (sample.schema === 5) {
+        const pending = new Set([sample.rootPid, ...seen]);
+        require(Array.isArray(sample.handleExits) && sample.handleExits.length === pending.size,
+            'Missing retained-handle exit observations');
+        for (const entry of sample.handleExits) {
+            require(record(entry) && pending.delete(entry.Pid) && Number.isInteger(entry.ExitCode) &&
+                entry.ExitCode >= 0 && entry.ExitCode <= 0xffffffff &&
+                (entry.Pid !== sample.rootPid || entry.ExitCode === sample.exit),
+                'Invalid retained-handle exit observation');
+        }
+        retainedHandleExitCount = sample.handleExits.length;
+    }
     return {
         status: 'CONSISTENT_REPORTED_SMOKE_PASS',
         sourceCommit: expectedCommit,
@@ -140,6 +153,7 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
         restrictedLowRenderers: roleAware ? restrictedLowRenderers : null,
         processesWithModuleInventory: sample.schema >= 3 ? processesWithModuleInventory : null,
         jobNotifications,
+        retainedHandleExitCount,
         independentRuntimeVerification: 'NOT ESTABLISHED',
         productReleaseGates: 'NOT RUN',
         limitations: 'Unsigned local evidence from sampled processes; no complete containment audit, site isolation, protected storage or product authorization.'
