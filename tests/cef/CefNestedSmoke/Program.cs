@@ -41,6 +41,7 @@ var initial = second.Members();
 if (initial.Length != 1 || initial[0] != rootPid)
     throw new InvalidOperationException("Unexpected initial job membership.");
 var observed = new Dictionary<uint, FixtureJob.TokenSample>();
+FixtureJob.TokenSample? browser = null;
 var timer = Stopwatch.StartNew();
 try
 {
@@ -49,8 +50,10 @@ try
     {
         foreach (uint pid in second.Members())
         {
-            if (pid == rootPid) continue;
-            if (second.TrySample(pid, image, out var sample))
+            if (!second.TrySample(pid, image, child, out var sample)) continue;
+            if (pid == rootPid)
+                browser = sample with { Role = "browser" };
+            else
                 observed[pid] = sample;
         }
         if (child.WaitForExit(0)) break;
@@ -67,12 +70,13 @@ try
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         scope = "nested-win32-smoke-only",
-        schema = 2,
+        schema = 3,
         rootPid, exit, outerEmpty, innerEmpty, restricted, rendererRestrictedLow,
+        browser,
         observed = observed.Values.OrderBy(s => s.Pid),
-        limitations = "Sampled command-line role and token evidence only; no full site isolation, product authorization or OS write trace."
+        limitations = "Sampled command-line role, token, job membership and loader inventory; no full site isolation, product authorization or OS write trace."
     }));
-    if (exit != 0 || !outerEmpty || !innerEmpty || !rendererRestrictedLow)
+    if (exit != 0 || !outerEmpty || !innerEmpty || !rendererRestrictedLow || browser is null)
         throw new InvalidOperationException("Nested CEF fixture did not establish required evidence.");
     return 0;
 }
@@ -143,9 +147,11 @@ sealed class FixtureJob : IDisposable
         finally { Marshal.FreeHGlobal(buffer); }
     }
 
-    internal sealed record TokenSample(uint Pid, uint IntegrityRid, bool Restricted, string Role, bool AppContainer);
+    internal sealed record ModuleSample(string Name, string Location);
+    internal sealed record TokenSample(uint Pid, uint IntegrityRid, bool Restricted, string Role, bool AppContainer,
+        ModuleSample[]? Modules);
 
-    internal bool TrySample(uint pid, string image, out TokenSample sample)
+    internal bool TrySample(uint pid, string image, CefContainedProcess outerJob, out TokenSample sample)
     {
         sample = null!;
         using var process = OpenProcess(0x1000 | 0x00100000, false, pid);
@@ -176,11 +182,38 @@ sealed class FixtureJob : IDisposable
                     appContainerBytes != sizeof(uint)) return false;
                 bool appContainer = Marshal.ReadInt32(buffer) != 0;
                 string role = ReadRole(process);
+                var modules = ObserveModules(pid, Path.GetDirectoryName(image)!);
                 if (!Contains(process) || WaitForSingleObject(process, 0) != 0x102) return false;
-                sample = new TokenSample(pid, rid, restricted, role, appContainer);
+                if (!outerJob.ContainsFixtureMember(process))
+                    throw new InvalidOperationException("Live fixture member is missing from the outer job.");
+                sample = new TokenSample(pid, rid, restricted, role, appContainer, modules);
                 return true;
             }
             finally { Marshal.FreeHGlobal(buffer); }
+        }
+    }
+
+    private static ModuleSample[]? ObserveModules(uint pid, string runtimeDirectory)
+    {
+        try
+        {
+            // The caller keeps the original process handle live across this PID-based query.
+            using var process = Process.GetProcessById(checked((int)pid));
+            var modules = process.Modules;
+            if (modules.Count is 0 or > 512) return null;
+            string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows) + Path.DirectorySeparatorChar;
+            string runtime = runtimeDirectory + Path.DirectorySeparatorChar;
+            return modules.Cast<ProcessModule>().Select(module =>
+            {
+                string path = module.FileName;
+                string location = path.StartsWith(runtime, StringComparison.OrdinalIgnoreCase) ? "runtime" :
+                    path.StartsWith(windows, StringComparison.OrdinalIgnoreCase) ? "windows" : "other";
+                return new ModuleSample(Path.GetFileName(path), location);
+            }).ToArray();
+        }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException or ArgumentException)
+        {
+            return null;
         }
     }
 

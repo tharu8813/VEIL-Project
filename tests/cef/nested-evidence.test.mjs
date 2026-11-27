@@ -58,6 +58,20 @@ test('role-aware evidence requires a restricted low-integrity renderer sample', 
     delete f.sample.observed[0].AppContainer;
     assert.throws(() => check(f), /AppContainer sample/);
 });
+test('module inventory is scoped to named modules on the sampled fixture processes', () => {
+    const f = fixture();
+    f.sample.schema = 3;
+    f.sample.rendererRestrictedLow = true;
+    f.sample.browser = { Pid: 100, Role: 'browser', IntegrityRid: 8192, Restricted: false,
+        AppContainer: false, Modules: [{ Name: 'libcef.dll', Location: 'runtime' }] };
+    Object.assign(f.sample.observed[0], { Role: 'renderer', AppContainer: false, Modules: null });
+    Object.assign(f.sample.observed[1], { Role: 'network', AppContainer: false, Modules: null });
+    assert.equal(check(f).processesWithModuleInventory, 1);
+    f.sample.browser.Modules[0].Name = '../libcef.dll';
+    assert.throws(() => check(f), /Invalid module inventory/);
+    f.sample.browser.Pid++;
+    assert.throws(() => check(f), /Invalid browser process sample/);
+});
 test('reject wrong checkout, manifest hash, scope and release claim', () => {
     assert.throws(() => check(fixture(), { expectedCommit: 'c'.repeat(40) }), /commit mismatch/);
     let f = fixture(); f.report.manifestSha256 = 'c'.repeat(64);

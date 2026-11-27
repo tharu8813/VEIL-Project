@@ -58,8 +58,27 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
     require(Array.isArray(sample.observed) && sample.observed.length > 0 && sample.observed.length <= 4096,
         'Missing or excessive token samples');
     const seen = new Set();
-    require(sample.schema === undefined || sample.schema === 2, 'Unsupported sample schema');
+    require(sample.schema === undefined || sample.schema === 2 || sample.schema === 3, 'Unsupported sample schema');
+    const roleAware = sample.schema >= 2;
     const roles = new Set(['renderer', 'gpu', 'network', 'utility', 'unknown']);
+    const locations = new Set(['runtime', 'windows', 'other']);
+    let processesWithModuleInventory = 0;
+    function checkModules(entry) {
+        require(entry.Modules === null || (Array.isArray(entry.Modules) &&
+            entry.Modules.length > 0 && entry.Modules.length <= 512 &&
+            entry.Modules.every(module => record(module) && typeof module.Name === 'string' &&
+                /^[^/\\:\u0000-\u001f]{1,255}$/.test(module.Name) && locations.has(module.Location))),
+        'Invalid module inventory');
+        if (entry.Modules !== null) processesWithModuleInventory++;
+    }
+    if (sample.schema === 3) {
+        const browser = sample.browser;
+        require(record(browser) && browser.Pid === sample.rootPid && browser.Role === 'browser' &&
+            Number.isInteger(browser.IntegrityRid) && browser.IntegrityRid >= 0 &&
+            browser.IntegrityRid <= 0xffffffff && typeof browser.Restricted === 'boolean' &&
+            typeof browser.AppContainer === 'boolean', 'Invalid browser process sample');
+        checkModules(browser);
+    }
     let restrictedLow = 0;
     let restrictedLowRenderers = 0;
     for (const entry of sample.observed) {
@@ -68,15 +87,16 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
             entry.IntegrityRid >= 0 && entry.IntegrityRid <= 0xffffffff &&
             typeof entry.Restricted === 'boolean', 'Invalid or duplicate descendant sample');
         seen.add(entry.Pid);
-        if (sample.schema === 2)
+        if (roleAware)
             require(roles.has(entry.Role) && typeof entry.AppContainer === 'boolean', 'Invalid role or AppContainer sample');
+        if (sample.schema === 3) checkModules(entry);
         if (entry.Restricted && entry.IntegrityRid <= 0x1000) {
             restrictedLow++;
             if (entry.Role === 'renderer') restrictedLowRenderers++;
         }
     }
     require(restrictedLow > 0, 'Restricted-low token assertion not supported by samples');
-    if (sample.schema === 2)
+    if (roleAware)
         require(sample.rendererRestrictedLow === true && restrictedLowRenderers > 0, 'Renderer token assertion not supported by samples');
     return {
         status: 'CONSISTENT_REPORTED_SMOKE_PASS',
@@ -86,7 +106,8 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
         sampleSha256: digest(sampleBytes),
         observedDescendants: seen.size,
         restrictedLowDescendants: restrictedLow,
-        restrictedLowRenderers: sample.schema === 2 ? restrictedLowRenderers : null,
+        restrictedLowRenderers: roleAware ? restrictedLowRenderers : null,
+        processesWithModuleInventory: sample.schema === 3 ? processesWithModuleInventory : null,
         independentRuntimeVerification: 'NOT ESTABLISHED',
         productReleaseGates: 'NOT RUN',
         limitations: 'Unsigned local evidence from sampled processes; no complete containment audit, site isolation, protected storage or product authorization.'
