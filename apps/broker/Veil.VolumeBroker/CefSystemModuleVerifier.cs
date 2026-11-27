@@ -56,11 +56,12 @@ internal sealed class CefSystemModuleVerifier
                 !CryptographicOperations.FixedTimeEquals(SHA256.HashData(retained), Convert.FromHexString(pin.Sha256)))
                 throw new UnauthorizedAccessException("System module digest mismatch.");
 
-            // Existing offline Authenticode file verification, while holding a
-            // read-only handle denying write/delete. A generic valid signature
-            // is NOT a Microsoft publisher or catalog membership assertion.
-            if (!Native.IsSigned(path))
-                throw new UnauthorizedAccessException("System module signature unavailable or invalid.");
+            // Require offline Authenticode (embedded or SHA-256 catalog member)
+            // plus the Microsoft production root-key policy on its signer.
+            // This is not a unique publisher identity or live revocation check.
+            retained.Position = 0;
+            if (!CefSystemSignatureTrust.Verify(path, retained.SafeFileHandle))
+                throw new UnauthorizedAccessException("System module Microsoft-root signature unavailable or invalid.");
             AdminOnlyFile.RequireProtectedExecutable(path);
             using var again = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             var current = RequireCanonical(again.SafeFileHandle, path);
