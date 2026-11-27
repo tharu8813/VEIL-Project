@@ -127,6 +127,10 @@ jobs:
         shell: pwsh
         run: dotnet run --project tests/security/CefContainmentCheck/CefContainmentCheck.csproj -c Release
 
+      - name: Test retained CEF runtime file handles and exact inventory
+        shell: pwsh
+        run: dotnet run --project tests/security/CefRuntimeFileCheck/CefRuntimeFileCheck.csproj -c Release
+
       # Hosted runners may be elevated and do not provide an interactive desktop.
       # Running the WPF smoke suite or broker authorization test here would
       # incorrectly test the runner, not a regular Windows user's security token.
