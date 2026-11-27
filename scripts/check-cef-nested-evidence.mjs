@@ -39,8 +39,9 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
         files.set(key, pin);
     }
     for (const path of ['smoke/veil-cef-smoke.exe', 'smoke/veil-cef-smoke.dll', 'smoke/libcef.dll',
-        'smoke/icudtl.dat', 'smoke/resources.pak', 'runner/CefNestedSmoke.exe',
-        'runner/CefNestedSmoke.dll', 'run-cef-nested-bundle.ps1']) {
+        'smoke/icudtl.dat', 'smoke/resources.pak', 'smoke/locales/en-US.pak', 'runner/CefNestedSmoke.exe',
+        'runner/CefNestedSmoke.dll', 'runner/CefNestedSmoke.deps.json', 'runner/CefNestedSmoke.runtimeconfig.json',
+        'CEF-LICENSE.txt', 'VEIL-LICENSE.txt', 'run-cef-nested-bundle.ps1']) {
         require(files.has(path.toLowerCase()) && files.get(path.toLowerCase()).bytes > 0, 'Missing required fixture file: ' + path);
     }
     require(record(report) && report.scope === 'nested-win32-smoke-only' &&
@@ -49,6 +50,8 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
     require(typeof report.manifestSha256 === 'string' && hex.test(report.manifestSha256) &&
         report.manifestSha256.toLowerCase() === digest(manifestBytes), 'Result manifest digest mismatch');
     require(report.status === 'PASS', 'Run did not report PASS');
+    require(typeof report.stdoutSha256 === 'string' && hex.test(report.stdoutSha256) &&
+        report.stdoutSha256.toLowerCase() === digest(sampleBytes), 'Result stdout digest mismatch');
     require(record(sample) && sample.scope === 'nested-win32-smoke-only' && pid(sample.rootPid) &&
         sample.exit === 0 && sample.outerEmpty === true && sample.innerEmpty === true &&
         sample.restricted === true, 'Missing successful smoke/empty job evidence');

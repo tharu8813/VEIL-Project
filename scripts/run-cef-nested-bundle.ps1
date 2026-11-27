@@ -13,7 +13,14 @@ $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.
 if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Do not run elevated.' }
 $root = [IO.Path]::GetFullPath($PSScriptRoot)
 $manifestPath = Join-Path $root 'manifest.json'
-$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+function Get-BytesDigest([byte[]]$Bytes) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { [BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace('-', '') }
+    finally { $sha.Dispose() }
+}
+$manifestBytes = [IO.File]::ReadAllBytes($manifestPath)
+$manifestDigest = Get-BytesDigest $manifestBytes
+$manifest = [Text.Encoding]::UTF8.GetString($manifestBytes).TrimStart([char]0xFEFF) | ConvertFrom-Json
 if ($manifest.schema -ne 1 -or $manifest.scope -cne 'unsigned-nested-cef-smoke-only' -or
     $manifest.sourceCommit -cne $ExpectedCommit -or $manifest.installable -ne $false -or
     $manifest.runtimeStatus -cne 'NOT RUN' -or
@@ -21,6 +28,9 @@ if ($manifest.schema -ne 1 -or $manifest.scope -cne 'unsigned-nested-cef-smoke-o
     throw 'Wrong smoke bundle manifest.'
 }
 function Assert-Inventory {
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash -cne $manifestDigest) {
+        throw 'Bundle manifest changed.'
+    }
     $items = @(Get-ChildItem -LiteralPath $root -Recurse -Force)
     if ((Get-Item -LiteralPath $root).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirected bundle root.' }
     if (@($items | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count -ne 0) { throw 'Redirected bundle item.' }
@@ -51,7 +61,8 @@ $null = New-Item -ItemType Directory -Path $evidence
 $report = [ordered]@{
     scope = 'nested-win32-smoke-only'
     sourceCommit = $ExpectedCommit
-    manifestSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash
+    manifestSha256 = $manifestDigest
+    stdoutSha256 = $null
     status = 'NOT RUN'
     productReleaseGates = 'NOT RUN'
 }
@@ -74,11 +85,18 @@ try {
         if ($child.ExitCode -ne 0) { throw "Nested fixture failed: $($child.ExitCode)" }
     } finally { $child.Dispose() }
     Assert-Inventory
-    $sample = Get-Content -LiteralPath (Join-Path $evidence 'stdout.json') -Raw | ConvertFrom-Json
+    $samplePath = Join-Path $evidence 'stdout.json'
+    $sampleInfo = Get-Item -LiteralPath $samplePath
+    if ($sampleInfo.PSIsContainer -or ($sampleInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        $sampleInfo.Length -le 0 -or $sampleInfo.Length -gt 1MB) { throw 'Invalid smoke sample file.' }
+    $sampleBytes = [IO.File]::ReadAllBytes($samplePath)
+    if ($sampleBytes.Length -ne $sampleInfo.Length) { throw 'Smoke sample size changed.' }
+    $sample = [Text.Encoding]::UTF8.GetString($sampleBytes).TrimStart([char]0xFEFF) | ConvertFrom-Json
     if ($sample.scope -cne 'nested-win32-smoke-only' -or $sample.exit -ne 0 -or
         $sample.outerEmpty -ne $true -or $sample.innerEmpty -ne $true -or $sample.restricted -ne $true) {
         throw 'Missing required fixture evidence.'
     }
+    $report.stdoutSha256 = Get-BytesDigest $sampleBytes
     $report.status = 'PASS'
 } catch {
     $report.status = 'FAIL'

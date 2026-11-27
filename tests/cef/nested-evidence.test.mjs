@@ -12,8 +12,9 @@ function fixture() {
         cefArchiveSha256: '1da0b9fe0e915bd41448939f944003d848f8d9e4d15c7d85d7a17cce656b1a9a',
         runtimeStatus: 'NOT RUN', installable: false,
         files: ['smoke/veil-cef-smoke.exe', 'smoke/veil-cef-smoke.dll', 'smoke/libcef.dll',
-            'smoke/icudtl.dat', 'smoke/resources.pak', 'runner/CefNestedSmoke.exe',
-            'runner/CefNestedSmoke.dll', 'run-cef-nested-bundle.ps1'].map(path => ({
+            'smoke/icudtl.dat', 'smoke/resources.pak', 'smoke/locales/en-US.pak', 'runner/CefNestedSmoke.exe',
+            'runner/CefNestedSmoke.dll', 'runner/CefNestedSmoke.deps.json', 'runner/CefNestedSmoke.runtimeconfig.json',
+            'CEF-LICENSE.txt', 'VEIL-LICENSE.txt', 'run-cef-nested-bundle.ps1'].map(path => ({
             path, bytes: 100, sha256: 'b'.repeat(64)
         }))
     };
@@ -27,9 +28,13 @@ function fixture() {
 }
 function check(f, overrides = {}) {
     const manifestBytes = encode(f.manifest);
-    const reportBytes = encode({ manifestSha256: createHash('sha256').update(manifestBytes).digest('hex').toUpperCase(), ...f.report });
-    return checkNestedEvidence({ expectedCommit: checkout, manifestBytes, reportBytes,
-        sampleBytes: encode(f.sample), ...overrides });
+    const sampleBytes = encode(f.sample);
+    const reportBytes = encode({
+        manifestSha256: createHash('sha256').update(manifestBytes).digest('hex').toUpperCase(),
+        stdoutSha256: createHash('sha256').update(sampleBytes).digest('hex').toUpperCase(),
+        ...f.report
+    });
+    return checkNestedEvidence({ expectedCommit: checkout, manifestBytes, reportBytes, sampleBytes, ...overrides });
 }
 test('valid unsigned smoke record stays explicitly non-product and non-attested', () => {
     const result = check(fixture());
@@ -71,4 +76,21 @@ test('reject duplicate or root samples, missing and duplicate manifest pins', ()
     assert.throws(() => check(f), /Invalid file pin/);
     f = fixture(); f.manifest.files[0].path = 'other.exe';
     assert.throws(() => check(f), /Missing required fixture file/);
+});
+
+test('reject mixed runs, raw stdout modifications and old reports without sample binding', () => {
+    const f = fixture();
+    const swapped = { ...f.sample, rootPid: 200 };
+    assert.throws(() => check(f, { sampleBytes: encode(swapped) }), /stdout digest mismatch/);
+    assert.throws(() => check(f, { sampleBytes: Buffer.concat([encode(f.sample), Buffer.from('\n')]) }), /stdout digest mismatch/);
+    f.report.stdoutSha256 = undefined;
+    assert.throws(() => check(f), /stdout digest mismatch/);
+});
+test('reject missing runtime configuration, locale or license inventory', () => {
+    for (const path of ['smoke/locales/en-US.pak', 'runner/CefNestedSmoke.deps.json',
+        'runner/CefNestedSmoke.runtimeconfig.json', 'CEF-LICENSE.txt', 'VEIL-LICENSE.txt']) {
+        const f = fixture();
+        f.manifest.files = f.manifest.files.filter(x => x.path !== path);
+        assert.throws(() => check(f), /Missing required fixture file/);
+    }
 });
