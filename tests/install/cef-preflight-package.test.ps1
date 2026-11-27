@@ -27,6 +27,10 @@ $publication = [IO.File]::ReadAllText((Join-Path $dir 'cef-preflight-publication
 $import = ". (Join-Path " + '$PSScriptRoot' + " 'cef-preflight-registration.ps1')"
 if (-not $publication.Contains($import)) { throw 'Publication import changed.' }
 . ([scriptblock]::Create($publication.Replace($import,'')))
+$serviceSource = [IO.File]::ReadAllText((Join-Path $dir 'cef-preflight-service.ps1'))
+$import = ". (Join-Path " + '$PSScriptRoot' + " 'cef-preflight-publication.ps1')"
+if (-not $serviceSource.Contains($import)) { throw 'Service import changed.' }
+. ([scriptblock]::Create($serviceSource.Replace($import,'')))
 function New-VeilRestrictedDirectory([string]$Path) {
     if (Test-Path -LiteralPath $Path) { throw 'Already exists.' }
     [void][IO.Directory]::CreateDirectory($Path)
@@ -197,6 +201,53 @@ try {
     [void](Read-VeilPreflightRegistrationDraft $publishedData $plan $publishedBin $image $profile $volumeGuid $primary $recovery $sid)
     [void](Read-VeilPreflightRegistrationDraft $publishPrepared $plan $publishedBin $image $profile $volumeGuid $primary $recovery $sid)
     Reject { Publish-VeilPreflightFiles $stage $publishPrepared $publishedBin $publishedData $transaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} }
+    # SCM is a fake here; publication, journal bytes and descriptor parsing
+    # are real. Never register a privileged service on a hosted runner.
+    $command = '"{0}" --service' -f (Join-Path $publishedBin 'Broker\Veil.VolumeBroker.exe')
+    $script:fakeService = $null
+    $script:fakeDacl = $null
+    $script:createCalls = 0
+    $verifyPublished = {
+        Get-VeilPreflightPublicationState $stage $publishPrepared $publishedBin $publishedData $transaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {}
+    }
+    $readService = { $script:fakeService }
+    $createService = {
+        param($binary)
+        $script:createCalls++
+        $script:fakeService = [pscustomobject]@{
+            Name='Veil.VolumeBroker';PathName=$binary;StartName='LocalSystem';StartMode='Disabled'
+            State='Stopped';ProcessId=0;ServiceType='Own Process'
+        }
+    }
+    $setDacl = { param($sddl) $script:fakeDacl = $sddl }
+    $readDacl = { $script:fakeDacl }
+    $serviceJournal = Join-Path $work 'service-journal'
+    $serviceResult = Register-VeilDisabledPreflightService $serviceJournal $command $verifyPublished $readService $createService $setDacl $readDacl
+    if ($serviceResult.state -cne 'registered-disabled' -or -not $serviceResult.serviceCreated -or $serviceResult.startupEnabled -or
+        $script:createCalls -ne 1 -or @(Get-ChildItem -LiteralPath $serviceJournal -Force).Count -ne 2) { throw 'Service registration boundary mismatch.' }
+    Assert-VeilDisabledPreflightService $script:fakeService $command
+    Assert-VeilPreflightServiceDacl $script:fakeDacl
+    Reject { Assert-VeilPreflightServiceDacl 'D:(A;;RPWP;;;AU)' }
+    Reject { Register-VeilDisabledPreflightService $serviceJournal $command $verifyPublished $readService $createService $setDacl $readDacl }
+    $badServiceJournal = Join-Path $work 'bad-service-journal'
+    Reject { Register-VeilDisabledPreflightService $badServiceJournal $command $verifyPublished $readService $createService $setDacl $readDacl }
+    if ((Test-Path -LiteralPath $badServiceJournal) -or $script:createCalls -ne 1) { throw 'Existing service was adopted.' }
+    foreach ($pair in @(@{name='StartMode';value='Auto'},@{name='StartName';value='LocalService'},@{name='State';value='Running'},@{name='ProcessId';value=100},@{name='PathName';value='wrong'})) {
+        $old = $script:fakeService.($pair.name)
+        $script:fakeService.($pair.name) = $pair.value
+        Reject { Assert-VeilDisabledPreflightService $script:fakeService $command }
+        $script:fakeService.($pair.name) = $old
+    }
+    $script:fakeService = $null
+    $badPublication = { [pscustomobject]@{state='publish-registration';startupEnabled=$false;serviceCreated=$false} }
+    Reject { Register-VeilDisabledPreflightService $badServiceJournal $command $badPublication $readService $createService $setDacl $readDacl }
+    if ((Test-Path -LiteralPath $badServiceJournal) -or $script:createCalls -ne 1) { throw 'Incomplete publication created a service.' }
+    $failedServiceJournal = Join-Path $work 'failed-service-journal'
+    Reject { Register-VeilDisabledPreflightService $failedServiceJournal $command $verifyPublished $readService $createService { throw 'Synthetic SCM DACL failure.' } $readDacl }
+    if ($script:createCalls -ne 2 -or $null -eq $script:fakeService -or
+        -not (Test-Path -LiteralPath (Join-Path $failedServiceJournal '01-service-intent.json')) -or
+        (Test-Path -LiteralPath (Join-Path $failedServiceJournal '02-service-registered.json'))) { throw 'Failed SCM registration evidence not preserved.' }
+    Write-Host 'PASS: synthetic disabled service registration, identity/DACL refusal and failure preservation'
     # Inject refusal at the boundary after binaries are published but before
     # registration is moved. Both sources and partial transaction must survive.
     $interruptedBin = Join-Path $work 'interrupted-bin'

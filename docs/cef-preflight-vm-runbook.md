@@ -102,11 +102,21 @@ Program Files와 ProgramData의 각각 동일 부모 안에서 pending 디렉터
 
 재개하려면 위 명령에 -Resume을 추가한다. 기존 복구 자격 증명과 재잠금/분리를 다시 확인하고 매 이동 또는 저널 기록 전에 전체 증거를 재검증한다. 알 수 없는 상태·변조·추가 기록·중복 디렉터리·서비스 존재·볼륨 연결은 거부한다. 파일이나 기록을 삭제/덮어쓰지 않는다. 한 명의 관리자가 다른 설치 도구와 동시에 실행하지 않는 폐기용 VM 절차이며, 전원 차단 및 동시성의 실제 내구성은 미검증이다.
 
-## 10. 서비스 등록 전 차단점
+## 10. 비활성 브로커 서비스 등록
 
-전용 파일 게시 및 제한된 재개 코드는 마련했지만 서비스 등록/시작 트랜잭션은 아직 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
+files-published-only 상태에서만 폐기용 VM 확인 옵션과 별도 확인한 입력으로 실행한다. 전체 파일 게시와 시험 볼륨 복구 자격 증명을 재확인한다.
 
-후속 구현은 files-published-only를 다시 검증한 뒤 서비스 등록/시작 및 서비스 실패 처리를 별도 수행해야 한다. 그 뒤에만 고정 설치 경로의 일반 사용자 검증 명령을 실행한다.
+~~~powershell
+.\scripts\register-cef-preflight-service.ps1 -DisposableVm -SignerThumbprint $pin -SourceCommit $commit -ImagePath $testImage -ProfilePath $testProfile -VolumeGuid $volumeGuid -ProtectorId $primaryId -RecoveryProtectorId $recoveryId -UserSid $testUserSid
+~~~
+
+SCM에 고정 경로의 Veil.VolumeBroker를 LocalSystem / Disabled / Stopped 상태로 생성하고 SYSTEM·Administrators 관리 및 인증 사용자 조회 전용 DACL을 설정·재조회한다. 별도 Program Files\VEIL.cef-preflight-service 에 등록 intent와 registered-disabled 기록을 남긴다. 등록 중 실패 시 서비스나 파일을 삭제하지 않으며 기존/불명확한 SCM 등록을 재사용하지 않는다. 실제 SCM DACL roundtrip, Windows 서비스 등록 및 권한 시험은 NOT RUN. 등록 완료 기록은 서비스를 시작할 권한이나 CEF 실행 성공을 의미하지 않는다.
+
+## 11. 서비스 시작 전 차단점
+
+전용 파일 게시, 제한된 재개 및 비활성 서비스 등록 코드는 마련했지만 서비스 등록 중단 상태 검사 및 서비스 시작 트랜잭션은 아직 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
+
+후속 구현은 실제 SCM 상태와 등록 기록을 재검증하고 제한된 서비스 시작 및 실패 처리를 별도 수행해야 한다. 그 뒤에만 고정 설치 경로의 일반 사용자 검증 명령을 실행한다.
 
 ~~~powershell
 # 전용 등록 절차 완료 후에만 실행. 현재 실행하지 않는다.

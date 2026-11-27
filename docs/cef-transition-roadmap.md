@@ -397,3 +397,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: 게시 상태 재검증 및 명시적 제한 재개
 
 정확한 head bfc09e5 일반 CI 45953601321 PASS, native CI 확인 시 진행 중. 서명된 staging/등록 초안과 독립 입력으로 intent 및 순서가 있는 저널 prefix를 바이트 단위 재구성하고 실제 pending/live 배치와 교차 검증한다. verified-copy 기록 이후 알려진 4개 경계에서만 명시적 -Resume을 허용하며 매 단계 전체 파일/등록을 재검증, 기존 복구 자격 증명 및 재잠금·분리를 다시 확인한다. 복사 검증 전 중단, 불일치, 변조, 중복 경로, 서비스 존재, 연결 볼륨은 거부하고 삭제·덮어쓰기 없음. 완료 재개는 읽기 전용. 합성 실제 디렉터리 이동/저널 테스트 추가. 단일 관리자 폐기용 VM 전제, 실제 전원 차단·동시성·ACL·서명/BitLocker/서비스 NOT RUN, 신규 CI 및 독립 리뷰 대기. 서비스 등록/시작과 제품 CEF 초기화는 미구현.
+
+### 추가 구현: 검증 전용 비활성 브로커 서비스 등록
+
+정확한 head 7eff11c 일반 CI 45954145871 PASS, native CI 확인 시 진행 중. 전체 files-published-only 상태 및 시험 볼륨 복구 자격 증명 재확인 후 별도 SCM 등록 intent를 작성하고 LocalSystem/Disabled/Stopped 서비스 생성, 시스템·관리자 관리/인증 사용자 조회 전용 DACL 설정 및 재확인한다. 고정 경로·서비스 상태·DACL·전체 게시 파일을 다시 대조한 뒤 registered-disabled 기록을 작성. 실패 시 기록·SCM 상태를 보존하고 기존 서비스 채택/시작/삭제 없음. 합성 SCM 콜백 및 실제 저널/SDDL 파싱 테스트 추가. 신규 CI 및 실제 SCM/DACL/BitLocker/VM/독립 리뷰 NOT RUN. 등록 중단 확인, 서비스 시작 및 CEF 초기화는 남아 있음.
