@@ -206,13 +206,7 @@ internal sealed class TabbedDevelopmentHost
         tab.Header.IsEnabled = false;
         CefNative.VeilCefCancelOwnedAttachment(tab.ClosingId);
         CefNative.VeilCefTryClose(tab.ClosingId);
-        if (ReferenceEquals(active, tab))
-        {
-            active = null;
-            var next = tabs.FirstOrDefault(candidate => !candidate.Closing);
-            if (next is not null && !shuttingDown) Select(next);
-            else { tab.View.Element.Visibility = Visibility.Hidden; address.Clear(); }
-        }
+        RefreshToolbar();
     }
 
     private void BeginShutdown()
@@ -245,6 +239,13 @@ internal sealed class TabbedDevelopmentHost
                 strip.Children.Remove(tab.Header);
                 tabs.Remove(tab);
                 if (tab.ClosingId != 0) retired.Add(tab.ClosingId);
+                if (ReferenceEquals(active, tab))
+                {
+                    active = null;
+                    var next = tabs.FirstOrDefault(candidate => !candidate.Closing);
+                    if (next is not null && !shuttingDown) Select(next);
+                    else address.Clear();
+                }
                 continue;
             }
             if (!tab.Closing && tab.View.DocumentTitle is { Length: > 0 } title)
@@ -578,8 +579,13 @@ internal sealed class TabbedDevelopmentHost
         }
         else if (phase == 33 && httpCacheClear is { IsCompleted: true })
         {
-            if (!httpCacheClear.IsCompletedSuccessfully || httpCacheClear.Result ||
-                deletionAuthorizationChecks < 2) { Fail(); return; }
+            if (!httpCacheClear.IsCompletedSuccessfully || httpCacheClear.Result || deletionAuthorizationChecks < 2)
+            {
+                Log($"HTTP cache refusal probe failed after {deletionAuthorizationChecks} authorization checks: " +
+                    (httpCacheClear.Exception?.GetBaseException().Message ?? httpCacheClear.Status.ToString()));
+                Fail();
+                return;
+            }
             address.Text = Url("/tabs-http-cache-reused");
             NavigateAddress();
             phase = 34;

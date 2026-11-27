@@ -31,7 +31,8 @@ $work = [IO.Path]::GetFullPath($WorkRoot)
 if (Test-Path -LiteralPath $work) { throw 'Choose a fresh runtime work directory.' }
 $null = New-Item -ItemType Directory -Path $work
 $evidence = Join-Path $work 'evidence'
-$runtimeTemp = Join-Path $work 'runtime-temp'
+# Chromium adds deep CacheStorage paths; keep its TEMP independent of WorkRoot.
+$runtimeTemp = Join-Path ([IO.Path]::GetTempPath()) ('vc-' + [IO.Path]::GetRandomFileName())
 $null = New-Item -ItemType Directory -Path $evidence, $runtimeTemp
 $buildRoot = Join-Path $work 'cef'
 $rustTarget = Join-Path $work 'rust'
@@ -40,6 +41,7 @@ $report = [ordered]@{
     schema = 1
     scope = 'synthetic-runtime-only'
     sourceCommit = $head
+    runtimeTemp = $runtimeTemp
     startedUtc = [DateTime]::UtcNow.ToString('o')
     finishedUtc = $null
     status = 'NOT RUN'
