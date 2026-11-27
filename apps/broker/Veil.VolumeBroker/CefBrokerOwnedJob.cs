@@ -30,6 +30,10 @@ internal sealed class CefBrokerOwnedJob : IDisposable
     // production build can select this two-process limit.
     internal static CefBrokerOwnedJob CreateMultiprocessFixture() => Create(2);
 
+    internal ClientIdentity[] ObserveSameJobFixture(
+        IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members) =>
+        ObserveNestedRetainedMembers(job, members);
+
     internal bool ContainsFixtureRoot(ClientIdentity child, SafeProcessHandle childHandle) =>
         FixtureRootRefusal(child, childHandle) is null;
 
