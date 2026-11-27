@@ -419,3 +419,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 후속 CI: 4e2b607 일반 CI 45956408765 FAIL. Rust PASS 및 .NET 빌드 성공 후 Windows PowerShell 5.1 파서에서 cef-preflight-package.test.ps1의 정규식 삽입 중복/문자열 파손 확인. 이전 정상 파싱 파일(78589ea) 기준으로 토큰 관측 및 거부 케이스 구간을 재구성하고 중복 제거. PID scalar snapshot 수정은 유지. 테스트 내용의 검증 조건은 완화하지 않음. 새 CI 실행 결과 및 실제 VM 확인 전 완료 처리 금지.
 
 후속 CI: 6e69f5c 일반 CI 45956868760 FAIL. Rust PASS, .NET 빌드 및 Windows PowerShell 5.1 파싱 통과. 실제 CI 자체 프로세스의 Inspect 호출에서 SecurityException Access is denied. TOKEN_QUERY 핸들을 WindowsIdentity/WindowsPrincipal로 감싸는 추가 권한 요구가 원인 후보이므로 해당 사용을 제거하고 TokenUser/TokenGroups/TokenIntegrityLevel을 GetTokenInformation으로 직접 읽도록 수정. 가변 구조체의 크기, SID 포인터와 길이, 그룹 수 및 플랫폼 정렬을 확인하며 deny-only 관리자 그룹도 거부. 기존 PID/세션/상승/무결성 검증 유지, 자체 프로세스의 활성 관리자 그룹 교차 검사 추가. 새 CI 결과 및 실제 VM은 미검증. 이전 실패의 직접 원인 확정 및 보호 세션 회귀 테스트 완료는 새 CI 확인 후 판단.
+
+### 추가 구현: 전체 서명 패키지와 등록/게시 기록 결합
+
+정확한 head f73b4b3 일반 CI 45957413402 PASS, native CI 확인 시 진행 중. 등록된 세 EXE 해시만으로는 동일 서명자·커밋의 다른 DLL 인벤토리를 구분하지 못하므로 staging에서 네 서명 증거(JSON/CMS)의 SHA-256 및 정규화된 서명자 지문을 검증 전후 관측하고 등록 준비 저널 format 2와 게시 intent format 2에 결합한다. 게시 경계에서 fresh stage plan 재검증을 추가하며 기존 format 1 준비 기록은 거부한다. 동일 EXE/서명자/커밋이나 변경 DLL로 다시 서명된 별도 패키지 테스트, 이전 형식 준비 저널 거부 테스트 추가. 기존 VM 준비 자료는 덮어쓰지 않고 깨끗한 스냅샷에서 다시 준비해야 한다. 관리자 단일 실행 전제의 스냅샷 비교이며 실제 동시성/서명/SCM/BitLocker/VM/독립 리뷰는 미검증. 보호 세션 결과 재검증 및 실제 CEF 실행은 후속 작업.

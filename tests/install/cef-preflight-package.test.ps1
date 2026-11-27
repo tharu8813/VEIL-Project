@@ -153,6 +153,35 @@ try {
     }
     $verifiedJournal = Inspect-Draft $destination
     if ($verifiedJournal.state -cne 'prepared-only' -or $verifiedJournal.files.Count -ne 3) { throw 'Invalid read-only inspection.' }
+    # A separately signed package from the same commit and signer, with
+    # identical EXEs but a changed managed DLL, must not reuse preparation.
+    $alternateRoot = Join-Path $work 'alternate-payload'
+    $alternateProof = Join-Path $work 'alternate-package-proof'
+    $alternateStage = Join-Path $work 'alternate-stage'
+    Copy-Item -LiteralPath $root -Destination $alternateRoot -Recurse
+    [void][IO.Directory]::CreateDirectory($alternateProof)
+    [IO.File]::WriteAllText((Join-Path $alternateRoot 'Desktop/Veil.Desktop.dll'),'alternate synthetic DLL')
+    Write-VeilPreflightPackageEvidence $alternateRoot $cefEvidence $alternateProof $commit $cert
+    $alternatePlan = Copy-VeilVerifiedPreflightPackage $alternateRoot $cefEvidence $alternateProof $alternateStage $cert.Thumbprint $commit
+    if ($alternatePlan.desktopSha256 -cne $plan.desktopSha256 -or
+        $alternatePlan.brokerSha256 -cne $plan.brokerSha256 -or
+        $alternatePlan.cefChildSha256 -cne $plan.cefChildSha256 -or
+        $alternatePlan.proofHashes.'preflight-package.json' -ceq $plan.proofHashes.'preflight-package.json') {
+        throw 'Alternate signed package fixture is not distinct.'
+    }
+    Reject { Read-VeilPreflightRegistrationDraft $destination $alternatePlan $bin $image $profile $volumeGuid $primary $recovery $sid }
+    # Old format preparations must not acquire authority under the new reader.
+    $savedJournal = [IO.File]::ReadAllBytes($journalPath)
+    $oldJournal = [ordered]@{
+        kind='cef-preflight-registration-journal';format=1;state='prepared-only'
+        sourceCommit=$plan.sourceCommit;installable=$false;startupEnabled=$false
+        desktopSha256=$plan.desktopSha256;brokerSha256=$plan.brokerSha256;cefChildSha256=$plan.cefChildSha256;files=$journal.files
+    }
+    [IO.File]::WriteAllBytes($journalPath,[Text.UTF8Encoding]::new($false).GetBytes(($oldJournal | ConvertTo-Json -Depth 10)))
+    Reject { Inspect-Draft $destination }
+    [IO.File]::WriteAllBytes($journalPath,$savedJournal)
+    [void](Inspect-Draft $destination)
+    Write-Host 'PASS: full signed package binding rejects alternate payload and legacy preparation'
     Reject { Read-VeilPreflightRegistrationDraft $destination $plan $bin $image 'V:\Other\profile' $volumeGuid $primary $recovery $sid }
     Reject { Read-VeilPreflightRegistrationDraft $destination $plan $bin $image $profile $volumeGuid $primary $recovery 'S-1-5-21-100-200-300-1002' }
     Reject { Read-VeilPreflightRegistrationDraft $destination $plan $bin $image $profile $volumeGuid $recovery $primary $sid }

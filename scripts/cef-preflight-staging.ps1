@@ -2,6 +2,24 @@
 # Pre-publication only: no installed path, service, volume or registration mutation.
 . (Join-Path $PSScriptRoot 'cef-preflight-package.ps1')
 
+function Get-VeilPreflightProofHashes([string]$CefEvidence,[string]$PackageEvidence) {
+    $hashes = [ordered]@{}
+    foreach ($pair in @(
+        @{root=$CefEvidence;name='cef-candidate.json'},
+        @{root=$CefEvidence;name='cef-candidate.p7s'},
+        @{root=$PackageEvidence;name='preflight-package.json'},
+        @{root=$PackageEvidence;name='preflight-package.p7s'}
+    )) {
+        Assert-VeilAdminPath $pair.root
+        $path = Join-Path $pair.root $pair.name
+        Assert-VeilAdminPath $path
+        $item = Get-Item -LiteralPath $path -Force
+        if ($item.PSIsContainer -or $item.Length -le 0 -or $item.Length -gt 4MB) { throw 'Invalid signed proof file.' }
+        $hashes.Add($pair.name,(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant())
+    }
+    return [pscustomobject]$hashes
+}
+
 function Get-VeilPreflightStagePlan([string]$Stage,[string]$Thumbprint,[string]$Commit) {
     Assert-VeilAdminPath $Stage
     $items = @(Get-ChildItem -LiteralPath $Stage -Force)
@@ -11,6 +29,7 @@ function Get-VeilPreflightStagePlan([string]$Stage,[string]$Thumbprint,[string]$
     $payload = Join-Path $Stage 'payload'
     $cefEvidence = Join-Path $Stage 'cef-evidence'
     $proof = Join-Path $Stage 'package-evidence'
+    $proofHashes = Get-VeilPreflightProofHashes $cefEvidence $proof
     $manifest = Read-VeilPreflightPackageEvidence $payload $cefEvidence $proof $Thumbprint $Commit
     $runtime = (Get-VeilCefVerifiedRuntimePinPlan (Join-Path $payload 'Cef') $cefEvidence $Thumbprint $Commit) | ConvertFrom-Json
     $byName = @{}
@@ -24,12 +43,17 @@ function Get-VeilPreflightStagePlan([string]$Stage,[string]$Thumbprint,[string]$
     if (@($manifest.files | Where-Object { $_.path.StartsWith('Cef/',[StringComparison]::Ordinal) }).Count -ne $runtime.files.Count) {
         throw 'Runtime plan inventory changed.'
     }
+    $again = Get-VeilPreflightProofHashes $cefEvidence $proof
+    if (($proofHashes | ConvertTo-Json -Compress) -cne ($again | ConvertTo-Json -Compress)) {
+        throw 'Signed proof changed during stage verification.'
+    }
     # A reviewable snapshot, not an authorization or published configuration.
     return [pscustomobject]@{
         kind='cef-preflight-stage-plan'; sourceCommit=$Commit; startupEnabled=$false; installable=$false
         desktopSha256=$byName['Desktop/Veil.Desktop.exe'].sha256
         brokerSha256=$byName['Broker/Veil.VolumeBroker.exe'].sha256
         cefChildSha256=$byName['Cef/veil-cef-product.exe'].sha256
+        signerThumbprint=$Thumbprint.ToLowerInvariant(); proofHashes=$proofHashes
         runtimePins=$runtime
     }
 }

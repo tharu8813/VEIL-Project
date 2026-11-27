@@ -14,6 +14,15 @@ function New-VeilPreflightRegistrationDraft($StagePlan,[string]$BinRoot,[string]
         $StagePlan.runtimePins.startupEnabled -isnot [bool] -or $StagePlan.runtimePins.startupEnabled) {
         throw 'Expected disabled verified preflight stage plan.'
     }
+    $proofNames = @('cef-candidate.json','cef-candidate.p7s','preflight-package.json','preflight-package.p7s')
+    if ($StagePlan.signerThumbprint -isnot [string] -or $StagePlan.signerThumbprint -cnotmatch '\A[0-9a-f]{40}\z' -or
+        $null -eq $StagePlan.proofHashes -or @($StagePlan.proofHashes.PSObject.Properties).Count -ne 4) {
+        throw 'Full signed package evidence binding required.'
+    }
+    foreach ($name in $proofNames) {
+        $value = $StagePlan.proofHashes.$name
+        if ($value -isnot [string] -or $value -cnotmatch '\A[0-9a-f]{64}\z') { throw 'Missing signed proof digest.' }
+    }
     foreach ($hash in @($StagePlan.desktopSha256,$StagePlan.brokerSha256,$StagePlan.cefChildSha256)) {
         if ($hash -isnot [string] -or $hash -cnotmatch '\A[0-9a-f]{64}\z') { throw 'Missing image pin.' }
     }
@@ -89,10 +98,11 @@ function Write-VeilPreflightRegistrationDraft([string]$Destination,$Draft,$Stage
 
 function New-VeilPreflightPreparationJournal($StagePlan,[object[]]$Files) {
     return [ordered]@{
-        kind='cef-preflight-registration-journal'; format=1; state='prepared-only'
+        kind='cef-preflight-registration-journal'; format=2; state='prepared-only'
         sourceCommit=$StagePlan.sourceCommit; installable=$false; startupEnabled=$false
         desktopSha256=$StagePlan.desktopSha256; brokerSha256=$StagePlan.brokerSha256
-        cefChildSha256=$StagePlan.cefChildSha256; files=$Files
+        cefChildSha256=$StagePlan.cefChildSha256
+        signerThumbprint=$StagePlan.signerThumbprint; proofHashes=$StagePlan.proofHashes; files=$Files
     }
 }
 
