@@ -536,7 +536,7 @@ test('nested CEF runtime experiment remains isolated from production admission',
     const workflow = await readFile('.github/workflows/veil-checks.yml', 'utf8');
     assert.match(fixture, /CefContainedProcess.CreateSuspended\(image, environment\)[\s\S]*?second.AssignRoot\(root\)[\s\S]*?child.ResumeAfterVerification/);
     assert.match(fixture, /s.Restricted && s.IntegrityRid <= 0x1000/);
-    assert.match(fixture, /exit != 0 \|\| !outerEmpty \|\| !innerEmpty \|\| !restricted/);
+    assert.match(fixture, /exit != 0 \|\| !outerEmpty \|\| !innerEmpty \|\| !rendererRestrictedLow/);
     assert.match(runner, /Invoke-Stage 'nestedWin32'[\s\S]*?Invoke-Bounded 'nested-win32'/);
     assert.match(workflow, /dotnet build tests\/cef\/CefNestedSmoke\/CefNestedSmoke.csproj -c Release/);
     const brokerProject = await readFile('apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj', 'utf8');

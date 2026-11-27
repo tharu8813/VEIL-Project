@@ -58,16 +58,26 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
     require(Array.isArray(sample.observed) && sample.observed.length > 0 && sample.observed.length <= 4096,
         'Missing or excessive token samples');
     const seen = new Set();
+    require(sample.schema === undefined || sample.schema === 2, 'Unsupported sample schema');
+    const roles = new Set(['renderer', 'gpu', 'network', 'utility', 'unknown']);
     let restrictedLow = 0;
+    let restrictedLowRenderers = 0;
     for (const entry of sample.observed) {
         require(record(entry) && pid(entry.Pid) && entry.Pid !== sample.rootPid &&
             !seen.has(entry.Pid) && Number.isInteger(entry.IntegrityRid) &&
             entry.IntegrityRid >= 0 && entry.IntegrityRid <= 0xffffffff &&
             typeof entry.Restricted === 'boolean', 'Invalid or duplicate descendant sample');
         seen.add(entry.Pid);
-        if (entry.Restricted && entry.IntegrityRid <= 0x1000) restrictedLow++;
+        if (sample.schema === 2)
+            require(roles.has(entry.Role) && typeof entry.AppContainer === 'boolean', 'Invalid role or AppContainer sample');
+        if (entry.Restricted && entry.IntegrityRid <= 0x1000) {
+            restrictedLow++;
+            if (entry.Role === 'renderer') restrictedLowRenderers++;
+        }
     }
     require(restrictedLow > 0, 'Restricted-low token assertion not supported by samples');
+    if (sample.schema === 2)
+        require(sample.rendererRestrictedLow === true && restrictedLowRenderers > 0, 'Renderer token assertion not supported by samples');
     return {
         status: 'CONSISTENT_REPORTED_SMOKE_PASS',
         sourceCommit: expectedCommit,
@@ -76,9 +86,10 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
         sampleSha256: digest(sampleBytes),
         observedDescendants: seen.size,
         restrictedLowDescendants: restrictedLow,
+        restrictedLowRenderers: sample.schema === 2 ? restrictedLowRenderers : null,
         independentRuntimeVerification: 'NOT ESTABLISHED',
         productReleaseGates: 'NOT RUN',
-        limitations: 'Unsigned local evidence; no renderer role, complete containment audit, site isolation, protected storage or product authorization.'
+        limitations: 'Unsigned local evidence from sampled processes; no complete containment audit, site isolation, protected storage or product authorization.'
     };
 }
 

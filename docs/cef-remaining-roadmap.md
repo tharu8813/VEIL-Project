@@ -43,7 +43,7 @@
 
 ## 2. CEF 다중 프로세스와 샌드박스 (P1)
 
-- [ ] P2-01: 이미 작성된 nested Win32 smoke bundle을 일반 사용자 Windows에서 실제 실행. 두 Job containment, renderer token 제한 및 종료를 실측. native compile 또는 CI artifact를 런타임 PASS로 처리하지 않는다.
+- [x] P2-01: 일반 사용자 Windows에서 nested Win32 smoke를 실제 실행해 제한 토큰과 낮은 무결성의 renderer 표본을 확인하고, 두 Job이 정상 종료 후 비었음을 검증했다. 역할별 전체 수명 검증은 P2-02 이후에 남아 있다.
 - [ ] P2-02: CEF browser/renderer/GPU/utility/network 등의 공식 bootstrap 역할과 실제 프로세스/모듈 목록을 조사. role별 제한 token, integrity, AppContainer/job, site isolation, command-line 및 실행 경로를 관측한다. 단순 PID/부모 metadata나 sampling만으로 전체 수명을 보증하지 않는다.
 - [ ] P2-03: 등록된 image와 runtime lease 및 broker 세션 generation을 전체 브라우저 수명에 결합하는 별도 다중 프로세스 admission 설계. 하위 프로세스마다 동일 계정/세션 및 적절한 sandbox 권한/역할, retained object, 모듈 핀을 검증. unknown role/image, breakaway, sandbox disable, 권한 철회/재인증 실패를 fail closed 처리. 기존 one-shot disabled candidate와 별도 protocol 및 tests.
 - [ ] P2-04: 보호 세션 권한 철회/desktop 또는 broker crash 때 모든 프로세스와 runtime lease 정리, job empty 확인 후 relock. timeout/강제 정리를 정상 종료와 구별.
@@ -107,3 +107,4 @@
 - 기준 `00427191d80bcf1bd8e49fe9ebc18cddd8e9de5a`에서 [일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45965912473) 및 [native compile CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45965912543) PASS. 후속 탭 수정은 CEF의 개별 탭 닫기 준비 알림을 WPF 호스트에 전달하고, 디스크 캐시 삭제를 합성 전용 `Default` 요청 컨텍스트로 제한한다. 짧은 임시 경로의 전용 탭 실행 PASS. 러너는 빌드 폴더와 별도로 짧은 임시 경로를 만들고 결과 JSON에 기록한다.
 - 탭 수정 커밋 `5947ea2410f6f864e09f0a3f480380832c7f0fc0`의 [일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45967544723), [native compile CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45967544558), 일반 사용자 전체 합성 실행 PASS. `veil-cef-5947ea2-f7fec5ef81164bef8df495524f519f75/evidence/result.json` SHA-256은 `88E4783BEC79AB28B2D9992C833ED971DE84E416EF2E4D30B6740A26C1BC11C8`이다.
 - 독립 nested 번들의 첫 실행은 종료 코드 0 및 양쪽 Job 정리 후, Windows 캐시 파일이 번들 안에 생성되어 인벤토리 FAIL. `CefNestedSmoke`의 시험 전용 자식 환경에서 Windows 캐시 경로를 scratch로 고정한 뒤 번들 실행과 전후 인벤토리 PASS. 역할별 renderer 토큰 대응과 제품 보호 VM 검증은 남아 있다.
+- 기준 `abd3af3e1647ddfbfa27c38e65a32d6b8ab5c024`의 [일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45968280506), [native compile CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45968280510), 전체 Windows 합성 실행 및 독립 nested 번들 PASS. 후속 nested 러너는 한 프로세스 핸들에서 역할·토큰을 대조해 renderer, GPU, network, utility 및 AppContainer 여부를 기록한다. 일반 사용자 로컬 실행에서 무결성 RID 0의 제한 renderer를 확인했다. 원본 명령행은 기록하지 않으며, Windows 내부 명령행 조회를 사용할 수 없으면 해당 역할을 unknown으로 취급한다. 새 증거는 제한된 renderer 표본을 요구하고 이전 증거에는 renderer 판정을 부여하지 않는다.

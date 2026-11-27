@@ -41,8 +41,22 @@ test('valid unsigned smoke record stays explicitly non-product and non-attested'
     assert.equal(result.status, 'CONSISTENT_REPORTED_SMOKE_PASS');
     assert.equal(result.observedDescendants, 2);
     assert.equal(result.restrictedLowDescendants, 1);
+    assert.equal(result.restrictedLowRenderers, null);
     assert.equal(result.independentRuntimeVerification, 'NOT ESTABLISHED');
     assert.equal(result.productReleaseGates, 'NOT RUN');
+});
+test('role-aware evidence requires a restricted low-integrity renderer sample', () => {
+    const f = fixture();
+    f.sample.schema = 2;
+    f.sample.rendererRestrictedLow = true;
+    Object.assign(f.sample.observed[0], { Role: 'renderer', AppContainer: false });
+    Object.assign(f.sample.observed[1], { Role: 'network', AppContainer: false });
+    assert.equal(check(f).restrictedLowRenderers, 1);
+    f.sample.observed[0].Role = 'gpu';
+    assert.throws(() => check(f), /Renderer token assertion/);
+    f.sample.observed[0].Role = 'renderer';
+    delete f.sample.observed[0].AppContainer;
+    assert.throws(() => check(f), /AppContainer sample/);
 });
 test('reject wrong checkout, manifest hash, scope and release claim', () => {
     assert.throws(() => check(fixture(), { expectedCommit: 'c'.repeat(40) }), /commit mismatch/);

@@ -62,14 +62,17 @@ try
     bool outerEmpty = child.WaitForNaturalJobExit(5000);
     bool innerEmpty = second.Members().Length == 0;
     bool restricted = observed.Values.Any(s => s.Restricted && s.IntegrityRid <= 0x1000);
+    bool rendererRestrictedLow = observed.Values.Any(s =>
+        s.Role == "renderer" && s.Restricted && s.IntegrityRid <= 0x1000);
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         scope = "nested-win32-smoke-only",
-        rootPid, exit, outerEmpty, innerEmpty, restricted,
+        schema = 2,
+        rootPid, exit, outerEmpty, innerEmpty, restricted, rendererRestrictedLow,
         observed = observed.Values.OrderBy(s => s.Pid),
-        limitations = "Sampled token evidence only; no subprocess role, full site isolation, product authorization or OS write trace."
+        limitations = "Sampled command-line role and token evidence only; no full site isolation, product authorization or OS write trace."
     }));
-    if (exit != 0 || !outerEmpty || !innerEmpty || !restricted)
+    if (exit != 0 || !outerEmpty || !innerEmpty || !rendererRestrictedLow)
         throw new InvalidOperationException("Nested CEF fixture did not establish required evidence.");
     return 0;
 }
@@ -140,7 +143,7 @@ sealed class FixtureJob : IDisposable
         finally { Marshal.FreeHGlobal(buffer); }
     }
 
-    internal sealed record TokenSample(uint Pid, uint IntegrityRid, bool Restricted);
+    internal sealed record TokenSample(uint Pid, uint IntegrityRid, bool Restricted, string Role, bool AppContainer);
 
     internal bool TrySample(uint pid, string image, out TokenSample sample)
     {
@@ -169,12 +172,68 @@ sealed class FixtureJob : IDisposable
                 if (count == 0) return false;
                 uint rid = unchecked((uint)Marshal.ReadInt32(GetSidSubAuthority(sid, (uint)(count - 1))));
                 bool restricted = IsTokenRestricted(token);
+                if (!GetTokenInformation(token, 29, buffer, needed, out uint appContainerBytes) ||
+                    appContainerBytes != sizeof(uint)) return false;
+                bool appContainer = Marshal.ReadInt32(buffer) != 0;
+                string role = ReadRole(process);
                 if (!Contains(process) || WaitForSingleObject(process, 0) != 0x102) return false;
-                sample = new TokenSample(pid, rid, restricted);
+                sample = new TokenSample(pid, rid, restricted, role, appContainer);
                 return true;
             }
             finally { Marshal.FreeHGlobal(buffer); }
         }
+    }
+
+    private static string ReadRole(SafeProcessHandle process)
+    {
+        // ProcessCommandLineInformation is used only for smoke diagnostics.
+        // Read it from the same process object as the token and log only a role.
+        const int commandLineInformation = 60;
+        const int headerSize = 16; // x64 UNICODE_STRING
+        NtQueryInformationProcess(process, commandLineInformation, IntPtr.Zero, 0, out uint needed);
+        if (needed < headerSize || needed > 131072) return "unknown";
+        IntPtr data = Marshal.AllocHGlobal((int)needed);
+        try
+        {
+            if (NtQueryInformationProcess(process, commandLineInformation, data, needed, out uint returned) != 0 ||
+                returned < headerSize || returned > needed) return "unknown";
+            int bytes = unchecked((ushort)Marshal.ReadInt16(data));
+            IntPtr value = Marshal.ReadIntPtr(data, 8);
+            long offset = value.ToInt64() - data.ToInt64();
+            if (bytes == 0 || bytes % 2 != 0 || offset < headerSize || offset > returned - bytes)
+                return "unknown";
+            string? commandLine = Marshal.PtrToStringUni(value, bytes / 2);
+            if (string.IsNullOrEmpty(commandLine) || commandLine.Contains('\0')) return "unknown";
+            IntPtr args = CommandLineToArgvW(commandLine, out int count);
+            if (args == IntPtr.Zero) return "unknown";
+            try
+            {
+                string? type = null;
+                string? utility = null;
+                for (int i = 1; i < count; i++)
+                {
+                    string? arg = Marshal.PtrToStringUni(Marshal.ReadIntPtr(args, i * IntPtr.Size));
+                    if (arg == "--") break;
+                    if (arg?.StartsWith("--type=", StringComparison.Ordinal) == true)
+                    {
+                        if (type is not null) return "unknown";
+                        type = arg[7..];
+                    }
+                    if (arg?.StartsWith("--utility-sub-type=", StringComparison.Ordinal) == true)
+                        utility = arg[19..];
+                }
+                return type switch
+                {
+                    "renderer" => "renderer",
+                    "gpu-process" => "gpu",
+                    "utility" when utility == "network.mojom.NetworkService" => "network",
+                    "utility" => "utility",
+                    _ => "unknown",
+                };
+            }
+            finally { LocalFree(args); }
+        }
+        finally { Marshal.FreeHGlobal(data); }
     }
 
     public void Dispose() => job.Dispose();
@@ -219,6 +278,12 @@ sealed class FixtureJob : IDisposable
     private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint WaitForSingleObject(SafeProcessHandle process, uint ms);
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(SafeProcessHandle process, int infoClass, IntPtr data, uint bytes, out uint returned);
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern IntPtr CommandLineToArgvW(string commandLine, out int count);
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr memory);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool QueryFullProcessImageNameW(SafeProcessHandle process, uint flags, StringBuilder path, ref uint length);

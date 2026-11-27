@@ -92,8 +92,12 @@ try {
     $sampleBytes = [IO.File]::ReadAllBytes($samplePath)
     if ($sampleBytes.Length -ne $sampleInfo.Length) { throw 'Smoke sample size changed.' }
     $sample = [Text.Encoding]::UTF8.GetString($sampleBytes).TrimStart([char]0xFEFF) | ConvertFrom-Json
-    if ($sample.scope -cne 'nested-win32-smoke-only' -or $sample.exit -ne 0 -or
-        $sample.outerEmpty -ne $true -or $sample.innerEmpty -ne $true -or $sample.restricted -ne $true) {
+    $rendererSamples = @($sample.observed | Where-Object {
+        $_.Role -ceq 'renderer' -and $_.Restricted -eq $true -and $_.IntegrityRid -le 0x1000
+    })
+    if ($sample.schema -ne 2 -or $sample.scope -cne 'nested-win32-smoke-only' -or $sample.exit -ne 0 -or
+        $sample.outerEmpty -ne $true -or $sample.innerEmpty -ne $true -or $sample.restricted -ne $true -or
+        $sample.rendererRestrictedLow -ne $true -or $rendererSamples.Count -eq 0) {
         throw 'Missing required fixture evidence.'
     }
     $report.stdoutSha256 = Get-BytesDigest $sampleBytes
