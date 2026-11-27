@@ -143,7 +143,7 @@ test('broker authenticated-owner snapshot is live, read-only and granted only af
     assert.match(owner, /!Registered\(status\) \|\| !status\.Unlocked \|\| !status\.FullyEncrypted/);
     assert.match(owner, /!status\.ProtectionOn \|\| !status\.ProtectorPresent/);
     assert.match(owner, /unlockOwner is null \|\| authenticatedOwner != client/);
-    assert.match(owner, /authenticatedOwnerHandle is not \{ \} liveHandle \|\| !Native\.IsRunning\(liveHandle\)/);
+    assert.match(owner, /authenticatedOwnerHandle is not \{ \} liveHandle \|\| !Native\.SameLiveProcess\(liveHandle, pipeClient\)/);
     assert.doesNotMatch(owner, /backend\.(Attach|Unlock|Lock|Detach)\(/);
     assert.match(broker, /if \(!Registered\(status\) \|\| !status\.Unlocked \|\| !status\.FullyEncrypted \|\|[\s\S]*?authenticatedOwner = client;/);
     assert.match(broker, /private void Watch\(int pid, SafeProcessHandle handle\)\s*\{\s*ClearAuthenticatedOwner\(\);/);
@@ -171,8 +171,8 @@ test('broker process generation binds the crash watcher without exposing general
     const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
     const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
     assert.match(native, /GetProcessTimes\(process, out long created, out _, out _, out _\)[\s\S]*?new ClientIdentity\([\s\S]*?, created\)/);
-    assert.match(native, /OpenForWait\(ClientIdentity client\)[\s\S]*?created == client\.CreatedFileTime && IsRunning\(process\)/);
-    assert.match(broker, /var ownerHandle = Native\.OpenForWait\(client\);\s*if \(ownerHandle\.IsInvalid\)/);
+    assert.match(native, /OpenForWait\(ClientIdentity client, SafeProcessHandle observed\)[\s\S]*?SameLiveProcess\(observed, process\) && ObserveProcess\(process\) == client/);
+    assert.match(broker, /var ownerHandle = Native\.OpenForWait\(client, pipeClient\);\s*if \(ownerHandle\.IsInvalid\)/);
     assert.doesNotMatch(protocol, /CefChildAdmission|GrantChild/);
 });
 
@@ -200,7 +200,7 @@ test('CEF launch nomination retains a duplicated live handle without treating pa
     const binding = native.slice(native.indexOf('internal static (SafeProcessHandle Handle, ClientIdentity Identity) DuplicateNominatedChild'),
         native.indexOf('// Match the process generation'));
     assert.match(binding, /ObserveProcess\(originalOwner\) != owner/);
-    assert.match(binding, /ObserveProcess\(source\) != owner \|\|\s*!DuplicateHandle\(source, nominatedHandle,/);
+    assert.match(binding, /ObserveProcess\(source\) != owner \|\|\s*!SameLiveProcess\(originalOwner, source\) \|\|\s*!DuplicateHandle\(source, nominatedHandle,/);
     assert.match(binding, /QueryLimitedInformation \| Synchronize, false, 0/);
     assert.match(binding, /!HasReportedParent\(identity\.ProcessId, owner\.ProcessId\)/);
     assert.match(binding, /ObserveProcess\(originalOwner\) != owner \|\| ObserveProcess\(child\) != identity/);
@@ -258,7 +258,7 @@ test('CEF redemption has a dedicated route and never reaches ordinary broker com
     const preflight = await readFile('apps/broker/Veil.VolumeBroker/CefChildPreflight.cs', 'utf8');
     const redeem = broker.slice(broker.indexOf('private byte[] RedeemCefChild('), broker.indexOf('private async Task<byte[]> Execute'));
     assert.match(broker, /bool redemptionCandidate = reason == "image" && !config\.Development/);
-    assert.match(broker, /if \(redemptionCandidate\)\s*response = request\.Command == BrokerCommand\.RedeemCefChild\s*\? RedeemCefChild\(request, client\) : Protocol\.Error\("ClientRejected"\);\s*else if \(request\.Command == BrokerCommand\.RedeemCefChild\)\s*response = Protocol\.Error\("ClientRejected"\);\s*else\s*response = await Execute/);
+    assert.match(broker, /if \(redemptionCandidate\)\s*response = request\.Command == BrokerCommand\.RedeemCefChild\s*\? RedeemCefChild\(request, client, pipeClient\) : Protocol\.Error\("ClientRejected"\);\s*else if \(request\.Command == BrokerCommand\.RedeemCefChild\)\s*response = Protocol\.Error\("ClientRejected"\);\s*else\s*response = await Execute/);
     assert.match(redeem, /!pending\.MatchesChild\(client\)[\s\S]*?pendingCefChild = null;\s*using \(pending\)/);
     assert.match(redeem, /!Protected\(backend\.Status\(\)\) \|\|\s*!CefChildPreflight\.VerifyRedemption[\s\S]*?!Protected\(backend\.Status\(\)\)[\s\S]*?!pending\.TryRedeem/);
     assert.doesNotMatch(redeem, /backend\.(Attach|Unlock|Lock|Detach)\(|Protocol\.Ok\(/);
@@ -362,4 +362,17 @@ test('desktop stages a contained suspended child only under the existing owner l
     assert.match(client, /CefStageWire\.WriteRequest\(writer, config\.VolumeId, handle\)/);
     assert.match(client, /if \(command == "StageCefChild"\) VerifyServer\(pipe\);/);
     assert.doesNotMatch(startup, /StageSuspendedChild|StageCefChild/);
+});
+
+
+test('broker retains pipe-observed process objects and compares actual handles before CEF staging and redemption', async () => {
+    const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    assert.match(native, /CompareObjectHandles\(first, second\)/);
+    assert.match(broker, /using var pipeClient = binding.Handle/);
+    assert.match(broker, /if \(!Native.MatchesPipeClient\(pipe, pipeClient, client\)\)/);
+    assert.match(broker, /!Native.SameLiveProcess\(stagingOwner, pipeClient\)/);
+    assert.match(broker, /!Native.SameLiveProcess\(nominated, pipeClient\)/);
+    assert.match(broker, /!Native.SameLiveProcess\(childHandle, pipeClient\)/);
+    assert.match(broker, /if \(request.Command is BrokerCommand.Lock or BrokerCommand.Detach\)\s*RevokePendingCefChild\(\);[^\n]*\n\s*var status = backend.Status\(\)/);
 });

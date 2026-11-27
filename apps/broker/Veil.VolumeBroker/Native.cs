@@ -32,18 +32,52 @@ internal static class Native
         finally { LocalFree(descriptor); }
     }
 
-    internal static ClientIdentity Identify(NamedPipeServerStream pipe)
+    internal static (ClientIdentity Identity, SafeProcessHandle Handle) Identify(NamedPipeServerStream pipe)
     {
         var handle = pipe.SafePipeHandle;
         if (!GetNamedPipeClientProcessId(handle, out uint pid) || !GetNamedPipeClientSessionId(handle, out uint session))
             throw new Win32Exception();
-        using var process = OpenProcess(QueryLimitedInformation | Synchronize, false, pid);
-        if (process.IsInvalid) throw new Win32Exception();
-        var observed = ObserveProcess(process);
-        if (observed.ProcessId != (int)pid || observed.SessionId != (int)session)
-            throw new UnauthorizedAccessException("Client pipe identity mismatch.");
-        return observed;
+        var process = OpenProcess(QueryLimitedInformation | Synchronize, false, pid);
+        try
+        {
+            if (process.IsInvalid) throw new Win32Exception();
+            var observed = ObserveProcess(process);
+            if (observed.ProcessId != (int)pid || observed.SessionId != (int)session ||
+                !MatchesPipeClient(pipe, process, observed))
+                throw new UnauthorizedAccessException("Client pipe identity mismatch.");
+            return (observed, process);
+        }
+        catch { process.Dispose(); throw; }
     }
+
+    internal static bool MatchesPipeClient(NamedPipeServerStream pipe, SafeProcessHandle process, ClientIdentity expected)
+    {
+        try
+        {
+            var handle = pipe.SafePipeHandle;
+            if (!GetNamedPipeClientProcessId(handle, out uint pid) ||
+                !GetNamedPipeClientSessionId(handle, out uint session) ||
+                pid != (uint)expected.ProcessId || session != (uint)expected.SessionId ||
+                ObserveProcess(process) != expected) return false;
+            using var current = OpenProcess(QueryLimitedInformation | Synchronize, false, pid);
+            return SameLiveProcess(process, current) && ObserveProcess(current) == expected;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException) { return false; }
+    }
+
+    internal static bool SameLiveProcess(SafeProcessHandle first, SafeProcessHandle second)
+    {
+        try
+        {
+            return IsRunning(first) && IsRunning(second) &&
+                CompareObjectHandles(first, second) && IsRunning(first) && IsRunning(second);
+        }
+        catch (ObjectDisposedException) { return false; }
+    }
+
+    [DllImport("kernelbase.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CompareObjectHandles(SafeProcessHandle first, SafeProcessHandle second);
 
     internal static ClientIdentity ObserveProcess(SafeProcessHandle process)
     {
@@ -78,6 +112,7 @@ internal static class Native
         using var source = OpenProcess(QueryLimitedInformation | Synchronize | duplicateHandleAccess,
             false, (uint)owner.ProcessId);
         if (source.IsInvalid || ObserveProcess(source) != owner ||
+            !SameLiveProcess(originalOwner, source) ||
             !DuplicateHandle(source, nominatedHandle, new IntPtr(-1), out var child,
                 QueryLimitedInformation | Synchronize, false, 0))
             throw new UnauthorizedAccessException("CEF child handle could not be duplicated.");
@@ -142,13 +177,20 @@ internal static class Native
 
     // Match the process generation observed on the pipe, not merely a PID
     // that Windows could have reused while this request waited for serial.
-    internal static SafeProcessHandle OpenForWait(ClientIdentity client)
+    internal static SafeProcessHandle OpenForWait(ClientIdentity client, SafeProcessHandle observed)
     {
-        var process = OpenProcess(QueryLimitedInformation | Synchronize, false, (uint)client.ProcessId);
-        if (!process.IsInvalid &&
-            GetProcessTimes(process, out long created, out _, out _, out _) &&
-            created == client.CreatedFileTime && IsRunning(process))
-            return process;
+        // Duplicate the actual pipe-observed handle, not a reopened PID.
+        using var self = OpenProcess(0x0040 /* PROCESS_DUP_HANDLE */, false, (uint)Environment.ProcessId);
+        if (self.IsInvalid || !IsRunning(observed) ||
+            !DuplicateHandle(self, observed.DangerousGetHandle(), new IntPtr(-1), out var process,
+                QueryLimitedInformation | Synchronize, false, 0))
+            return new SafeProcessHandle(IntPtr.Zero, ownsHandle: true);
+        try
+        {
+            if (SameLiveProcess(observed, process) && ObserveProcess(process) == client)
+                return process;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException) { }
         process.Dispose();
         return new SafeProcessHandle(IntPtr.Zero, ownsHandle: true);
     }

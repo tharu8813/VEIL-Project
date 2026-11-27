@@ -112,6 +112,10 @@ try
         child.SafeHandle.DangerousGetHandle());
     using var retained = binding.Handle;
     Check(binding.Identity == expected && Native.IsRunning(retained), "Child identity not retained.");
+    Check(Native.SameLiveProcess(retained, child.SafeHandle), "Different handles to the same child did not match.");
+    Check(!Native.SameLiveProcess(retained, owner.SafeHandle), "Different process objects matched.");
+    using (var watch = Native.OpenForWait(identity, owner.SafeHandle))
+        Check(Native.SameLiveProcess(watch, owner.SafeHandle), "Owner watch did not retain the observed object.");
     Reject(() => Native.DuplicateNominatedChild(identity, owner.SafeHandle, IntPtr.Zero).Handle.Dispose());
     Reject(() => Native.DuplicateNominatedChild(identity, owner.SafeHandle, owner.SafeHandle.DangerousGetHandle()).Handle.Dispose());
     Reject(() => Native.DuplicateNominatedChild(identity with { CreatedFileTime = identity.CreatedFileTime + 1 },
@@ -124,6 +128,7 @@ try
     await child.StandardInput.WriteLineAsync("exit");
     await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
     Check(child.ExitCode == 0 && !Native.IsRunning(retained), "Exited child still considered live.");
+    Check(!Native.SameLiveProcess(retained, child.SafeHandle), "Exited process objects matched as live.");
     Reject(() => Native.DuplicateNominatedChild(identity, owner.SafeHandle, child.SafeHandle.DangerousGetHandle()).Handle.Dispose());
     Console.WriteLine("PASS: synthetic Windows child handle duplication, generation binding and exit detection");
     return 0;

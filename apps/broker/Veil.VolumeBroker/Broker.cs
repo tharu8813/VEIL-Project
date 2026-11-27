@@ -77,9 +77,11 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
 
             // The bounded line is read first so a rejected client still receives its answer;
             // it is parsed only after the client passes the identity checks.
-            ClientIdentity client;
-            try { client = Native.Identify(pipe); }
+            (ClientIdentity Identity, SafeProcessHandle Handle) binding;
+            try { binding = Native.Identify(pipe); }
             catch (Exception) { log.Write("client-rejected", new { reason = "identity" }); await Reply(pipe, Protocol.Error("ClientRejected")); return; }
+            using var pipeClient = binding.Handle;
+            ClientIdentity client = binding.Identity;
             string? reason = Reject(client);
             // A separately pinned image may reach ONLY the redemption parser,
             // never the ordinary command dispatcher. Actual identity is checked
@@ -117,13 +119,15 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 try
                 {
                     stop.ThrowIfCancellationRequested();
-                    if (redemptionCandidate)
+                    if (!Native.MatchesPipeClient(pipe, pipeClient, client))
+                        response = Protocol.Error("ClientRejected");
+                    else if (redemptionCandidate)
                         response = request.Command == BrokerCommand.RedeemCefChild
-                            ? RedeemCefChild(request, client) : Protocol.Error("ClientRejected");
+                            ? RedeemCefChild(request, client, pipeClient) : Protocol.Error("ClientRejected");
                     else if (request.Command == BrokerCommand.RedeemCefChild)
                         response = Protocol.Error("ClientRejected");
                     else
-                        response = await Execute(request, client);
+                        response = await Execute(request, client, pipeClient);
                 }
                 finally { serial.Release(); }
             }
@@ -150,10 +154,12 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
 
     // Called only for separately pinned child candidates, while holding serial.
     // The response is a one-shot verification receipt; product startup remains disabled.
-    private byte[] RedeemCefChild(BrokerRequest request, ClientIdentity client)
+    private byte[] RedeemCefChild(BrokerRequest request, ClientIdentity client, SafeProcessHandle pipeClient)
     {
         if (request.VolumeId != config.VolumeId ||
-            pendingCefChild is not { } pending || !pending.MatchesChild(client))
+            pendingCefChild is not { } pending || !pending.MatchesChild(client) ||
+            pending.ProcessResource is not SafeProcessHandle nominated ||
+            !Native.SameLiveProcess(nominated, pipeClient))
             return Protocol.Error("CefChildRejected");
 
         // Only the designated generation can consume the slot. Once it tries,
@@ -178,6 +184,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     pending.ProcessResource is not SafeProcessHandle childHandle ||
                     Native.ObserveProcess(ownerHandle) != owner ||
                     Native.ObserveProcess(childHandle) != client ||
+                    !Native.SameLiveProcess(childHandle, pipeClient) ||
                     !pending.TryRedeem(owner, client, generation,
                         Native.IsRunning(ownerHandle), Native.IsRunning(childHandle), true, true))
                     return Protocol.Error("CefChildRejected");
@@ -191,7 +198,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         }
     }
 
-    private async Task<byte[]> Execute(BrokerRequest request, ClientIdentity client)
+    private async Task<byte[]> Execute(BrokerRequest request, ClientIdentity client, SafeProcessHandle pipeClient)
     {
         string command = request.Command.ToString();
         if (request.VolumeId != config.VolumeId)
@@ -202,6 +209,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         string? code = null;
         try
         {
+            if (request.Command is BrokerCommand.Lock or BrokerCommand.Detach)
+                RevokePendingCefChild(); // Retire before any backend call, including a failed status.
             var status = backend.Status();
             bool Registered(BackendStatus current) => current.Attached &&
                 string.Equals(current.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase);
@@ -210,8 +219,6 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 !status.ProtectorPresent || authenticatedOwnerHandle is not { } active ||
                 !Native.IsRunning(active)))
                 RevokePendingCefChild();
-            if (request.Command is BrokerCommand.Lock or BrokerCommand.Detach)
-                RevokePendingCefChild(); // Even a refused lock retires pending startup authority.
             if (status.Attached && !Registered(status))
                 return Protocol.Error("VolumeMismatch");
             switch (request.Command)
@@ -224,7 +231,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
                         !status.ProtectionOn || !status.ProtectorPresent ||
                         unlockOwner is null || authenticatedOwner != client ||
-                        authenticatedOwnerHandle is not { } liveHandle || !Native.IsRunning(liveHandle))
+                        authenticatedOwnerHandle is not { } liveHandle || !Native.SameLiveProcess(liveHandle, pipeClient))
                         code = "NotAuthenticatedOwner";
                     break;
                 case BrokerCommand.CheckCefChild:
@@ -233,7 +240,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
                         !status.ProtectionOn || !status.ProtectorPresent ||
                         unlockOwner is null || authenticatedOwner != client ||
-                        authenticatedOwnerHandle is not { } preflightOwner || !Native.IsRunning(preflightOwner))
+                        authenticatedOwnerHandle is not { } preflightOwner || !Native.SameLiveProcess(preflightOwner, pipeClient))
                     {
                         code = "NotAuthenticatedOwner";
                         break;
@@ -256,7 +263,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
                         !status.ProtectionOn || !status.ProtectorPresent ||
                         unlockOwner is not { } generation || authenticatedOwner != client ||
-                        authenticatedOwnerHandle is not { } stagingOwner || !Native.IsRunning(stagingOwner))
+                        authenticatedOwnerHandle is not { } stagingOwner || !Native.SameLiveProcess(stagingOwner, pipeClient))
                     {
                         code = "NotAuthenticatedOwner";
                         break;
@@ -313,7 +320,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 case BrokerCommand.Unlock:
                     // Acquire the crash-relock handle BEFORE opening protected data.
                     // If this process cannot be watched, no new unlock is allowed.
-                    var ownerHandle = Native.OpenForWait(client);
+                    var ownerHandle = Native.OpenForWait(client, pipeClient);
                     if (ownerHandle.IsInvalid)
                     {
                         ownerHandle.Dispose();
@@ -391,6 +398,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            RevokePendingCefChild();
             log.Write("command", new { client.ProcessId, command, result = "BackendFailure", type = error.GetType().Name });
             return Protocol.Error("BackendFailure");
         }
