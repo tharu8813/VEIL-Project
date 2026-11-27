@@ -207,3 +207,7 @@ Native.ObserveProcess는 실제 live process handle에서 PID/생성 시각/imag
 ### 추가 구현: owner-only CEF broker 사전 검증 명령 (검증 대기)
 
 CheckCefChild 명령은 기존 인증 및 allowlist를 통과한 실제 unlock owner만 요청 가능하다. 엄격한 decimal string childHandle만 허용하고 기존 명령과 secret/path/PID 입력을 분리한다. admin-only 생산 설정의 별도 CefChildImage/CefChildSha256 pin이 모두 등록되어야 하며 미등록/개발 모드에서는 CefUnavailable. 실제 handle 복제, child 파일 경로/서명/hash 검증, owner/child 및 볼륨 재확인 후 일반 status만 반환한다. handle은 요청 종료 시 폐기하며 위임 grant, 자식 pipe 권한, 실행 승인은 절대 생성하지 않는다. 현재 installer/desktop/native 제품 startup 미연결. 순수 실제 parser 회귀와 fake broker 거부 시나리오 추가; fake broker 및 실제 production pin/BitLocker 실행 NOT RUN. 다음 단계는 broker 소유의 retained handle/grant lifecycle 및 별도 child redemption 프로토콜과 native 검증 연결.
+
+### 추가 구현: 단일 대기 CEF 위임 자원 (검증 대기)
+
+StageCefChild는 별도 제품 pin이 등록된 실제 unlock owner만 호출할 수 있다. 기존 CheckCefChild와 별도 명령으로 child handle/image handle 및 CefChildAdmission을 하나의 broker pending slot에 보존한다. 중복 staging 거부, 15초 단조 정책 및 serialized timeout, lock/detach 요청, owner 종료, service cleanup, 보호 상태 상실 시 철회/자원 정리. 반환은 기존 status이며 grant token 또는 child pipe 권한은 없다. 실제 redemption/launch authorization, child exit containment/relock, installer 등록 및 native 연동은 미완료. 순수 resource lifecycle, 실제 parser, 소스 계약 및 fake broker 거부 테스트 추가. 최신 CI와 production Windows/BitLocker 실행 결과 대기. WebView2 유지.

@@ -545,6 +545,40 @@ foreach (string invalidPin in new[] { "", "00", new string('g', 64), new string(
 }
 Console.WriteLine("PASS: CEF executable SHA-256 pin and changed bytes refusal");
 
+// Resource ownership is exercised without real process or file handles.
+var retainedPolicy = Grant();
+var retainedProcess = new SyntheticRetainedResource();
+var retainedImage = new SyntheticRetainedResource();
+using (var pending = new Veil.VolumeBroker.CefPendingChild(retainedPolicy, retainedProcess, retainedImage))
+{
+    Check(!pending.IsExpired, "new pending child expired immediately");
+    admissionClock.Advance(TimeSpan.FromSeconds(15));
+    Check(pending.IsExpired, "pending child did not expire");
+    pending.Dispose();
+    pending.Dispose();
+    Check(retainedProcess.Disposals == 1 && retainedImage.Disposals == 1 &&
+        !Redeem(retainedPolicy), "pending child disposal failed to retire resources");
+}
+var throwingProcess = new SyntheticRetainedResource();
+var throwingImage = new SyntheticRetainedResource { Throw = true };
+var throwingPending = new Veil.VolumeBroker.CefPendingChild(Grant(), throwingProcess, throwingImage);
+try { throwingPending.Dispose(); }
+catch (IOException) { }
+Check(throwingProcess.Disposals == 1 && throwingImage.Disposals == 1,
+    "image disposal failure leaked the process resource");
+Console.WriteLine("PASS: pending CEF child resource ownership and retirement");
+
+file sealed class SyntheticRetainedResource : IDisposable
+{
+    internal int Disposals { get; private set; }
+    internal bool Throw { get; init; }
+    public void Dispose()
+    {
+        Disposals++;
+        if (Throw) throw new IOException("synthetic disposal failure");
+    }
+}
+
 file sealed class SyntheticAdmissionClock : TimeProvider
 {
     private long timestamp;

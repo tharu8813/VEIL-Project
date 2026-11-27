@@ -11,6 +11,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private object? unlockOwner;
     private ClientIdentity? authenticatedOwner;
     private SafeProcessHandle? authenticatedOwnerHandle;
+    private CefPendingChild? pendingCefChild;
 
     internal async Task RunAsync(CancellationToken stop, Action? ready = null)
     {
@@ -38,6 +39,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         await serial.WaitAsync();
         try
         {
+            RevokePendingCefChild();
             var status = backend.Status();
             if (!status.Attached) return;
             if (!string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase))
@@ -148,6 +150,13 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             var status = backend.Status();
             bool Registered(BackendStatus current) => current.Attached &&
                 string.Equals(current.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase);
+            if (pendingCefChild is { } pending && (pending.IsExpired || !Registered(status) ||
+                !status.Unlocked || !status.FullyEncrypted || !status.ProtectionOn ||
+                !status.ProtectorPresent || authenticatedOwnerHandle is not { } active ||
+                !Native.IsRunning(active)))
+                RevokePendingCefChild();
+            if (request.Command is BrokerCommand.Lock or BrokerCommand.Detach)
+                RevokePendingCefChild(); // Even a refused lock retires pending startup authority.
             if (status.Attached && !Registered(status))
                 return Protocol.Error("VolumeMismatch");
             switch (request.Command)
@@ -187,6 +196,46 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                         !status.ProtectionOn || !status.ProtectorPresent ||
                         !Native.IsRunning(preflightOwner))
                         code = "NotAuthenticatedOwner";
+                    break;
+                case BrokerCommand.StageCefChild:
+                    if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
+                        !status.ProtectionOn || !status.ProtectorPresent ||
+                        unlockOwner is not { } generation || authenticatedOwner != client ||
+                        authenticatedOwnerHandle is not { } stagingOwner || !Native.IsRunning(stagingOwner))
+                    {
+                        code = "NotAuthenticatedOwner";
+                        break;
+                    }
+                    if (config.Development || config.CefChildImage is not { } stagePath ||
+                        config.CefChildSha256 is not { } stageHash)
+                    {
+                        code = "CefUnavailable";
+                        break;
+                    }
+                    if (pendingCefChild is not null)
+                    {
+                        code = "CefChildPending";
+                        break;
+                    }
+                    var candidate = CefChildPreflight.Stage(client, stagingOwner,
+                        request.ChildHandle!.Value, stagePath, stageHash, generation);
+                    try
+                    {
+                        status = backend.Status();
+                        if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
+                            !status.ProtectionOn || !status.ProtectorPresent ||
+                            !Native.IsRunning(stagingOwner) || candidate.IsExpired)
+                        {
+                            code = "NotAuthenticatedOwner";
+                            break;
+                        }
+                        pendingCefChild = candidate;
+                        _ = ExpirePendingCefChildAsync(candidate);
+                    }
+                    finally
+                    {
+                        if (!ReferenceEquals(pendingCefChild, candidate)) candidate.Dispose();
+                    }
                     break;
                 case BrokerCommand.Attach when status.Attached:
                     code = "AlreadyAttached"; break;
@@ -302,8 +351,28 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     /// <summary>Locks the volume when the client that unlocked it exits without locking.</summary>
     private void ClearAuthenticatedOwner()
     {
+        RevokePendingCefChild();
         authenticatedOwner = null;
         authenticatedOwnerHandle = null;
+    }
+
+    private void RevokePendingCefChild()
+    {
+        var pending = pendingCefChild;
+        pendingCefChild = null;
+        pending?.Dispose();
+    }
+
+    private async Task ExpirePendingCefChildAsync(CefPendingChild expected)
+    {
+        await Task.Delay(CefChildAdmission.Lifetime);
+        await serial.WaitAsync();
+        try
+        {
+            // An older timeout must never revoke a later nomination.
+            if (ReferenceEquals(pendingCefChild, expected)) RevokePendingCefChild();
+        }
+        finally { serial.Release(); }
     }
 
     private void Watch(int pid, SafeProcessHandle handle)

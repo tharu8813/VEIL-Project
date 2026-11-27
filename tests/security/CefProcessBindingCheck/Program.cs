@@ -14,7 +14,11 @@ using (var parsed = Protocol.Parse("""{"command":"CheckCefChild","volumeId":"syn
     Check(parsed.Command == BrokerCommand.CheckCefChild && parsed.ChildHandle == 123 &&
         parsed.Secret is null, "Valid CEF preflight wire request rejected.");
 }
+using (var staged = Protocol.Parse("""{"command":"StageCefChild","volumeId":"synthetic","childHandle":"123"}"""u8))
+    Check(staged.Command == BrokerCommand.StageCefChild && staged.ChildHandle == 123, "Stage request rejected.");
 foreach (string bad in new[] {
+    """{"command":"StageCefChild","volumeId":"synthetic"}""",
+    """{"command":"StageCefChild","volumeId":"synthetic","childHandle":"1","secret":"synthetic"}""",
     """{"command":"CheckCefChild","volumeId":"synthetic"}""",
     """{"command":"CheckCefChild","volumeId":"synthetic","childHandle":123}""",
     """{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"0"}""",

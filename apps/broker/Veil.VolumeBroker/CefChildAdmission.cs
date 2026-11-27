@@ -9,7 +9,7 @@ namespace Veil.VolumeBroker;
 /// </summary>
 internal sealed class CefChildAdmission
 {
-    private static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(15);
+    internal static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(15);
     private readonly TimeProvider clock;
     private readonly long issuedAt;
     private readonly ClientIdentity owner;
@@ -57,6 +57,9 @@ internal sealed class CefChildAdmission
             owner == observedOwner && child == observedChild &&
             ownerAlive && childAlive && childImageVerified && protectedVolume;
     }
+
+    internal bool IsExpired => clock.GetElapsedTime(issuedAt) is var elapsed &&
+        (elapsed < TimeSpan.Zero || elapsed >= Lifetime);
 
     internal void Revoke() => retired = true;
 }

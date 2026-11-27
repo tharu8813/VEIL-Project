@@ -139,6 +139,8 @@ try {
     assert.equal((await command(a, 'AuthenticatedOwner')).status.unlocked, true);
     assert.deepEqual(await command(a, 'CheckCefChild', { childHandle: '1' }),
         { ok: false, error: 'CefUnavailable' });
+    assert.deepEqual(await command(a, 'StageCefChild', { childHandle: '1' }),
+        { ok: false, error: 'CefUnavailable' });
     const ownerCheckScript = `const s=require('net').connect(process.argv[1]);s.on('connect',()=>s.write(JSON.stringify({command:'AuthenticatedOwner',volumeId:'${volumeId}'})+'\\n'));s.on('data',d=>{process.stdout.write(d);process.exit(0);});`;
     const otherOwner = await run(process.execPath, ['-e', ownerCheckScript, `\\\\.\\pipe\\${a.settings.pipeName}`]);
     assert.deepEqual(JSON.parse(otherOwner.stdout), { ok: false, error: 'NotAuthenticatedOwner' });

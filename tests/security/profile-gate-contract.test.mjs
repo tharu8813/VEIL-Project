@@ -173,7 +173,7 @@ test('broker process generation binds the crash watcher and child admission stay
     assert.match(native, /GetProcessTimes\(process, out long created, out _, out _, out _\)[\s\S]*?new ClientIdentity\([\s\S]*?, created\)/);
     assert.match(native, /OpenForWait\(ClientIdentity client\)[\s\S]*?created == client\.CreatedFileTime && IsRunning\(process\)/);
     assert.match(broker, /var ownerHandle = Native\.OpenForWait\(client\);\s*if \(ownerHandle\.IsInvalid\)/);
-    assert.doesNotMatch(broker, /CefChildAdmission/);
+    assert.doesNotMatch(protocol, /RedeemChild|GrantChild/);
     assert.doesNotMatch(protocol, /CefChildAdmission|RedeemChild|GrantChild/);
 });
 
@@ -216,14 +216,31 @@ test('CEF preflight command is owner-only, separately pinned and never grants ch
     const config = await readFile('apps/broker/Veil.VolumeBroker/BrokerConfig.cs', 'utf8');
     const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
     const preflight = await readFile('apps/broker/Veil.VolumeBroker/CefChildPreflight.cs', 'utf8');
-    const command = broker.slice(broker.indexOf('case BrokerCommand.CheckCefChild:'), broker.indexOf('case BrokerCommand.Attach'));
+    const command = broker.slice(broker.indexOf('case BrokerCommand.CheckCefChild:'), broker.indexOf('case BrokerCommand.StageCefChild:'));
     assert.match(command, /authenticatedOwner != client[\s\S]*?code = "NotAuthenticatedOwner";[\s\S]*?config\.Development[\s\S]*?code = "CefUnavailable";[\s\S]*?CefChildPreflight\.Check/);
     assert.match(command, /status = backend\.Status\(\);[\s\S]*?!Native\.IsRunning\(preflightOwner\)/);
     assert.doesNotMatch(command, /backend\.(Attach|Unlock|Lock|Detach)\(|CefChildAdmission|GrantChild|RedeemChild/);
     const reject = broker.slice(broker.indexOf('private string? Reject('), broker.indexOf('private async Task<byte[]> Execute'));
     assert.doesNotMatch(reject, /CefChildImage|CefChildSha256|CheckCefChild/);
     assert.match(config, /if \(CefChildImage is not null \|\| CefChildSha256 is not null\)[\s\S]*?if \(development \|\|/);
-    assert.match(protocol, /\(parsed == BrokerCommand\.CheckCefChild\) != childHandle\.HasValue/);
+    assert.match(protocol, /\(parsed is BrokerCommand\.CheckCefChild or BrokerCommand\.StageCefChild\) != childHandle\.HasValue/);
     assert.match(preflight, /using var child = binding\.Handle;\s*using var image = CefPinnedImage\.OpenVerified/);
     assert.match(preflight, /Native\.ObserveProcess\(ownerHandle\) != owner \|\|\s*Native\.ObserveProcess\(child\) != binding\.Identity/);
+});
+
+
+test('CEF staged child is bounded to one pending slot and retired on lock and timeout', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const preflight = await readFile('apps/broker/Veil.VolumeBroker/CefChildPreflight.cs', 'utf8');
+    const pending = await readFile('apps/broker/Veil.VolumeBroker/CefPendingChild.cs', 'utf8');
+    const stage = broker.slice(broker.indexOf('case BrokerCommand.StageCefChild:'), broker.indexOf('case BrokerCommand.Attach'));
+    assert.match(stage, /authenticatedOwner != client[\s\S]*?config\.Development[\s\S]*?if \(pendingCefChild is not null\)[\s\S]*?CefChildPreflight\.Stage/);
+    assert.match(stage, /pendingCefChild = candidate;\s*_ = ExpirePendingCefChildAsync\(candidate\);/);
+    assert.match(stage, /if \(!ReferenceEquals\(pendingCefChild, candidate\)\) candidate\.Dispose\(\)/);
+    assert.match(broker, /request\.Command is BrokerCommand\.Lock or BrokerCommand\.Detach\)\s*RevokePendingCefChild\(\)/);
+    assert.match(broker, /private void ClearAuthenticatedOwner\(\)\s*\{\s*RevokePendingCefChild\(\)/);
+    assert.match(broker, /if \(ReferenceEquals\(pendingCefChild, expected\)\) RevokePendingCefChild\(\)/);
+    assert.match(preflight, /return new CefPendingChild\(new CefChildAdmission/);
+    assert.match(pending, /admission\.Revoke\(\);\s*try \{ image\.Dispose\(\); \}\s*finally \{ process\.Dispose\(\); \}/);
+    assert.doesNotMatch(broker, /TryRedeem\(/);
 });

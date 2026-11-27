@@ -19,5 +19,6 @@
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/ClientIdentity.cs" Link="ClientIdentity.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefChildAdmission.cs" Link="CefChildAdmission.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefImageDigest.cs" Link="CefImageDigest.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefPendingChild.cs" Link="CefPendingChild.cs" />
   </ItemGroup>
 </Project>
