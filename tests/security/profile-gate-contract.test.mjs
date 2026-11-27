@@ -69,3 +69,25 @@ test('runtime protection attestation requires explicitly disabled automatic unlo
     assert.match(backend, /root\.TryGetProperty\("autoUnlockDisabled", out var automatic\) &&\s*automatic\.ValueKind == JsonValueKind\.True/);
     assert.match(backend, /Number\("protection"\) == 1 && autoUnlockDisabled, Number\("lock"\) == 0/);
 });
+
+
+test('future CEF protected profile preflight is read-only and refuses unverified volume', async () => {
+    const layout = await readFile('apps/desktop/Engine/CefProfileLayout.cs', 'utf8');
+    const preflight = await readFile('apps/desktop/Engine/CefProtectedProfilePreflight.cs', 'utf8');
+    const native = await readFile('apps/cef-smoke/wpf.cc', 'utf8');
+    const session = await readFile('apps/desktop/BrowserSession.cs', 'utf8');
+    assert.match(layout, /!Path\.IsPathFullyQualified\(productRoot\)/);
+    assert.match(layout, /EngineRoot = Path\.Combine\(ProductRoot, "cef"\);/);
+    for (const [property, dir] of [['Cache','cache'], ['Scratch','temp'], ['Logs','logs']])
+        assert.match(layout, new RegExp(property + ' = Path\\.Combine\\(EngineRoot, "' + dir + '"\\);'));
+    assert.match(preflight, /ProfileGate\.RejectElevated\(\);[\s\S]*?ProfileGate\.Verify\(layout\.ProductRoot, broker, requireProtected: true\)/);
+    assert.match(preflight, /FileAttributes\.Directory[\s\S]*?FileAttributes\.ReparsePoint[\s\S]*?ProfileGate\.Verify\(path, broker, requireProtected: true\);\s*RequireSameVolume\(initial, location\);/);
+    assert.match(preflight, /ProfileGate\.RejectRedirectedChildren\(layout\.EngineRoot\)/);
+    assert.match(preflight, /RequireSameVolume\(initial, ProfileGate\.Verify\(layout\.ProductRoot, broker, requireProtected: true\)\);/);
+    assert.match(preflight, /!expected\.Protected \|\| !actual\.Protected \|\|[\s\S]*?expected\.VolumeGuid, actual\.VolumeGuid/);
+    assert.match(preflight, /try \{ return File\.GetAttributes\(path\); \}\s*catch \(FileNotFoundException\) \{ return null; \}\s*catch \(DirectoryNotFoundException\) \{ return null; \}/);
+    assert.doesNotMatch(preflight, /Directory\.CreateDirectory|ProfileGate\.Prepare|requireProtected:\s*false|UnmanagedDevelopmentVolume|SetEnvironmentVariable|Process\.Start/);
+    assert.match(native, /if \(!CefInitialize\([\s\S]*?const int result = RunManagedWindow\(\);/);
+    assert.match(session, /EngineHost \{ get; \} = new WebView2BrowserEngine\(\);/);
+    assert.doesNotMatch(startup, /CefProtectedProfilePreflight|CefDevelopmentEngine/);
+});
