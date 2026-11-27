@@ -108,6 +108,10 @@ try
     Check(await child.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)) == "ready",
         "Test child failed to become ready.");
     var expected = Native.ObserveProcess(child.SafeHandle);
+    var modules = Native.SnapshotModulePaths(child.SafeHandle, expected);
+    Check(modules.Contains(expected.ImagePath, StringComparer.OrdinalIgnoreCase), "Live module snapshot omitted child image.");
+    Check(modules.Length == modules.Distinct(StringComparer.OrdinalIgnoreCase).Count(), "Duplicate module paths.");
+    Reject(() => Native.SnapshotModulePaths(owner.SafeHandle, expected));
     var binding = Native.DuplicateNominatedChild(identity, owner.SafeHandle,
         child.SafeHandle.DangerousGetHandle());
     using var retained = binding.Handle;
@@ -129,6 +133,7 @@ try
     await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
     Check(child.ExitCode == 0 && !Native.IsRunning(retained), "Exited child still considered live.");
     Check(!Native.SameLiveProcess(retained, child.SafeHandle), "Exited process objects matched as live.");
+    Reject(() => Native.SnapshotModulePaths(retained, expected));
     Check(Native.MatchesExitedNomination(identity, owner.SafeHandle, child.SafeHandle.DangerousGetHandle().ToInt64(), retained, 0), "Exited nominated object did not match.");
     Check(!Native.MatchesExitedNomination(identity, owner.SafeHandle, child.SafeHandle.DangerousGetHandle().ToInt64(), retained, 29), "Incorrect exit code accepted.");
     Check(!Native.MatchesExitedNomination(identity, owner.SafeHandle, owner.SafeHandle.DangerousGetHandle().ToInt64(), retained, 0), "Different object accepted.");

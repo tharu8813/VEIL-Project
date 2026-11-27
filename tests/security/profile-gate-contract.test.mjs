@@ -428,3 +428,13 @@ test('native disabled candidate checks image mapping type and backing filenames 
     assert.match(native, /ObserveImageBacking\(entry.hModule, module_path, local\)/);
     assert.match(product, /RunProductPreflight\(allowed,[\s\S]*?result == veil_cef::ProductPreflightExit::kVerifiedButDisabled &&\s*!veil_cef::RestrictAndObserveLoadedModules\(\)/);
 });
+
+
+test('broker independently checks the live CEF module snapshot against retained registered runtime files', async () => {
+    const preflight = await readFile('apps/broker/Veil.VolumeBroker/CefChildPreflight.cs', 'utf8');
+    const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
+    const lease = await readFile('apps/desktop/Engine/CefRuntimeFileLease.cs', 'utf8');
+    assert.match(preflight, /CefRuntimeRegistrationLease.OpenInstalled\(\)[\s\S]*?Native.SnapshotModulePaths\(process, child\)[\s\S]*?runtime.RequireObservedApplicationModule\(module\)[\s\S]*?Native.SnapshotModulePaths\(process, child\)[\s\S]*?before.SequenceEqual\(after/);
+    assert.match(native, /SnapshotModulePaths[\s\S]*?ObserveProcess\(process\) != expected[\s\S]*?CreateToolhelp32Snapshot\(0x00000008 \| 0x00000010/);
+    assert.match(lease, /RequireObservedApplicationModule[\s\S]*?RequireCanonicalSingleLink\(observed.SafeFileHandle, modulePath\)[\s\S]*?original.VolumeSerial != current.VolumeSerial[\s\S]*?original.IndexHigh != current.IndexHigh \|\| original.IndexLow != current.IndexLow/);
+});

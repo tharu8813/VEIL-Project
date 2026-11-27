@@ -94,6 +94,38 @@ internal sealed class CefRuntimeFileLease : IDisposable
                 Path.Combine(root, pin.Path.Replace('/', Path.DirectorySeparatorChar)));
     }
 
+    // Broker-side loader snapshot names must resolve to the same retained
+    // disk objects that passed the registered SHA-256 inventory check.
+    // This is not a comparison with the kernel's mapped section object.
+    internal void RequireObservedApplicationModule(string modulePath)
+    {
+        RequireCurrent();
+        if (!Path.IsPathFullyQualified(modulePath) ||
+            !string.Equals(modulePath, Path.GetFullPath(modulePath), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(Path.GetDirectoryName(modulePath), root, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("CEF module is outside the registered runtime root.");
+        string name = Path.GetFileName(modulePath);
+        if (!pins.ContainsKey(name) ||
+            !(name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+              string.Equals(name, "veil-cef-product.exe", StringComparison.OrdinalIgnoreCase)))
+            throw new UnauthorizedAccessException("CEF module is not a registered image.");
+        int i = 0;
+        foreach (var pin in pins.Values)
+        {
+            var retained = streams[i++];
+            if (!string.Equals(pin.Path, name, StringComparison.OrdinalIgnoreCase)) continue;
+            using var observed = new FileStream(modulePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            RequireCanonicalSingleLink(observed.SafeFileHandle, modulePath);
+            if (!GetFileInformationByHandle(retained.SafeFileHandle, out var original) ||
+                !GetFileInformationByHandle(observed.SafeFileHandle, out var current) ||
+                original.VolumeSerial != current.VolumeSerial ||
+                original.IndexHigh != current.IndexHigh || original.IndexLow != current.IndexLow)
+                throw new UnauthorizedAccessException("CEF module disk object differs from retained inventory.");
+            return;
+        }
+        throw new UnauthorizedAccessException("CEF module registration unavailable.");
+    }
+
     private void CheckInventory()
     {
         for (var ancestor = new DirectoryInfo(root); ancestor is not null; ancestor = ancestor.Parent)

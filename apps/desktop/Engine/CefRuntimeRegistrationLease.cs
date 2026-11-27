@@ -119,6 +119,12 @@ internal sealed class CefRuntimeRegistrationLease : IDisposable
         get { RequireCurrent(); return runtime.ImagePath; }
     }
 
+    internal void RequireObservedApplicationModule(string modulePath)
+    {
+        RequireCurrent();
+        runtime.RequireObservedApplicationModule(modulePath);
+    }
+
     internal void RequireCurrent()
     {
         ObjectDisposedException.ThrowIf(disposed, this);

@@ -31,7 +31,36 @@ internal static class CefChildPreflight
         Native.RequireCanonicalSingleLinkImage(retainedImage.SafeFileHandle, registeredPath);
         using var rechecked = CefPinnedImage.OpenVerified(child, process,
             registeredPath, new CefImageDigest(sha256));
-        return Native.ObserveProcess(ownerHandle) == owner && Native.ObserveProcess(process) == child;
+        // Independently read the fixed admin registration and inspect the
+        // actual child loader list before releasing the broker receipt.
+        using var runtime = Veil.Desktop.CefRuntimeRegistrationLease.OpenInstalled();
+        if (!string.Equals(runtime.ImagePath, registeredPath, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var before = Native.SnapshotModulePaths(process, child);
+        string application = Path.GetDirectoryName(registeredPath)!;
+        string system = Environment.SystemDirectory;
+        if (string.IsNullOrWhiteSpace(system)) return false;
+        bool host = false, product = false;
+        foreach (string module in before)
+        {
+            if (!Path.IsPathFullyQualified(module) ||
+                !string.Equals(module, Path.GetFullPath(module), StringComparison.OrdinalIgnoreCase))
+                return false;
+            string? directory = Path.GetDirectoryName(module);
+            if (string.Equals(directory, application, StringComparison.OrdinalIgnoreCase))
+            {
+                runtime.RequireObservedApplicationModule(module);
+                host |= string.Equals(module, registeredPath, StringComparison.OrdinalIgnoreCase);
+                product |= string.Equals(Path.GetFileName(module), "veil-cef-product.dll", StringComparison.OrdinalIgnoreCase);
+            }
+            else if (!string.Equals(directory, system, StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+        if (!host || !product) return false;
+        runtime.RequireCurrent();
+        var after = Native.SnapshotModulePaths(process, child);
+        return before.SequenceEqual(after, StringComparer.OrdinalIgnoreCase) &&
+            Native.ObserveProcess(ownerHandle) == owner && Native.ObserveProcess(process) == child;
     }
 
     // Transfers ownership only after all observations succeed. The caller

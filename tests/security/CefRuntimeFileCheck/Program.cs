@@ -61,6 +61,12 @@ try
         Check(lease.ImagePath == Path.Combine(root, "veil-cef-product.exe"), "Wrong image path.");
         lease.RequireCurrent();
         string dll = Path.Combine(root, "libcef.dll");
+        lease.RequireObservedApplicationModule(dll);
+        lease.RequireObservedApplicationModule(lease.ImagePath);
+        Reject(() => lease.RequireObservedApplicationModule(Path.Combine(root, "icudtl.dat")));
+        Reject(() => lease.RequireObservedApplicationModule(Path.Combine(root, "unregistered.dll")));
+        Reject(() => lease.RequireObservedApplicationModule(Path.Combine(root, "locales", "en-US.pak")));
+        Reject(() => lease.RequireObservedApplicationModule(Path.Combine(Path.GetTempPath(), "libcef.dll")));
         Reject(() => File.AppendAllText(dll, "modified"));
         Reject(() => File.Delete(dll));
         string extra = Path.Combine(root, "extra.dll");

@@ -158,6 +158,50 @@ internal static class Native
 
     // Toolhelp parent PID is only corroborating metadata (parent selection can
     // be overridden at creation); it is NOT proof of the original creator.
+    // Independent broker-side snapshot of the live process. Holding the
+    // original process object avoids treating a reused PID as this child.
+    // Toolhelp is a loader inventory, not an exhaustive memory attestation.
+    internal static string[] SnapshotModulePaths(SafeProcessHandle process, ClientIdentity expected)
+    {
+        if (ObserveProcess(process) != expected)
+            throw new UnauthorizedAccessException("CEF module process identity changed.");
+        using var snapshot = CreateToolhelp32Snapshot(0x00000008 | 0x00000010, (uint)expected.ProcessId);
+        if (snapshot.IsInvalid) throw new Win32Exception();
+        var entry = new ModuleEntry { Size = (uint)Marshal.SizeOf<ModuleEntry>(), ModuleName = "", ImagePath = "" };
+        if (!Module32FirstW(snapshot, ref entry)) throw new Win32Exception();
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        do
+        {
+            if (entry.ProcessId != (uint)expected.ProcessId || entry.Module == IntPtr.Zero ||
+                entry.ImagePath.Length is 0 or >= 259 || !paths.Add(entry.ImagePath) || paths.Count > 1024)
+                throw new UnauthorizedAccessException("Invalid CEF module snapshot.");
+            entry.Size = (uint)Marshal.SizeOf<ModuleEntry>();
+        } while (Module32NextW(snapshot, ref entry));
+        if (Marshal.GetLastWin32Error() != 18 || ObserveProcess(process) != expected ||
+            !paths.Contains(expected.ImagePath))
+            throw new UnauthorizedAccessException("Incomplete CEF module snapshot.");
+        return paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ModuleEntry
+    {
+        public uint Size, ModuleId, ProcessId, GlobalUsage, ProcessUsage;
+        public IntPtr BaseAddress;
+        public uint BaseSize;
+        public IntPtr Module;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string ModuleName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string ImagePath;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Module32FirstW(SafeFileHandle snapshot, ref ModuleEntry entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Module32NextW(SafeFileHandle snapshot, ref ModuleEntry entry);
+
     private static bool HasReportedParent(int child, int parent)
     {
         using var snapshot = CreateToolhelp32Snapshot(0x00000002 /* TH32CS_SNAPPROCESS */, 0);
