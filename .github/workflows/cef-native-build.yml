@@ -30,7 +30,7 @@ jobs:
       - name: Build pinned CEF smoke hosts
         shell: pwsh
         run: |
-          ./scripts/build-cef-smoke.ps1 -WorkRoot (Join-Path $env:RUNNER_TEMP "veil-cef-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT")
+          ./scripts/build-cef-smoke.ps1 -BuildProductCandidate -WorkRoot (Join-Path $env:RUNNER_TEMP "veil-cef-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT")
       - name: Check native CEF broker verification wire contract
         shell: pwsh
         run: |
@@ -49,6 +49,9 @@ jobs:
           $work = Join-Path $env:RUNNER_TEMP "veil-cef-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           & (Join-Path $work "build/Release/veil-cef-registration-test.exe")
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Synthetic product candidate inventory refusal checks
+        shell: pwsh
+        run: ./tests/install/cef-candidate.test.ps1
       - name: Record validation scope
         if: always()
         shell: pwsh

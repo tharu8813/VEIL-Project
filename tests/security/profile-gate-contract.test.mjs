@@ -322,3 +322,17 @@ test('native product registration is fixed machine-only read-only and not connec
         assert.doesNotMatch(host, /LoadRegisteredBootstrap|bootstrap_registration\.h/);
     }
 });
+
+
+test('product-named CEF candidate is isolated and does not initialize CEF', async () => {
+    const cmake = await readFile('apps/cef-smoke/CMakeLists.txt', 'utf8');
+    const product = await readFile('apps/cef-smoke/product_candidate.cc', 'utf8');
+    const packageBuild = await readFile('scripts/build-package.ps1', 'utf8');
+    const packagePolicy = await readFile('scripts/package-common.ps1', 'utf8');
+    assert.match(cmake, /add_library\(veil-cef-product SHARED EXCLUDE_FROM_ALL product_candidate\.cc\)/);
+    assert.match(cmake, /RUNTIME_OUTPUT_DIRECTORY "\$\{CMAKE_BINARY_DIR\}\/product-candidate"/);
+    assert.match(product, /int RunWinMain\([^)]*\)\s*\{\s*return 29;\s*\}/);
+    assert.doesNotMatch(product, /CefInitialize\s*\(|CefExecuteProcess\s*\(|RequestChildVerification\s*\(/);
+    assert.doesNotMatch(packageBuild, /veil-cef-product|BuildProductCandidate/);
+    assert.match(packagePolicy, /\(Desktop\|Broker\)\//);
+});

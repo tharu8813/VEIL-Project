@@ -52,3 +52,24 @@ if(DOTNET_HOST_PACK)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${CEF_BINARY_DIR_RELEASE}/bootstrap.exe" "$<TARGET_FILE_DIR:veil-cef-wpf>/veil-cef-wpf.exe")
 endif()
+
+
+# Product-named compile candidate only. Isolated from all smoke/managed
+# fixture output; it intentionally cannot start a browser.
+add_library(veil-cef-product SHARED EXCLUDE_FROM_ALL product_candidate.cc)
+SET_LIBRARY_TARGET_PROPERTIES(veil-cef-product)
+set_target_properties(veil-cef-product PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/product-candidate"
+  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/product-candidate"
+  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/product-import"
+  PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/product-symbols")
+target_include_directories(veil-cef-product PRIVATE "${CEF_ROOT}")
+target_link_libraries(veil-cef-product PRIVATE libcef_dll_wrapper "${CEF_LIB_RELEASE}"
+  ${CEF_STANDARD_LIBS} user32)
+set(product_candidate_dir "$<TARGET_FILE_DIR:veil-cef-product>")
+COPY_FILES(veil-cef-product "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR_RELEASE}" "${product_candidate_dir}")
+COPY_FILES(veil-cef-product "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${product_candidate_dir}")
+add_custom_command(TARGET veil-cef-product POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CEF_BINARY_DIR_RELEASE}/bootstrap.exe" "${product_candidate_dir}/veil-cef-product.exe"
+  COMMAND ${CMAKE_COMMAND} -E rm -f "${product_candidate_dir}/bootstrap.exe")
