@@ -192,3 +192,20 @@ test('future CEF executable checks use a retained file handle and do not extend 
     assert.match(admin, /Require\(file\.GetAccessControl\(\), "executable"\);\s*Require\(file\.Directory!\.GetAccessControl\(\), "executable directory"\);/);
     assert.doesNotMatch(broker, /CefPinnedImage|CefImageDigest/);
 });
+
+
+test('CEF launch nomination retains a duplicated live handle without treating parent PID as authorization', async () => {
+    const native = await readFile('apps/broker/Veil.VolumeBroker/Native.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
+    const binding = native.slice(native.indexOf('internal static (SafeProcessHandle Handle, ClientIdentity Identity) DuplicateNominatedChild'),
+        native.indexOf('// Match the process generation'));
+    assert.match(binding, /ObserveProcess\(originalOwner\) != owner/);
+    assert.match(binding, /ObserveProcess\(source\) != owner \|\|\s*!DuplicateHandle\(source, nominatedHandle,/);
+    assert.match(binding, /QueryLimitedInformation \| Synchronize, false, 0/);
+    assert.match(binding, /!HasReportedParent\(identity\.ProcessId, owner\.ProcessId\)/);
+    assert.match(binding, /ObserveProcess\(originalOwner\) != owner \|\| ObserveProcess\(child\) != identity/);
+    assert.match(binding, /return \(child, identity\);\s*\}\s*catch\s*\{\s*child\.Dispose\(\);/);
+    assert.doesNotMatch(broker, /DuplicateNominatedChild/);
+    assert.doesNotMatch(protocol, /NominatedChild|GrantChild|RedeemChild/);
+});

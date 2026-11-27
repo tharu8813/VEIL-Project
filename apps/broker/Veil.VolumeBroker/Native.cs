@@ -39,11 +39,21 @@ internal static class Native
             throw new Win32Exception();
         using var process = OpenProcess(QueryLimitedInformation | Synchronize, false, pid);
         if (process.IsInvalid) throw new Win32Exception();
-        var image = new StringBuilder(1024);
+        var observed = ObserveProcess(process);
+        if (observed.ProcessId != (int)pid || observed.SessionId != (int)session)
+            throw new UnauthorizedAccessException("Client pipe identity mismatch.");
+        return observed;
+    }
+
+    internal static ClientIdentity ObserveProcess(SafeProcessHandle process)
+    {
+        uint pid = GetProcessId(process);
+        if (pid == 0 || !IsRunning(process)) throw new UnauthorizedAccessException("Process is unavailable.");
+        var image = new StringBuilder(32768);
         int length = image.Capacity;
         if (!QueryFullProcessImageNameW(process, 0, image, ref length)) throw new Win32Exception();
-        if (!ProcessIdToSessionId(pid, out uint processSession) || processSession != session)
-            throw new UnauthorizedAccessException("Client session mismatch.");
+        if (!ProcessIdToSessionId(pid, out uint session))
+            throw new Win32Exception();
         if (!OpenProcessToken(process, 0x8 /* TOKEN_QUERY */, out var token)) throw new Win32Exception();
         using (token)
         using (var identity = new WindowsIdentity(token.DangerousGetHandle()))
@@ -54,6 +64,81 @@ internal static class Native
             return new ClientIdentity((int)pid, (int)session, identity.User!.Value, image.ToString(), created);
         }
     }
+
+    // Disconnected future launch-binding primitive. The source handle value
+    // must come from an authenticated owner's explicit launch nomination,
+    // never from the child or an environment variable. No authority is granted.
+    internal static (SafeProcessHandle Handle, ClientIdentity Identity) DuplicateNominatedChild(
+        ClientIdentity owner, SafeProcessHandle originalOwner, IntPtr nominatedHandle)
+    {
+        if (nominatedHandle.ToInt64() <= 0 || ObserveProcess(originalOwner) != owner)
+            throw new UnauthorizedAccessException("CEF owner or nominated handle is invalid.");
+
+        const uint duplicateHandleAccess = 0x0040;
+        using var source = OpenProcess(QueryLimitedInformation | Synchronize | duplicateHandleAccess,
+            false, (uint)owner.ProcessId);
+        if (source.IsInvalid || ObserveProcess(source) != owner ||
+            !DuplicateHandle(source, nominatedHandle, new IntPtr(-1), out var child,
+                QueryLimitedInformation | Synchronize, false, 0))
+            throw new UnauthorizedAccessException("CEF child handle could not be duplicated.");
+        try
+        {
+            var identity = ObserveProcess(child);
+            if (identity.ProcessId == owner.ProcessId ||
+                identity.CreatedFileTime < owner.CreatedFileTime ||
+                identity.SessionId != owner.SessionId ||
+                !string.Equals(identity.UserSid, owner.UserSid, StringComparison.OrdinalIgnoreCase) ||
+                !HasReportedParent(identity.ProcessId, owner.ProcessId) ||
+                ObserveProcess(originalOwner) != owner || ObserveProcess(child) != identity)
+                throw new UnauthorizedAccessException("CEF child nomination did not match live process identities.");
+            return (child, identity);
+        }
+        catch
+        {
+            child.Dispose();
+            throw;
+        }
+    }
+
+    // Toolhelp parent PID is only corroborating metadata (parent selection can
+    // be overridden at creation); it is NOT proof of the original creator.
+    private static bool HasReportedParent(int child, int parent)
+    {
+        using var snapshot = CreateToolhelp32Snapshot(0x00000002 /* TH32CS_SNAPPROCESS */, 0);
+        if (snapshot.IsInvalid) return false;
+        var entry = new ProcessEntry { Size = (uint)Marshal.SizeOf<ProcessEntry>(), ImageName = string.Empty };
+        if (!Process32FirstW(snapshot, ref entry)) return false;
+        do
+        {
+            if (entry.ProcessId == (uint)child) return entry.ParentProcessId == (uint)parent;
+        } while (Process32NextW(snapshot, ref entry));
+        return false;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry
+    {
+        public uint Size, Usage, ProcessId;
+        public UIntPtr DefaultHeapId;
+        public uint ModuleId, Threads, ParentProcessId;
+        public int Priority;
+        public uint Flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string ImageName;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DuplicateHandle(SafeProcessHandle sourceProcess, IntPtr sourceHandle,
+        IntPtr targetProcess, out SafeProcessHandle targetHandle, uint access,
+        [MarshalAs(UnmanagedType.Bool)] bool inherit, uint options);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeFileHandle CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32FirstW(SafeFileHandle snapshot, ref ProcessEntry entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32NextW(SafeFileHandle snapshot, ref ProcessEntry entry);
 
     // Match the process generation observed on the pipe, not merely a PID
     // that Windows could have reused while this request waited for serial.

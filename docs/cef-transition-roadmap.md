@@ -199,3 +199,7 @@ Named pipe에서 확인한 ClientIdentity에 OS GetProcessTimes의 생성 시각
 ### 추가 구현: CEF 실행 파일 pin 검증 (검증 대기)
 
 CefImageDigest는 정확한 64자 SHA-256과 전체 스트림 검사를 요구한다. 미연결 CefPinnedImage.OpenVerified는 별도 등록 경로와 실제 child process handle의 PID/생성 시각/image path, 관리자 소유 및 쓰기 제한 파일·직접 directory, reparse ancestor, read-only share로 유지한 파일 handle의 canonical path 및 single link, SHA-256/Authenticode, 검사 후 재검증을 요구한다. 성공 시 파일 handle을 반환하여 호출자가 수명을 유지할 수 있다. 프로세스 메모리/로드된 DLL, 상위 directory ACL 전부, 경로 race, 실제 parent-child 관계, 별도 제품 pin 등록 및 배포·서명, native bootstrap/IPC 권한 위임은 아직 미완료. 현재 브로커 allowlist와 명령, 기존 WebView2 startup은 변경하지 않는다. 순수 hash 회귀 및 source contract 추가; 실제 Windows signature/ACL/process/BitLocker 실측 NOT RUN.
+
+### 추가 구현: CEF launch nomination 및 Windows process handle 회귀 (검증 대기)
+
+Native.ObserveProcess는 실제 live process handle에서 PID/생성 시각/image/SID/session을 관측하며 기존 pipe의 PID/session과 일치시킨다. 미연결 DuplicateNominatedChild는 기존 owner handle과 재개방한 generation 일치 owner process를 요구하고 owner가 명시한 원본 child handle을 query/synchronize 권한만으로 복제한다. child의 SID/session/생성 시각, Toolhelp reported parent, 양쪽 생존 및 신원을 다시 확인하고 실패 시 handle을 닫는다. reported parent는 생성자가 지정할 수 있는 메타데이터라 단독 인증 증거가 아니며 이 helper도 생성 이벤트/실제 creator 증명이나 launch authority가 아니다. 실제 authenticated broker 요청, 등록 실행 파일 pin 및 one-shot admission 연결과 suspended launch/containment는 후속. 새 CI에서 합성 child 실제 프로세스를 실행하여 handle/세대/종료 및 잘못된 handle 거부를 검증하도록 추가. Windows test 결과 대기; 실제 CEF/BitLocker/서비스/표준 사용자 실측 NOT RUN. 기존 broker 명령 및 WebView2 유지.
