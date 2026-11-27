@@ -724,3 +724,21 @@ test('only explicit product login capability can reach existing encrypted creden
     assert.doesNotMatch(passwordUi, /tab\.EngineView is (?:not )?IEngineLoginForms/);
     assert.doesNotMatch(cefView, /LoginFormScope\.Product|Task<SavedLogin\?>/);
 });
+
+
+test('CEF standard-user runtime wrapper never equates synthetic pass with product security', async () => {
+    const wrapper = await readFile('scripts/test-cef-wpf.ps1', 'utf8');
+    assert.match(wrapper, /\[Environment\]::UserInteractive[\s\S]*?SessionId -eq 0/);
+    assert.match(wrapper, /\$principal\.IsInRole\(\[Security\.Principal\.WindowsBuiltInRole\]::Administrator\)/);
+    assert.match(wrapper, /status --porcelain --untracked-files=all/);
+    assert.match(wrapper, /build-cef-smoke\.ps1/);
+    assert.match(wrapper, /'build', '--locked', '--release', '--bin', 'veil-vault'/);
+    assert.match(wrapper, /Invoke-Stage 'win32'[\s\S]*?Invoke-Stage 'wpf'[\s\S]*?Invoke-Stage 'tabs'/);
+    assert.match(wrapper, /WaitForExit\(\$Seconds \* 1000\)/);
+    assert.match(wrapper, /taskkill\.exe \/PID \$child\.Id \/T \/F/);
+    assert.match(wrapper, /Assert-NoTestProcesses \$executables/);
+    assert.match(wrapper, /productReleaseGates = 'NOT RUN'/);
+    assert.match(wrapper, /sourceCommit = \$head/);
+    assert.match(wrapper, /Get-FileHash -Algorithm SHA256/);
+    assert.doesNotMatch(wrapper, /Remove-Item|no-sandbox|RunAs/);
+});

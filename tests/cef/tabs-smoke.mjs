@@ -288,6 +288,9 @@ try {
   // Only delete the unique directory created by this runner. Preserve failed
   // evidence and refuse to recurse into an unexpected root link.
   assert.ok(!(await lstat(fixtureTemp)).isSymbolicLink(), 'Fixture root was replaced with a link');
+  // Preserve successful synthetic observation evidence in the caller's stdout log.
+  console.log('Seed fixture observations:\n' + evidence);
+  console.log('Fresh fixture observations:\n' + fresh.evidence);
   await rm(fixtureTemp, { recursive: true, force: false, maxRetries: 5, retryDelay: 200 });
   assert.equal(await stat(fixtureTemp).then(() => true, error => {
     if (error.code !== 'ENOENT') throw error;
