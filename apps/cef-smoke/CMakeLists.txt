@@ -56,7 +56,13 @@ endif()
 
 # Product-named compile candidate only. Isolated from all smoke/managed
 # fixture output; it intentionally cannot start a browser.
-add_library(veil-cef-product SHARED EXCLUDE_FROM_ALL product_candidate.cc)
+add_executable(veil-cef-product-preflight-test product_preflight_test.cc)
+target_compile_features(veil-cef-product-preflight-test PRIVATE cxx_std_17)
+
+add_library(veil-cef-product SHARED EXCLUDE_FROM_ALL product_candidate.cc
+  protected_bootstrap.cc bootstrap_registration.cc broker_verification.cc)
+target_compile_features(veil-cef-product PRIVATE cxx_std_17)
+add_dependencies(veil-cef-product veil-cef-product-preflight-test)
 SET_LIBRARY_TARGET_PROPERTIES(veil-cef-product)
 set_target_properties(veil-cef-product PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/product-candidate"
@@ -65,7 +71,7 @@ set_target_properties(veil-cef-product PROPERTIES
   PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/product-symbols")
 target_include_directories(veil-cef-product PRIVATE "${CEF_ROOT}")
 target_link_libraries(veil-cef-product PRIVATE libcef_dll_wrapper "${CEF_LIB_RELEASE}"
-  ${CEF_STANDARD_LIBS} user32)
+  ${CEF_STANDARD_LIBS} user32 advapi32)
 set(product_candidate_dir "$<TARGET_FILE_DIR:veil-cef-product>")
 COPY_FILES(veil-cef-product "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR_RELEASE}" "${product_candidate_dir}")
 COPY_FILES(veil-cef-product "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${product_candidate_dir}")

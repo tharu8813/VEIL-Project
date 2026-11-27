@@ -6,7 +6,7 @@
 namespace veil_cef {
 // This input MUST come from independent administrator-controlled registration,
 // never from the child environment. Receipt v1 does not authenticate these
-// fields. The product loader for that registration is not implemented yet.
+// fields. The product candidate uses the independent machine registry loader.
 struct RegisteredBootstrap {
   fs::path product_root;
   std::wstring volume_guid;
@@ -62,7 +62,7 @@ BootstrapCheck CheckBootstrap(const RegisteredBootstrap& registration,
 }
 
 bool ReadBootstrapEnvironment(BootstrapEnvironment& supplied);
-// Deliberately not called by RunWinMain/CefInitialize. Caller still needs
+// The product candidate calls this for preflight only, never CefInitialize. Caller still needs
 // independently authenticated registration, pinned loaded code, containment,
 // live authority through shutdown and verified protected volume behavior.
 BootstrapCheck VerifyRegisteredBootstrap(const RegisteredBootstrap& registration);
