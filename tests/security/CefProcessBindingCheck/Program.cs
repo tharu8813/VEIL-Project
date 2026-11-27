@@ -12,6 +12,7 @@ if (args is ["--child"] or ["--child", "--type=renderer"])
 
 CefRoleTokenPolicyTests.Run();
 CefCommandRoleTests.Run();
+CefSystemModuleVerifierTests.Run();
 
 // Exercise the actual production parser with no broker or volume access.
 using (var parsed = Protocol.Parse("""{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"123"}"""u8))
