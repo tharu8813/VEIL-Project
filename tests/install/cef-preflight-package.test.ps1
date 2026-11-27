@@ -11,6 +11,14 @@ foreach ($name in @('cef-candidate-evidence.ps1','cef-preflight-package.ps1')) {
     if (-not $source.Contains('$cms.CheckSignature($false)')) { throw 'CMS contract changed.' }
     . ([scriptblock]::Create($source.Replace('$cms.CheckSignature($false)','$cms.CheckSignature($true)')))
 }
+$stageSource = [IO.File]::ReadAllText((Join-Path $dir 'cef-preflight-staging.ps1'))
+$import = ". (Join-Path " + '$PSScriptRoot' + " 'cef-preflight-package.ps1')"
+if (-not $stageSource.Contains($import)) { throw 'Staging import changed.' }
+. ([scriptblock]::Create($stageSource.Replace($import,'')))
+function New-VeilRestrictedDirectory([string]$Path) {
+    if (Test-Path -LiteralPath $Path) { throw 'Already exists.' }
+    [void][IO.Directory]::CreateDirectory($Path)
+}
 function Assert-VeilAdminPath([string]$Path) { }
 function Assert-VeilSignedImage([string]$Path,[string]$Thumbprint) { }
 $script:markerAccepted = $true
@@ -71,6 +79,35 @@ try {
     Reject { Verify }
     [IO.File]::WriteAllBytes($json,$original)
     [void](Verify)
+    $stage = Join-Path $work 'stage'
+    $bad = Join-Path $work 'bad-stage'
+    Reject { Copy-VeilVerifiedPreflightPackage $root $cefEvidence $packageEvidence $bad ('0'*40) $commit }
+    if (Test-Path -LiteralPath $bad) { throw 'Bad trust input created staging.' }
+    Reject { Copy-VeilVerifiedPreflightPackage $root $cefEvidence $packageEvidence (Join-Path $root 'bad') $cert.Thumbprint $commit }
+    $plan = Copy-VeilVerifiedPreflightPackage $root $cefEvidence $packageEvidence $stage $cert.Thumbprint $commit
+    if ($plan.kind -cne 'cef-preflight-stage-plan' -or $plan.installable -or $plan.startupEnabled -or
+        $plan.runtimePins.startupEnabled -or $plan.runtimePins.files.Count -ne 4 -or $plan.sourceCommit -cne $commit) {
+        throw 'Unexpected stage plan.'
+    }
+    foreach ($pair in @(@{name='desktopSha256';path='Desktop/Veil.Desktop.exe'},@{name='brokerSha256';path='Broker/Veil.VolumeBroker.exe'},@{name='cefChildSha256';path='Cef/veil-cef-product.exe'})) {
+        if ($plan.($pair.name) -ne (Get-FileHash -LiteralPath (Join-Path $root $pair.path)).Hash) { throw 'Staged image pin mismatch.' }
+    }
+    Reject { Copy-VeilVerifiedPreflightPackage $root $cefEvidence $packageEvidence $stage $cert.Thumbprint $commit }
+    [void](Get-VeilPreflightStagePlan $stage $cert.Thumbprint $commit)
+    $stageDll = Join-Path $stage 'payload/Desktop/Veil.Desktop.dll'
+    [IO.File]::AppendAllText($stageDll,'changed')
+    Reject { Get-VeilPreflightStagePlan $stage $cert.Thumbprint $commit }
+    if ([IO.File]::ReadAllText($stageDll) -cne 'syntheticchanged') { throw 'Invalid staging was modified.' }
+    [IO.File]::WriteAllText($stageDll,'synthetic')
+    $stageProof = Join-Path $stage 'package-evidence/preflight-package.p7s'
+    [IO.File]::AppendAllText($stageProof,'changed')
+    # Mutate the signed JSON as well; CMS decoders may ignore trailing bytes.
+    [IO.File]::AppendAllText((Join-Path $stage 'package-evidence/preflight-package.json'),' ')
+    Reject { Get-VeilPreflightStagePlan $stage $cert.Thumbprint $commit }
+    [IO.File]::AppendAllText((Join-Path $root 'Desktop/Veil.Desktop.dll'),'changed')
+    Reject { Copy-VeilVerifiedPreflightPackage $root $cefEvidence $packageEvidence $bad $cert.Thumbprint $commit }
+    if (Test-Path -LiteralPath $bad) { throw 'Changed source created staging.' }
+    Write-Host 'PASS: verified preflight staging, exact image pins, refusal and preservation'
     Write-Host 'PASS: separate preflight package signed inventory synthetic checks'
 }
 finally {

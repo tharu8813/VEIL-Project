@@ -48,7 +48,17 @@ $runtimePlan | ConvertFrom-Json | Select-Object kind,format,architecture,sourceC
 
 새 별도 CMS 증거에는 전체 파일 크기 및 SHA-256이 포함된다. 기존 제품 manifest와 형식이 다르며 installable=false 및 startupEnabled=false만 허용한다. 패키지 검증은 파일을 실행하거나 설치하지 않는다. 전체 payload의 안전한 게시 및 복구 절차는 여전히 미구현이다.
 
-## 5. 등록 전 차단점
+## 5. 전체 패키지 사전 스테이징
+
+깨끗한 폐기용 VM에서 기존 VEIL 설치 디렉터리·등록·브로커 서비스가 없는 경우에만 다음 준비를 수행할 수 있다.
+
+~~~powershell
+$stagePlan = .\scripts\stage-cef-preflight-package.ps1 -PayloadRoot $payload -CefEvidenceDirectory $evidence -PackageEvidenceDirectory $packageEvidence -SignerThumbprint $pin -SourceCommit $commit
+~~~
+
+고정 Program Files\VEIL.cef-preflight-staging 에 payload 및 양쪽 CMS 증거를 별도로 복사하고 원본·복사본을 다시 검증한다. 등록 예정 데스크톱/브로커/CEF 이미지 해시와 런타임 핀 계획을 출력한다. 오류 또는 기존 staging 발견 시 중단하고 증거를 보존한다. 이 도구는 설치 또는 등록을 수행하지 않으며 출력만으로 등록 권한을 부여하지 않는다.
+
+## 6. 등록 전 차단점
 
 전체 설치 트리의 서명 인벤토리 검증 도구는 마련했지만 CefPreflight 데스크톱의 pin, 브로커 pin 및 CEF 런타임 계획을 안전하게 함께 게시하는 전용 설치/복구 트랜잭션이 없다. 따라서 기존 설치 파일이나 broker.json/client.json을 수동 덮어쓰지 않는다. 기존 broker-service.ps1 및 제품 package-maintenance.ps1은 CEF 검증 빌드의 등록 도구가 아니다. 기존 staging을 설치 트리로 이동하거나 서비스 ACL/서명 검사를 우회하지 않는다.
 

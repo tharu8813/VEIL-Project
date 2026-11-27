@@ -377,3 +377,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 추가 구현: 검증 전용 전체 패키지 서명 증거
 
 정확한 head 5a45daf 일반 CI 45950908056 PASS, native CI 확인 시 진행 중. 별도 cef-preflight-vm-package CMS 형식으로 Desktop/CefPreflight, Broker 및 Cef 후보의 모든 파일을 크기/SHA-256 인벤토리에 포함한다. 원래 CEF 후보 CMS 검증과 runtime pins 일치를 요구하고 VEIL EXE/DLL Authenticode 및 별도 CefPreflight ProductName 마커를 검사한다. 일반 Release와 마커 분리를 CI에서 확인한다. 마커와 서명은 실행 동작 또는 빌드 출처의 독립 attestation이 아니다. 설치 가능/제품 시작 플래그는 false만 허용, 기존 패키지 및 설치 스크립트 변경 없음. 합성 CMS/변조/누락/추가/마커 거부 테스트 추가, 실제 Authenticode 및 ACL은 합성 시험에서 mock. 신규 CI, 실제 서명/설치/BitLocker/CEF runtime 및 독립 리뷰 NOT RUN. 게시/복구 트랜잭션은 다음 단계.
+
+### 추가 구현: 검증용 전체 패키지 스테이징 및 등록 핀 계획
+
+정확한 head 342b6cd 일반 CI 45951446755 PASS, native CI 확인 시 진행 중. 기존 설치/등록/서비스가 없는 깨끗한 VM에서만 고정 별도 staging에 전체 검증용 payload와 두 CMS 증거를 관리자 제한 ACL로 복사하는 준비 도구 추가. 복사 전 검증, 원본 증거 해시 및 복사본 비교, 원본/복사본 재검증 후 Desktop/Broker/CEF SHA-256 및 runtime pins 계획을 출력한다. 기존/부분 staging은 자동 삭제·재사용하지 않는다. 등록/설치/서비스/볼륨 변경 없음. 합성 테스트 추가, 신규 CI 및 실제 ACL/서명/VM NOT RUN. 설치 게시·복구·실제 BitLocker 검증은 남아 있음.
