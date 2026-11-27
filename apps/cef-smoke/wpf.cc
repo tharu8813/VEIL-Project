@@ -790,6 +790,7 @@ extern "C" __declspec(dllexport) void VeilCefResize(uint64_t id, HWND parent) {
 }
 
 extern "C" __declspec(dllexport) void VeilCefNavigate(uint64_t id, const wchar_t* url) {
+  if (const auto state = LookupView(id)) state->InvalidateLoginProbe();
   const auto browser = LookupBrowser(id);
   if (browser) browser->GetMainFrame()->LoadURL(url);
 }
@@ -814,22 +815,27 @@ extern "C" __declspec(dllexport) int VeilCefCanGoForward(uint64_t id) {
   return browser && browser->CanGoForward();
 }
 extern "C" __declspec(dllexport) void VeilCefGoBack(uint64_t id) {
+  if (const auto state = LookupView(id)) state->InvalidateLoginProbe();
   const auto browser = LookupBrowser(id);
   if (browser && browser->CanGoBack()) browser->GoBack();
 }
 extern "C" __declspec(dllexport) void VeilCefGoForward(uint64_t id) {
+  if (const auto state = LookupView(id)) state->InvalidateLoginProbe();
   const auto browser = LookupBrowser(id);
   if (browser && browser->CanGoForward()) browser->GoForward();
 }
 extern "C" __declspec(dllexport) void VeilCefReload(uint64_t id) {
+  if (const auto state = LookupView(id)) state->InvalidateLoginProbe();
   const auto browser = LookupBrowser(id);
   if (browser) browser->Reload();
 }
 extern "C" __declspec(dllexport) void VeilCefReloadIgnoringCache(uint64_t id) {
+  if (const auto state = LookupView(id)) state->InvalidateLoginProbe();
   const auto browser = LookupBrowser(id);
   if (browser) browser->ReloadIgnoreCache();
 }
 extern "C" __declspec(dllexport) void VeilCefStop(uint64_t id) {
+  if (const auto state = LookupView(id)) state->InvalidateLoginProbe();
   const auto browser = LookupBrowser(id);
   if (browser) browser->StopLoad();
 }
@@ -987,7 +993,10 @@ static bool IsFixtureLoginFillPage(const std::wstring& origin, const std::wstrin
   if (!IsFixtureStorageOrigin(origin) || origin.rfind(L"http://127.0.0.1:", 0) != 0) return false;
   for (const auto* path : {L"/tabs-login-fill-empty", L"/tabs-login-fill-matching",
                           L"/tabs-login-fill-existing", L"/tabs-login-fill-other",
-                          L"/tabs-login-fill-denied"})
+                          L"/tabs-login-fill-denied", L"/tabs-login-fill-duplicate",
+                          L"/tabs-login-fill-switch", L"/tabs-login-fill-navigation",
+                          L"/tabs-login-fill-destination", L"/tabs-login-fill-closing",
+                          L"/tabs-login-fill-reopened"})
     if (page == origin + path) return true;
   return false;
 }
@@ -1075,7 +1084,8 @@ static int StartFixtureLoginObservation(uint64_t id, const wchar_t* origin,
     case FixtureLoginOperation::CheckFillState:
       expression += R"JS(
         const route=location.pathname;
-        const filled=route==='/tabs-login-fill-empty'||route==='/tabs-login-fill-matching';
+        const filled=route==='/tabs-login-fill-empty'||route==='/tabs-login-fill-matching'||
+          route==='/tabs-login-fill-duplicate';
         const expectedUser=filled||route==='/tabs-login-fill-existing'?'veil-synthetic-user':
           route==='/tabs-login-fill-other'?'other-synthetic-user':'';
         const expectedPass=filled?'veil-synthetic-marker':
@@ -1283,6 +1293,7 @@ extern "C" __declspec(dllexport) int VeilCefTryClose(uint64_t id) {
   const auto state = LookupView(id);
   if (!state) return 1;
   if (!browser) return 0;
+  state->InvalidateLoginProbe();
   if (state->owned_transfer) state->owned_transfer->Cancel();
   const bool ready = browser->GetHost()->TryCloseBrowser();
   if (ready) state->closing = true;

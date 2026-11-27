@@ -48,7 +48,10 @@ internal sealed class TabbedDevelopmentHost
     private Task<double?>? firstUsage, secondUsage, rejectedUsage;
     private Task<bool>? storageClear, httpCacheClear;
     private Task<int>? knownOriginClear;
-    private Task<bool?>? loginProbe;
+    private Task<bool?>? loginProbe, duplicateLoginProbe;
+    private Tab? loginSpare;
+    private int lifetimeAuthorizationChecks;
+    private ulong closingLoginId;
     private int loginProbeIndex, loginValuesIndex, loginFillIndex;
     private static readonly string[] LoginFillPaths = ["/tabs-login-fill-empty", "/tabs-login-fill-matching",
         "/tabs-login-fill-existing", "/tabs-login-fill-other", "/tabs-login-fill-denied"];
@@ -156,6 +159,11 @@ internal sealed class TabbedDevelopmentHost
     private void Select(Tab tab)
     {
         if (shuttingDown || tab.Closing || !tabs.Contains(tab)) return;
+        if (!ReferenceEquals(active, tab))
+        {
+            active?.View.InvalidateFixtureLoginContext();
+            tab.View.InvalidateFixtureLoginContext();
+        }
         active = tab;
         foreach (var item in tabs)
         {
@@ -182,6 +190,7 @@ internal sealed class TabbedDevelopmentHost
     {
         if (tab.Closing || !tabs.Contains(tab)) return;
         tab.Closing = true;
+        tab.View.InvalidateFixtureLoginContext();
         tab.ClosingId = tab.View.NativeHandle;
         tab.Header.IsEnabled = false;
         CefNative.VeilCefCancelOwnedAttachment(tab.ClosingId);
@@ -255,7 +264,7 @@ internal sealed class TabbedDevelopmentHost
 
     private void RunFixture()
     {
-        if (elapsed.Elapsed > TimeSpan.FromSeconds(75))
+        if (elapsed.Elapsed > TimeSpan.FromSeconds(freshProfileProbe ? 105 : 75))
         {
             Log($"Tabbed fixture timeout at phase {phase}");
             BeginShutdown();
@@ -826,8 +835,9 @@ internal sealed class TabbedDevelopmentHost
             if (++loginFillIndex == LoginFillPaths.Length)
             {
                 Log("Synthetic login fill verified exact markers, input/change events, existing values and revoked dispatch without submission");
-                result = 0;
-                BeginShutdown();
+                address.Text = Url("/tabs-login-fill-duplicate");
+                NavigateAddress();
+                phase = 63;
             }
             else
             {
@@ -835,6 +845,172 @@ internal sealed class TabbedDevelopmentHost
                 NavigateAddress();
                 phase = 60;
             }
+        }
+        else if (phase == 63 && first?.View.DocumentTitle == "TAB_LOGIN_LIFETIME_DUPLICATE" && !first.View.IsFixtureLoading)
+        {
+            var page = Url("/tabs-login-fill-duplicate");
+            var origin = new Uri(page).GetLeftPart(UriPartial.Authority);
+            if (first.View.Source != page) { Fail(); return; }
+            lifetimeAuthorizationChecks = 0;
+            loginProbe = first.View.FillFixtureLoginAsync(origin, page, () =>
+            {
+                // Reenter during native dispatch authorization, while the
+                // original managed/native operation owns its slot.
+                if (++lifetimeAuthorizationChecks == 2)
+                    duplicateLoginProbe = first.View.FillFixtureLoginAsync(origin, page, () => true);
+                return active == first && !first.Closing && !shuttingDown;
+            });
+            phase = 64;
+        }
+        else if (phase == 64 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result != true ||
+                duplicateLoginProbe is not { IsCompletedSuccessfully: true } || duplicateLoginProbe.Result is not null)
+            { Fail(); return; }
+            var page = Url("/tabs-login-fill-duplicate");
+            loginProbe = first!.View.CheckFixtureLoginFillStateAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page, () => true);
+            phase = 65;
+        }
+        else if (phase == 65 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result != true) { Fail(); return; }
+            Log("Duplicate login operation rejected without releasing original slot");
+            loginSpare = AddTab();
+            if (loginSpare is null) { Fail(); return; }
+            Select(first!);
+            address.Text = Url("/tabs-login-fill-switch");
+            NavigateAddress();
+            phase = 66;
+        }
+        else if (phase == 66 && first?.View.DocumentTitle == "TAB_LOGIN_LIFETIME_SWITCH" &&
+                 loginSpare?.View.NativeHandle > 0 && !first.View.IsFixtureLoading)
+        {
+            var page = Url("/tabs-login-fill-switch");
+            if (first.View.Source != page) { Fail(); return; }
+            lifetimeAuthorizationChecks = 0;
+            loginProbe = first.View.FillFixtureLoginAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page, () =>
+            {
+                if (++lifetimeAuthorizationChecks == 2)
+                {
+                    Select(loginSpare!);
+                    Select(first);
+                }
+                return active == first && !first.Closing && !shuttingDown;
+            });
+            phase = 67;
+        }
+        else if (phase == 67 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is not null || lifetimeAuthorizationChecks != 2)
+            { Fail(); return; }
+            var page = Url("/tabs-login-fill-switch");
+            loginProbe = first!.View.CheckFixtureLoginFillStateAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page, () => true);
+            phase = 68;
+        }
+        else if (phase == 68 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result != true) { Fail(); return; }
+            Log("A-B-A tab switch invalidated login authorization and preserved empty form");
+            RequestClose(loginSpare!);
+            address.Text = Url("/tabs-login-fill-navigation");
+            NavigateAddress();
+            phase = 69;
+        }
+        else if (phase == 69 && first?.View.DocumentTitle == "TAB_LOGIN_LIFETIME_NAVIGATION" && !first.View.IsFixtureLoading)
+        {
+            var page = Url("/tabs-login-fill-navigation");
+            if (first.View.Source != page) { Fail(); return; }
+            lifetimeAuthorizationChecks = 0;
+            loginProbe = first.View.FillFixtureLoginAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page, () =>
+            {
+                if (++lifetimeAuthorizationChecks == 2)
+                    first.View.Navigate(Url("/tabs-login-fill-destination"));
+                return active == first && !first.Closing && !shuttingDown;
+            });
+            phase = 70;
+        }
+        else if (phase == 70 && loginProbe is { IsCompleted: true } &&
+                 first?.View.DocumentTitle == "TAB_LOGIN_LIFETIME_DESTINATION" && !first.View.IsFixtureLoading)
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is not null || lifetimeAuthorizationChecks != 2)
+            { Fail(); return; }
+            var page = Url("/tabs-login-fill-destination");
+            if (first.View.Source != page || first.View.NativeHandle != firstId) { Fail(); return; }
+            loginProbe = first.View.CheckFixtureLoginFillStateAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page, () => true);
+            phase = 71;
+        }
+        else if (phase == 71 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result != true) { Fail(); return; }
+            Log("Navigation during native authorization rejected fill and preserved destination form");
+            phase = 72;
+        }
+        else if (phase == 72 && CefNative.VeilCefLiveViewCount() == 1 && retired.Count == 0)
+        {
+            loginSpare = AddTab();
+            if (loginSpare is null) { Fail(); return; }
+            phase = 73;
+        }
+        else if (phase == 73 && loginSpare is { } closingTab && closingTab.View.NativeHandle != 0)
+        {
+            closingLoginId = closingTab.View.NativeHandle;
+            if (closingLoginId == firstId) { Fail(); return; }
+            address.Text = Url("/tabs-login-fill-closing");
+            NavigateAddress();
+            phase = 74;
+        }
+        else if (phase == 74 && loginSpare is { } closingTarget &&
+                 closingTarget.View.DocumentTitle == "TAB_LOGIN_LIFETIME_CLOSING" && !closingTarget.View.IsFixtureLoading)
+        {
+            var page = Url("/tabs-login-fill-closing");
+            if (closingTarget.View.Source != page || closingTarget.View.NativeHandle != closingLoginId) { Fail(); return; }
+            lifetimeAuthorizationChecks = 0;
+            loginProbe = closingTarget.View.FillFixtureLoginAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page, () =>
+            {
+                if (++lifetimeAuthorizationChecks == 2) RequestClose(closingTarget);
+                // Intentionally return true: closing must invalidate the
+                // captured generation even if the caller fails to revoke.
+                return true;
+            });
+            phase = 75;
+        }
+        else if (phase == 75 && loginProbe is { IsCompleted: true } &&
+                 CefNative.VeilCefClosed(closingLoginId) != 0 && retired.Count == 0)
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result is not null || lifetimeAuthorizationChecks != 2 ||
+                active != first || first!.View.NativeHandle != firstId || CefNative.VeilCefLiveViewCount() != 1)
+            { Fail(); return; }
+            var page = Url("/tabs-login-fill-closing");
+            CefNative.CookieDeleteAuthorization allow = _ => 1;
+            if (CefNative.VeilCefStartLoginFill(closingLoginId, new Uri(page).GetLeftPart(UriPartial.Authority), page, allow) != 0 ||
+                CefNative.VeilCefLoginProbeStatus(closingLoginId) != -1) { Fail(); return; }
+            Log("Closing login target invalidated authorization and retired native identity");
+            loginSpare = AddTab();
+            if (loginSpare is null) { Fail(); return; }
+            phase = 76;
+        }
+        else if (phase == 76 && loginSpare is { } reopenedTab && reopenedTab.View.NativeHandle != 0)
+        {
+            if (reopenedTab.View.NativeHandle <= closingLoginId) { Fail(); return; }
+            address.Text = Url("/tabs-login-fill-reopened");
+            NavigateAddress();
+            phase = 77;
+        }
+        else if (phase == 77 && loginSpare is { } newTarget &&
+                 newTarget.View.DocumentTitle == "TAB_LOGIN_LIFETIME_REOPENED" && !newTarget.View.IsFixtureLoading)
+        {
+            var page = Url("/tabs-login-fill-reopened");
+            if (newTarget.View.Source != page) { Fail(); return; }
+            loginProbe = newTarget.View.CheckFixtureLoginFillStateAsync(new Uri(page).GetLeftPart(UriPartial.Authority), page,
+                () => active == newTarget && !newTarget.Closing && !shuttingDown);
+            phase = 78;
+        }
+        else if (phase == 78 && loginProbe is { IsCompleted: true })
+        {
+            if (!loginProbe.IsCompletedSuccessfully || loginProbe.Result != true) { Fail(); return; }
+            Log("Reopened login view retained new identity and empty form");
+            result = 0;
+            BeginShutdown();
         }
     }
 }
