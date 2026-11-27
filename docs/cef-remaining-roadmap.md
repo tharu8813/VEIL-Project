@@ -22,9 +22,9 @@
 [#228](https://github.com/tharu8813/VEIL-Project/pull/228)은 #226에 이미 통합된 이력으로, main에 별도로 병합하지 않는다. #222~#225와 #227의 정확한 head가 #226의 조상임을 비교 API로 확인했지만 최종 통합 내용이 모든 기능을 보존하는지는 리뷰로 검증한다. 현재 승인된 독립 리뷰 없음. Copilot quota 실패는 승인 아님.
 
 - [x] P0-01: [#226 합성 다중 프로세스 시험 실패](https://github.com/tharu8813/VEIL-Project/actions/runs/45960862547)를 로컬 Windows에서 재현하고 수정했다. root handle 신원과 Job 소속은 정상이고, `CREATE_NO_WINDOW`로 자식을 시작했을 때 `conhost`까지 포함되어 accounting이 active=3, total=3, terminated=0이었다. 자식이 루트의 콘솔을 상속하도록 수정한 뒤 기존 검사와 production cap=1을 유지한 상태로 통과했다. 별도 Job을 생성하는 실제 CEF는 P2-01에서 검증한다.
-- [ ] P0-02: #226의 최신 정확한 head에서 일반 CI와 native CI 모두 PASS. 합성 root/descendant 쌍, 외부 PID, 변조 생성시각, cap=1, 두 Job 종료/강제 종료, 프로세스 핸들 보존을 검사한다.
+- [x] P0-02: #226의 CI 실패 이력을 보존하고, 후속 [#229](https://github.com/tharu8813/VEIL-Project/pull/229)의 검증 커밋에서 일반 CI와 native compile CI가 모두 PASS했다. 합성 root/descendant 쌍, 외부 PID, 변조 생성시각, cap=1, 두 Job 종료/강제 종료, 프로세스 핸들 보존을 검사했다.
 - [ ] P0-03: 통합 범위와 기존 PR 변경의 보존 여부를 독립 리뷰. 승인 리뷰를 가장하지 않는다. 사용자 결정으로 이번 통합은 독립 리뷰 전에 수행하며, 이후 보안 검토 및 제품 활성화 기준은 유지한다.
-- [ ] P0-04: 통합된 #180/#181 다운로드 fixture의 충돌 해소 코드 검증: 합성 GET/redirect/401/HttpOnly cookie/취소/원본 hash 및 Rust 금고 회귀, 기존 per-view 및 parallel 동작. 새 통합 결과는 미검증; 실제 CEF 테스트는 별도 기록.
+- [x] P0-04: 통합된 #180/#181의 합성 GET/redirect/401/HttpOnly cookie/취소/원본 hash, 기존 per-view 및 parallel 동작을 실제 CEF로 검증했다. Rust 금고 회귀도 통과했다.
 - [ ] P0-05: 이번 통합 후 정확한 main SHA의 CI 및 PR 상태 확인. 실패를 삭제하거나 성공으로 바꾸지 않고 해결 작업 기록. 이후 일반 병합에는 CI/리뷰/충돌 검사 기준 적용. 브랜치/PR 이력 및 실패 증거 보존.
 
 **완료 조건:** 통합 코드가 main에 있고 필수 CI 성공 및 필요한 검토 기록이 존재하며, 기존 WebView2 제품이 회귀하지 않는다. 제품 CEF 활성화는 여전히 금지.
@@ -96,3 +96,11 @@
 - [기준 커밋의 일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45962004465) FAIL. 다운로드 handoff와 parallel fixture의 소스 계약 두 개가 통합 전 코드 형태를 검사하고 있었다. `tests/security/tab-lifetime-contract.test.mjs`에서 현재의 동일 출처 검사, parallel별 원본 경로, handoff의 원본 URL 및 일회성 상태 초기화를 검사한다. 로컬 소스 계약 139개 PASS.
 - 로컬 미커밋 수정으로 `apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs`에 시험 전용 거절 진단을 추가하고, `tests/security/CefContainmentCheck/Program.cs`에서 자식의 콘솔 상속과 두 Job 각각의 명시적 강제 종료를 검증했다. Windows 합성 시험 PASS. 프로세스 핸들을 보존해 두 프로세스의 종료와 강제 종료 코드 35를 확인했다.
 - 로컬 Rust 금고 회귀 PASS, CEF WPF 관리 코드 Release compile PASS. 수정본의 원격 일반/native CI, 실제 CEF 다운로드·nested sandbox 실행과 보호 VM 검증은 NOT RUN. P0-02~P0-05는 열린 상태로 유지한다.
+
+## 후속 PR 및 CEF 실행 기록 (2026-11-27 KST)
+
+- [초안 #229](https://github.com/tharu8813/VEIL-Project/pull/229), `d378a5eda5e5d4b27f5423b68beebe32961be802`. [일반 CI PASS](https://github.com/tharu8813/VEIL-Project/actions/runs/45963056358), [native compile CI PASS](https://github.com/tharu8813/VEIL-Project/actions/runs/45963053759). #226 및 #180/#181과 #222~#225/#227의 로드맵 head가 통합 커밋의 조상임을 재확인했다. 독립 승인 리뷰는 대기 중이다.
+- 같은 SHA의 로컬 Windows 일반 사용자 합성 실행에서 native/managed build, Rust 금고 빌드, Win32, nested Win32 및 WPF 다운로드 PASS. 다운로드는 한 번의 인증 GET, HttpOnly 쿠키 전송, 익명 요청의 자격 증명 부재, redirect 미추적, 잘림·포화·병렬 취소, 각 정상 응답을 복호화한 전체 바이트와 예상 원본의 일치를 확인했다. 명시적 SHA-256 비교와 인증 실패 401 응답의 실제 CEF 경로는 별도 증거가 필요하다.
+- nested Win32는 종료 코드 0, 두 Job 정리 및 낮은 무결성의 제한 토큰 표본을 기록했다. 프로세스 역할별 표본 대응과 전체 수명 검증은 남아 있다.
+- 전체 로컬 실행 FAIL. 긴 임시 경로에서 탭 단계 2의 CacheStorage.open이 내부 오류로 실패했다. 짧은 경로를 사용한 진단에서는 양쪽 저장소 초기화와 쿠키 검증을 통과했으나 활성 탭 닫기에서 종료가 완료되지 않았다. 실패 로그와 실행 증거는 로컬 임시 디렉터리 `veil-cef-p0-d378a5e-17dd7ad5b9124af3b3f869781ba6468a/evidence`에 보존했다. 보호 VM과 제품 게이트는 NOT RUN.
+- P0-04 후속 변경은 인증 handoff를 두 번 명시적으로 요청해 각각 401/200을 한 번씩 관측한다. 401에서는 응답 바이트와 금고 객체가 없고, 성공한 인증 및 병렬 전송에서는 금고에서 복원한 SHA-256이 HTTP 원본과 일치한다. 새 WPF 합성 다운로드 시험 PASS, 소스 계약 139개 PASS. 변경 파일은 `apps/cef-smoke/wpf/FixtureVault.cs`, `apps/cef-smoke/wpf/WpfSmoke.cs`, `tests/cef/wpf-smoke.mjs`다. 전용 시험의 실행 로그는 같은 evidence 폴더의 `download-auth-wpf.stdout.log`에 보존했다.

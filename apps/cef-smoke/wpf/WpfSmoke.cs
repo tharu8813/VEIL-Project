@@ -455,6 +455,7 @@ public static class WpfSmoke
                     return;
                 }
                 Trace("Canceled parallel vault published no object; surviving vault restored all 786432 bytes");
+                Trace($"Parallel restored SHA-256: {kept.RestoredSha256}");
                 phase = 12;
             }
             else if (phase == 12 && secondaryWindowClosed && CefNative.VeilCefClosed(secondaryHandle) != 0)
@@ -528,14 +529,15 @@ public static class WpfSmoke
                     _ => "/wpf-owned-attachment",
                 };
                 var url = new Uri(new Uri(fixture), path).AbsoluteUri;
-                if (vaultScenario == VaultScenario.Full &&
+                bool requiresHandoff = vaultScenario is VaultScenario.Unauthorized or VaultScenario.Full;
+                if (requiresHandoff &&
                     CefNative.VeilCefStartOwnedAttachment(browser.NativeHandle, url, vaultStream.ChunkCallback) != 0)
                 {
                     Trace("CEF accepted an attachment without a page handoff");
                     window.Close();
                     return;
                 }
-                if (!vaultStream.Ready.Result || (vaultScenario == VaultScenario.Full
+                if (!vaultStream.Ready.Result || (requiresHandoff
                     ? CefNative.VeilCefClickFixtureAttachment(browser.NativeHandle, url)
                     : CefNative.VeilCefStartOwnedAttachment(browser.NativeHandle, url, vaultStream.ChunkCallback)) == 0)
                 {
@@ -543,7 +545,7 @@ public static class WpfSmoke
                     window.Close();
                     return;
                 }
-                phase = vaultScenario == VaultScenario.Full ? 9 : 7;
+                phase = requiresHandoff ? 9 : 7;
             }
             else if (phase == 9 && CefNative.VeilCefPageAttachmentIntercepted(browser.NativeHandle) != 0)
             {
@@ -563,6 +565,7 @@ public static class WpfSmoke
                 {
                     VaultScenario.Truncated => -1,
                     VaultScenario.Redirect => -1,
+                    VaultScenario.Unauthorized => -1,
                     VaultScenario.Saturated => -2,
                     _ => FixtureVault.BodySize,
                 };
@@ -589,12 +592,14 @@ public static class WpfSmoke
                     {
                         VaultScenario.Truncated => "Rust vault aborted the truncated stream without publishing an object",
                         VaultScenario.Redirect => "CEF refused the redirect and Rust vault published no object or response bytes",
+                        VaultScenario.Unauthorized => "CEF rejected the unauthorized attachment and Rust vault published no object or response bytes",
                         _ => "CEF canceled the saturated stream and Rust vault published no object",
                     });
                     vaultScenario = vaultScenario switch
                     {
                         VaultScenario.Truncated => VaultScenario.Redirect,
                         VaultScenario.Redirect => VaultScenario.Saturated,
+                        VaultScenario.Saturated => VaultScenario.Unauthorized,
                         _ => VaultScenario.Full,
                     };
                     vaultStream = new FixtureVault(fixtureVault!, CefDevelopmentEngine.FixtureProfile, vaultScenario);
@@ -604,6 +609,7 @@ public static class WpfSmoke
                 {
                     result = 0;
                     Trace($"Rust vault streamed and restored all {FixtureVault.BodySize} bytes from the owned CEF request");
+                    Trace($"Authenticated restored SHA-256: {vaultStream.RestoredSha256}");
                     window.Close();
                 }
             }

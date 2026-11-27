@@ -8,7 +8,7 @@ using System.Threading.Channels;
 
 namespace Veil.Cef;
 
-internal enum VaultScenario { Truncated, Redirect, Saturated, Full, ParallelCanceled, ParallelFull }
+internal enum VaultScenario { Truncated, Redirect, Saturated, Unauthorized, Full, ParallelCanceled, ParallelFull }
 
 internal sealed class FixtureVault
 {
@@ -21,6 +21,7 @@ internal sealed class FixtureVault
     private int completed;
     private int receivedBytes;
     internal int ReceivedBytes => Volatile.Read(ref receivedBytes);
+    internal string? RestoredSha256 { get; private set; }
 
     internal FixtureVault(string executable, string profile, VaultScenario scenario)
     {
@@ -70,6 +71,7 @@ internal sealed class FixtureVault
                 VaultScenario.Truncated => "truncated.veil",
                 VaultScenario.Redirect => "redirect.veil",
                 VaultScenario.Saturated => "saturated.veil",
+                VaultScenario.Unauthorized => "unauthorized.veil",
                 VaultScenario.ParallelCanceled => "canceled.veil",
                 _ => "fixture.veil",
             });
@@ -121,7 +123,8 @@ internal sealed class FixtureVault
                 var reply = ReadLine(output);
                 if (scenario is not (VaultScenario.Full or VaultScenario.ParallelFull))
                 {
-                    bool expectedBytes = scenario == VaultScenario.Redirect ? total == 0 : total > 0 && total < BodySize;
+                    bool expectedBytes = scenario is VaultScenario.Redirect or VaultScenario.Unauthorized
+                        ? total == 0 : total > 0 && total < BodySize;
                     if (fullResponse || !expectedBytes || !reply.StartsWith("err\t", StringComparison.Ordinal) ||
                         File.Exists(objectPath)) return false;
                 }
@@ -131,6 +134,7 @@ internal sealed class FixtureVault
                     WriteLine(input, $"read\t{objectPath}");
                     if (ReadLine(output) != $"ok\t{total}") return false;
                     var restored = new byte[ChunkSize];
+                    using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
                     try
                     {
                         for (var offset = 0; offset < total; offset += restored.Length)
@@ -138,7 +142,9 @@ internal sealed class FixtureVault
                             output.ReadExactly(restored);
                             for (var i = 0; i < restored.Length; ++i)
                                 if (restored[i] != (offset + i) % 251) return false;
+                            digest.AppendData(restored);
                         }
+                        RestoredSha256 = Convert.ToHexString(digest.GetHashAndReset());
                     }
                     finally { CryptographicOperations.ZeroMemory(restored); }
                 }
