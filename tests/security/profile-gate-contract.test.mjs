@@ -267,3 +267,17 @@ test('CEF redemption has a dedicated route and never reaches ordinary broker com
     assert.match(protocol, /new \{ ok = true, cefChildVerified = true \}/);
     assert.doesNotMatch(startup, /RedeemCefChild|cefChildVerified/);
 });
+
+
+test('native CEF receipt helper does not authorize smoke startup', async () => {
+    const header = await readFile('apps/cef-smoke/broker_verification.h', 'utf8');
+    const impl = await readFile('apps/cef-smoke/broker_verification.cc', 'utf8');
+    const smoke = await readFile('apps/cef-smoke/smoke.cc', 'utf8');
+    const wpf = await readFile('apps/cef-smoke/wpf.cc', 'utf8');
+    assert.match(header, /return reply == kVerifiedReply/);
+    assert.match(impl, /GetNamedPipeServerProcessId[\s\S]*?ServicePid\(\) == expected/);
+    assert.match(impl, /CancelIoEx\(pipe, &operation\)/);
+    assert.match(impl, /return IsVerifiedReply\(reply\) && SameServer/);
+    assert.doesNotMatch(impl, /GetEnvironmentVariable|CefInitialize/);
+    assert.doesNotMatch(smoke + wpf, /RequestChildVerification|broker_verification\.h/);
+});

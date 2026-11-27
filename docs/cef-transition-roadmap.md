@@ -215,3 +215,7 @@ StageCefChild는 별도 제품 pin이 등록된 실제 unlock owner만 호출할
 ### 추가 구현: CEF child 일회성 검증 응답 (검증 대기)
 
 RedeemCefChild는 기존 client allowlist의 image 거부 중 별도 admin pin과 경로가 일치하는 production 후보만 전용 분기로 들어가며 다른 모든 명령은 ClientRejected. 기존 desktop owner도 이 명령을 사용할 수 없다. pipe에서 관측한 실제 child identity와 pending generation이 일치해야 slot을 소비하고, owner/child retained handles, 실행 파일 canonical path/서명/hash, 등록 보호 상태를 재확인한 뒤 one-shot 정책을 적용한다. 성공은 최소 boolean cefChildVerified 응답뿐이며 실패·예외·lost reply 모두 재사용 불가. 현재 installer 및 CEF bootstrap에 연결하지 않았으며 실행 허가나 보호 볼륨 접근권 자체를 발급하지 않는다. child lifespan/containment/relock 및 원본 pipe identity handle 수명 강화, 전체 install trust, 실제 signed client/service/BitLocker 검증 필요. 기존 WebView2 유지. 실제 parser와 순수 slot 회귀 및 source contract 추가.
+
+### 추가 구현: CEF native broker 검증 통신 모듈 (검증 대기)
+
+별도 broker_verification 모듈은 고정 설치 service/pipe, SCM running PID와 pipe server PID 및 live process handle 일치 전후 확인, 제한된 ASCII volume ID, 고정 RedeemCefChild 요청, LF 프레임 및 정확한 compact boolean receipt만 허용한다. Overlapped I/O의 8초 예산과 취소/완료 정리, 실패 후 retry 없음. SCM 호출 및 cancellation drain은 엄격한 전체 wall-clock deadline 보장이 아니다. Native wire synthetic CI에서 invalid ID/부분 응답/추가 필드/거부/중복 필드 등을 검증하며 실제 서비스에는 접속하지 않는다. 기존 native smoke startup 및 CefInitialize 미연결, #225 경로 검증 별도, 실제 service/pipe transport·signed package·launch containment·BitLocker NOT RUN. receipt는 초기화 허가가 아니다. 고정 pipe 및 제한된 ID는 향후 installer registration 계약과 맞춰야 한다. WebView2 유지.

@@ -11,7 +11,13 @@ list(PREPEND CMAKE_MODULE_PATH "${CEF_ROOT}/cmake")
 find_package(CEF REQUIRED)
 add_subdirectory("${CEF_LIBCEF_DLL_WRAPPER_PATH}" libcef_dll_wrapper)
 
+# Standalone native protocol test; never launches CEF or contacts a real broker.
+add_executable(veil-cef-broker-wire-test broker_verification_test.cc broker_verification.cc)
+target_compile_features(veil-cef-broker-wire-test PRIVATE cxx_std_17)
+target_link_libraries(veil-cef-broker-wire-test PRIVATE advapi32)
+
 add_library(veil-cef-smoke SHARED smoke.cc)
+add_dependencies(veil-cef-smoke veil-cef-broker-wire-test)
 SET_LIBRARY_TARGET_PROPERTIES(veil-cef-smoke)
 target_include_directories(veil-cef-smoke PRIVATE "${CEF_ROOT}")
 target_link_libraries(veil-cef-smoke PRIVATE libcef_dll_wrapper "${CEF_LIB_RELEASE}"
