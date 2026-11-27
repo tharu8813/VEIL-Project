@@ -9,14 +9,16 @@ internal sealed class CefPendingChild : IDisposable
     private IDisposable? process;
     private readonly IDisposable image;
     private readonly IDisposable? runtime;
+    private IDisposable? job;
     private bool disposed;
 
-    internal CefPendingChild(CefChildAdmission admission, IDisposable process, IDisposable image, IDisposable? runtime = null)
+    internal CefPendingChild(CefChildAdmission admission, IDisposable process, IDisposable image, IDisposable? runtime = null, IDisposable? job = null)
     {
         this.admission = admission;
         this.process = process;
         this.image = image;
         this.runtime = runtime;
+        this.job = job;
     }
 
     internal bool IsExpired => disposed || admission.IsExpired;
@@ -33,6 +35,14 @@ internal sealed class CefPendingChild : IDisposable
         admission.Revoke();
         var retained = process;
         process = null;
+        return retained;
+    }
+    internal IDisposable? JobResource => job;
+    internal IDisposable? DetachJob()
+    {
+        admission.Revoke();
+        var retained = job;
+        job = null;
         return retained;
     }
     internal IDisposable ImageResource => image;
@@ -52,7 +62,11 @@ internal sealed class CefPendingChild : IDisposable
         finally
         {
             try { image.Dispose(); }
-            finally { process?.Dispose(); }
+            finally
+            {
+                try { job?.Dispose(); }
+                finally { process?.Dispose(); }
+            }
         }
     }
 }

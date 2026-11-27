@@ -23,6 +23,7 @@ internal static class CefChildPreflight
         SafeProcessHandle ownerHandle, ClientIdentity child, string registeredPath, string sha256)
     {
         if (pending.ProcessResource is not SafeProcessHandle process ||
+            pending.JobResource is not CefBrokerOwnedJob job || !job.ContainsVerifiedCandidate(child, process) ||
             pending.ImageResource is not FileStream retainedImage ||
             pending.RuntimeResource is not Veil.Desktop.CefRuntimeRegistrationLease runtime ||
             retainedImage.SafeFileHandle.IsClosed || retainedImage.SafeFileHandle.IsInvalid ||
@@ -61,6 +62,7 @@ internal static class CefChildPreflight
         runtime.RequireCurrent();
         var after = Native.SnapshotModulePaths(process, child);
         return before.SequenceEqual(after, StringComparer.OrdinalIgnoreCase) &&
+            job.ContainsVerifiedCandidate(child, process) &&
             Native.ObserveProcess(ownerHandle) == owner && Native.ObserveProcess(process) == child;
     }
 
@@ -73,6 +75,7 @@ internal static class CefChildPreflight
         FileStream? image = null;
         Veil.Desktop.CefRuntimeRegistrationLease? runtime = null;
         SafeProcessHandle? termination = null;
+        CefBrokerOwnedJob? job = null;
         try
         {
             image = CefPinnedImage.OpenVerified(binding.Identity, binding.Handle,
@@ -87,8 +90,10 @@ internal static class CefChildPreflight
                 Native.ObserveProcess(binding.Handle) != binding.Identity)
                 throw new UnauthorizedAccessException("CEF staging identity changed.");
             termination = Native.OpenCefTerminationHandle(binding.Identity, binding.Handle);
+            job = CefBrokerOwnedJob.CreateDisabledCandidate();
+            job.AssignVerifiedCandidate(owner, ownerHandle, binding.Identity, termination);
             var pending = new CefPendingChild(new CefChildAdmission(owner, binding.Identity,
-                generation, TimeProvider.System), termination, image, runtime);
+                generation, TimeProvider.System), termination, image, runtime, job);
             binding.Handle.Dispose();
             return pending;
         }
@@ -100,8 +105,12 @@ internal static class CefChildPreflight
                 try { image?.Dispose(); }
                 finally
                 {
-                    try { termination?.Dispose(); }
-                    finally { binding.Handle.Dispose(); }
+                    try { job?.Dispose(); }
+                    finally
+                    {
+                        try { termination?.Dispose(); }
+                        finally { binding.Handle.Dispose(); }
+                    }
                 }
             }
             throw;

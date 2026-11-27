@@ -6,9 +6,9 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Veil.VolumeBroker;
 
-// Disconnected prerequisite. Never accepts a client-provided job object.
+// Broker-owned disabled candidate job. Never accepts a client-provided job object.
 // The disabled preflight gets a single-process job, not a browser job.
-// All calls must be serialized by a future owning broker.
+// All production calls are serialized by the owning broker.
 internal sealed class CefBrokerOwnedJob : IDisposable
 {
     private readonly SafeFileHandle job;
@@ -101,7 +101,8 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
         var elapsed = Stopwatch.StartNew();
-        if (!TerminateJobObject(job, 35)) return false;
+        if (HasNoActiveProcesses()) return true;
+        if (!TerminateJobObject(job, 35)) return HasNoActiveProcesses();
         while (!HasNoActiveProcesses())
         {
             if (elapsed.ElapsedMilliseconds >= milliseconds) return false;

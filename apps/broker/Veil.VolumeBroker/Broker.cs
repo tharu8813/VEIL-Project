@@ -12,9 +12,10 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private ClientIdentity? authenticatedOwner;
     private SafeProcessHandle? authenticatedOwnerHandle;
     private CefPendingChild? pendingCefChild;
-    private readonly List<SafeProcessHandle> unresolvedCefStops = [];
+    private sealed record CandidateStop(SafeProcessHandle Child, CefBrokerOwnedJob? Job);
+    private readonly List<CandidateStop> unresolvedCefStops = [];
     private bool cefStopRetryRunning;
-    private sealed record CompletedPreflight(object Generation, SafeProcessHandle Child, long Issued);
+    private sealed record CompletedPreflight(object Generation, SafeProcessHandle Child, CefBrokerOwnedJob Job, long Issued);
     private CompletedPreflight? completedPreflight;
     private static bool Expired(CompletedPreflight receipt) =>
         System.Diagnostics.Stopwatch.GetElapsedTime(receipt.Issued) >= TimeSpan.FromSeconds(15);
@@ -194,6 +195,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     Native.ObserveProcess(ownerHandle) != owner ||
                     Native.ObserveProcess(childHandle) != client ||
                     !Native.SameLiveProcess(childHandle, pipeClient) ||
+                    pending.JobResource is not CefBrokerOwnedJob job || !job.ContainsVerifiedCandidate(client, childHandle) ||
                     !pending.TryRedeem(owner, client, generation,
                         Native.IsRunning(ownerHandle), Native.IsRunning(childHandle), true, true))
                     return Protocol.Error("CefChildRejected");
@@ -201,7 +203,12 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 // disposed. The owner must confirm this exact exited object.
                 var retained = Native.OpenCefTerminationHandle(client, childHandle);
                 if (completedPreflight is not null) { retained.Dispose(); return Protocol.Error("CefChildRejected"); }
-                var receipt = new CompletedPreflight(generation, retained, System.Diagnostics.Stopwatch.GetTimestamp());
+                if (!ReferenceEquals(pending.DetachJob(), job))
+                {
+                    retained.Dispose();
+                    return Protocol.Error("CefChildRejected");
+                }
+                var receipt = new CompletedPreflight(generation, retained, job, System.Diagnostics.Stopwatch.GetTimestamp());
                 completedPreflight = receipt;
                 _ = MonitorCompletedPreflightAsync(receipt);
                 return Protocol.CefChildVerified();
@@ -354,7 +361,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     try
                     {
                         if (Expired(receipt) || !ReferenceEquals(receipt.Generation, unlockOwner) ||
-                            !Native.MatchesExitedNomination(client, confirmOwner, request.ChildHandle!.Value, receipt.Child, 29))
+                            !Native.MatchesExitedNomination(client, confirmOwner, request.ChildHandle!.Value, receipt.Child, 29) ||
+                            !receipt.Job.HasNoActiveProcesses())
                         {
                             code = "CefChildRejected";
                             break;
@@ -362,14 +370,18 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                         status = backend.Status();
                         if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
                             !status.ProtectionOn || !status.ProtectorPresent || Expired(receipt) ||
-                            !Native.SameLiveProcess(confirmOwner, pipeClient))
+                            !Native.SameLiveProcess(confirmOwner, pipeClient) || !receipt.Job.HasNoActiveProcesses())
                             code = "CefChildRejected";
                         else confirmed = true;
                     }
                     finally
                     {
-                        if (confirmed) receipt.Child.Dispose();
-                        else StopOrRetain(receipt.Child);
+                        if (confirmed)
+                        {
+                            try { receipt.Job.Dispose(); }
+                            finally { receipt.Child.Dispose(); }
+                        }
+                        else StopOrRetain(new CandidateStop(receipt.Child, receipt.Job));
                     }
                     break;
                 case BrokerCommand.Attach when status.Attached:
@@ -511,19 +523,32 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     {
         var receipt = completedPreflight;
         completedPreflight = null;
-        if (receipt is not null) StopOrRetain(receipt.Child);
+        if (receipt is not null) StopOrRetain(new CandidateStop(receipt.Child, receipt.Job));
     }
 
     private void StopPendingChild(CefPendingChild pending)
     {
         var resource = pending.DetachRevokedProcess();
-        if (resource is SafeProcessHandle child) StopOrRetain(child);
-        else resource?.Dispose();
+        var job = pending.DetachJob();
+        if (resource is SafeProcessHandle child)
+            StopOrRetain(new CandidateStop(child, job as CefBrokerOwnedJob));
+        else
+        {
+            try { job?.Dispose(); }
+            finally { resource?.Dispose(); }
+        }
     }
 
-    private bool TryStopVerifiedChild(SafeProcessHandle child)
+    private bool TryStopVerifiedChild(CandidateStop candidate)
     {
-        try { return Native.TerminateCefChildAndWait(child); }
+        try
+        {
+            // Both job accounting and the original process exit signal are
+            // required. Failure retains both handles for the existing retry.
+            bool drained = candidate.Job is null || candidate.Job.TerminateAndDrain(2000);
+            bool exited = Native.TerminateCefChildAndWait(candidate.Child);
+            return drained && exited && (candidate.Job is null || candidate.Job.HasNoActiveProcesses());
+        }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             log.Write("cef-child-stop", new { result = "ExitNotConfirmed", type = error.GetType().Name });
@@ -533,14 +558,14 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
 
     // Owns the actual retained handle even on a failed stop. Never reopen
     // a PID, and never treat a failed termination as a successful admission.
-    private void StopOrRetain(SafeProcessHandle child)
+    private void StopOrRetain(CandidateStop candidate)
     {
-        if (TryStopVerifiedChild(child))
+        if (TryStopVerifiedChild(candidate))
         {
-            child.Dispose();
+            DisposeStoppedCandidate(candidate);
             return;
         }
-        unresolvedCefStops.Add(child);
+        unresolvedCefStops.Add(candidate);
         log.Write("cef-child-stop", new { result = "ExitNotConfirmed" });
         if (!cefStopRetryRunning)
         {
@@ -549,14 +574,20 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         }
     }
 
+    private static void DisposeStoppedCandidate(CandidateStop candidate)
+    {
+        try { candidate.Job?.Dispose(); }
+        finally { candidate.Child.Dispose(); }
+    }
+
     private void RetryUnresolvedCefStops()
     {
         for (int i = unresolvedCefStops.Count - 1; i >= 0; --i)
         {
-            var child = unresolvedCefStops[i];
-            if (!TryStopVerifiedChild(child)) continue;
+            var candidate = unresolvedCefStops[i];
+            if (!TryStopVerifiedChild(candidate)) continue;
             unresolvedCefStops.RemoveAt(i);
-            child.Dispose();
+            DisposeStoppedCandidate(candidate);
             log.Write("cef-child-stop", new { result = "ExitConfirmedAfterRetry" });
         }
     }
@@ -604,7 +635,10 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             try
             {
                 if (!ReferenceEquals(completedPreflight, expected)) return;
-                if (!Expired(expected) && CandidateAuthorityCurrent(expected.Generation)) continue;
+                if (!Expired(expected) && CandidateAuthorityCurrent(expected.Generation) &&
+                    (Native.IsRunning(expected.Child)
+                        ? expected.Job.ContainsVerifiedCandidate(Native.ObserveProcess(expected.Child), expected.Child)
+                        : expected.Job.HasNoActiveProcesses())) continue;
                 RevokeCompletedPreflight();
                 return;
             }
@@ -628,7 +662,9 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             {
                 if (!ReferenceEquals(pendingCefChild, expected)) return;
                 if (!expected.IsExpired && expected.ProcessResource is SafeProcessHandle child &&
-                    Native.IsRunning(child) && CandidateAuthorityCurrent(generation)) continue;
+                    Native.IsRunning(child) && expected.JobResource is CefBrokerOwnedJob job &&
+                    job.ContainsVerifiedCandidate(Native.ObserveProcess(child), child) &&
+                    CandidateAuthorityCurrent(generation)) continue;
                 RevokePendingCefChild();
                 return;
             }

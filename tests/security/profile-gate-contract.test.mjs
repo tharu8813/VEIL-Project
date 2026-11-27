@@ -246,7 +246,7 @@ test('CEF staged child is bounded to one pending slot and retired on lock and ti
     assert.match(broker, /private void ClearAuthenticatedOwner\(\)\s*\{\s*RevokePendingCefChild\(\)/);
     assert.match(broker, /if \(ReferenceEquals\(pendingCefChild, expected\)\) RevokePendingCefChild\(\)/);
     assert.match(preflight, /var pending = new CefPendingChild\(new CefChildAdmission[\s\S]*?return pending;/);
-    assert.match(pending, /admission\.Revoke\(\);\s*try \{ runtime\?\.Dispose\(\); \}\s*finally\s*\{\s*try \{ image\.Dispose\(\); \}\s*finally \{ process\?\.Dispose\(\); \}/);
+    assert.match(pending, /admission\.Revoke\(\);\s*try \{ runtime\?\.Dispose\(\); \}\s*finally\s*\{\s*try \{ image\.Dispose\(\); \}\s*finally\s*\{\s*try \{ job\?\.Dispose\(\); \}\s*finally \{ process\?\.Dispose\(\); \}/);
     assert.doesNotMatch(stage, /TryRedeem\(/);
 });
 
@@ -481,10 +481,10 @@ test('unconfirmed CEF exit retains the same process handle and blocks new admiss
     const pending = await readFile('apps/broker/Veil.VolumeBroker/CefPendingChild.cs', 'utf8');
     assert.match(pending, /DetachRevokedProcess\(\)[\s\S]*?admission.Revoke\(\);[\s\S]*?process = null;/);
     assert.match(broker, /StopPendingChild\(CefPendingChild pending\)[\s\S]*?pending.DetachRevokedProcess\(\)/);
-    assert.match(broker, /StopOrRetain\(SafeProcessHandle child\)[\s\S]*?unresolvedCefStops.Add\(child\)/);
-    assert.match(broker, /RetryUnresolvedCefStops\(\)[\s\S]*?TryStopVerifiedChild\(child\)[\s\S]*?unresolvedCefStops.RemoveAt\(i\);\s*child.Dispose\(\)/);
+    assert.match(broker, /StopOrRetain\(CandidateStop candidate\)[\s\S]*?unresolvedCefStops.Add\(candidate\)/);
+    assert.match(broker, /RetryUnresolvedCefStops\(\)[\s\S]*?TryStopVerifiedChild\(candidate\)[\s\S]*?unresolvedCefStops.RemoveAt\(i\);\s*DisposeStoppedCandidate\(candidate\)/);
     assert.match(broker, /request.Command is BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild\)\s*return Protocol.Error\("CefExitUnconfirmed"\)/);
-    assert.match(broker, /if \(confirmed\) receipt.Child.Dispose\(\);\s*else StopOrRetain\(receipt.Child\)/);
+    assert.match(broker, /if \(confirmed\)\s*\{\s*try \{ receipt.Job.Dispose\(\); \}\s*finally \{ receipt.Child.Dispose\(\); \}\s*\}\s*else StopOrRetain\(new CandidateStop\(receipt.Child, receipt.Job\)\)/);
 });
 
 
@@ -497,7 +497,7 @@ test('future broker-owned disabled job is created internally and never accepts c
     assert.match(native, /DuplicateJobHandle\(new IntPtr\(-1\), job, destination, out IntPtr remote, 0x0001 \| 0x0004, false, 0\)/);
     assert.match(job, /!IsProcessInJob\(ownerHandle, job, out bool ownerInside\) \|\| ownerInside[\s\S]*?!IsProcessInJob\(childHandle, job, out bool childInside\) \|\| !childInside[\s\S]*?state.TotalProcesses != 1 \|\| state.ActiveProcesses != 1/);
     assert.match(job, /TerminateJobObject\(job, 35\)[\s\S]*?while \(!HasNoActiveProcesses\(\)\)/);
-    assert.doesNotMatch(broker, /CefBrokerOwnedJob/);
+    assert.doesNotMatch(broker, /IssueAssignmentHandle|DuplicateCefJobAssignment/);
 });
 
 
@@ -510,4 +510,14 @@ test('broker can bind a desktop-contained child without exporting job assignment
     assert.doesNotMatch(direct, /IssueAssignmentHandle|DuplicateCefJobAssignment/);
     assert.match(native, /OpenCefAssignmentHandle[\s\S]*?0x0100 \| 0x0001[\s\S]*?!SameLiveProcess\(observed, handle\)/);
     assert.match(integration, /CefContainedProcess.CreateSuspended\(image, environment\)[\s\S]*?brokerJob.AssignVerifiedCandidate[\s\S]*?candidate.ResumeAfterVerification[\s\S]*?if \(closeBrokerFirst\) brokerJob.Dispose\(\);\s*else candidate.Dispose\(\);[\s\S]*?observer.WaitForExit/);
+});
+
+
+test('production disabled candidate retains broker job through admission, receipt and failed stop', async () => {
+    const preflight = await readFile('apps/broker/Veil.VolumeBroker/CefChildPreflight.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    assert.match(preflight, /job = CefBrokerOwnedJob.CreateDisabledCandidate\(\);\s*job.AssignVerifiedCandidate\(owner, ownerHandle, binding.Identity, termination\);[\s\S]*?termination, image, runtime, job/);
+    assert.match(broker, /pending.JobResource is not CefBrokerOwnedJob job[\s\S]*?pending.DetachJob\(\)[\s\S]*?new CompletedPreflight\(generation, retained, job,/);
+    assert.match(broker, /Native.MatchesExitedNomination[\s\S]*?!receipt.Job.HasNoActiveProcesses\(\)/);
+    assert.match(broker, /candidate.Job.TerminateAndDrain\(2000\)[\s\S]*?Native.TerminateCefChildAndWait\(candidate.Child\)[\s\S]*?return drained && exited/);
 });
