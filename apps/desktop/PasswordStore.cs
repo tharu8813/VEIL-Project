@@ -6,11 +6,6 @@ using System.Text.Json;
 
 namespace Veil.Desktop;
 
-internal sealed record SavedLogin(string Origin, string UserName, string Password)
-{
-    public override string ToString() => "[SavedLogin redacted]";
-}
-
 /// <summary>One-shot, authenticated Rust age store. No keys cached in the browser session.</summary>
 internal sealed class PasswordStore(string profileRoot)
 {

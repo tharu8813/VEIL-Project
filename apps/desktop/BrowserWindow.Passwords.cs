@@ -189,22 +189,26 @@ public partial class BrowserWindow
 
     private void UpdateLoginAction() =>
         LoginActionButton.Visibility = !session.IsPrivate && Active is { LoginFormDetected: true } tab && CanUseTab(tab.Item) &&
-            SitePermissionPolicy.Origin(tab.Url) is not null ? Visibility.Visible : Visibility.Collapsed;
+            tab.EngineView is IEngineLoginForms && SitePermissionPolicy.Origin(tab.Url) is not null
+                ? Visibility.Visible : Visibility.Collapsed;
 
     // Automatic detection returns only a boolean. Values are read only after an explicit native command.
     private async Task ProbeLoginFormAsync(BrowserTab tab)
     {
-        if (session.IsPrivate) return;
+        if (session.IsPrivate || tab.EngineView is not IEngineLoginForms forms) return;
         string page = tab.Url;
         string? origin = SitePermissionPolicy.Origin(page);
         long epoch = tab.NavigationEpoch;
         long selectionEpoch = permissionSelectionEpoch;
-        if (origin is null || !PermissionContextMatches(tab, origin, epoch, selectionEpoch)) return;
+        if (origin is null) return;
+        bool Current() => tab.Url == page && ReferenceEquals(tab.EngineView, forms) &&
+            !session.IsPrivate && PermissionContextMatches(tab, origin, epoch, selectionEpoch);
+        if (!Current()) return;
         try
         {
-            string result = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Probe(origin, page));
-            if (tab.Url != page || !PermissionContextMatches(tab, origin, epoch, selectionEpoch)) return;
-            tab.LoginFormDetected = result == "true";
+            bool detected = await forms.ProbeLoginFormAsync(origin, page, Current);
+            if (!Current()) return;
+            tab.LoginFormDetected = detected;
             UpdateLoginAction();
         }
         catch (Exception error) when (error is InvalidOperationException or COMException) { }
@@ -223,11 +227,13 @@ public partial class BrowserWindow
     private async Task PageLoginAsync(bool save)
     {
         if (!PasswordWindowReady() || session.PasswordUiOpen || session.PermissionUiOpen || session.SettingsUiOpen ||
-            Active is not { } tab || SitePermissionPolicy.Origin(tab.Url) is not { } origin) return;
+            Active is not { } tab || tab.EngineView is not IEngineLoginForms forms ||
+            SitePermissionPolicy.Origin(tab.Url) is not { } origin) return;
         long epoch = tab.NavigationEpoch;
         long selectionEpoch = permissionSelectionEpoch;
         string page = tab.Url;
-        bool Current() => tab.Url == page && PermissionContextMatches(tab, origin, epoch, selectionEpoch);
+        bool Current() => PasswordWindowReady() && tab.Url == page && ReferenceEquals(tab.EngineView, forms) &&
+            PermissionContextMatches(tab, origin, epoch, selectionEpoch);
         if (!Current()) return;
         session.PasswordUiOpen = true;
         session.PermissionUiOpen = true;
@@ -257,9 +263,9 @@ public partial class BrowserWindow
             if (!Current()) return;
             if (save)
             {
-                string json = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Read(origin, page));
+                var login = await forms.ReadLoginFormAsync(origin, page, Current);
                 if (!Current()) return;
-                var login = LoginFormPolicy.Decode(origin, json);
+                if (login is not null && login.Origin != origin) return;
                 if (login is null)
                 {
                     Status.Text = "지원되는 로그인 폼에 계정과 비밀번호를 먼저 입력하세요.";
@@ -298,11 +304,13 @@ public partial class BrowserWindow
 
     private async Task FillLoginAsync(BrowserTab tab, SavedLogin login, string page, long epoch, long selectionEpoch)
     {
-        bool Current() => tab.Url == page && PermissionContextMatches(tab, login.Origin, epoch, selectionEpoch);
+        if (tab.EngineView is not IEngineLoginForms forms) return;
+        bool Current() => PasswordWindowReady() && tab.Url == page && ReferenceEquals(tab.EngineView, forms) &&
+            PermissionContextMatches(tab, login.Origin, epoch, selectionEpoch);
         if (!Current()) return;
-        string result = await tab.View.CoreWebView2.ExecuteScriptAsync(LoginFormPolicy.Fill(login, page));
+        bool filled = await forms.FillLoginFormAsync(login, page, Current);
         if (Current())
-            Status.Text = result == "true" ? "로그인 정보를 채웠습니다. 제출은 직접 진행하세요." :
+            Status.Text = filled ? "로그인 정보를 채웠습니다. 제출은 직접 진행하세요." :
                 "지원되는 로그인 폼을 찾지 못했습니다. 직접 입력하세요.";
     }
 }

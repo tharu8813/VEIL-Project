@@ -129,9 +129,10 @@ test('login form probe, read and fill are bound to exact original URL in the scr
     assert.match(loginForm, /window !== window\.top \|\| location\.origin !==[\s\S]*?location\.href !== new URL\(\{\{JsonSerializer\.Serialize\(page\)\}\}\)\.href/);
     assert.match(loginForm, /el\.closest\('\[hidden\], \[inert\], \[aria-hidden="true"\]'\)/);
     assert.match(loginForm, /Number\(style\.opacity\) === 0 \|\| style\.contentVisibility === 'hidden'/);
-    assert.match(passwordUi, /LoginFormPolicy\.Probe\(origin, page\)/);
-    assert.match(passwordUi, /LoginFormPolicy\.Read\(origin, page\)/);
-    assert.match(passwordUi, /bool Current\(\) => tab\.Url == page && PermissionContextMatches\(tab, login\.Origin, epoch, selectionEpoch\);\s*if \(!Current\(\)\) return;\s*string result = await tab\.View\.CoreWebView2\.ExecuteScriptAsync\(LoginFormPolicy\.Fill\(login, page\)\);\s*if \(Current\(\)\)/);
+    assert.match(passwordUi, /await forms\.ProbeLoginFormAsync\(origin, page, Current\);\s*if \(!Current\(\)\) return;/);
+    assert.match(passwordUi, /await forms\.ReadLoginFormAsync\(origin, page, Current\);\s*if \(!Current\(\)\) return;\s*if \(login is not null && login\.Origin != origin\) return;/);
+    assert.match(passwordUi, /bool Current\(\) => PasswordWindowReady\(\) && tab\.Url == page && ReferenceEquals\(tab\.EngineView, forms\) &&\s*PermissionContextMatches\(tab, login\.Origin, epoch, selectionEpoch\);\s*if \(!Current\(\)\) return;\s*bool filled = await forms\.FillLoginFormAsync\(login, page, Current\);\s*if \(Current\(\)\)/);
+    assert.doesNotMatch(passwordUi, /CoreWebView2|ExecuteScriptAsync|LoginFormPolicy\./);
     assert.doesNotMatch(loginForm, /\.submit\(|\.requestSubmit\(/);
 });
 
@@ -587,4 +588,20 @@ test('CEF tab fixture checks fresh-process isolation before removing only its ow
     for (const source of [runner, singleRunner])
         assert.match(source, /Object\.entries\(process\.env\)\.filter\(\(\[key\]\) =>\s*!\[[^\]]*'VEIL_CEF_WPF_TABS_FRESH_PROBE'[^\]]*\]\.includes\(key\.toUpperCase\(\)\)/);
     assert.match(runner, /-not \$p\.ExecutablePath -and \$p\.Name -eq \[IO\.Path\]::GetFileName/);
+});
+
+
+test('login form capability permits only fixed host operations on the exact live standard HTTPS page', async () => {
+    const contract = await readFile('apps/desktop/Engine/IEngineLoginForms.cs', 'utf8');
+    assert.match(contract, /Task<bool> ProbeLoginFormAsync\(string origin, string page, Func<bool> stillAuthorized\);/);
+    assert.match(contract, /Task<SavedLogin\?> ReadLoginFormAsync\(string origin, string page, Func<bool> stillAuthorized\);/);
+    assert.match(contract, /Task<bool> FillLoginFormAsync\(SavedLogin login, string page, Func<bool> stillAuthorized\);/);
+    assert.match(contract, /ToString\(\) => "\[SavedLogin redacted\]"/);
+    assert.doesNotMatch(contract, /ExecuteScriptAsync|PostWebMessage|SubmitForm/);
+    assert.match(webView2, /NativeView\.Dispatcher\.VerifyAccess\(\);\s*if \(disposed \|\| SitePermissionPolicy\.Origin\(origin\) != origin \|\|\s*SitePermissionPolicy\.Origin\(page\) != origin \|\| !stillAuthorized\(\)\) return null;/);
+    assert.match(webView2, /!core\.Profile\.IsInPrivateModeEnabled &&\s*string\.Equals\(core\.Source, page, StringComparison\.Ordinal\)/);
+    assert.match(webView2, /core\.ExecuteScriptAsync\(LoginFormPolicy\.Probe\(origin, page\)\);\s*return ReferenceEquals\(core, LoginCore\(origin, page, stillAuthorized\)\) && result == "true";/);
+    assert.match(webView2, /core\.ExecuteScriptAsync\(LoginFormPolicy\.Read\(origin, page\)\);\s*if \(!ReferenceEquals\(core, LoginCore\(origin, page, stillAuthorized\)\)\) return null;\s*return LoginFormPolicy\.Decode\(origin, json\);/);
+    assert.match(webView2, /core\.ExecuteScriptAsync\(LoginFormPolicy\.Fill\(login, page\)\);\s*return ReferenceEquals\(core, LoginCore\(login\.Origin, page, stillAuthorized\)\) && result == "true";/);
+    assert.doesNotMatch(cefView, /IEngineLoginForms|ReadLoginFormAsync|FillLoginFormAsync/);
 });
