@@ -166,6 +166,34 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         };
     }
 
+    // Deliberately not IEngineLoginForms: HTTP synthetic detection is not a
+    // product credential capability. The native route allowlist is authoritative.
+    internal bool IsFixtureLoading => NativeHandle == 0 || CefNative.VeilCefFixtureLoading(NativeHandle) != 0;
+
+    internal async Task<bool> ProbeFixtureLoginFormAsync(string origin, string page, Func<bool> stillAuthorized)
+    {
+        Dispatcher.VerifyAccess();
+        RequireView();
+        ulong id = NativeHandle;
+        bool Current() => !disposed && NativeHandle == id && CefNative.VeilCefClosed(id) == 0 &&
+            SiteDataSupport.Scope == SiteDataScope.SyntheticFixture &&
+            SiteDataPolicy.Origin(page) == origin && Source == page && stillAuthorized();
+        if (!Current()) return false;
+        if (CefNative.VeilCefStartLoginProbe(id, origin, page) != 1) return false;
+        try
+        {
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            int status;
+            while ((status = CefNative.VeilCefLoginProbeStatus(id)) == 0)
+            {
+                if (!Current() || deadline.Elapsed > TimeSpan.FromSeconds(5)) return false;
+                await Task.Delay(10);
+            }
+            return Current() && status == 1;
+        }
+        finally { CefNative.VeilCefEndLoginProbe(id); }
+    }
+
     public async Task<IReadOnlyList<string>> GetCookieDomainsAsync()
     {
         Dispatcher.VerifyAccess();
@@ -534,6 +562,11 @@ internal static class CefNative
     [DllImport(Module)] internal static extern int VeilCefPageAttachmentIntercepted(ulong id);
     [DllImport(Module)] internal static extern int VeilCefOwnedAttachmentResult(ulong id);
     [DllImport(Module)] internal static extern void VeilCefCancelOwnedAttachment(ulong id);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern int VeilCefStartLoginProbe(ulong id, string origin, string page);
+    [DllImport(Module)] internal static extern int VeilCefFixtureLoading(ulong id);
+    [DllImport(Module)] internal static extern int VeilCefLoginProbeStatus(ulong id);
+    [DllImport(Module)] internal static extern void VeilCefEndLoginProbe(ulong id);
     [DllImport(Module)] internal static extern int VeilCefStartCookieDomainScan(ulong id);
     [DllImport(Module)] internal static extern int VeilCefCookieDomainScanStatus(ulong id);
     [DllImport(Module)] internal static extern int VeilCefCookieDomainCount(ulong id);
