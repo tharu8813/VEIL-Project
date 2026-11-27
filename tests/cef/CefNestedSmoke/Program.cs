@@ -26,6 +26,8 @@ Directory.CreateDirectory(temp);
 var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
 {
     ["TEMP"] = temp, ["TMP"] = temp,
+    // Expand the Windows cache path into fixture-owned scratch storage.
+    ["SystemDrive"] = temp,
     ["SystemRoot"] = Environment.GetFolderPath(Environment.SpecialFolder.Windows),
     ["WINDIR"] = Environment.GetFolderPath(Environment.SpecialFolder.Windows),
     ["PATH"] = Environment.SystemDirectory,
