@@ -245,8 +245,8 @@ test('CEF staged child is bounded to one pending slot and retired on lock and ti
     assert.match(broker, /request\.Command is BrokerCommand\.Lock or BrokerCommand\.Detach\)\s*RevokePendingCefChild\(\)/);
     assert.match(broker, /private void ClearAuthenticatedOwner\(\)\s*\{\s*RevokePendingCefChild\(\)/);
     assert.match(broker, /if \(ReferenceEquals\(pendingCefChild, expected\)\) RevokePendingCefChild\(\)/);
-    assert.match(preflight, /return new CefPendingChild\(new CefChildAdmission/);
-    assert.match(pending, /admission\.Revoke\(\);\s*try \{ runtime\?\.Dispose\(\); \}\s*finally\s*\{\s*try \{ image\.Dispose\(\); \}\s*finally \{ process\.Dispose\(\); \}/);
+    assert.match(preflight, /var pending = new CefPendingChild\(new CefChildAdmission[\s\S]*?return pending;/);
+    assert.match(pending, /admission\.Revoke\(\);\s*try \{ runtime\?\.Dispose\(\); \}\s*finally\s*\{\s*try \{ image\.Dispose\(\); \}\s*finally \{ process\?\.Dispose\(\); \}/);
     assert.doesNotMatch(stage, /TryRedeem\(/);
 });
 
@@ -379,7 +379,7 @@ test('broker retains pipe-observed process objects and compares actual handles b
     assert.match(broker, /!Native.SameLiveProcess\(stagingOwner, pipeClient\)/);
     assert.match(broker, /!Native.SameLiveProcess\(nominated, pipeClient\)/);
     assert.match(broker, /!Native.SameLiveProcess\(childHandle, pipeClient\)/);
-    assert.match(broker, /if \(request.Command is BrokerCommand.Lock or BrokerCommand.Detach\)\s*RevokePendingCefChild\(\);[^\n]*\n\s*var status = backend.Status\(\)/);
+    assert.match(broker, /if \(request.Command is BrokerCommand.Lock or BrokerCommand.Detach\)\s*RevokePendingCefChild\(\);[\s\S]*?var status = backend.Status\(\)/);
 });
 
 
@@ -473,4 +473,16 @@ test('broker monitors the exact staged or redeemed disabled candidate and revoke
     assert.match(native, /TerminateProcess\(child, 35\)[\s\S]*?WaitForSingleObject\(child, 2000\) == 0/);
     assert.match(broker, /MonitorPendingCefChildAsync\(CefPendingChild expected, object generation\)[\s\S]*?await serial.WaitAsync\(\)[\s\S]*?!ReferenceEquals\(pendingCefChild, expected\)[\s\S]*?CandidateAuthorityCurrent\(generation\)[\s\S]*?RevokePendingCefChild\(\)/);
     assert.match(broker, /MonitorCompletedPreflightAsync\(CompletedPreflight expected\)[\s\S]*?!ReferenceEquals\(completedPreflight, expected\)[\s\S]*?CandidateAuthorityCurrent\(expected.Generation\)[\s\S]*?RevokeCompletedPreflight\(\)/);
+});
+
+
+test('unconfirmed CEF exit retains the same process handle and blocks new admissions', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const pending = await readFile('apps/broker/Veil.VolumeBroker/CefPendingChild.cs', 'utf8');
+    assert.match(pending, /DetachRevokedProcess\(\)[\s\S]*?admission.Revoke\(\);[\s\S]*?process = null;/);
+    assert.match(broker, /StopPendingChild\(CefPendingChild pending\)[\s\S]*?pending.DetachRevokedProcess\(\)/);
+    assert.match(broker, /StopOrRetain\(SafeProcessHandle child\)[\s\S]*?unresolvedCefStops.Add\(child\)/);
+    assert.match(broker, /RetryUnresolvedCefStops\(\)[\s\S]*?TryStopVerifiedChild\(child\)[\s\S]*?unresolvedCefStops.RemoveAt\(i\);\s*child.Dispose\(\)/);
+    assert.match(broker, /request.Command is BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild\)\s*return Protocol.Error\("CefExitUnconfirmed"\)/);
+    assert.match(broker, /if \(confirmed\) receipt.Child.Dispose\(\);\s*else StopOrRetain\(receipt.Child\)/);
 });

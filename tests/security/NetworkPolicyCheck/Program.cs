@@ -568,6 +568,20 @@ try { throwingPending.Dispose(); }
 catch (IOException) { }
 Check(throwingProcess.Disposals == 1 && throwingImage.Disposals == 1 && throwingRuntime.Disposals == 1,
     "image disposal failure leaked the process resource");
+var detachedProcess = new SyntheticRetainedResource();
+var detachedImage = new SyntheticRetainedResource();
+var detachedRuntime = new SyntheticRetainedResource();
+var detachedPolicy = Grant();
+using (var slot = new Veil.VolumeBroker.CefPendingChild(detachedPolicy, detachedProcess, detachedImage, detachedRuntime))
+{
+    Check(ReferenceEquals(slot.DetachRevokedProcess(), detachedProcess) &&
+        slot.DetachRevokedProcess() is null && !slot.MatchesChild(childIdentity) &&
+        !Redeem(detachedPolicy), "Detached stop handle remained eligible for redemption.");
+}
+Check(detachedProcess.Disposals == 0 && detachedImage.Disposals == 1 && detachedRuntime.Disposals == 1,
+    "Pending disposal closed transferred stop handle or leaked inventory.");
+detachedProcess.Dispose();
+Check(detachedProcess.Disposals == 1, "Transferred stop handle not released exactly once.");
 Console.WriteLine("PASS: pending CEF child resource ownership and retirement");
 
 // The scoped slot can be redeemed only by the designated generation.

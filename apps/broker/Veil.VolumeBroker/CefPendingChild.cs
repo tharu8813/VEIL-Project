@@ -6,7 +6,7 @@ namespace Veil.VolumeBroker;
 internal sealed class CefPendingChild : IDisposable
 {
     private readonly CefChildAdmission admission;
-    private readonly IDisposable process;
+    private IDisposable? process;
     private readonly IDisposable image;
     private readonly IDisposable? runtime;
     private bool disposed;
@@ -24,7 +24,17 @@ internal sealed class CefPendingChild : IDisposable
     internal bool MatchesChild(ClientIdentity child) => !disposed && !IsExpired && admission.MatchesChild(child);
 
     // These resources remain owned by this object, never transferred to the client.
-    internal IDisposable ProcessResource => process;
+    internal IDisposable? ProcessResource => process;
+
+    // Transfer only within the serialized broker; the grant is permanently
+    // revoked even if disposal/termination subsequently fails.
+    internal IDisposable? DetachRevokedProcess()
+    {
+        admission.Revoke();
+        var retained = process;
+        process = null;
+        return retained;
+    }
     internal IDisposable ImageResource => image;
     internal IDisposable? RuntimeResource => runtime;
 
@@ -42,7 +52,7 @@ internal sealed class CefPendingChild : IDisposable
         finally
         {
             try { image.Dispose(); }
-            finally { process.Dispose(); }
+            finally { process?.Dispose(); }
         }
     }
 }

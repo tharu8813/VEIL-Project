@@ -12,6 +12,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private ClientIdentity? authenticatedOwner;
     private SafeProcessHandle? authenticatedOwnerHandle;
     private CefPendingChild? pendingCefChild;
+    private readonly List<SafeProcessHandle> unresolvedCefStops = [];
+    private bool cefStopRetryRunning;
     private sealed record CompletedPreflight(object Generation, SafeProcessHandle Child, long Issued);
     private CompletedPreflight? completedPreflight;
     private static bool Expired(CompletedPreflight receipt) =>
@@ -44,6 +46,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         try
         {
             RevokePendingCefChild();
+            RetryUnresolvedCefStops();
             var status = backend.Status();
             if (!status.Attached) return;
             if (!string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase))
@@ -53,6 +56,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             status = backend.Status();
             if (!status.Attached || status.Unlocked || !string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("The registered volume lock could not be verified.");
+            if (unresolvedCefStops.Count != 0)
+                throw new InvalidOperationException("CEF candidate exit remains unconfirmed; detach refused.");
             backend.Detach();
             if (backend.Status().Attached) throw new InvalidOperationException("The registered image remains attached.");
             unlockOwner = null;
@@ -229,6 +234,13 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         {
             if (request.Command is BrokerCommand.Lock or BrokerCommand.Detach)
                 RevokePendingCefChild(); // Retire before any backend call, including a failed status.
+            if (unresolvedCefStops.Count != 0 &&
+                request.Command is BrokerCommand.Lock or BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild)
+                RetryUnresolvedCefStops();
+            if (unresolvedCefStops.Count != 0 &&
+                request.Command is BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild)
+                return Protocol.Error("CefExitUnconfirmed");
+            // Non-forced Lock remains available even if an exit is unconfirmed.
             var status = backend.Status();
             bool Registered(BackendStatus current) => current.Attached &&
                 string.Equals(current.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase);
@@ -338,7 +350,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     // Only the authenticated owner can consume a receipt.
                     // Any attempt by that owner is one-shot, even on refusal.
                     completedPreflight = null;
-                    using (receipt.Child)
+                    bool confirmed = false;
+                    try
                     {
                         if (Expired(receipt) || !ReferenceEquals(receipt.Generation, unlockOwner) ||
                             !Native.MatchesExitedNomination(client, confirmOwner, request.ChildHandle!.Value, receipt.Child, 29))
@@ -351,6 +364,12 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                             !status.ProtectionOn || !status.ProtectorPresent || Expired(receipt) ||
                             !Native.SameLiveProcess(confirmOwner, pipeClient))
                             code = "CefChildRejected";
+                        else confirmed = true;
+                    }
+                    finally
+                    {
+                        if (confirmed) receipt.Child.Dispose();
+                        else StopOrRetain(receipt.Child);
                     }
                     break;
                 case BrokerCommand.Attach when status.Attached:
@@ -492,30 +511,76 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     {
         var receipt = completedPreflight;
         completedPreflight = null;
-        if (receipt is not null)
-        {
-            try { StopVerifiedChild(receipt.Child); }
-            finally { receipt.Child.Dispose(); }
-        }
+        if (receipt is not null) StopOrRetain(receipt.Child);
     }
 
     private void StopPendingChild(CefPendingChild pending)
     {
-        if (pending.ProcessResource is SafeProcessHandle child) StopVerifiedChild(child);
+        var resource = pending.DetachRevokedProcess();
+        if (resource is SafeProcessHandle child) StopOrRetain(child);
+        else resource?.Dispose();
     }
 
-    private void StopVerifiedChild(SafeProcessHandle child)
+    private bool TryStopVerifiedChild(SafeProcessHandle child)
     {
-        // Termination is scoped to the verified, retained candidate only,
-        // not the owner, a PID lookup, or an arbitrary process tree.
-        try
-        {
-            if (!Native.TerminateCefChildAndWait(child))
-                log.Write("cef-child-stop", new { result = "ExitNotConfirmed" });
-        }
+        try { return Native.TerminateCefChildAndWait(child); }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             log.Write("cef-child-stop", new { result = "ExitNotConfirmed", type = error.GetType().Name });
+            return false;
+        }
+    }
+
+    // Owns the actual retained handle even on a failed stop. Never reopen
+    // a PID, and never treat a failed termination as a successful admission.
+    private void StopOrRetain(SafeProcessHandle child)
+    {
+        if (TryStopVerifiedChild(child))
+        {
+            child.Dispose();
+            return;
+        }
+        unresolvedCefStops.Add(child);
+        log.Write("cef-child-stop", new { result = "ExitNotConfirmed" });
+        if (!cefStopRetryRunning)
+        {
+            cefStopRetryRunning = true;
+            _ = RetryCefStopsAsync();
+        }
+    }
+
+    private void RetryUnresolvedCefStops()
+    {
+        for (int i = unresolvedCefStops.Count - 1; i >= 0; --i)
+        {
+            var child = unresolvedCefStops[i];
+            if (!TryStopVerifiedChild(child)) continue;
+            unresolvedCefStops.RemoveAt(i);
+            child.Dispose();
+            log.Write("cef-child-stop", new { result = "ExitConfirmedAfterRetry" });
+        }
+    }
+
+    private async Task RetryCefStopsAsync()
+    {
+        // Bounded automatic attempts. If the OS still refuses, keep the
+        // object for explicit lock/cleanup retries until service exit.
+        for (int attempt = 0; attempt < 30; attempt++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            await serial.WaitAsync();
+            try
+            {
+                RetryUnresolvedCefStops();
+                if (unresolvedCefStops.Count == 0 || attempt == 29)
+                {
+                    cefStopRetryRunning = false;
+                    if (unresolvedCefStops.Count != 0)
+                        log.Write("cef-child-stop", new { result = "RetryExhausted" });
+                    return;
+                }
+            }
+            finally { serial.Release(); }
         }
     }
 
@@ -594,6 +659,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 {
                     if (!ReferenceEquals(unlockOwner, ownership)) return;
                     ClearAuthenticatedOwner();
+                    RetryUnresolvedCefStops();
                     var status = backend.Status();
                     if (!status.Attached) { unlockOwner = null; return; }
                     if (!string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase))
