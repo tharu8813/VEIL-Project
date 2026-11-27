@@ -114,3 +114,15 @@
 - P2-02 사이트 격리 시험: CEF Win32 smoke가 `127.0.0.1` 상위 페이지에 동일 사이트 프레임과 `localhost` 교차 사이트 프레임을 실제 로드했다. 로컬 CDP 호출에서 교차 사이트 프레임의 정확한 URL에 해당하는 out-of-process iframe target 한 개와 동일 사이트 대조군의 target 부재를 확인했다. 전용 런타임 시험 PASS. 제품 구성 및 전체 renderer 수명 관측은 남아 있다.
 - 사이트 격리 시험 커밋 `affd601e7bd6c2587b5085b5e7e5a24697df68d1`의 [일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45983496116), [native compile CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45983496193), 일반 사용자 전체 합성 실행 8단계 PASS.
 - P2-02 수명 관측: root가 정지된 상태에서 두 Job을 완료 포트에 연결해 시작·종료·비어 있음 알림을 수집한다. 일반 사용자 초기 실행에서 두 Job 각각 시작 10건, 종료 10건, 비어 있음 1건을 확인했다. 증거 검사기는 알림에만 나타난 PID, 시작 또는 종료 알림에 없는 표본, 짝이 없는 시작·종료를 표시한다. Windows의 Job 알림은 전달을 보장하지 않고 PID를 전달하므로, 최종 종료 판정은 기존 root 핸들과 양쪽 Job의 실제 상태 확인을 사용한다. 완전한 수명 추적 및 독립 OS 증거는 남아 있다.
+- Job 관측 커밋 `6728ba8aa8c617059e0dc12b810ac0b8544e8426`의 [일반 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45993327625), [native CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45993327493), 일반 사용자 전체 합성 실행 8단계 및 독립 nested 번들 PASS. 두 Job에서 알림으로만 관측한 PID는 각각 3개였다.
+- 독립 OS 추적 준비: 호스트 일반 사용자 세션의 CEF 전용 WMI 시작 이벤트 구독이 거부됐다. 오프라인 `Veil-VM-TESTER`는 확인 당시 전원이 꺼져 있었다. Procmon CSV와 번들 증거를 대조하는 분석기에 대해 일치, 누락, 다른 이미지, PID 재사용을 합성 시험했다. 실제 관리자 VM Procmon 수집은 NOT RUN.
+
+### P2-02 Procmon 대조 실행
+
+폐기용 오프라인 VM의 관리자 세션에서 Procmon으로 프로세스 활동을 캡처한다. 일반 사용자 세션에서 같은 SHA의 nested 번들을 한 번 실행한다. 번들 실행 전에 수집을 시작하고 종료 후 수집을 멈춘다. 하위 프로세스 이름이나 경로로 수집 단계에서 제외하면 예기치 않은 자식이 빠질 수 있다. 내보낼 때 `Process Create`와 `Process Exit`를 유지하고, 영어 열 이름과 원래 이벤트 순서를 보존한다.
+
+```powershell
+node scripts/check-cef-process-trace.mjs <commit> <bundle-manifest.json> <bundle-evidence-dir> <trace.csv> <guest-smoke-exe-path>
+```
+
+원본 PML, 내보낸 CSV, 번들 매니페스트, `result.json`과 `stdout.json`을 같은 실행의 증거로 보존한다. 분석기는 root 생성과 각 종료, 두 Job과의 불일치, 살아 있는 표본이 없는 PID, PID 재사용 모호성을 출력한다. `MATCHED_CAPTURE`는 내보낸 추적의 대조 결과이며, 수집 손실 확인과 제품 게이트 판정은 별개다.

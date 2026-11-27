@@ -63,6 +63,7 @@ $report = [ordered]@{
     sourceCommit = $ExpectedCommit
     manifestSha256 = $manifestDigest
     stdoutSha256 = $null
+    runnerPid = $null
     status = 'NOT RUN'
     productReleaseGates = 'NOT RUN'
 }
@@ -73,6 +74,7 @@ try {
     $scratch = Join-Path $evidence 'scratch'
     foreach ($arg in @($smoke, $scratch)) { if ($arg.Contains('"') -or $arg.EndsWith('\')) { throw 'Invalid fixture path.' } }
     $child = Start-Process -FilePath $program -ArgumentList @('"' + $smoke + '"', '"' + $scratch + '"') -WorkingDirectory $root -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $evidence 'stdout.json') -RedirectStandardError (Join-Path $evidence 'stderr.log')
+    $report.runnerPid = $child.Id
     try {
         if (-not $child.WaitForExit(60000)) {
             # The isolated runner owns kill-on-close jobs. Kill only the
