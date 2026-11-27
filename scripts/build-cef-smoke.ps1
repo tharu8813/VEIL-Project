@@ -5,7 +5,8 @@ param(
     [string]$WorkRoot = (Join-Path ([IO.Path]::GetTempPath()) ("veil-cef-build-" + [Guid]::NewGuid().ToString("N"))),
     [ValidateSet('Visual Studio 18 2026', 'Visual Studio 17 2022')]
     [string]$Generator,
-    [string]$DotnetHostPack
+    [string]$DotnetHostPack,
+    [switch]$BuildProductCandidate
 )
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitProcess) {
@@ -82,3 +83,15 @@ foreach ($file in @('veil-cef-smoke.exe', 'veil-cef-wpf.exe')) {
 }
 Write-Host "PASS: native and managed CEF compilation; output $out"
 Write-Host 'NOT RUN: interactive WPF, renderer sandbox, site isolation, protected storage and download runtime checks.'
+
+
+if ($BuildProductCandidate) {
+    Invoke-Checked 'cmake' @('--build', $build, '--config', 'Release', '--target', 'veil-cef-product')
+    $candidate = Join-Path $build 'product-candidate/Release'
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $candidate 'veil-cef-product.exe')).Hash -ne $bootstrapHash) {
+        throw 'Product candidate bootstrap does not match the pinned distribution.'
+    }
+    # Inventory only; not a signed package or installable manifest.
+    & (Join-Path $repo 'scripts/check-cef-candidate.ps1') -CandidateRoot $candidate -InventoryPath (Join-Path $work 'cef-candidate-inventory.json')
+    Write-Host 'PASS: isolated product-named CEF candidate compiled; startup intentionally denied.'
+}

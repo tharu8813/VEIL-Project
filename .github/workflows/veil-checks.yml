@@ -54,6 +54,31 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
+      - name: Compile isolated CEF preflight entry and verify refusal outside install
+        shell: pwsh
+        run: |
+          dotnet build apps/desktop/Veil.Desktop.csproj -c CefPreflight --no-restore --nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $fixture = Resolve-Path 'apps/desktop/bin/CefPreflight/net10.0-windows/Veil.Desktop.exe'
+          $release = Resolve-Path 'apps/desktop/bin/Release/net10.0-windows/Veil.Desktop.exe'
+          $marker = 'VEIL CEF Preflight Validation Only'
+          $fixtureDll = Join-Path (Split-Path $fixture.Path) 'Veil.Desktop.dll'
+          $releaseDll = Join-Path (Split-Path $release.Path) 'Veil.Desktop.dll'
+          if ([Diagnostics.FileVersionInfo]::GetVersionInfo($fixtureDll).ProductName -cne $marker -or
+              [Diagnostics.FileVersionInfo]::GetVersionInfo($releaseDll).ProductName -ceq $marker) {
+            throw 'Preflight build marker mismatch.'
+          }
+          foreach ($case in @(@{exe=$fixture; arg='--unknown'}, @{exe=$fixture; arg='--cef-protected-preflight'}, @{exe=$release; arg='--cef-protected-preflight'})) {
+            $child = Start-Process -FilePath $case.exe.Path -ArgumentList $case.arg -PassThru
+            try {
+              if (-not $child.WaitForExit(10000)) {
+                $child.Kill()
+                throw 'Preflight refusal timed out.'
+              }
+              if ($child.ExitCode -ne 2) { throw "Expected refusal exit 2, got $($child.ExitCode)." }
+            } finally { $child.Dispose() }
+          }
+
       # Compile-only: the native CEF package and interactive WPF runtime are not exercised here.
       - name: Compile CEF managed smoke adapter
         shell: pwsh
@@ -93,10 +118,26 @@ jobs:
         shell: powershell
         run: .\tests\install\bitlocker-recovery.test.ps1
 
+      - name: Test CEF registration consistency plan without installation
+        shell: powershell
+        run: .\tests\install\cef-registration-plan.test.ps1
+
+      - name: Test signed CEF candidate evidence without installation
+        shell: powershell
+        run: .\tests\install\cef-candidate-evidence.test.ps1
+
+      - name: Test separate signed CEF preflight package inventory
+        shell: powershell
+        run: .\tests\install\cef-preflight-package.test.ps1
+
+      - name: Test isolated CEF candidate staging
+        shell: powershell
+        run: .\tests\install\cef-candidate-staging.test.ps1
+
       # SEC-004: the Procmon trace analyzer is pure parsing; the capture itself runs only in the VM.
       - name: Check local-write evidence analyzers
         shell: pwsh
-        run: node --test tests/security/async-handlers.test.mjs tests/security/profile-gate-contract.test.mjs tests/security/outside-writes.test.mjs tests/security/jump-list-evidence.test.mjs tests/phase3/phase34-vm.test.mjs tests/phase3/power-loss.test.mjs tests/vm/internet-batch.test.mjs
+        run: node --test tests/security/async-handlers.test.mjs tests/security/profile-gate-contract.test.mjs tests/cef/nested-evidence.test.mjs tests/security/outside-writes.test.mjs tests/security/jump-list-evidence.test.mjs tests/phase3/phase34-vm.test.mjs tests/phase3/power-loss.test.mjs tests/vm/internet-batch.test.mjs
 
       - name: Check download retry context contract
         shell: pwsh
@@ -105,6 +146,23 @@ jobs:
       - name: Test fixed HTTP proxy and refusal of direct fallback
         shell: pwsh
         run: dotnet run --project tests/security/NetworkPolicyCheck/NetworkPolicyCheck.csproj -c Release
+
+      # A disposable synthetic process test needs no service, real profile or UI.
+      - name: Test synthetic Windows CEF child handle binding
+        shell: pwsh
+        run: dotnet run --project tests/security/CefProcessBindingCheck/CefProcessBindingCheck.csproj -c Release
+
+      - name: Test suspended CEF child containment with synthetic apphost
+        shell: pwsh
+        run: dotnet run --project tests/security/CefContainmentCheck/CefContainmentCheck.csproj -c Release
+
+      - name: Test retained CEF runtime file handles and exact inventory
+        shell: pwsh
+        run: dotnet run --project tests/security/CefRuntimeFileCheck/CefRuntimeFileCheck.csproj -c Release
+
+      - name: Compile nested CEF smoke runner (interactive execution not run)
+        shell: pwsh
+        run: dotnet build tests/cef/CefNestedSmoke/CefNestedSmoke.csproj -c Release
 
       # Hosted runners may be elevated and do not provide an interactive desktop.
       # Running the WPF smoke suite or broker authorization test here would

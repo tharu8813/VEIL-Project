@@ -27,4 +27,8 @@ internal sealed class CefProfileLayout
     }
 
     internal IEnumerable<string> Directories => [EngineRoot, Cache, Scratch, Logs];
+
+    // Immediate parent must be verified before every child preparation.
+    internal IEnumerable<(string Parent, string Child)> PreparationSteps =>
+        [(ProductRoot, EngineRoot), (EngineRoot, Cache), (EngineRoot, Scratch), (EngineRoot, Logs)];
 }

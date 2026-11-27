@@ -1,0 +1,133 @@
+// SPDX-License-Identifier: MPL-2.0
+#include "protected_bootstrap.h"
+#include <iostream>
+#include <fstream>
+
+int main() {
+  namespace fs = std::filesystem;
+  using namespace veil_cef;
+  std::error_code error;
+  const auto configured_temp = fs::temp_directory_path(error);
+  if (error) return 1;
+  // CI's inherited TEMP can be a short-name or redirected spelling. Resolve
+  // the synthetic fixture base before building inputs to the strict verifier.
+  auto temp = fs::canonical(configured_temp, error);
+  if (error) return 1;
+  const auto native = temp.native();
+  if (native.rfind(L"\\\\?\\", 0) == 0) temp = fs::path(native.substr(4));
+  temp.make_preferred();
+  if (!DriveAbsolute(temp)) {
+    std::cerr << "Synthetic fixture base is not a canonical drive path\n";
+    return 1;
+  }
+  const auto product = temp / (L"veil-cef-path-test-" + std::to_wstring(GetCurrentProcessId()));
+  if (!fs::create_directory(product, error) || error) return 2;
+  struct Cleanup {
+    fs::path root;
+    ~Cleanup() { std::error_code e; fs::remove_all(root, e); }
+  } cleanup{product};
+  Paths paths{product / L"cef", product / L"cef/cache", product / L"cef/temp",
+              product / L"cef/logs/cef.log"};
+  // Construct using individual components to keep native path separators.
+  paths.cache = paths.root / L"cache";
+  paths.scratch = paths.root / L"temp";
+  paths.log = paths.root / L"logs" / L"cef.log";
+  for (const auto& dir : {paths.root, paths.cache, paths.scratch, paths.log.parent_path()})
+    if (!fs::create_directory(dir, error) || error) return 3;
+  wchar_t mount[32768]{}, volume[128]{};
+  if (!GetVolumePathNameW(product.c_str(), mount, 32768) ||
+      !GetVolumeNameForVolumeMountPointW(mount, volume, 128)) return 4;
+  const char* failure = nullptr;
+  if (!VerifyPaths(product, volume, paths, &failure)) {
+    std::cerr << "Initial native path check: " << (failure ? failure : "unknown") << '\n';
+    return 5;
+  }
+  // Ordinary synthetic directories; the receipt callback is not a real broker.
+  RegisteredBootstrap registration{product, volume, "synthetic-volume"};
+  BootstrapEnvironment environment{paths, paths.scratch, paths.scratch};
+  int receipts = 0;
+  const auto yes = [&receipts](std::string_view id) {
+    ++receipts;
+    return id == "synthetic-volume";
+  };
+  const auto read = [&environment](BootstrapEnvironment& out) {
+    out = environment;
+    return true;
+  };
+  if (CheckBootstrap(registration, yes, read) != BootstrapCheck::kPreflightVerified ||
+      receipts != 1) return 24;
+  auto wrong = registration;
+  wrong.volume_guid = L"wrong-volume";
+  if (CheckBootstrap(wrong, yes, read) != BootstrapCheck::kInvalidPaths ||
+      receipts != 1) return 25;
+  environment.tmp = product;
+  if (CheckBootstrap(registration, yes, read) != BootstrapCheck::kInvalidEnvironment ||
+      receipts != 1) return 26;
+  environment.tmp = paths.scratch;
+  const auto no = [&receipts](std::string_view) { ++receipts; return false; };
+  if (CheckBootstrap(registration, no, read) != BootstrapCheck::kBrokerRejected ||
+      receipts != 2) return 27;
+  const auto changes = [&environment, &receipts, &product](std::string_view) {
+    ++receipts;
+    environment.temp = product;
+    return true;
+  };
+  if (CheckBootstrap(registration, changes, read) != BootstrapCheck::kChangedAfterReceipt ||
+      receipts != 3) return 28;
+  environment.temp = paths.scratch;
+  const auto remove_cache = [&paths, &receipts](std::string_view) {
+    ++receipts;
+    std::error_code e;
+    return fs::remove(paths.cache, e) && !e;
+  };
+  if (CheckBootstrap(registration, remove_cache, read) != BootstrapCheck::kChangedAfterReceipt ||
+      receipts != 4) return 29;
+  if (!fs::create_directory(paths.cache, error) || error) return 30;
+
+  if (VerifyPaths(product, L"wrong-volume", paths)) return 6;
+  std::wstring bad_volume(volume);
+  bad_volume.push_back(L'\0');
+  bad_volume += L"ignored";
+  if (VerifyPaths(product, bad_volume, paths)) return 21;
+  auto nul_log = paths;
+  auto log_name = paths.log.native();
+  log_name.push_back(L'\0');
+  log_name += L"ignored";
+  nul_log.log = fs::path(log_name);
+  if (VerifyPaths(product, volume, nul_log)) return 22;
+  if (Same(L"valid", std::wstring(L"valid\0extra", 11))) return 23;
+  auto bad = paths;
+  bad.cache = product;
+  if (VerifyPaths(product, volume, bad)) return 7;
+  bad = paths;
+  bad.scratch = paths.root / L"cache" / L".." / L"temp";
+  if (VerifyPaths(product, volume, bad)) return 8;
+  if (!fs::create_directory(paths.log, error) || error) return 9;
+  if (VerifyPaths(product, volume, paths)) return 10;
+  if (!fs::remove(paths.log, error) || error) return 11;
+  { std::ofstream out(paths.log); out << "synthetic"; if (!out) return 12; }
+  failure = nullptr;
+  if (!VerifyPaths(product, volume, paths, &failure)) {
+    std::cerr << "Existing log native path check: " << (failure ? failure : "unknown") << '\n';
+    return 13;
+  }
+  const auto alias = paths.root / L"logs" / L"alias.log";
+  if (!CreateHardLinkW(alias.c_str(), paths.log.c_str(), nullptr)) return 14;
+  if (VerifyPaths(product, volume, paths)) return 15;
+  if (!fs::remove(alias, error) || error || !fs::remove(paths.log, error) || error) return 16;
+  if (!fs::remove(paths.cache, error) || error || VerifyPaths(product, volume, paths)) return 17;
+  for (const auto* key : {L"VEIL_CEF_PROTECTED_ROOT", L"VEIL_CEF_PROTECTED_CACHE",
+                          L"VEIL_CEF_PROTECTED_LOG_FILE"})
+    if (!SetEnvironmentVariableW(key, nullptr) &&
+        GetLastError() != ERROR_ENVVAR_NOT_FOUND) return 18;
+  if (HasProductEnvironment()) return 19;
+  for (const auto* key : {L"VEIL_CEF_PROTECTED_ROOT", L"VEIL_CEF_PROTECTED_CACHE",
+                          L"VEIL_CEF_PROTECTED_LOG_FILE"}) {
+    if (!SetEnvironmentVariableW(key, L"synthetic") ||
+        !HasProductEnvironment() ||
+        !SetEnvironmentVariableW(key, nullptr) ||
+        HasProductEnvironment()) return 20;
+  }
+  std::cout << "PASS: synthetic CEF path layout, volume identity, obstruction, hardlink and environment refusal\n";
+  return 0;
+}

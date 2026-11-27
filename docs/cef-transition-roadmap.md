@@ -179,3 +179,267 @@ main의 컴파일 전용 helper와 분리한 `scripts/test-cef-wpf.ps1`을 추�
 ### 추가 구현: CEF 보호 프로필 읽기 전용 사전 검사 (검증 대기)
 
 제품 브로커 기반 ProfileGate를 재사용하는 CefProtectedProfilePreflight 및 별도 CefProfileLayout을 추가한다. 고정 제품 root/cef 아래 cache, temp, logs 및 cef.log 경로를 분리하며 WebView2 프로필이나 기존 temp를 사용하지 않는다. 실제 등록된 암호화/보호/잠금 해제/보호기 상태 및 동일 볼륨 GUID를 기존 root와 존재하는 디렉터리에 요구하고 재분석 지점·파일 충돌·권한 오류를 거부한다. 초기/종료 root 검증, 기존 CEF 하위 경로 검사, 순수 레이아웃 회귀 포함. 읽기 전용: 생성, 환경 변경, 엔진 시작, 암호화 보장 또는 launch permission 없음. 기존 CEF smoke는 CefInitialize 이후 WPF 진입이므로 이 검사에 통과해도 보호 엔진 연결은 불가하다. 후속은 broker 인증 완료 후, 보호 경로 생성/재검증, 자식 bootstrap 시작 전 TEMP/TMP/로그 경로 전달, bootstrap 측 native 초기화 이전 독립 검증 및 종료/재잠금 조율. 검사와 사용 사이 TOCTOU, 볼륨 외 쓰기, renderer sandbox/사이트 격리 및 실제 BitLocker VM 실행 미검증. 제품 엔진 WebView2 유지.
+
+### 추가 구현: CEF 보호 디렉터리 준비 모듈 (검증 대기)
+
+기존 보호 세션과 exclusive profile lock을 호출자가 소유하는 전제에서만 CefProtectedProfilePreparation.Prepare를 사용하도록 계약을 정의했다. 최초 root 보호 상태 및 GUID 고정, 기존 대상 전체 read-only preflight 이후 고정 parent/child 순서로 CEF root/cache/temp/logs를 준비한다. 각 단계에서 세션 권한, root와 직접 parent의 등록 보호 상태/GUID를 재확인하고 기존 ProfileGate.Prepare의 생성 전 ancestor 검증을 재사용한다. 생성 후 동일 GUID 및 redirected children 검사, 전체 재검사 및 최종 권한/볼륨 확인을 수행한다. 중간 실패는 즉시 전파하며 이미 만들어진 빈 폴더를 삭제하거나 기존 데이터에 롤백/정리를 시도하지 않는다. 레이아웃 순서 순수 .NET 검사와 소스 계약 검사 추가. 제품 startup에서 미호출, 실제 session/lock 소유권과 호출자 권한의 결합은 후속. path TOCTOU/파일 hardlink/OS 쓰기 검증을 대체하지 않으며 실제 BitLocker VM 실행 NOT RUN. CEF 초기화 전 별도 실행 경계 및 child/renderer 종료와 relock 조율은 미구현. 제품 WebView2 유지.
+
+### 추가 구현: 인증 세션 기반 CEF 준비 환경 통합 (검증 대기)
+
+#222~#224의 정확한 head를 합친 통합 브랜치에서 CefPreparationLease.PrepareChildEnvironment를 추가한다. 등록 제품 root와 같은 인증 broker를 사용하여 살아 있는 lease를 재확인하고, 보호 디렉터리 준비에 lease의 StillAuthorized를 직접 전달한다. 현재 프로세스 환경을 복사하여 CEF 전용 TEMP/TMP/cache/log 계획을 구성하고 반환 직전 권한을 다시 검증한다. 호출자에게 임의 root/broker/권한 콜백을 받지 않는다. 반환값은 환경 스냅샷이며 launch 권한이 아니다. 기존 제품 시작 경로 미호출, native broker 인증 및 보호 경로 검증 연결 미완료. #225 네이티브 경로 검증 PR은 별도. 실제 Windows/BitLocker/lock contention 및 프로세스 수명 검증 NOT RUN, 기존 WebView2와 release gate 유지.
+
+### 추가 구현: 브로커 소유권 확인과 CEF 준비 통합 (검증 대기)
+
+#226에 #227의 정확한 head를 통합한다. CEF 준비 lease의 기존 thread/session/lock/volume 검증에 브로커 AuthenticatedOwner 조회를 연결하고, 파일 경로 검증 전후 모두 현재 소유권 및 보호 상태와 인증 GUID를 확인한다. 소유자 거부, 응답 오류, 잠금 요청 발생 시 준비 실패를 전파하며 일반 Status만으로 대체하지 않는다. #225 네이티브 검증은 별도 PR이다. 아직 자식 bootstrap이 실제 브로커 인증을 수행하지 않고 준비 API도 제품 startup에 연결되지 않는다. 별도 native client admission 및 인증 위임, 종료/재잠금, 실제 BitLocker 및 OS 쓰기 실측은 NOT RUN. WebView2 유지.
+
+### 추가 구현: 프로세스 세대 확인 및 CEF 자식 위임 정책 모델 (검증 대기)
+
+Named pipe에서 확인한 ClientIdentity에 OS GetProcessTimes의 생성 시각을 포함하고, unlock crash watcher handle을 열 때 PID와 생성 시각 및 생존 상태를 일치시킨다. 별도 순수 CefChildAdmission 모델은 인증된 owner/child의 전체 identity, 동일 SID/session, unlock 세대 객체, 15초 단조 시간, 단일 사용 및 명시 철회를 요구한다. 미래 broker가 직접 관측한 child image 검증·생존·보호 상태만 전달할 계약이며 현재 protocol/제품에는 연결되지 않는다. 실제 parent-child launch binding, 서명/해시 pin, 원본 handle 보유, pipe 인증, 자식 종료/relock, Windows/BitLocker 실측은 미완료. 기존 broker client allowlist와 WebView2 제품 시작을 유지한다. 순수 회귀 및 소스 계약 검사 추가.
+
+### 추가 구현: CEF 실행 파일 pin 검증 (검증 대기)
+
+CefImageDigest는 정확한 64자 SHA-256과 전체 스트림 검사를 요구한다. 미연결 CefPinnedImage.OpenVerified는 별도 등록 경로와 실제 child process handle의 PID/생성 시각/image path, 관리자 소유 및 쓰기 제한 파일·직접 directory, reparse ancestor, read-only share로 유지한 파일 handle의 canonical path 및 single link, SHA-256/Authenticode, 검사 후 재검증을 요구한다. 성공 시 파일 handle을 반환하여 호출자가 수명을 유지할 수 있다. 프로세스 메모리/로드된 DLL, 상위 directory ACL 전부, 경로 race, 실제 parent-child 관계, 별도 제품 pin 등록 및 배포·서명, native bootstrap/IPC 권한 위임은 아직 미완료. 현재 브로커 allowlist와 명령, 기존 WebView2 startup은 변경하지 않는다. 순수 hash 회귀 및 source contract 추가; 실제 Windows signature/ACL/process/BitLocker 실측 NOT RUN.
+
+### 추가 구현: CEF launch nomination 및 Windows process handle 회귀 (검증 대기)
+
+Native.ObserveProcess는 실제 live process handle에서 PID/생성 시각/image/SID/session을 관측하며 기존 pipe의 PID/session과 일치시킨다. 미연결 DuplicateNominatedChild는 기존 owner handle과 재개방한 generation 일치 owner process를 요구하고 owner가 명시한 원본 child handle을 query/synchronize 권한만으로 복제한다. child의 SID/session/생성 시각, Toolhelp reported parent, 양쪽 생존 및 신원을 다시 확인하고 실패 시 handle을 닫는다. reported parent는 생성자가 지정할 수 있는 메타데이터라 단독 인증 증거가 아니며 이 helper도 생성 이벤트/실제 creator 증명이나 launch authority가 아니다. 실제 authenticated broker 요청, 등록 실행 파일 pin 및 one-shot admission 연결과 suspended launch/containment는 후속. 새 CI에서 합성 child 실제 프로세스를 실행하여 handle/세대/종료 및 잘못된 handle 거부를 검증하도록 추가. Windows test 결과 대기; 실제 CEF/BitLocker/서비스/표준 사용자 실측 NOT RUN. 기존 broker 명령 및 WebView2 유지.
+
+### 추가 구현: owner-only CEF broker 사전 검증 명령 (검증 대기)
+
+CheckCefChild 명령은 기존 인증 및 allowlist를 통과한 실제 unlock owner만 요청 가능하다. 엄격한 decimal string childHandle만 허용하고 기존 명령과 secret/path/PID 입력을 분리한다. admin-only 생산 설정의 별도 CefChildImage/CefChildSha256 pin이 모두 등록되어야 하며 미등록/개발 모드에서는 CefUnavailable. 실제 handle 복제, child 파일 경로/서명/hash 검증, owner/child 및 볼륨 재확인 후 일반 status만 반환한다. handle은 요청 종료 시 폐기하며 위임 grant, 자식 pipe 권한, 실행 승인은 절대 생성하지 않는다. 현재 installer/desktop/native 제품 startup 미연결. 순수 실제 parser 회귀와 fake broker 거부 시나리오 추가; fake broker 및 실제 production pin/BitLocker 실행 NOT RUN. 다음 단계는 broker 소유의 retained handle/grant lifecycle 및 별도 child redemption 프로토콜과 native 검증 연결.
+
+### 추가 구현: 단일 대기 CEF 위임 자원 (검증 대기)
+
+StageCefChild는 별도 제품 pin이 등록된 실제 unlock owner만 호출할 수 있다. 기존 CheckCefChild와 별도 명령으로 child handle/image handle 및 CefChildAdmission을 하나의 broker pending slot에 보존한다. 중복 staging 거부, 15초 단조 정책 및 serialized timeout, lock/detach 요청, owner 종료, service cleanup, 보호 상태 상실 시 철회/자원 정리. 반환은 기존 status이며 grant token 또는 child pipe 권한은 없다. 실제 redemption/launch authorization, child exit containment/relock, installer 등록 및 native 연동은 미완료. 순수 resource lifecycle, 실제 parser, 소스 계약 및 fake broker 거부 테스트 추가. 최신 CI와 production Windows/BitLocker 실행 결과 대기. WebView2 유지.
+
+### 추가 구현: CEF child 일회성 검증 응답 (검증 대기)
+
+RedeemCefChild는 기존 client allowlist의 image 거부 중 별도 admin pin과 경로가 일치하는 production 후보만 전용 분기로 들어가며 다른 모든 명령은 ClientRejected. 기존 desktop owner도 이 명령을 사용할 수 없다. pipe에서 관측한 실제 child identity와 pending generation이 일치해야 slot을 소비하고, owner/child retained handles, 실행 파일 canonical path/서명/hash, 등록 보호 상태를 재확인한 뒤 one-shot 정책을 적용한다. 성공은 최소 boolean cefChildVerified 응답뿐이며 실패·예외·lost reply 모두 재사용 불가. 현재 installer 및 CEF bootstrap에 연결하지 않았으며 실행 허가나 보호 볼륨 접근권 자체를 발급하지 않는다. child lifespan/containment/relock 및 원본 pipe identity handle 수명 강화, 전체 install trust, 실제 signed client/service/BitLocker 검증 필요. 기존 WebView2 유지. 실제 parser와 순수 slot 회귀 및 source contract 추가.
+
+### 추가 구현: CEF native broker 검증 통신 모듈 (검증 대기)
+
+별도 broker_verification 모듈은 고정 설치 service/pipe, SCM running PID와 pipe server PID 및 live process handle 일치 전후 확인, 제한된 ASCII volume ID, 고정 RedeemCefChild 요청, LF 프레임 및 정확한 compact boolean receipt만 허용한다. Overlapped I/O의 8초 예산과 취소/완료 정리, 실패 후 retry 없음. SCM 호출 및 cancellation drain은 엄격한 전체 wall-clock deadline 보장이 아니다. Native wire synthetic CI에서 invalid ID/부분 응답/추가 필드/거부/중복 필드 등을 검증하며 실제 서비스에는 접속하지 않는다. 기존 native smoke startup 및 CefInitialize 미연결, #225 경로 검증 별도, 실제 service/pipe transport·signed package·launch containment·BitLocker NOT RUN. receipt는 초기화 허가가 아니다. 고정 pipe 및 제한된 ID는 향후 installer registration 계약과 맞춰야 한다. WebView2 유지.
+
+### 추가 구현: native 경로 및 broker wire 검증 통합 (검증 대기)
+
+#225의 정확한 head 2a9370fe512b6ac4dadb1dba2f456a7ab7a201c9를 #226에 통합한다. 기존 native wire CI와 synthetic path CI를 모두 유지하며 기존 두 smoke host는 product 경로 환경이 존재하면 CefExecuteProcess 이전에 즉시 거부한다. 경로/볼륨 문자열 비교에 길이 제한과 embedded NUL 거부를 추가하고 아직 존재하지 않는 log를 포함해 모든 supplied path의 canonical drive 형식을 먼저 확인한다. synthetic NUL regression 추가. 두 모듈을 동일 브랜치에서 빌드/검증하는 단계이며 실제 native bootstrap의 broker auth + registered paths 결합, 권한 수명/containment 및 BitLocker는 NOT RUN. WebView2 제품 및 release gate 유지.
+
+### 추가 구현: native startup preflight sequencing (검증 대기)
+
+RegisteredBootstrap은 별도의 신뢰된 admin 등록 root/volume GUID/volume ID를 입력으로 요구한다. 현재 v1 broker receipt에는 이 정보가 없어 환경변수나 receipt만으로 trust를 구성할 수 없다. 실제 등록 loader 및 설치 계약 미구현. CheckBootstrap은 TEMP/TMP와 고정 protected path, volume 및 canonical handles 검증 후 단 한 번 receipt 요청, 재조회한 환경/경로 상태를 다시 검증하고 변화 시 거부. known fixture/log override 존재 거부. 독립 native module과 합성 filesystem/receipt sequencing regression (invalid volume, TEMP/TMP mismatch, refused receipt, env mutation, removed cache) CI 추가. 기존 RunWinMain과 CefInitialize는 이 함수를 호출하지 않으며 product environment 거부 유지. Bootstrap executable + loaded DLL pin, trusted registration, launch containment/lifetime, actual broker + BitLocker/runtime NOT RUN. 성공 preflight는 초기화 권한이 아니다. WebView2 유지.
+
+### 추가 구현: native admin registration reader (검증 대기)
+
+고정 64-bit HKLM\SOFTWARE\VEIL\CefBootstrap에서만 ProductRoot/VolumeGuid/VolumeId REG_SZ 3개를 읽는 reader를 추가. SOFTWARE는 OS-controlled anchor로 가정하고 VEIL 및 CefBootstrap key 자체의 SYSTEM/Administrators owner, protected non-null DACL, nontrusted read-only ACE, registry link refusal, bounded strings/embedded NUL/strict GUID+ASCII volume ID, leaf snapshot 변경 및 ACL 재검증을 요구한다. 설치자는 두 키를 protected DACL로 생성해야 하며 기존 broker.json/client.json의 등록과 일치하는지 검증하는 provisioning 작업은 미구현. 별도 registration 합성 ACL/format test는 실제 HKLM 접근/수정 없이 수행한다. 기존 native bootstrap 실행에는 미연결. 관리자 변경 경쟁/OS anchor 신뢰/registry ACL 실측 및 서비스 연동, signed loaded DLL 및 launch containment/BitLocker는 NOT RUN. WebView2 및 제품 실행 차단 유지.
+
+### 추가 구현: installer CEF registration consistency plan (검증 대기)
+
+기존 패키지는 Desktop/Broker만 허용하고 CEF 설치 파일/핀/업데이트 저널 지원이 없다. 따라서 먼저 순수 cef-registration-plan.ps1과 read-only 관리자 검사 check-cef-registration.ps1을 추가. broker.json/client.json의 exact volume ID, volume GUID format, fixed service pipe, production flags, profile path, 별도 executable pin 및 관측 SHA-256 일치 확인. 관리자 검사에서는 고정 Program Files/ProgramData 경로, 기존 ACL helper, 서명 지문, 정지된 LocalSystem service 및 등록/실행 파일 snapshot 전후 확인. 예정 제품 host 경로 Cef/veil-cef-product.exe는 현재 존재하지 않음. 실제 registry write/installer activation/update/remove/recovery는 미연결; 현재 package contract에서는 검사 성공 불가. 전체 signed package inventory, JSON strict parser, ancestor ACL/races, protected volume identity, SCM/registry 실제 통합 검증 필요. 합성 순수 PowerShell 5.1 테스트 CI 추가. 제품 실행이나 출시 허가가 아니며 WebView2 유지.
+
+### 추가 구현: isolated product-named CEF build candidate (검증 대기)
+
+별도 EXCLUDE_FROM_ALL veil-cef-product DLL 및 공식 pinned bootstrap.exe 복사본을 product-candidate/Release 출력으로 빌드한다. 기존 smoke/WPF/managed fixture와 분리하고 runtime/resources는 CEF distribution의 CMake inventory를 사용한다. product_candidate.cc RunWinMain은 무조건 29 반환하며 CEF 실행·broker 인증·profile I/O를 시작하지 않는다. build-cef-smoke.ps1 -BuildProductCandidate 선택 및 CI compile + unsigned candidate inventory/hash/fixture refusal tests 추가. inventory는 installable=false/startupEnabled=false이며 signed manifest가 아니다. 기존 format 1 package/installer는 CEF를 여전히 거부하고 변경하지 않는다. 실제 signed runtime inventory/loaded module verification, license notices, format migration/installer registration, launch containment, BitLocker 및 제품 실행은 NOT RUN. WebView2 유지.
+
+### 추가 구현: detached signed CEF candidate evidence (검증 대기)
+
+별도 cef-candidate.json / cef-candidate.p7s evidence format에 exact file inventory + source commit + pinned archive identifier를 기록하고 SHA-256 CMS 서명, independent thumbprint/commit, existing ACL 및 product EXE/DLL Authenticode 검사, 모든 파일 이름/길이/hash/누락/추가 검증을 제공한다. 후보와 evidence 디렉터리는 분리되고 installable=false/startupEnabled=false 고정. 현재 format 1 설치 패키지 및 설치/업데이트에는 연결하지 않는다. 관리자는 이미 서명된 EXE/DLL과 보호 디렉터리를 제공해야 한다. synthetic CI는 in-memory certificate로 CMS signature math 및 변조/누락/추가/다른 signer/commit 등을 검사하며 certificate chain/ACL/Authenticode는 모의 처리한다. manifest의 archive identifier는 실제 archive provenance 증명이 아니며 strict JSON parser, hardlink/ADS/TOCTOU 및 loader dependency pin, 실제 서명/설치/BitLocker NOT RUN. WebView2 유지.
+
+### 추가 구현: isolated signed candidate staging (검증 대기)
+
+기존 유지보수의 restricted directory / signed inventory 방식을 이용하되 설치 트리와 기존 update journal은 변경하지 않는다. stage-cef-candidate.ps1은 고정 Program Files/VEIL.cef-candidate-staging sibling에만 후보/evidence를 별도 복사한다. 원본 서명·인벤토리 검증이 먼저이며 실제 열거된 이름을 사용하고 덮어쓰기 없이 복사, 대상 전체 서명/파일 검증 및 최초 manifest 비교, 원본 재검증. 기존 staging은 변경하지 않고 실패/중단 잔재는 관리자 검토용 보존. 합성 테스트는 실제 CMS math 및 파일 복사를 실행하고 ACL/chain/Authenticode만 모의 처리한다. 현재 후보는 installable=false/startupEnabled=false; 실제 운영 설치/업데이트/복구 활성화, 관리자 ACL/ancestor/TOCTOU 및 signed package/BitLocker NOT RUN. WebView2 유지.
+
+### 추가 구현: Windows suspended child containment primitive (검증 대기)
+
+CefContainedProcess는 local absolute executable 및 명시적 정렬 Unicode environment block, no shell/no inherited handles/no arbitrary arguments, CREATE_SUSPENDED, unnamed KILL_ON_JOB_CLOSE job에 assign 및 membership 확인, broker nomination용 live suspended handle, verification callback 후 단일 resume, 실패 시 owned child 정리 구조를 제공한다. 실제 Windows synthetic apphost CI로 denied resume, suspended state, successful resume, independent process handle에서 job close exit 확인 예정. callback은 production broker authority가 아니며 현재 desktop startup에는 연결하지 않는다. CreateProcess와 job assignment 사이 owner crash window (atomic job assignment 필요), graceful shutdown, complete process tree drain, broker lifetime/relock, CEF sandbox nested jobs compatibility, trusted image/loaded DLL pin, Windows/BitLocker NOT RUN. 기존 product startup 및 WebView2 유지.
+
+### 추가 구현: atomic Windows job assignment (검증 대기)
+
+STARTUPINFOEX + PROC_THREAD_ATTRIBUTE_JOB_LIST로 unnamed KILL_ON_JOB_CLOSE job에 child를 생성 시점부터 소속시킨다. CREATE_SUSPENDED/UNICODE/EXTENDED_STARTUPINFO flags, no handle inheritance, post-create membership recheck, attribute memory 및 SafeHandle ref lifetime 관리, API 실패 시 legacy fallback 없음. 기존 CreateProcess/AssignProcess 사이 orphan window를 제거하는 설계. 실제 Windows synthetic apphost에서 suspended child를 보유한 별도 owner를 강제 종료하고 관찰 핸들로 child exit 및 marker 미생성을 확인하는 회귀 추가. 실제 CEF sandbox nested-job compatibility, child subtree drain, owner/child broker attestation 및 lifetime/relock, protected volume, runtime은 NOT RUN. Product startup에 미연결. WebView2 유지.
+
+### 추가 구현: desktop owner-only suspended CEF staging connection (검증 대기)
+
+CefStageWire serializes strict StageCefChild volumeId + invariant positive decimal handle, exact JSON status fields/duplicate refusal, registered GUID/protection flags. NamedPipeVolumeBroker production-only fixed pipe, 8-second I/O timeout, service PID validation before/after reply, no retry. CefPreparationLease.StageSuspendedChild accepts existing contained suspended child, requires same owner/volume/profile lease before/after staging, checks same live nominated handle and disposes child job on refusal/ambiguous reply. No resume or launch, no invocation from Program. Actual parser roundtrip (64-bit handle precision) and strict response tests added to Windows synthetic check. Pending stage 15-second lifetime, retained pipe process object comparison, revocation on backend errors, executable/DLL trust and full process lifetime still required; actual broker/BitLocker/sandbox NOT RUN. WebView2 remains product engine.
+
+### 추가 구현: retained pipe process identity and pending revocation (검증 대기)
+
+Native.Identify retains actual observed process handle through request; pipe PID/session requery and SameLiveProcess (CompareObjectHandles + live waits) under serial, owner watch duplicates observed handle rather than PID reopen, nominated source/owner and redemption pipe/retained child object comparison. Lock/Detach retire pending before backend status; Execute exceptions retire pending. Synthetic Windows same/different/exited process handle and retained owner watch tests. Initial pipe PID lookup is still a snapshot, not kernel-issued authenticated process handle; handle transfer, malicious same-user manipulation, full service integration and backend failure tests remain unverified. No CEF startup authorization or WebView2 engine switch. Actual Windows service, BitLocker and sandbox NOT RUN.
+
+### 추가 구현: product candidate native preflight wiring (검증 대기)
+
+제품 후보 RunWinMain에서 sandbox_info non-null, no arguments, job membership (any job, not desktop job proof) 후 fixed HKLM registration loader 및 VerifyRegisteredBootstrap을 호출한다. 등록 정보 before/after 비교, one-shot receipt, 모든 실패 및 성공 모두 nonzero exit 29–34; CefExecuteProcess/CefInitialize 미호출, subprocess 미지원, fixture 호스트 unchanged. Native synthetic sequencing test uses mock load/verify, no live registry or broker. Actual CEF bootstrap may load DLLs before RunWinMain: package/loaded image verification must precede resume, current preflight is NOT launch authorization. Existing installer never provisions registry or activates candidate, actual product/BitLocker/service/sandbox NOT RUN.
+
+### 추가 구현: retained CEF runtime file inventory lease (검증 대기)
+
+CefRuntimeFileLease.OpenInstalled uses fixed Program Files/VEIL/Cef path and independently authenticated pins (no registration loader or trust issuance yet). Exact file names, count, length, SHA-256, required host/libcef/resources, no fixture/unknown executable, no redirected ancestors/entries, existing admin-only file ACL helper, Win32 final path and single link, FileShare.Read handles held until disposal. RequireCurrent rechecks inventory and retained handles, not mapped DLLs or all ancestor ACLs. Synthetic Windows CI exercises actual byte/hash/share and missing/extra/duplicate/traversal failures, ACL mocked; no real signed runtime, external DLL load search, ADS, writable ancestor replacement, ongoing directory mutation, handle-to-loaded-image attestation, actual installation or BitLocker verified. Not called by product launch or Program. Next: authenticated administrator runtime pin loader and guarded coordinator, full loader/lifetime audit. WebView2 unchanged.
+
+Native CI 45936147075 for 7dbeb86 failed in product DLL compilation (MSVC C4018 promoted to C2220); fix SID size arithmetic to unsigned size_t and bound fixed/variable SID before IsValidSid. No compiler warning policy relaxation. Exact new head CI pending.
+
+### 추가 구현: fixed administrator runtime registration loader (검증 대기)
+
+Fixed ProgramData/VEIL/cef-runtime-pins.json, separate disabled candidate registration kind (cef-admin-runtime-pins), exact fields, duplicate/unknown property refusal, bounded JSON, canonical pin path/hash/integer length/required files, fixed archive identity, startupEnabled=false only. Retains registration handle FileShare.Read + canonical single-link/ACL recheck and runtime lease. CefPreparationLease.PrepareRegisteredRuntime binds to the authenticated owner before/after preparation, no creation or resume; Program unchanged. Source commit is metadata, not independent build provenance; installer must publish from verified signed evidence and atomically reconcile package/broker/HKLM; no publication or actual launch yet. Real ACL/ancestor/loader/BitLocker unverified. Synthetic parser roundtrip and negative cases added. Windows CI 45936690659 failed because test Reject did not catch InvalidDataException (expected invalid pin refusal); explicit catch added without weakening production validation. Latest CI pending.
+
+### 추가 구현: disabled candidate launch coordinator (검증 대기)
+
+CefDisabledLaunchCoordinator combines owner profile lease, admin runtime pin lease, protected environment with minimal SystemRoot/WINDIR/PATH, atomic suspended child, StageSuspendedChild and one-shot CefDisabledPreflight. Only accepts exit 29 (verified but disabled), local 12s budget checks including stage/rechecks (synchronous broker calls may exceed deadline), job active process accounting/forced terminate and drain before normal lease release. No Program/UI invocation, no CefInitialize, no registry publication. Synthetic test apphost exit 29 and stage rejection exercise sequencing and real process wait; not an actual signed CEF/service launch. Exit code alone is not authenticated proof of a real broker receipt; loader/dependency trust, actual registration, continuously live owner, drain failure and non-forced relock remain gates. On already-disposed job or drain failure cleanup is best effort, not confirmed drain. WebView2 unchanged.
+
+### 추가 구현: one-shot owner confirmation of completed disabled preflight (검증 대기)
+Broker retains redeemed child object for 15s, same authenticated owner and generation only, ConfirmCefPreflight consumes receipt and compares duplicated original owner handle to actual exited object plus exit 29 and protected status. Stage blocks while receipt pending; lock/detach/backend failure/owner cleanup revoke receipt. Desktop requires confirmation after drain, no retries. Fix failed CI 45937610146: job active count zero alone does not guarantee process wait signaled; explicitly wait for original process exit. Synthetic object tests and source checks added. Real service/BitLocker/loaded DLL trust and end-to-end receipt not run; no production startup or install activation.
+
+### 추가 구현: creation-time image-load policy and post-bootstrap module directory observation (검증 대기)
+
+Atomic STARTUPINFOEX adds PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_REMOTE / NO_LOW_LABEL / PREFER_SYSTEM32 always-on (bits 52,56,60), confirms Windows process flags before resume and on creation. No fallback. Native disabled candidate sets SetDefaultDllDirectories APPLICATION_DIR|SYSTEM32, verifies current mitigation, enumerates current Toolhelp modules and rejects unknown/noncanonical/directories outside executable directory or System32; snapshot only and may refuse legitimate WinSxS/system modules. Synthetic path classifier and actual managed test apphost mitigation queries in CI. Microsoft Win32 documentation: https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute and https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-setdefaultdlldirectories. This is NOT mapped code digest, pre-entry bootstrap loader proof, DLL allowlist enforcement, or continuous module monitoring. No real signed product, broker or CEF/BitLocker runtime launched. Actual CefInitialize still disabled and WebView2 unchanged.
+
+### 추가 구현: native image mapping and backing-file name consistency (검증 대기)
+
+ObserveImageBacking checks VirtualQuery MEM_IMAGE + allocation base, loader path, kernel GetMappedFileNameW device path, canonical DOS and NT path from opened file handle; rejects redirected path components, local hardlinks, non-image mappings, requires product host/DLL observed. Reobserves mapping name and checks full snapshot before and after broker receipt; no retry or CefInitialize. Synthetic native test uses actual Windows test executable mapping, wrong path, private allocation, and data-file mapping. Parent's authenticated runtime inventory lease still supplies on-disk SHA-256 checks; native snapshot is NOT independent hash of loaded code or exact file object binding, cannot detect same-name stale sections, patched private image pages, transient loads, or pre-entry code execution. Actual signed product and OS compatibility (including WinSxS) NOT RUN, native CI pending. WebView2 unchanged.
+
+### 추가 구현: independent broker-side registered module observation (검증 대기)
+
+At redemption, broker independently opens fixed admin runtime registration and verifies the complete installed SHA-256 inventory using shared desktop source, retains files, independently snapshots the actual live child loader modules (Toolhelp with retained process identity checks). Only direct installed application files (registered EXE/DLL, same retained disk file ID/volume serial) or System32 path accepted; host and product DLL required, before/after module inventory equal. Synthetic actual Windows child module snapshot and disk object tests; no real product run. Snapshot and reopened disk object comparison are not kernel section identity or mapped byte attestation; System32 trust remains path-based, legitimate WinSxS modules may be refused. Re-reading the full runtime during redemption may exceed existing receipt/I/O deadline; measure on real signed candidate before enabling and consider pre-stage retained lease in a later change. No startup or installer authorization; CefInitialize remains blocked. WebView2 unchanged.
+
+### 추가 구현: retained broker runtime inventory across staging and redemption (검증 대기)
+Full runtime SHA-256 verification moved to broker Stage before issuing 15-second admission; pending owns registration/runtime/file handles along with signed executable and process, disposes on failure, expiry, lock or redemption. Redemption reuses retained runtime and checks module batch instead of repeating whole inventory walks per module. Small host signature/digest still rechecked. Explicit serialized broker access permits different worker threads under existing semaphore; desktop keeps thread affinity. Stage client I/O budget 45s, local 12s redemption budget begins after stage reply; broker 15s lifetime unchanged. Synthetic resource disposal and cross-thread/batch tests. No actual throughput benchmark; hashing remains synchronous under serial and may exceed client budget. Signed installed product/BitLocker/mapped byte trust NOT RUN, no actual CefInitialize, WebView2 unchanged.
+
+### 추가 구현: disabled candidate lifetime rechecks and natural-vs-forced exit separation (검증 대기)
+
+Desktop preflight now polls current authenticated profile/runtime authority and live image policy between process wait slices (at most 250ms per wait, 12s local budget unchanged); loss of authority rejects and drains. Natural job exit must be observed before broker confirmation, with a short non-terminating wait; forced cleanup uses distinct exit code 35, never verified-but-disabled 29. Synthetic actual Windows tests revoke after marker, assert no confirmation, verify forced exit code and non-terminating natural wait. Not continuous or real-time enforcement: synchronous broker/volume checks can block, owner dispatcher messages may be delayed, no actual CEF/browser/subprocess lifespan, service/BitLocker or graceful shutdown verified. Product initialization remains disabled and WebView2 unchanged. Future active runtime authorization needs independent service-side liveness/revocation, safe broker-held containment and actual shutdown/relock verification.
+
+### 추가 구현: independent broker monitoring and scoped candidate termination (검증 대기)
+After signed executable and registered runtime verification, retain a termination-capable handle compared to the original nominated process object; keep equivalent handle through redemption. Serialized broker monitors pending and completed disabled candidate slots at 1s delay; rechecks generation, live owner, registered protected volume, expiry, pending child liveness; revoke on error/loss, lock/detach, owner cleanup, failed redemption. Requests termination only on retained verified process, exit code 35, observes exit up to 2s, logs ExitNotConfirmed on failure. Does NOT terminate the whole job or prove complete drain, does not retain failed termination handle for retry, does not guarantee wall-clock interval when backend or semaphore blocked. Synthetic actual Windows process object mismatch/termination checks added; service/BitLocker/real CEF NOT RUN. Actual product startup remains disabled, no new pipe commands, WebView2 unchanged.
+
+### 추가 구현: retained failed candidate termination and bounded retries (검증 대기)
+Fix source-contract CI 45941081712 (stale return-new assertion). Revoked pending process handle transfers out of disposable admission; failed termination retains the exact handle, no PID reopen, 30 automatic attempts with 2s delay under broker serialization, logs exhaustion and keeps handle for later cleanup attempts. Failed confirmation also uses stop-or-retain. Block new Stage/Unlock/Detach while unresolved; non-forced Lock remains available, service cleanup refuses detach after verified lock if exit unresolved. Actual retry timing not hard bounded, service restart loses in-memory recovery, failed stop no longer holds the full runtime file lease, not whole-job containment or graceful shutdown. Synthetic ownership/replay tests and source contracts added; real termination failure and service/BitLocker not run. No product startup; WebView2 unchanged.
+
+### 추가 구현: broker-created disabled candidate job primitive (검증 대기)
+New disconnected CefBrokerOwnedJob creates its own unnamed kill-on-close job, active process limit 1, no breakaway, issues one reduced assignment/query handle to the authenticated process via DuplicateHandle and same-object checks. Refuses owner membership, verifies single nominated child and job accounting, terminates only internally owned job with exit 35, observes active count. Synthetic Windows test assigns an isolated test child, rejects missing membership and reduced-access termination, verifies whole job termination and process exit. Production atomic assignment, wire/owner generation binding, remote handle lifecycle, kill-on-close when a duplicate remains open, broker restart, full multi-process CEF nested-job compatibility and failed job termination retention are NOT implemented/verified. No broker dispatcher or product startup changes; no arbitrary user-nominated job termination. WebView2 unchanged.
+
+### 추가 구현: direct broker assignment to an already-contained suspended candidate (검증 대기)
+Prefer broker-only assignment over issuing remote job handles: open PROCESS_SET_QUOTA|PROCESS_TERMINATE for exact verified process, recheck object and identity, assign internally created single-candidate job, check membership/accounting before resume. Synthetic actual Windows integration exercises desktop atomic job + nested broker job, closes each owner independently and expects child exit. No production dispatcher wiring yet: require nested compatibility evidence first, then retain broker job across pending/redeemed/recovery states. No new pipe command, no remote handle on direct route, existing experimental remote handle helper remains disconnected. Same-user process injection/suspension, service boundary, actual CEF nested sandbox jobs, BitLocker and restart recovery not verified. Product startup remains disabled, WebView2 unchanged.
+
+### 추가 구현: broker-owned job retained through disabled candidate lifecycle (검증 대기)
+Previous exact head fe72d71 general CI passed, including real Windows synthetic nested-job containment test (45942445119). Stage now creates a private single-process broker job after executable/runtime pins, directly binds the nominated process, and retains it through redemption and completed receipt. Confirmation checks exact process exit 29 and empty broker job; revocation or failed confirmation retains both job and process handles on failed drain, retries through existing recovery; no remote assignment handle is issued by broker dispatcher. Admission failure during initial job assignment still relies on local job and kill-on-close cleanup, not independently retained drain proof. Actual CEF sandbox subprocess compatibility, signed installed service cross-session assignment, BitLocker, mapped bytes, and restart recovery remain unverified. Single process only, startup disabled, no new wire commands, WebView2 unchanged.
+
+### 추가 구현: separate multi-process nested CEF smoke runner (검증 대기)
+New tests/cef/CefNestedSmoke runs only the built Win32 smoke executable with a new temp profile, atomically contained desktop job plus independent test-only nested job without an active-process cap, non-elevated interactive x64 session required. Samples own job members and restricted/low integrity tokens; requires JS smoke exit 0, observed restricted low/untrusted descendant and empty jobs. Standard-user evidence runner adds nestedBuild/nestedWin32 stages, hashes/logs; hosted CI only compiles this runner, never claims browser execution. The production broker job still has limit 1 and startup remains disabled. Sampled token evidence does not prove renderer role, every process sandboxed, all memory mappings or no off-volume writes. Real nested CEF, broker/service/BitLocker and renderer sandbox compatibility NOT RUN. WebView2 unchanged.
+
+
+### 추가 구현: downloadable unsigned nested smoke bundle (검증 대기)
+Native compile workflow packages only the built Win32 fixture plus matching pinned CEF runtime/resources, required licenses and framework-dependent nested runner; upload retained seven days, exact checkout SHA and inventory manifest. No product binary/installer, no hosted interactive launch. Local PowerShell 7 non-elevated x64 runner verifies manifest/commit/files, launches bounded test, rechecks inventory, records JSON/log evidence outside bundle. Expected checkout SHA may be synthetic PR merge SHA. Manifest is unsigned consistency evidence, not independent provenance; verify artifact run before execution. Requires .NET 10 x64 and native runtime prerequisites. Packaging and actual runtime are NOT RUN at change time; no product gates advanced. WebView2 unchanged.
+
+
+### 추가 구현: review returned nested fixture evidence (검증 대기)
+Previous exact PR head bdeaba1 general/native CI passed, artifact 15174370614 from run 45943924095, checkout 5a4d0ab67225e01218e0028dc85a9a1c28d63ddd, 199023604 bytes, archive artifact digest sha256:f66679545e7a5cb6eef8b547ea784740ed99cc5f5540f944e4ae68a679e430c7. New bounded Node evidence reviewer supports this already published bundle; original trusted manifest and exact checkout expected, report hash must match raw manifest, typed sample values and non-root unique descendant PIDs required, independently derives reported restricted-low count and checks natural empty jobs and exit 0. Synthetic negative tests in normal CI. Output only CONSISTENT_REPORTED_SMOKE_PASS, not independent execution or provenance; actual interactive Windows evidence not received, product gates NOT RUN. No startup or WebView2 changes.
+
+
+### 추가 구현: initial job assignment failure recovery (검증 대기)
+Prior exact head 743a263 passed general and native CI. Stage now transfers already-pinned termination handle and any private broker job to serialized stop recovery on exception (including create/assign/bind failure). Before executable/runtime verification no termination authority is acquired. Both job drain and process exit attempted independently even if a job query throws, with final accounting required. Recheck unresolved-stop gate after revocation in same request to prevent fresh admission/Unlock/Detach. Added source contracts. No actual injected service-side assignment failure or OS termination refusal tested; runtime pins are still released after failed staging and not held across recovery, same-user injection/suspension and service restart remain open. Product startup disabled; interactive nested fixture still NOT RUN; WebView2 unchanged.
+
+
+### 추가 구현: retain runtime pins across redemption and unresolved stop (검증 대기)
+Prior exact head af172b3 passed general and native CI. Pending admission now transfers image and runtime inventory pins alongside job/child resources to completion receipt or stop recovery, including initial assignment exception after verified handle acquisition. Only confirmed natural exit and empty job, or successful forced drain with observed process exit, releases all four resources. Failed stop retains them across bounded retries. Synthetic ownership transfer/double-detach and source contracts added. No actual installed service/BitLocker, OS termination refusal, or interactive CEF nested runtime tested. Disk pins are not a measurement of mapped bytes, nor durable across broker crash; same-user races remain unproven. Startup remains disabled and WebView2 unchanged.
+
+### 추가 구현: 잠금 요청 거부 시에도 CEF 인증 철회 (검증 대기)
+
+Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 먼저 CEF 인증 소유자와 자식 admission/receipt를 철회한다. 후보 정리 예외가 발생해도 인증은 먼저 제거되며 기존 unlockOwner crash-relock 감시 토큰은 보존한다. 비강제 잠금이 열린 핸들로 거부되어 볼륨이 아직 unlocked여도 새 CEF 준비는 재인증 전 거부한다. 가짜 backend 회귀에 Detach 거부/HandlesOpen, 새 unlock 후 권한 회복 및 재잠금 성공을 추가했다. 일반 Status 및 실제 잠금 오류 의미, 기존 WebView2 startup은 유지한다. 외부 OS 잠금/재잠금의 미관측 상태 전이, 실제 설치형 broker 및 BitLocker, CEF 실행은 별도 검증 필요. 작성 시 테스트 NOT RUN. 제품 startup disabled.
+
+### 통합: nested smoke 증거 결합 (#228)
+
+정확한 head 475d11a의 일반/네이티브 CI는 PASS (45946397415 / 45946397389), artifact `cef-nested-smoke-56b556458a45625c49b9c15d7a36f43cc62821db` 생성 확인. #226의 잠금 권한 철회 커밋 ce73c94와 변경 경로가 겹치지 않음을 확인하여 두 부모를 유지한 draft 통합 커밋으로 결합한다. 실제 파싱 stdout 원본 SHA-256, 최초 manifest hash 및 inventory 검증을 포함하며 이전 보고서 호환을 위해 검사를 약화하지 않는다. 통합 head CI와 독립 리뷰는 별도 필수. 실제 standard-user nested CEF 및 BitLocker runtime NOT RUN; 제품 startup disabled, WebView2 및 출시 게이트 유지.
+
+### CI 보완: retained process 종료 신호의 독립 검증
+
+통합 head 2d51601의 일반 CI (45947323875)에서 CefProcessBindingCheck가 `Exited child still considered live` 복합 단언으로 실패했다. Rust, .NET 빌드, source/evidence 및 NetworkPolicyCheck는 통과했으나 후속 containment/runtime file 테스트는 건너뛰었다. 실제 실패 조건(비정상 exit code 또는 retained handle liveness)은 기존 로그만으로 구분할 수 없다. 합성 자식 stdin을 명시적으로 flush하고 정확히 복제된 process handle의 WAIT_OBJECT_0를 제한 10초 내 요구하며 이후 managed exit code, production IsRunning, SameLiveProcess 및 기존 nomination 단언을 모두 보존한다. 실패 원인을 진단 가능하게 분리하며 timeout이나 오류를 성공으로 처리하지 않는다. production liveness 정책 변경 없음. 수정 head CI 및 실제 CEF/BitLocker/독립 리뷰 미확인; startup disabled 및 WebView2 유지.
+
+### 추가 검증: 잠금 거부 후 owner 종료 및 자동 재잠금 회귀
+
+정확한 head 82ce76c 일반 CI 45947832401 PASS (직전 실패했던 CefProcessBindingCheck, containment, runtime inventory 포함); native CI 확인 시 진행 중. 표준 사용자 fake-backend suite에 같은 별도 owner process가 Unlock/AuthenticatedOwner/Lock(HandlesOpen)/AuthenticatedOwner 및 Stage 거부를 차례로 받고 종료하는 시나리오를 추가한다. watcher의 실제 HandlesOpen 로그를 먼저 요구한 다음 synthetic marker 제거, 자동 relock, 권한 거부 및 Detach를 확인한다. SYSTEM/elevated/session 0/noninteractive 실행을 테스트 시작 전에 거부한다. README에 CEF 빌드 없이 실행할 방법과 증거 필드를 문서화했다. 이 회귀는 hosted CI에서 문법만 검사되고 실제 Windows broker 실행 NOT RUN. 실제 BitLocker, CEF, 독립 리뷰 및 출시 검증은 별도. Product startup disabled; WebView2 unchanged.
+
+### 추가 검증: disabled preflight와 양쪽 job 및 종료 객체 확인 통합 회귀
+
+정확한 head edff03c 일반 CI 45948372574 PASS, native CI 확인 시 진행 중. 기존 CefContainmentCheck에 실제 Windows synthetic apphost를 사용하여 desktop atomic job, broker-owned single candidate job, retained process handle, CefDisabledPreflight.Run 및 Native.MatchesExitedNomination을 하나의 순서로 묶는 두 시나리오를 추가했다. 정상 exit 29와 두 job 종료 확인 후에도 잘못된 owner handle을 nomination으로 제시하면 성공을 반환하지 않음을 요구한다. 확인 실패를 강제 종료로 성공 처리하지 않고 정확한 객체의 자연 종료를 유지한다. callback은 합성 broker dispatch이며 실제 pipe/service, signed runtime, BitLocker 또는 CEF 실행이 아니다. 최신 CI NOT RUN; product startup disabled, WebView2 unchanged.
+
+### 추가 구현: 별도 CefPreflight 빌드의 보호 프로필 사전 검사 진입점
+
+정확한 head ad8c946의 일반 CI 45948786981 및 native CI 45948786928 PASS. 제품 Debug/Release와 별개의 MSBuild Configuration=CefPreflight에서만 고정 --cef-protected-preflight 인자를 허용한다. 해당 구성은 일반 탐색 진입점을 컴파일에서 제외하고 설치된 고정 Desktop 경로, 관리자 아닌 실행, 사용자 단일 실행 mutex, 실제 등록 broker, 새 보호 볼륨 인증을 요구한다. 비밀번호 버퍼를 정리하고 기존 disabled coordinator를 호출한 뒤 session Dispose 및 등록 볼륨이 잠겼거나 분리되었는지 확인할 때만 exit 29 반환. CEF 브라우저 시작 없음, 평문 fallback 없음, 일반 제품 Debug/Release 동작 유지. CI에 별도 구성 빌드 및 설치되지 않은 경로/정상 Release 거부 검사 추가. 이 검증 빌드는 배포물/installer가 아니며 별도 격리 VM의 승인된 서명·등록 및 runtime pins 준비가 선행되어야 한다. 동기 owner thread 검사 중 WPF 잠금 알림 dispatch 지연 및 실제 Windows/BitLocker/CEF runtime은 미검증이며 제품 활성화 금지. 신규 CI NOT RUN, 독립 리뷰 대기.
+
+### 추가 구현: 독립 STA 알림 pump (CefPreflight 전용)
+
+정확한 head a703549 일반 CI 45949344666 PASS, native CI 확인 시 진행 중. 검증 전용 entry는 owner dispatcher와 별개인 STA background thread에서 기존 WTS/power hidden HWND를 등록하고 Dispatcher.Run을 유지한다. 잠금 요청은 Interlocked로 단방향 latch, owner는 Volatile.Read로 기존 authority 체크에서 관찰한다. owner 종료 요청은 비동기 dispatch만 하며 lease/IPC/cleanup은 기존 owner thread에 유지. 등록 실패/10초 시작 제한 또는 pump 종료는 성공으로 처리하지 않으며 종료 시 dispatcher shutdown 및 제한 join. 기본 Debug/Release는 기존 owner HWND 사용 유지. 소스 계약 추가; 신규 CI, 실제 WTS/절전/BitLocker/CefPreflight 실행 NOT RUN. OS 알림 전달 자체의 지연 및 동기 broker I/O 중 즉시 중단은 보장하지 않으며 실제 제품 CEF 활성화 금지.
+
+### 추가 구현: 정확한 인증 볼륨의 종료 확인 (검증 대기)
+
+정확한 head 00d8370 일반 CI 45949822918 PASS, native CI 확인 시 진행 중. CefPreflight 전용 성공 경로에 명시적 cleanup을 추가: 원래 인증 GUID와 현재 볼륨 일치 요구, 비강제 Lock 응답 성공, 같은 GUID 및 잠금/ReadyToUnlock 상태 재조회, 이번 실행에서 Attach한 경우 Detach 성공 및 분리 상태 재조회. 잠긴 메타데이터의 FullyEncrypted/ProtectionOn은 attestation이 아니므로 요구하지 않는다. 오류/부재/다른 GUID/잠금 거부/분리 실패는 검증 성공 불가, 기존 Dispose와 broker crash watcher는 best-effort 정리만 수행. 원래부터 attached였으면 분리하지 않는다. 순수 synthetic 12개 시나리오 및 source contract 추가, 기존 Debug/Release Dispose 정책 변경 없음. 새 head CI, 실제 broker/BitLocker/CEF, 독립 리뷰 NOT RUN. 알림 및 외부 OS 상태 변화의 관측 한계는 유지. Product startup disabled.
+
+### 추가 구현: 서명 증거에서 비활성 런타임 핀 계획 생성
+
+정확한 head 38acf5b 일반 CI 45950466353 PASS, native CI 확인 시 진행 중. 기존 별도 CMS 서명·Authenticode·제한 ACL·정확한 후보 인벤토리 검증을 재사용해 C# runtime registration parser 계약의 JSON을 생성하는 읽기 전용 계획 도구를 추가한다. 고정 staging만 읽고 stdout에 계획만 반환; 설치 경로/ProgramData/서비스/볼륨 변경 없음. startupEnabled=false 유지, source commit·archive hash·파일별 길이/SHA-256 유지. 기존 evidence 합성 CI에 정상 계획 및 잘못된 signer/commit/파일/manifest 거부 추가. 폐기용 VM 준비 런북에 별도 Desktop 구성, 서명 및 후보 staging, 등록 계획 검토와 실제 게시 미구현 차단점을 명시. 신규 CI 및 실제 서명/서비스 등록/BitLocker NOT RUN; 제품 활성화 금지.
+
+### 추가 구현: 검증 전용 전체 패키지 서명 증거
+
+정확한 head 5a45daf 일반 CI 45950908056 PASS, native CI 확인 시 진행 중. 별도 cef-preflight-vm-package CMS 형식으로 Desktop/CefPreflight, Broker 및 Cef 후보의 모든 파일을 크기/SHA-256 인벤토리에 포함한다. 원래 CEF 후보 CMS 검증과 runtime pins 일치를 요구하고 VEIL EXE/DLL Authenticode 및 별도 CefPreflight ProductName 마커를 검사한다. 일반 Release와 마커 분리를 CI에서 확인한다. 마커와 서명은 실행 동작 또는 빌드 출처의 독립 attestation이 아니다. 설치 가능/제품 시작 플래그는 false만 허용, 기존 패키지 및 설치 스크립트 변경 없음. 합성 CMS/변조/누락/추가/마커 거부 테스트 추가, 실제 Authenticode 및 ACL은 합성 시험에서 mock. 신규 CI, 실제 서명/설치/BitLocker/CEF runtime 및 독립 리뷰 NOT RUN. 게시/복구 트랜잭션은 다음 단계.
+
+### 추가 구현: 검증용 전체 패키지 스테이징 및 등록 핀 계획
+
+정확한 head 342b6cd 일반 CI 45951446755 PASS, native CI 확인 시 진행 중. 기존 설치/등록/서비스가 없는 깨끗한 VM에서만 고정 별도 staging에 전체 검증용 payload와 두 CMS 증거를 관리자 제한 ACL로 복사하는 준비 도구 추가. 복사 전 검증, 원본 증거 해시 및 복사본 비교, 원본/복사본 재검증 후 Desktop/Broker/CEF SHA-256 및 runtime pins 계획을 출력한다. 기존/부분 staging은 자동 삭제·재사용하지 않는다. 등록/설치/서비스/볼륨 변경 없음. 합성 테스트 추가, 신규 CI 및 실제 ACL/서명/VM NOT RUN. 설치 게시·복구·실제 BitLocker 검증은 남아 있음.
+
+### 추가 구현: 보호 볼륨 등록 초안 및 준비 기록
+
+정확한 head 12c4661 일반 CI 45951965294 PASS, native CI 확인 시 진행 중. 별도 staging을 재검증하고 Desktop/Broker/CEF 이미지 핀과 명시된 시험 볼륨/보호기/사용자 SID를 연결하는 broker.json/client.json/cef-runtime-pins.json 초안 생성. 실제 실행 시 기존 복구 확인 루틴으로 명시적 기존 보호기 확인, 비강제 재잠금과 분리 후 재검증하며 실제 VHDX를 일시 mount/unlock할 수 있다. 비밀번호를 기록하지 않는다. 고정 별도 Program Files 디렉터리에 CreateNew/Flush(true)/재조회 후 파일 해시와 prepared-only journal을 마지막에 작성. 기존/부분 초안 보존. 합성 핀·입력 거부·파일 충돌 테스트 추가. 설치/서비스/실제 등록 변경 없음. 신규 CI, 실제 복구/ACL/VM/전원 차단 및 독립 리뷰 NOT RUN; 초안 재검증 및 게시/복구 상태 기계는 미구현.
+
+### 추가 구현: 준비 저널 및 독립 등록 입력 재검증
+
+정확한 head 9b15df5 일반 CI 45952554083 PASS, native CI 확인 시 진행 중. 읽기 전용 check-cef-preflight-registration.ps1은 고정 staging/준비 디렉터리, 설치 부재, 분리된 시험 VHDX 및 독립 운영자 입력을 사용한다. 등록 JSON에서 생성된 opaque volume ID만 읽고 나머지는 서명 검증 stage와 독립 입력으로 재구성한다. 바이트 수준 정확한 writer 형식 및 파일별 해시, prepared-only journal 대조; 누락/추가/변조/재해시된 잘못된 정책/다른 SID/보호기/프로필 거부. 부분 준비와 실제 설치 흔적을 구분하여 보존, 자동 복구 없음. 저널은 서명 또는 실제 복구 검증 증명이 아니며 TOCTOU를 제거하는 보유 핸들도 아니다. 합성 회귀 추가, 신규 CI 및 실제 VM/독립 리뷰 NOT RUN. 실제 게시 및 서비스 등록/장애 복구 상태 기계는 미구현.
+
+### 추가 구현: 검증 전용 설치 파일 게시 (서비스 미등록)
+
+정확한 head 61de04f 일반 CI 45953063242 PASS, native CI 확인 시 진행 중. 명시적인 폐기용 VM 옵션으로 기존 설치·서비스·pending·transaction 부재 및 복구 자격 증명 재확인/분리 후, 서명 검증 stage/등록 초안을 별도 제한 pending에 복사하고 원본/복사본을 재검증한다. 별도 intent 및 단계별 create-new 저널 후 동일 부모 디렉터리 이동으로 실제 Program Files/ProgramData VEIL 파일을 게시한다. 두 경로 이동은 각각 별개이며 서비스 생성/시작, 자동 복구/삭제 없음. 합성 실제 파일 복사/이동 및 중간 거부 테스트 추가. 실제 서명/ACL/BitLocker/서비스/전원 차단, 신규 CI, 독립 리뷰 NOT RUN. 게시 상태 재검증·복구 및 서비스 등록은 후속. 제품 CEF 비활성 유지.
+
+### 추가 구현: 게시 상태 재검증 및 명시적 제한 재개
+
+정확한 head bfc09e5 일반 CI 45953601321 PASS, native CI 확인 시 진행 중. 서명된 staging/등록 초안과 독립 입력으로 intent 및 순서가 있는 저널 prefix를 바이트 단위 재구성하고 실제 pending/live 배치와 교차 검증한다. verified-copy 기록 이후 알려진 4개 경계에서만 명시적 -Resume을 허용하며 매 단계 전체 파일/등록을 재검증, 기존 복구 자격 증명 및 재잠금·분리를 다시 확인한다. 복사 검증 전 중단, 불일치, 변조, 중복 경로, 서비스 존재, 연결 볼륨은 거부하고 삭제·덮어쓰기 없음. 완료 재개는 읽기 전용. 합성 실제 디렉터리 이동/저널 테스트 추가. 단일 관리자 폐기용 VM 전제, 실제 전원 차단·동시성·ACL·서명/BitLocker/서비스 NOT RUN, 신규 CI 및 독립 리뷰 대기. 서비스 등록/시작과 제품 CEF 초기화는 미구현.
+
+### 추가 구현: 검증 전용 비활성 브로커 서비스 등록
+
+정확한 head 7eff11c 일반 CI 45954145871 PASS, native CI 확인 시 진행 중. 전체 files-published-only 상태 및 시험 볼륨 복구 자격 증명 재확인 후 별도 SCM 등록 intent를 작성하고 LocalSystem/Disabled/Stopped 서비스 생성, 시스템·관리자 관리/인증 사용자 조회 전용 DACL 설정 및 재확인한다. 고정 경로·서비스 상태·DACL·전체 게시 파일을 다시 대조한 뒤 registered-disabled 기록을 작성. 실패 시 기록·SCM 상태를 보존하고 기존 서비스 채택/시작/삭제 없음. 합성 SCM 콜백 및 실제 저널/SDDL 파싱 테스트 추가. 신규 CI 및 실제 SCM/DACL/BitLocker/VM/독립 리뷰 NOT RUN. 등록 중단 확인, 서비스 시작 및 CEF 초기화는 남아 있음.
+
+### 추가 구현: 서비스 등록 재검증 및 일회성 시작/정지 시험
+
+정확한 head 1f765d0 일반 CI 45954697017 PASS, native CI 확인 시 진행 중. 별도 등록 저널과 실제 Disabled/Stopped SCM identity/DACL 및 게시 증거 재검증. 명시적 RunProbe에만 복구 자격 증명 재확인 후 Manual 및 Running 관측, finally에서 Disabled/정상 Stop/분리 확인. 실패 기록 보존, 완료 기록은 정상 전체 시험에서만 생성. 실제 서비스와 볼륨은 실행하지 않았으며 강제 종료/분리 및 자동 재개 없음. 합성 시작/정지·시작 응답 실패 후 정리 테스트 추가. 신규 CI 및 실제 SCM/ACL/BitLocker/전원 차단/독립 리뷰 NOT RUN. 일반 사용자 사전 검사 세션 및 CEF 초기화는 남아 있음.
+
+### 추가 구현: 일반 사용자 보호 프로필 검증 세션
+
+정확한 head cea72bb 일반 CI 45955235904 PASS, native CI 확인 시 진행 중. 비활성 등록과 이전 서비스 전용 probe 저널을 재구성해 확인한 뒤 명시적 폐기용 VM/RunProtectedSession 옵션으로 별도 시험 계정의 Windows 자격 증명을 요청, 등록 SID와 일치 확인. 서비스 제한 시작 중 고정 서명 Desktop EXE를 해당 계정으로 --cef-protected-preflight만 실행, 관리자 측 Process에서 최대 5분 종료 관측, 정확한 int 29/동일 서비스 PID/시험 VHDX 분리 확인 후 Disabled/Stopped 및 등록 재검증. 별도 저널 기록. 실패/timeout은 강제 종료 없이 정상 정리 시도 및 상태 보존. 합성 callback 테스트 추가. 실제 Windows Secondary Logon/토큰/SCM/BitLocker/서명/VM/독립 리뷰 NOT RUN; 일반 사용자 계정 구성과 독립 OS trace는 별도 확인 필요. 29는 CEF 활성화/브라우징이 아님. 신규 CI 대기.
+
+### 추가 구현: 일반 사용자 실행 프로세스 토큰 직접 관측
+
+직전 head 78589ea의 일반/native CI는 작업 시작 시 실행 중. Process.Start가 반환한 프로세스 핸들에서 Win32 GetProcessId/QueryFullProcessImageName/OpenProcessToken 및 TokenSessionId/ElevationType/Elevation/IntegrityLevel을 읽고, 등록 SID·고정 실행 경로·동일 대화형 세션·medium integrity·비상승/기본 토큰·관리자 그룹 부재를 요구한다. 동일 Process 객체 종료 코드 int 29와 tokenVerified/PID/세션 관측이 있어야 protected-preflight 기록 생성. 실제 CI 자체 프로세스 토큰 읽기 및 합성 잘못된 관측 거부 시험 추가. 시작 후 스냅샷으로 실행 전 suspended 검증이나 런타임 토큰 불변성 증명이 아니며 실제 별도 사용자/VM/BitLocker/CEF NOT RUN. 신규 CI 및 독립 리뷰 대기.
+
+후속 CI 조회: 78589ea 일반 CI 45955792334 FAIL (별도 preflight package 거부 테스트), Rust PASS. 로그는 공통 Reject에서 거부되지 않은 입력만 보여주므로 정확한 케이스는 미확정. 합성 서비스 객체가 같은 참조를 공유해 PID 교체가 이전 관측에도 반영되는 결함을 발견, scalar PID 스냅샷으로 수정하고 Reject 호출 위치 진단을 추가. 신규 CI로 재확인 필요.
+
+후속 CI: 4e2b607 일반 CI 45956408765 FAIL. Rust PASS 및 .NET 빌드 성공 후 Windows PowerShell 5.1 파서에서 cef-preflight-package.test.ps1의 정규식 삽입 중복/문자열 파손 확인. 이전 정상 파싱 파일(78589ea) 기준으로 토큰 관측 및 거부 케이스 구간을 재구성하고 중복 제거. PID scalar snapshot 수정은 유지. 테스트 내용의 검증 조건은 완화하지 않음. 새 CI 실행 결과 및 실제 VM 확인 전 완료 처리 금지.
+
+후속 CI: 6e69f5c 일반 CI 45956868760 FAIL. Rust PASS, .NET 빌드 및 Windows PowerShell 5.1 파싱 통과. 실제 CI 자체 프로세스의 Inspect 호출에서 SecurityException Access is denied. TOKEN_QUERY 핸들을 WindowsIdentity/WindowsPrincipal로 감싸는 추가 권한 요구가 원인 후보이므로 해당 사용을 제거하고 TokenUser/TokenGroups/TokenIntegrityLevel을 GetTokenInformation으로 직접 읽도록 수정. 가변 구조체의 크기, SID 포인터와 길이, 그룹 수 및 플랫폼 정렬을 확인하며 deny-only 관리자 그룹도 거부. 기존 PID/세션/상승/무결성 검증 유지, 자체 프로세스의 활성 관리자 그룹 교차 검사 추가. 새 CI 결과 및 실제 VM은 미검증. 이전 실패의 직접 원인 확정 및 보호 세션 회귀 테스트 완료는 새 CI 확인 후 판단.
+
+### 추가 구현: 전체 서명 패키지와 등록/게시 기록 결합
+
+정확한 head f73b4b3 일반 CI 45957413402 PASS, native CI 확인 시 진행 중. 등록된 세 EXE 해시만으로는 동일 서명자·커밋의 다른 DLL 인벤토리를 구분하지 못하므로 staging에서 네 서명 증거(JSON/CMS)의 SHA-256 및 정규화된 서명자 지문을 검증 전후 관측하고 등록 준비 저널 format 2와 게시 intent format 2에 결합한다. 게시 경계에서 fresh stage plan 재검증을 추가하며 기존 format 1 준비 기록은 거부한다. 동일 EXE/서명자/커밋이나 변경 DLL로 다시 서명된 별도 패키지 테스트, 이전 형식 준비 저널 거부 테스트 추가. 기존 VM 준비 자료는 덮어쓰지 않고 깨끗한 스냅샷에서 다시 준비해야 한다. 관리자 단일 실행 전제의 스냅샷 비교이며 실제 동시성/서명/SCM/BitLocker/VM/독립 리뷰는 미검증. 보호 세션 결과 재검증 및 실제 CEF 실행은 후속 작업.
+
+### 추가 구현: 보호 세션 기록 읽기 전용 재검증
+
+정확한 head 196ceec 일반 CI 45958003951 PASS, native CI 확인 시 진행 중. 보호 세션 관측에 broker PID를 포함하고 최종 정리 기록에 관측 SHA-256을 결합한다. 별도 검사기는 현재 전체 서명 패키지/등록/게시 기록, 서비스 전용 시험 및 Disabled/Stopped DACL/시험 볼륨 분리를 검증하고 네 보호 세션 기록을 정확한 바이트로 재구성하여 재조회한다. 누락/추가/공백 변조/다른 등록/관측 PID 교체 거부 회귀 테스트 추가. 기존 관측 해시 없는 기록 거부. 관리자 수집 기록의 일관성 검사이며 독립적인 과거 실행 증명이나 활성화 권한은 아님. 신규 CI, 실제 SCM/BitLocker/VM/CEF 및 독립 리뷰 NOT RUN.
+
+### 추가 구현: native CEF bootstrap 레지스트리와 설치 연결
+
+정확한 head 3450861 일반 CI 45958573564 PASS, native CI 조회 시 진행 중. native LoadRegisteredBootstrap은 HKLM 64-bit SOFTWARE/VEIL/CefBootstrap의 독립 등록을 요구하나 기존 설치 경로는 JSON만 게시하는 연결 누락 발견. 서명된 게시/등록 검증 및 복구 확인 후 기존 키를 채택하지 않고 제한 ACL의 부모/leaf를 생성, 세 REG_SZ를 일치시켜 재조회한다. 서비스 등록/서비스 probe/보호 세션/읽기 전용 검사에서 키와 ACL·값을 재확인. synthetic plan/descriptor 테스트와 helper 컴파일 추가; HKLM 실제 변경은 CI에서 하지 않는다. 부분 등록 보존, 자동 삭제 없음. 관리자 단일 폐기 VM 전제, 실제 registry ACL roundtrip/link/SCM/BitLocker/CEF 및 신규 CI/독립 리뷰 미검증. startupEnabled=false 및 single-process job 유지; 실제 CEF 초기화는 아직 연결하지 않음.
+
+### 추가 구현: 비활성 단일 프로세스와 다중 프로세스 containment 분리
+
+정확한 head f3592b0 일반 CI 45959236210 PASS, native CI 조회 시 진행 중. broker-owned job 공통 생성 경로에서 active process cap을 보존하면서 일반 제품은 CreateDisabledCandidate(1)만 제공. 테스트 프로젝트 전용 VEIL_CEF_CONTAINMENT_TEST 조건에서만 2-process fixture 생성/관측을 컴파일하고 disabled admission은 cap 1이 아니면 거부한다. 실제 합성 apphost root에서 동일 이미지의 하위 프로세스를 생성해 single-process job의 거부와 2-process nested job에서 desktop/broker 각각의 job close 후 descendant 종료를 확인하는 회귀 시험 추가. 실제 CEF 렌더러/GPU, sandbox 역할, 전체 job 멤버 인증, live broker authority와 제품 startup은 아직 미구현/미검증. 신규 CI, 실제 VM, 독립 리뷰 대기. 제품 단일 프로세스 제한 및 startupEnabled=false 유지.
+
+후속 CI: b8c4efe 일반 CI 45959726873 FAIL. Rust PASS, .NET 빌드 및 앞선 설치 검사 통과, profile-gate-contract.test.mjs 499/540의 기존 literal cap=1 정적 검사 두 건 실패 (89/91). 실제 다중 프로세스 테스트 단계는 미도달. CreateDisabledCandidate(1), Create 내부 제품 빌드의 cap 1 강제 가드, test-only symbol 및 disabled admission cap 확인으로 소스 계약 갱신. 합성 root/descendant 각각 retained process handle의 PID/생성 시각/SID/세션/이미지/실제 job 소속 및 두 프로세스 accounting 검증 추가. 외부 프로세스, root 재사용, 변조 생성 시각 거부 시험 추가. 신규 CI 및 실제 VM/CEF/독립 리뷰 대기. 합성 pair 스냅샷이며 실제 CEF 역할/샌드박스/전체 프로세스 수명 검증이 아님. 제품 cap=1 및 startupEnabled=false 유지.
+
+후속 CI: eb7abba 일반 CI 45960330762 FAIL. Rust/.NET/소스 계약 및 child handle binding 통과, 실제 합성 Windows containment 시험의 Fixture pair membership/identity assertion 실패 (Program.cs:179). 어느 조건인지 기존 로그만으로 확정 불가. test-only FixturePairRefusal에 root/descendant identity, SID/session/image/생성 순서, 실제 job 소속, active/total/terminated accounting, 재관측을 구분하는 비민감 진단 추가. 기존 모든 검사와 cap 유지, altered creation time은 구체적 거부 사유까지 확인. 신규 CI에서 정확한 실패 조건 확인 필요. 실제 CEF/VM/독립 리뷰 미검증.
+
+### 통합 병합: #180/#181 다운로드 fixture
+
+기존 per-view OwnedTransfer 및 parallel cancel/keep 구현을 유지하면서 동일 loopback origin 제한, redirect 대상 요청/금고 발행 금지, 지정된 페이지 GET의 frame 기반 합성 HttpOnly 쿠키 사용과 익명 요청 쿠키 미전송 시험을 통합한다. 신규 표준 사용자 clean-checkout/nested runner 유지, 기존 cache 재사용 runner는 사용하지 않는다. 사용자 요청에 따른 코드 통합이며 정확한 통합 head CI, 실제 CEF 실행 및 독립 리뷰 미검증. 제품 엔진 및 startupEnabled=false 유지. [남은 작업](cef-remaining-roadmap.md).

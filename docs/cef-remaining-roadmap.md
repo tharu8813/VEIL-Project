@@ -2,7 +2,9 @@
 
 기준일: 2026-11-27 (KST). 이 문서는 기존 [CEF 전환 로드맵](cef-transition-roadmap.md)의 후속 실행 계획이다. main의 실제 제품 엔진은 WebView2이며, CEF 실험 코드의 구현 여부와 제품 런타임 검증 여부를 분리한다. 코드 병합, 제품 활성화, 공개 배포는 서로 다른 결정이다.
 
-## 0. 병합 인벤토리 및 현재 차단점 (P0)
+## 0. 통합 이력 및 현재 차단점 (P0)
+
+**2026-11-27 사용자 결정:** 기존 작업을 즉시 main에 통합하고 실패 및 미검증 항목은 이 로드맵으로 관리한다. 아래 PR 표는 통합 전 스냅샷이다. 통합 커밋은 기존 main, #226, #180, #181의 정확한 head를 부모로 보존하고 #222~#225/#227/#228의 조상 이력도 유지한다. 다운로드 fixture 충돌은 최신 per-view/parallel 구현에 redirect/인증 GET 변경을 재적용하고 최신 표준 사용자 runtime runner를 유지하는 방식으로 해소한다. 코드 통합 자체는 CI 성공, 독립 리뷰, 제품 활성화 또는 배포 승인이 아니다.
 
 조회 당시 main 코드 기준: `fd04e0088048acd783c8e7eddb8fec3991e9ece0`. 통합 PR은 [#226](https://github.com/tharu8813/VEIL-Project/pull/226), head `e48f6bebb0918c58a3fad58021325406f27244fd`. 다음 목록은 조회 시점 스냅샷이며, 이후 작업에서는 정확한 최신 SHA를 다시 확인한다.
 
@@ -13,7 +15,7 @@
 | #224 | f646e9a | #226 조상, 일반 PASS | 동일 |
 | #225 | 2a9370f | #226 조상, 일반/native PASS | 동일 |
 | #227 | 7665a9e | #226 조상, 일반 PASS | 동일 |
-| #226 | e48f6be | draft; 일반 FAIL, native 실행 중(조회 시점) | P0 실패 해결 및 최신 통합 CI/독립 리뷰 |
+| #226 | e48f6be | draft; 일반 FAIL, native PASS | 통합 후 P0 실패 해결 및 최신 main CI/독립 리뷰 |
 | #180 | 531882e | 별도 분기; 일반/native PASS, main과 충돌 | 충돌 해소, redirect fixture 재검증 |
 | #181 | 6d170b2 | #180 기반 draft; 일반 PASS | #180 의존성 유지, 인증 쿠키 fixture 재검증 |
 
@@ -21,15 +23,15 @@
 
 - [ ] P0-01: [최신 실패 CI](https://github.com/tharu8813/VEIL-Project/actions/runs/45960862547)의 합성 다중 프로세스 시험 실패를 해결한다. 로그: `Fixture pair refused (mode 1): root-membership`. root process handle 신원 재관측, 실제 Job 소속, active/total/terminated accounting 각각을 분리 진단한다. nested Job이 descendant의 별도 job 생성/상속과 호환되는지 실제 Windows에서 확인한다. 검사 삭제, timeout/오류의 PASS 변환, production cap=1 완화 금지.
 - [ ] P0-02: #226의 최신 정확한 head에서 일반 CI와 native CI 모두 PASS. 합성 root/descendant 쌍, 외부 PID, 변조 생성시각, cap=1, 두 Job 종료/강제 종료, 프로세스 핸들 보존을 검사한다.
-- [ ] P0-03: #226의 통합 범위와 기존 PR 변경의 보존 여부를 독립 리뷰. 필요한 리뷰와 CI를 충족하면 중복 선행 PR들을 통합 병합으로 정리한다. branch protection을 우회하거나 승인 리뷰를 가장하지 않는다.
-- [ ] P0-04: #180을 최신 main 또는 통합 기준에 재조정하고 #181의 stacked 변경을 보존한다. 충돌 파일별 의도 검토, 합성 GET/redirect/401/HttpOnly cookie/취소/원본 hash 및 Rust 금고 회귀. 실제 CEF 테스트는 별도 결과 기록.
-- [ ] P0-05: 병합 직전 main과 head SHA 재확인, 정확한 head CI/리뷰/충돌 없음 확인, GitHub 정상 PR merge. 병합 후 main CI 및 중복 PR 상태 확인. 실패 시 추가 병합 중단. 브랜치/PR 이력 및 실패 증거 보존.
+- [ ] P0-03: 통합 범위와 기존 PR 변경의 보존 여부를 독립 리뷰. 승인 리뷰를 가장하지 않는다. 사용자 결정으로 이번 통합은 독립 리뷰 전에 수행하며, 이후 보안 검토 및 제품 활성화 기준은 유지한다.
+- [ ] P0-04: 통합된 #180/#181 다운로드 fixture의 충돌 해소 코드 검증: 합성 GET/redirect/401/HttpOnly cookie/취소/원본 hash 및 Rust 금고 회귀, 기존 per-view 및 parallel 동작. 새 통합 결과는 미검증; 실제 CEF 테스트는 별도 기록.
+- [ ] P0-05: 이번 통합 후 정확한 main SHA의 CI 및 PR 상태 확인. 실패를 삭제하거나 성공으로 바꾸지 않고 해결 작업 기록. 이후 일반 병합에는 CI/리뷰/충돌 검사 기준 적용. 브랜치/PR 이력 및 실패 증거 보존.
 
 **완료 조건:** 통합 코드가 main에 있고 필수 CI 성공 및 필요한 검토 기록이 존재하며, 기존 WebView2 제품이 회귀하지 않는다. 제품 CEF 활성화는 여전히 금지.
 
 ## 1. 보호된 사전 검사 실측 (P0/P1)
 
-#226에는 별도 CefPreflight 구성, 보호 세션/프로필 lock, 등록 런타임 SHA-256 및 retained file handles, broker one-shot admission, 독립 Job, 종료 확인, 패키지 CMS/게시 및 복구 저널, 비활성 SCM 등록/시험, HKLM bootstrap 등록, 일반 사용자 토큰 관측과 시험 기록 재검증 코드가 작성되어 있다. 현재 main 미병합, 실제 Windows BitLocker 설치 시험 NOT RUN.
+#226에는 별도 CefPreflight 구성, 보호 세션/프로필 lock, 등록 런타임 SHA-256 및 retained file handles, broker one-shot admission, 독립 Job, 종료 확인, 패키지 CMS/게시 및 복구 저널, 비활성 SCM 등록/시험, HKLM bootstrap 등록, 일반 사용자 토큰 관측과 시험 기록 재검증 코드가 작성되어 있다. 이번 통합 대상에 포함, 실제 Windows BitLocker 설치 시험 NOT RUN.
 
 - [ ] P1-01: 폐기용 Windows x64 VM, 별도 관리자/일반 사용자, 독립 서명 인증서, 시험용 VHDX 및 복구 보호기를 준비한다. 실사용 설치/파일/계정 금지.
 - [ ] P1-02: 정확한 통합 커밋에서 CEF 후보/desktop/broker 빌드, 서명, 전체 CMS 검증, 제한 ACL staging, 등록 형식 2, 게시 및 HKLM 등록, SCM Disabled/Stopped 등록. VM runbook은 #226의 `docs/cef-preflight-vm-runbook.md` 참조.
@@ -79,5 +81,11 @@
 1. 우선순위는 P0 병합 차단점 → P1 실제 보호 런타임 → P2 제품 기능 및 배포. 여러 단계의 독립 작업은 병행 가능하되 선행 검증에 의존하는 활성화는 금지.
 2. 각 일감에 정확한 SHA, PR/CI 링크, 변경 파일, 시험 종류(compile/synthetic/runtime/VM), 결과(PASS/FAIL/NOT RUN), 남은 위험을 기록한다.
 3. 정량 진행률은 실제 검증 근거가 없으면 추정치로만 표시한다. 임의로 전체 완료율을 높이지 않는다.
-4. 테스트·보안 검증 실패, 독립 리뷰 미완료, 충돌이 있으면 해당 코드 병합을 보류하고 차단점을 갱신한다. 문서 반영은 제품 배포 승인이 아니다.
+4. 이번 통합은 사용자가 명시적으로 요청한 예외로 기록한다. 이후 기본 정책은 테스트·보안 검증 실패, 독립 리뷰 미완료, 충돌 시 해당 코드 병합 보류 및 차단점 갱신이다. 코드 통합은 제품 배포 승인이 아니다.
 5. 기존 자동 개발 작업에 Chromium 직접 포크 지시가 남아 있다면 별도 사용자 승인으로 CEF 전환 로드맵에 맞춰 변경한다. 중복 작업과 병합 충돌을 방지한다.
+
+## 이번 통합 시점의 오류 및 검증 부채
+
+- #226 일반 CI 45960862547 FAIL: `Fixture pair refused (mode 1): root-membership` (CefContainmentCheck/Program.cs:180). 정확한 원인은 아직 미확정. Rust/.NET/소스 검사 통과, 해당 job 시험 실패. native CI 45960862278 PASS (compile 및 제한된 검사, 실제 브라우저 실행 아님).
+- #180/#181의 오래된 전역 상태와 최신 per-view 소유 요청 구현 간 충돌을 수동 해소. 통합 후 native/managed compile 및 소스 계약, 실제 Windows CEF 테스트는 NOT RUN. 최신 runtime wrapper를 유지했으므로 기존 `-ReuseExtractedCef` 옵션은 도입하지 않는다.
+- 독립 리뷰 없음. 실제 BitLocker/SCM/HKLM/CEF 실행, OS 쓰기 추적, Gate A~E는 미검증. 기존 WebView2와 startupEnabled=false 유지.

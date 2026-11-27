@@ -92,3 +92,45 @@ Use a clean checkout, an interactive non-elevated Windows x64 terminal, Git, Nod
 ```
 
 The new wrapper builds fresh pinned binaries and the locked Rust vault, then runs Win32, WPF/vault and tab fixtures in order with separate outer timeouts. It refuses elevated/noninteractive execution and dirty source, checks for remaining test executable processes, isolates fixture TEMP/TMP, and retains its own work directory. Inspect `evidence/result.json`, stage stdout/stderr logs and retained fixture profiles. The report records the source commit, binary hashes and PASS/FAIL/NOT RUN per stage; it does not certify a product security gate. Do not upload local logs without reviewing them. A successful tab runner prints its synthetic observation log before removing its own temporary profiles. A successful run is not independent sandbox-token, site-isolation, protected-volume, outside-write, or release evidence. This wrapper has not yet been executed on standard-user Windows.
+
+
+### Nested-job multi-process Win32 fixture
+The standard-user `scripts/test-cef-wpf.ps1` now includes `nestedBuild` and `nestedWin32`. The dedicated test-only runner launches the previously built Win32 smoke under two independent jobs and a fresh temp directory. It requires an observed restricted Low/Untrusted-integrity descendant, successful JavaScript smoke shutdown and empty jobs; stdout includes JSON evidence. Hosted CI compiles the runner only. No product profile, broker unlock or actual product engine activation is involved. Token sampling is not a complete subprocess role or site-isolation audit. Actual nested CEF runtime result: NOT RUN at implementation.
+
+
+### Run without rebuilding CEF locally
+After the native compile workflow succeeds, download its `cef-nested-smoke-<sha>` artifact for the exact tested checkout (on PR runs, GitHub's checkout SHA may be the synthetic merge commit, not the PR head). Extract it to a new directory. Use PowerShell 7 x64 with .NET 10 x64 runtime and required Windows/VC runtime dependencies, in a non-elevated interactive session:
+
+```powershell
+.\run-cef-nested-bundle.ps1 -ExpectedCommit '<exact artifact checkout SHA>'
+```
+
+Only run artifacts from the trusted repository/workflow and verified run; the unsigned manifest is a consistency check, not a publisher signature or independent provenance. The artifact contains only the Win32 smoke and nested runner, pinned CEF runtime/resources and licenses, not the product candidate or an installer. The script verifies inventory and produces result.json/stdout.json/stderr.log in a new evidence directory. Actual execution is still NOT RUN on hosted CI. Send the result files, not the temporary browser profile, for review.
+
+
+### Review returned nested smoke evidence
+Use the original manifest from the verified artifact download, not a manifest supplied solely with the result. From a repository checkout with Node.js:
+
+```powershell
+node scripts/check-cef-nested-evidence.mjs --commit '<exact artifact checkout SHA>' --manifest 'C:\test-bundle\manifest.json' --evidence 'C:\test-evidence'
+```
+
+This accepts the existing bundle's result.json and stdout.json, compares exact checkout and raw manifest hash, requires the report's raw stdout SHA-256 to match stdout.json (older reports without this field require a fresh run), validates required fixture inventory pins including locale, runner configuration and licenses, empty-job flags, and actual reported restricted Low/Untrusted token samples. Output is `CONSISTENT_REPORTED_SMOKE_PASS`, not independent attestation. It never marks product gates passed; a local report can be fabricated and the validator does not measure installed files or execute a browser. Keep stderr.log for diagnosis; do not share the temporary profile.
+
+### Run the broker authorization regression without building CEF
+
+From a clean checkout on an interactive, non-elevated Windows x64 test account (prefer a disposable VM), with Node 22 and .NET 10 SDK:
+
+```powershell
+dotnet build apps/desktop/Veil.Desktop.csproj -c Debug
+if ($LASTEXITCODE -ne 0) { throw 'Desktop build failed' }
+dotnet build apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj -c Debug
+if ($LASTEXITCODE -ne 0) { throw 'Broker build failed' }
+node tests/broker/broker.mjs
+```
+
+The suite now refuses SYSTEM, elevated and noninteractive/session-0 execution before starting a broker. It uses randomized test pipes, a disposable fake backend and synthetic secrets, not a real VHDX. The negative real-backend case must refuse the non-elevated token before opening a volume. The new regression requires the same authenticated owner to receive a refused Lock, lose CEF authority and exit; the broker must observe a refused automatic lock while the synthetic handle marker exists, then relock when the marker is removed. Check the final PASS output and `evidence.json` in its reported `.veil-dev/broker-test-*` directory; `refusedOwnerExitRelock` must be true. Keep these observations separate from installed-service, actual BitLocker, CEF runtime and release gates. Hosted CI syntax/source checks do not execute this suite.
+
+### Integrated redirect and authenticated handoff fixtures
+
+The #180/#181 fixtures are reconciled with the newer per-view OwnedTransfer state and parallel vault scenarios. The zero-body 302 must not reach its target or publish an object. Only the armed same-origin page GET may use frame-owned stored credentials; the synthetic HttpOnly cookie is never manually exported. Anonymous truncation/redirect/saturation must not receive that cookie. All owned GETs must match the current loopback origin; parallel source-path checks are preserved. The current clean-checkout standard-user wrapper supersedes the older reuse-extracted runner. Exact merged compile/runtime results are pending; no product download support or release approval is implied.

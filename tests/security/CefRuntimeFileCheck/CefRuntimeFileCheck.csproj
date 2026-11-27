@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../apps/desktop/Engine/CefRuntimeFileLease.cs" Link="CefRuntimeFileLease.cs" />
+    <Compile Include="../../../apps/desktop/Engine/CefRuntimeRegistrationLease.cs" Link="CefRuntimeRegistrationLease.cs" />
+    <Compile Include="../../../apps/shared/AdminOnlyFile.cs" Link="AdminOnlyFile.cs" />
+  </ItemGroup>
+</Project>

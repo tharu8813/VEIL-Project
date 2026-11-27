@@ -31,6 +31,20 @@ internal static class AdminOnlyFile
         return File.ReadAllText(file.FullName);
     }
 
+    // Separate from configuration loading. The caller must retain a read
+    // handle denying write/delete and separately verify its final path.
+    internal static void RequireProtectedExecutable(string path)
+    {
+        var file = new FileInfo(Path.GetFullPath(path));
+        if (file.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            throw new UnauthorizedAccessException("Executable must not be a link.");
+        for (var directory = file.Directory; directory is not null; directory = directory.Parent)
+            if (directory.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                throw new UnauthorizedAccessException("Executable ancestor must not be a link.");
+        Require(file.GetAccessControl(), "executable");
+        Require(file.Directory!.GetAccessControl(), "executable directory");
+    }
+
     private static void Require(FileSystemSecurity security, string what)
     {
         var owner = security.GetOwner(typeof(SecurityIdentifier))?.Value;

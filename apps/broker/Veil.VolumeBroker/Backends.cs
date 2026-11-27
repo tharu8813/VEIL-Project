@@ -5,9 +5,6 @@ using System.Text.Json;
 
 namespace Veil.VolumeBroker;
 
-internal sealed record BackendStatus(bool Attached, string? VolumeGuid, bool FullyEncrypted, bool ProtectionOn,
-    bool Unlocked, bool ProtectorPresent, bool ReadyToUnlock = false);
-
 internal enum LockResult { Locked, HandlesOpen, Failed }
 
 /// <summary>Volume operations on the single registered image. No method accepts a caller-supplied path.</summary>

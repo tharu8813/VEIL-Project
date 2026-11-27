@@ -15,6 +15,9 @@ internal sealed record BrokerConfig
     public required string UserSid { get; init; }
     public required string[] ClientImages { get; init; }
     public string? ClientSha256 { get; init; }
+    // Separate opt-in pin for owner-only CEF preflight. Not a pipe allowlist.
+    public string? CefChildImage { get; init; }
+    public string? CefChildSha256 { get; init; }
     public string PipeName { get; init; } = "VEIL.VolumeBroker";
     public string Backend { get; init; } = "bitlocker";
     public bool Development { get; init; }
@@ -49,6 +52,17 @@ internal sealed record BrokerConfig
             throw new InvalidDataException("Production configuration allows only the BitLocker backend and signed clients.");
         if (!development && (ClientImages is not { Length: 1 } || ClientSha256 is not { Length: 64 } || !ClientSha256.All(Uri.IsHexDigit)))
             throw new InvalidDataException("Production configuration must pin one signed client image by SHA-256.");
+        if (CefChildImage is not null || CefChildSha256 is not null)
+        {
+            if (development || CefChildImage is not { } child || CefChildSha256 is not { Length: 64 } hash ||
+                !hash.All(Uri.IsHexDigit) || !Path.IsPathFullyQualified(child) ||
+                child.StartsWith(@"\\", StringComparison.Ordinal) ||
+                !string.Equals(child, Path.GetFullPath(child), StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(Path.GetExtension(child), ".exe", StringComparison.OrdinalIgnoreCase) ||
+                ClientImages is not { Length: 1 } ||
+                string.Equals(child, Path.GetFullPath(ClientImages[0]), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Invalid separate CEF preflight image pin.");
+        }
         if (Backend is not ("bitlocker" or "fake") || (Backend == "fake") != (Fake is not null))
             throw new InvalidDataException("Unknown or incomplete backend configuration.");
         if (string.IsNullOrWhiteSpace(VolumeId) || VolumeId.Length > 64 ||

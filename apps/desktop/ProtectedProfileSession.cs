@@ -1,3 +1,4 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Windows;
@@ -15,6 +16,8 @@ internal sealed class ProtectedProfileSession : IDisposable
     private bool attachedHere;
     private bool unlockAttempted;
     private bool disposed;
+    private string? authenticatedVolumeGuid;
+    private readonly int ownerThread = Environment.CurrentManagedThreadId;
 
     private ProtectedProfileSession(NamedPipeVolumeBroker broker, ProtectedSessionNotifications notifications)
     {
@@ -70,6 +73,9 @@ internal sealed class ProtectedProfileSession : IDisposable
                     state = broker.QueryRegisteredVolume();
                     if (state is not { FullyEncrypted: true, ProtectionOn: true, Unlocked: true, ProtectorPresent: true })
                         throw new ProfileLocationException("The volume lost protected status during unlock.");
+                    if (string.IsNullOrWhiteSpace(state.VolumeGuid))
+                        throw new ProfileLocationException("The authenticated volume identity is missing.");
+                    authenticatedVolumeGuid = state.VolumeGuid;
                     var accepted = secret;
                     secret = null; // Transfer ownership to the startup caller for vault unlock.
                     return accepted;
@@ -86,14 +92,195 @@ internal sealed class ProtectedProfileSession : IDisposable
         throw new ProfileLocationException("Too many failed unlock attempts.");
     }
 
+    // Only a future CEF preparation caller uses this. Existing WebView2 startup
+    // is unchanged; call instead of opening a second product profile.lock.
+    internal CefPreparationLease AcquireCefPreparationLease()
+        => CefPreparationLease.Acquire(this);
+
+    private void RequireCefPreparationAuthority(string root)
+    {
+        if (Environment.CurrentManagedThreadId != ownerThread ||
+            disposed || notifications.LockRequested || authenticatedVolumeGuid is null)
+            throw new ProfileLocationException("The authenticated CEF preparation session is unavailable.");
+        // Ordinary volume Status does not prove the requesting desktop owns
+        // the unlock. Require a live broker owner attestation on both sides
+        // of filesystem verification, without changing WebView2 startup.
+        RequireBrokerOwner();
+        var location = ProfileGate.Verify(root, broker, requireProtected: true);
+        if (!string.Equals(location.VolumeGuid, authenticatedVolumeGuid, StringComparison.OrdinalIgnoreCase))
+            throw new ProfileLocationException("The authenticated CEF volume changed.");
+        RequireBrokerOwner();
+        if (disposed || notifications.LockRequested)
+            throw new ProfileLocationException("The authenticated CEF session changed.");
+    }
+
+    private void RequireBrokerOwner()
+    {
+        var owner = broker.QueryAuthenticatedOwner();
+        if (owner is not { FullyEncrypted: true, ProtectionOn: true, Unlocked: true, ProtectorPresent: true } ||
+            !string.Equals(owner.VolumeGuid, authenticatedVolumeGuid, StringComparison.OrdinalIgnoreCase))
+            throw new ProfileLocationException("The broker did not attest the authenticated CEF owner.");
+    }
+
+    // Owns the exclusive file handle. Same dispatcher thread only.
+    // Dispose before disposing the parent session. This is not launch authority.
+    internal sealed class CefPreparationLease : IDisposable
+    {
+        private readonly ProtectedProfileSession session;
+        private readonly FileStream handle;
+        private bool released;
+
+        internal string ProductRoot { get; }
+
+        internal static CefPreparationLease Acquire(ProtectedProfileSession session)
+        {
+            var root = session.broker.RegisteredProductProfilePath ??
+                throw new ProfileLocationException("CEF requires a registered product profile.");
+            ProfileGate.RejectElevated();
+            session.RequireCefPreparationAuthority(root);
+            ProfileGate.RejectRedirectedChildren(root);
+            session.RequireCefPreparationAuthority(root);
+            var handle = new FileStream(Path.Combine(root, "profile.lock"), FileMode.OpenOrCreate,
+                FileAccess.ReadWrite, FileShare.None);
+            try
+            {
+                session.RequireCefPreparationAuthority(root);
+                return new CefPreparationLease(session, root, handle);
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+
+        private CefPreparationLease(ProtectedProfileSession session, string root, FileStream handle)
+        {
+            this.session = session;
+            ProductRoot = root;
+            this.handle = handle;
+        }
+
+        internal bool StillAuthorized()
+        {
+            if (Environment.CurrentManagedThreadId != session.ownerThread || released ||
+                handle.SafeFileHandle.IsClosed || handle.SafeFileHandle.IsInvalid)
+                return false;
+            session.RequireCefPreparationAuthority(ProductRoot);
+            return true;
+        }
+
+        // This plan uses the same authenticated broker as the lease. The
+        // caller owns the lease and must dispose it before the parent session.
+        // Returned paths/environment are a snapshot, never launch authority.
+        internal IReadOnlyDictionary<string, string?> PrepareChildEnvironment()
+        {
+            RequireCurrentPreparation();
+            var layout = CefProtectedProfilePreparation.Prepare(ProductRoot,
+                session.broker, StillAuthorized);
+            RequireCurrentPreparation();
+
+            var inherited = new List<KeyValuePair<string, string?>>();
+            foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+            {
+                if (entry.Key is not string key || entry.Value is not string value)
+                    throw new InvalidOperationException("Unexpected process environment entry.");
+                inherited.Add(new KeyValuePair<string, string?>(key, value));
+            }
+
+            var plan = CefChildEnvironmentPlan.Build(layout, inherited);
+            RequireCurrentPreparation();
+            return plan;
+        }
+
+        // Open only the fixed installed runtime registration, retaining both
+        // registration and runtime handles. No process creation or resume.
+        // The caller owns this lease and must retain it through child shutdown.
+        internal CefRuntimeRegistrationLease PrepareRegisteredRuntime()
+        {
+            RequireCurrentPreparation();
+            var runtime = CefRuntimeRegistrationLease.OpenInstalled();
+            try
+            {
+                RequireCurrentPreparation();
+                runtime.RequireCurrent();
+                return runtime;
+            }
+            catch { runtime.Dispose(); throw; }
+        }
+
+        // Stage exactly one already-contained suspended child. This does not
+        // resume it or authorize CEF; the future product coordinator must
+        // bind image trust, redemption, runtime lifetime and shutdown.
+        internal void StageSuspendedChild(CefContainedProcess child)
+        {
+            ArgumentNullException.ThrowIfNull(child);
+            try
+            {
+                RequireCurrentPreparation();
+                long nominated = child.NominatedHandle;
+                session.broker.StageCefChild(nominated, session.authenticatedVolumeGuid!);
+                RequireCurrentPreparation();
+                if (child.NominatedHandle != nominated)
+                    throw new ProfileLocationException("The nominated CEF child changed.");
+            }
+            catch
+            {
+                // Ambiguous reply: never retry or resume. The broker's staged
+                // verification expires independently; close the child job now.
+                child.Dispose();
+                throw;
+            }
+        }
+
+        internal void ConfirmCompletedPreflight(CefContainedProcess child)
+        {
+            RequireCurrentPreparation();
+            session.broker.ConfirmCefPreflight(child.ExitedHandle, session.authenticatedVolumeGuid!);
+            RequireCurrentPreparation();
+        }
+
+        private void RequireCurrentPreparation()
+        {
+            if (!StillAuthorized())
+                throw new ProfileLocationException("The CEF preparation lease is no longer available.");
+        }
+
+        public void Dispose()
+        {
+            if (Environment.CurrentManagedThreadId != session.ownerThread)
+                throw new InvalidOperationException("Release the CEF preparation lease on its owning thread.");
+            if (released) return;
+            released = true;
+            handle.Dispose();
+        }
+    }
+
     internal static void ClearPassword(char[]? password) =>
         CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(password.AsSpan()));
+
+#if VEIL_CEF_PREFLIGHT_ONLY
+    // Success requires acknowledged commands and the exact authenticated
+    // volume. On refusal the normal finally/Dispose and crash watcher still
+    // attempt best-effort cleanup, but may never manufacture preflight PASS.
+    internal void CompleteCefPreflightCleanup()
+    {
+        if (Environment.CurrentManagedThreadId != ownerThread || disposed ||
+            !unlockAttempted || authenticatedVolumeGuid is not { } guid)
+            throw new ProfileLocationException("No authenticated CEF session to close.");
+        CefPreflightCleanup.RequireClosed(guid, attachedHere, broker.QueryRegisteredVolume,
+            broker.Lock, broker.Detach);
+        authenticatedVolumeGuid = null;
+        disposed = true;
+    }
+#endif
 
     /// <summary>Best-effort non-forced relock; broker's process-exit monitor covers crashes.</summary>
     public void Dispose()
     {
         if (disposed) return;
         disposed = true;
+        authenticatedVolumeGuid = null;
         if (!attachedHere && !unlockAttempted) return;
         try
         {

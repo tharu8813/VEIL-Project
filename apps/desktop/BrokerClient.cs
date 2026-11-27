@@ -54,13 +54,50 @@ internal sealed record BrokerClientConfig
 /// <summary>Queries the volume broker's Status over its named pipe (ADR-0003). Any failure stops startup.</summary>
 internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolumeBroker
 {
-    public VolumeStatus? QueryRegisteredVolume()
+    // Only the administrator-controlled installed-product configuration is
+    // eligible for future CEF preparation; development broker paths are not.
+    internal string? RegisteredProductProfilePath =>
+        !config.Development && config.RequireWindowsService &&
+        config.ProfilePath is { } path && Path.IsPathFullyQualified(path)
+            ? Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)) : null;
+
+    public VolumeStatus? QueryRegisteredVolume() => QueryVolume("Status");
+
+    // Read-only snapshot for the authenticated desktop owner itself. Not
+    // authorization for a different CEF child or an inherited environment.
+    internal VolumeStatus? QueryAuthenticatedOwner() => QueryVolume("AuthenticatedOwner");
+
+    // Called only from the existing authenticated owner with the actual
+    // suspended process handle. No retries: a lost reply may follow staging.
+    internal void StageCefChild(long childHandle, string expectedGuid)
+    {
+        if (config.Development || !config.RequireWindowsService ||
+            config.PipeName != "VEIL.VolumeBroker" || config.BrokerImage is null ||
+            string.IsNullOrWhiteSpace(expectedGuid))
+            throw new ProfileLocationException("CEF staging requires the registered production broker.");
+        using var response = SendCommand("StageCefChild", ReadOnlySpan<char>.Empty, childHandle);
+        if (!CefStageWire.IsProtectedStageReply(response.RootElement, expectedGuid))
+            throw new ProfileLocationException("The volume broker refused protected CEF child staging.");
+    }
+
+    internal void ConfirmCefPreflight(long childHandle, string expectedGuid)
+    {
+        if (config.Development || !config.RequireWindowsService ||
+            config.PipeName != "VEIL.VolumeBroker" || config.BrokerImage is null ||
+            string.IsNullOrWhiteSpace(expectedGuid))
+            throw new ProfileLocationException("CEF confirmation requires the registered production broker.");
+        using var response = SendCommand("ConfirmCefPreflight", ReadOnlySpan<char>.Empty, childHandle);
+        if (!CefStageWire.IsProtectedStageReply(response.RootElement, expectedGuid))
+            throw new ProfileLocationException("The broker did not confirm the completed CEF preflight.");
+    }
+
+    private VolumeStatus? QueryVolume(string command)
     {
         try
         {
-            using var reply = SendCommand("Status");
+            using var reply = SendCommand(command);
             var root = reply.RootElement;
-            RequireSuccess(root, "Status");
+            RequireSuccess(root, command);
             var status = root.GetProperty("status");
             if (!status.GetProperty("attached").GetBoolean()) return null;
             return new VolumeStatus(status.GetProperty("volumeGuid").GetString() ?? "",
@@ -156,16 +193,26 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
 
     private JsonDocument SendCommand(string command) => SendCommand(command, ReadOnlySpan<char>.Empty);
 
-    private JsonDocument SendCommand(string command, ReadOnlySpan<char> secret)
+    private JsonDocument SendCommand(string command, ReadOnlySpan<char> secret, long? childHandle = null)
     {
         using var request = new MemoryStream();
         using (var writer = new Utf8JsonWriter(request))
         {
-            writer.WriteStartObject();
-            writer.WriteString("command", command);
-            writer.WriteString("volumeId", config.VolumeId);
-            if (command == "Unlock") writer.WriteString("secret", secret);
-            writer.WriteEndObject();
+            if (command is "StageCefChild" or "ConfirmCefPreflight")
+            {
+                if (childHandle is not { } handle || !secret.IsEmpty)
+                    throw new ArgumentException("Invalid CEF staging command.");
+                CefStageWire.WriteRequest(writer, config.VolumeId, handle, command);
+            }
+            else
+            {
+                if (childHandle.HasValue) throw new ArgumentException("Unexpected child handle.");
+                writer.WriteStartObject();
+                writer.WriteString("command", command);
+                writer.WriteString("volumeId", config.VolumeId);
+                if (command == "Unlock") writer.WriteString("secret", secret);
+                writer.WriteEndObject();
+            }
         }
         byte[] wire = request.GetBuffer();
         try
@@ -177,7 +224,7 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
             VerifyServer(pipe);
             // A mutation can take longer than a status query, especially when Windows
             // mounts a cold VHDX and BitLocker discovers the volume.
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(command == "Status" ? 8 : 45));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(command is "Status" or "AuthenticatedOwner" or "ConfirmCefPreflight" ? 8 : 45));
             pipe.WriteAsync(wire.AsMemory(0, checked((int)request.Length)), timeout.Token)
                 .AsTask().GetAwaiter().GetResult();
             byte[] newline = [10];
@@ -194,6 +241,7 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
                 if (response.Length >= 4096) throw new InvalidDataException("Broker response too large.");
                 response.WriteByte(byteBuffer[0]);
             }
+            if (command is "StageCefChild" or "ConfirmCefPreflight") VerifyServer(pipe);
             return JsonDocument.Parse(response.ToArray());
         }
         catch (Exception error) when (error is IOException or TimeoutException or UnauthorizedAccessException or

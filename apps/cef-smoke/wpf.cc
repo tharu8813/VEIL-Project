@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "include/cef_app.h"
+#include "protected_paths.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
 #include "include/cef_cookie.h"
@@ -718,17 +719,20 @@ extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(uint64_t id, co
   const CefString path(&parts.path);
   const bool parallel = path == "/wpf-owned-parallel-keep" || path == "/wpf-owned-parallel-cancel";
   if (path != "/wpf-owned-attachment" && path != "/wpf-owned-truncated" &&
-      path != "/wpf-owned-saturated" && !parallel) return 0;
+      path != "/wpf-owned-saturated" && path != "/wpf-owned-redirect" && !parallel) return 0;
+  const auto frame = browser->GetMainFrame();
+  CefURLParts source;
+  if (!frame || !CefParseURL(frame->GetURL(), source) ||
+      CefString(&source.origin) != CefString(&parts.origin)) return 0;
   if (parallel) {
-    CefURLParts source;
-    if (!CefParseURL(browser->GetMainFrame()->GetURL(), source) ||
-        CefString(&source.origin) != CefString(&parts.origin)) return 0;
     const CefString source_path(&source.path);
     if ((path == "/wpf-owned-parallel-keep" && source_path != "/wpf-first") ||
         (path == "/wpf-owned-parallel-cancel" && source_path != "/wpf-isolation-reopened")) return 0;
   }
-  if (path == "/wpf-owned-attachment") {
-    if (!state->page_attachment_intercepted || url != state->armed_page_attachment) return 0;
+  const bool authenticated_fixture = path == "/wpf-owned-attachment";
+  if (authenticated_fixture) {
+    if (!state->page_attachment_intercepted || url != state->armed_page_attachment ||
+        frame->GetURL() != state->armed_attachment_source) return 0;
     state->page_attachment_intercepted = false;
     state->armed_page_attachment.clear();
     state->armed_attachment_source.clear();
@@ -738,10 +742,16 @@ extern "C" __declspec(dllexport) int VeilCefStartOwnedAttachment(uint64_t id, co
   const auto request = CefRequest::Create();
   request->SetURL(url);
   request->SetMethod("GET");
-  if (path == "/wpf-owned-attachment")
+  int flags = UR_FLAG_DISABLE_CACHE | UR_FLAG_STOP_ON_REDIRECT | UR_FLAG_NO_RETRY_ON_5XX;
+  if (authenticated_fixture) {
     request->SetHeaderByName("X-Veil-Fixture-Handoff", "1", true);
-  request->SetFlags(UR_FLAG_DISABLE_CACHE | UR_FLAG_STOP_ON_REDIRECT | UR_FLAG_NO_RETRY_ON_5XX);
-  const auto created = CefURLRequest::Create(request, new OwnedAttachmentClient(transfer), nullptr);
+    flags |= UR_FLAG_ALLOW_STORED_CREDENTIALS;
+  }
+  request->SetFlags(flags);
+  CefRefPtr<OwnedAttachmentClient> client = new OwnedAttachmentClient(transfer);
+  const auto created = authenticated_fixture
+      ? frame->CreateURLRequest(request, client)
+      : CefURLRequest::Create(request, client, nullptr);
   if (!created) {
     transfer->Cancel();
     return 0;
@@ -1348,6 +1358,9 @@ extern "C" __declspec(dllexport) int VeilCefTryClose(uint64_t id) {
 }
 
 int RunWinMain(HINSTANCE instance, LPWSTR, int, void* sandbox_info, cef_version_info_t*) {
+  // These are development-only hosts. Never interpret product paths as
+  // permission or fall back to an unprotected temporary profile.
+  if (veil_cef::HasProductEnvironment()) return 28;
   if (!sandbox_info) return 10;
   CefMainArgs args(instance);
   const int subprocess = CefExecuteProcess(args, nullptr, sandbox_info);

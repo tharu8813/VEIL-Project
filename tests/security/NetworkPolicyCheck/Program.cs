@@ -420,12 +420,248 @@ Check(cefLayout.Cache == Path.Combine(layoutRoot, "cef", "cache") &&
 Check(cefLayout.Directories.Distinct().Count() == 4 &&
     cefLayout.Directories.All(path => path.StartsWith(cefLayout.EngineRoot, StringComparison.Ordinal)),
     "CEF directories overlap or escape engine root");
+var steps = cefLayout.PreparationSteps.ToArray();
+Check(steps.SequenceEqual(new (string Parent, string Child)[] {
+    (cefLayout.ProductRoot, cefLayout.EngineRoot),
+    (cefLayout.EngineRoot, cefLayout.Cache),
+    (cefLayout.EngineRoot, cefLayout.Scratch),
+    (cefLayout.EngineRoot, cefLayout.Logs)
+}), "CEF preparation order or immediate parent mismatch");
+Check(steps.Select(step => step.Child).SequenceEqual(cefLayout.Directories),
+    "CEF preparation steps do not cover exactly the expected directories");
 Check(!Directory.Exists(layoutRoot), "layout planning created a profile");
 bool relativeRejected = false;
 try { _ = new CefProfileLayout("relative-profile"); }
 catch (ArgumentException) { relativeRejected = true; }
 Check(relativeRejected, "relative CEF root accepted");
 Console.WriteLine("PASS: separate CEF profile layout without filesystem side effects");
+
+// Child environment planning is pure; no process or real profile is started.
+var inheritedCefEnvironment = new Dictionary<string, string?>(StringComparer.Ordinal) {
+    ["TEMP"] = "old-temp", ["temp"] = "old-lower-temp", ["TmP"] = "old-tmp",
+    ["veil_cef_wpf_test_url"] = "fixture-url", ["VEIL_CEF_WPF_TABS"] = "1",
+    ["VEIL_CEF_PROTECTED_ROOT"] = "old-root", ["Veil_Cef_Protected_Log_File"] = "old-log",
+    ["chrome_log_file"] = "outside-log", ["SystemRoot"] = "synthetic-system-root"
+};
+var childCefEnvironment = CefChildEnvironmentPlan.Build(cefLayout, inheritedCefEnvironment);
+Check(childCefEnvironment.Count == 6 &&
+    childCefEnvironment["temp"] == cefLayout.Scratch &&
+    childCefEnvironment["TMP"] == cefLayout.Scratch &&
+    childCefEnvironment[CefChildEnvironmentPlan.RootKey] == cefLayout.EngineRoot &&
+    childCefEnvironment[CefChildEnvironmentPlan.CacheKey] == cefLayout.Cache &&
+    childCefEnvironment[CefChildEnvironmentPlan.LogKey] == cefLayout.LogFile &&
+    childCefEnvironment["SystemRoot"] == "synthetic-system-root",
+    "CEF child environment did not replace controlled paths");
+Check(!childCefEnvironment.ContainsKey("VEIL_CEF_WPF_TEST_URL") &&
+    !childCefEnvironment.ContainsKey("VEIL_CEF_WPF_TABS") &&
+    !childCefEnvironment.ContainsKey("CHROME_LOG_FILE"), "CEF fixture/log override inherited");
+Check(inheritedCefEnvironment.Count == 9 && inheritedCefEnvironment["TEMP"] == "old-temp" &&
+    inheritedCefEnvironment["VEIL_CEF_WPF_TABS"] == "1", "Parent environment input was modified");
+bool ambiguousEnvironmentRejected = false;
+try {
+    _ = CefChildEnvironmentPlan.Build(cefLayout, new Dictionary<string, string?> {
+        ["PATH"] = "first", ["Path"] = "second"
+    });
+}
+catch (ArgumentException) { ambiguousEnvironmentRejected = true; }
+Check(ambiguousEnvironmentRejected, "Ambiguous unrelated environment accepted");
+Check(!Directory.Exists(layoutRoot), "Child environment plan created a profile");
+Console.WriteLine("PASS: isolated CEF child environment planning without launch or parent mutation");
+
+// Pure child admission model; no OS process, credential or volume access.
+var ownerIdentity = new Veil.VolumeBroker.ClientIdentity(100, 1, "S-1-synthetic", "owner.exe", 1000);
+var childIdentity = new Veil.VolumeBroker.ClientIdentity(101, 1, "S-1-synthetic", "child.exe", 2000);
+var unlockGeneration = new object();
+var admissionClock = new SyntheticAdmissionClock();
+Veil.VolumeBroker.CefChildAdmission Grant() => new(ownerIdentity, childIdentity, unlockGeneration, admissionClock);
+bool Redeem(Veil.VolumeBroker.CefChildAdmission grant,
+    Veil.VolumeBroker.ClientIdentity? observedOwner = null,
+    Veil.VolumeBroker.ClientIdentity? observedChild = null,
+    object? generation = null, bool ownerAlive = true, bool childAlive = true,
+    bool imageVerified = true, bool volumeProtected = true) =>
+    grant.TryRedeem(observedOwner ?? ownerIdentity, observedChild ?? childIdentity,
+        generation ?? unlockGeneration, ownerAlive, childAlive, imageVerified, volumeProtected);
+var admittedGrant = Grant();
+Check(Redeem(admittedGrant) && !Redeem(admittedGrant), "CEF admission replay accepted");
+foreach (var wrongChild in new[] {
+    childIdentity with { ProcessId = 102 }, childIdentity with { CreatedFileTime = 3000 },
+    childIdentity with { SessionId = 2 }, childIdentity with { UserSid = "other" },
+    childIdentity with { ImagePath = "other.exe" }
+})
+{
+    var denied = Grant();
+    Check(!Redeem(denied, observedChild: wrongChild) && !Redeem(denied),
+        "wrong CEF child accepted or failed grant reusable");
+}
+Check(!Redeem(Grant(), observedOwner: ownerIdentity with { CreatedFileTime = 3000 }),
+    "reused owner PID admitted");
+Check(!Redeem(Grant(), generation: new object()), "changed unlock generation admitted");
+Check(!Redeem(Grant(), ownerAlive: false) && !Redeem(Grant(), childAlive: false) &&
+    !Redeem(Grant(), imageVerified: false) && !Redeem(Grant(), volumeProtected: false),
+    "unverified CEF child admission accepted");
+var revoked = Grant();
+revoked.Revoke();
+Check(!Redeem(revoked), "revoked CEF grant admitted");
+var expired = Grant();
+admissionClock.Advance(TimeSpan.FromSeconds(15));
+Check(!Redeem(expired), "expired CEF grant admitted");
+var almostExpired = Grant();
+admissionClock.Advance(TimeSpan.FromSeconds(14));
+Check(Redeem(almostExpired), "live CEF grant unexpectedly rejected");
+foreach (var invalidChild in new[] {
+    childIdentity with { ProcessId = 100 }, childIdentity with { SessionId = 2 },
+    childIdentity with { UserSid = "other" }, childIdentity with { CreatedFileTime = 999 }
+})
+{
+    bool rejected = false;
+    try { _ = new Veil.VolumeBroker.CefChildAdmission(ownerIdentity, invalidChild, unlockGeneration, admissionClock); }
+    catch (ArgumentException) { rejected = true; }
+    Check(rejected, "invalid child binding accepted");
+}
+Console.WriteLine("PASS: CEF child one-shot admission policy, generation, expiry, revocation and identity");
+
+// Pure digest pin tests use synthetic bytes, not real signed executables.
+byte[] syntheticImage = [0, 1, 2, 3, 4, 255];
+string syntheticDigest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(syntheticImage));
+var imagePin = new Veil.VolumeBroker.CefImageDigest(syntheticDigest.ToLowerInvariant());
+using (var bytes = new MemoryStream(syntheticImage))
+    Check(imagePin.Matches(bytes), "matching CEF digest rejected");
+using (var bytes = new MemoryStream([0, 1, 2, 3, 4, 254]))
+    Check(!imagePin.Matches(bytes), "modified CEF image accepted");
+using (var bytes = new MemoryStream(syntheticImage))
+{
+    bytes.Position = 1;
+    bool rejected = false;
+    try { _ = imagePin.Matches(bytes); }
+    catch (ArgumentException) { rejected = true; }
+    Check(rejected, "partial CEF image hash accepted");
+}
+foreach (string invalidPin in new[] { "", "00", new string('g', 64), new string('0', 65) })
+{
+    bool rejected = false;
+    try { _ = new Veil.VolumeBroker.CefImageDigest(invalidPin); }
+    catch (ArgumentException) { rejected = true; }
+    Check(rejected, "invalid CEF digest pin accepted");
+}
+Console.WriteLine("PASS: CEF executable SHA-256 pin and changed bytes refusal");
+
+// Resource ownership is exercised without real process or file handles.
+var retainedPolicy = Grant();
+var retainedProcess = new SyntheticRetainedResource();
+var retainedImage = new SyntheticRetainedResource();
+var retainedRuntime = new SyntheticRetainedResource();
+using (var stagedChildResource = new Veil.VolumeBroker.CefPendingChild(retainedPolicy, retainedProcess, retainedImage, retainedRuntime))
+{
+    Check(!stagedChildResource.IsExpired, "new pending child expired immediately");
+    admissionClock.Advance(TimeSpan.FromSeconds(15));
+    Check(stagedChildResource.IsExpired, "pending child did not expire");
+    stagedChildResource.Dispose();
+    stagedChildResource.Dispose();
+    Check(retainedProcess.Disposals == 1 && retainedImage.Disposals == 1 && retainedRuntime.Disposals == 1 &&
+        !Redeem(retainedPolicy), "pending child disposal failed to retire resources");
+}
+var throwingProcess = new SyntheticRetainedResource();
+var throwingImage = new SyntheticRetainedResource { Throw = true };
+var throwingRuntime = new SyntheticRetainedResource { Throw = true };
+var throwingPending = new Veil.VolumeBroker.CefPendingChild(Grant(), throwingProcess, throwingImage, throwingRuntime);
+try { throwingPending.Dispose(); }
+catch (IOException) { }
+Check(throwingProcess.Disposals == 1 && throwingImage.Disposals == 1 && throwingRuntime.Disposals == 1,
+    "image disposal failure leaked the process resource");
+var detachedProcess = new SyntheticRetainedResource();
+var detachedImage = new SyntheticRetainedResource();
+var detachedRuntime = new SyntheticRetainedResource();
+var detachedJob = new SyntheticRetainedResource();
+var detachedPolicy = Grant();
+using (var slot = new Veil.VolumeBroker.CefPendingChild(detachedPolicy, detachedProcess, detachedImage, detachedRuntime, detachedJob))
+{
+    Check(ReferenceEquals(slot.DetachRevokedProcess(), detachedProcess) &&
+        slot.DetachRevokedProcess() is null && ReferenceEquals(slot.DetachJob(), detachedJob) &&
+        slot.DetachJob() is null && !slot.MatchesChild(childIdentity) &&
+        !Redeem(detachedPolicy), "Detached stop handle remained eligible for redemption.");
+    var filePins = slot.DetachFilePins();
+    var repeated = slot.DetachFilePins();
+    Check(ReferenceEquals(filePins.Image, detachedImage) && ReferenceEquals(filePins.Runtime, detachedRuntime) &&
+        repeated.Image is null && repeated.Runtime is null, "File pins transferred more than once.");
+}
+Check(detachedProcess.Disposals == 0 && detachedJob.Disposals == 0 && detachedImage.Disposals == 0 && detachedRuntime.Disposals == 0,
+    "Pending disposal released resources that belong to unresolved stop recovery.");
+detachedProcess.Dispose();
+detachedJob.Dispose();
+detachedImage.Dispose();
+detachedRuntime.Dispose();
+Check(detachedProcess.Disposals == 1 && detachedJob.Disposals == 1 && detachedImage.Disposals == 1 &&
+    detachedRuntime.Disposals == 1, "Transferred resources not released exactly once.");
+Console.WriteLine("PASS: pending CEF child resource ownership and retirement");
+
+// The scoped slot can be redeemed only by the designated generation.
+var redeemProcess = new SyntheticRetainedResource();
+var redeemImage = new SyntheticRetainedResource();
+using (var redemptionSlot = new Veil.VolumeBroker.CefPendingChild(Grant(), redeemProcess, redeemImage))
+{
+    Check(!redemptionSlot.MatchesChild(childIdentity with { CreatedFileTime = 3000 }) &&
+        redemptionSlot.MatchesChild(childIdentity), "wrong child consumed or matched a pending slot");
+    Check(redemptionSlot.TryRedeem(ownerIdentity, childIdentity, unlockGeneration, true, true, true, true),
+        "valid pending child redemption rejected");
+    Check(!redemptionSlot.MatchesChild(childIdentity) &&
+        !redemptionSlot.TryRedeem(ownerIdentity, childIdentity, unlockGeneration, true, true, true, true),
+        "pending child redeemed twice");
+}
+Check(redeemProcess.Disposals == 1 && redeemImage.Disposals == 1, "redeemed slot leaked resources");
+Console.WriteLine("PASS: scoped pending child redemption and replay rejection");
+
+// The preflight cleanup policy runs without a real volume, broker or UI.
+var openVolume = new VolumeStatus("synthetic-volume", true, true, true, false, true);
+var lockedVolume = openVolume with { Unlocked = false, FullyEncrypted = false, ProtectionOn = false, ReadyToUnlock = true };
+void CheckCleanup(bool attachedHere, VolumeStatus?[] observations, bool shouldPass, int expectedLocks, int expectedDetaches,
+    bool refuseLock = false, bool refuseDetach = false)
+{
+    var statuses = new Queue<VolumeStatus?>(observations);
+    int locks = 0, detaches = 0;
+    bool passed = false;
+    try
+    {
+        CefPreflightCleanup.RequireClosed(openVolume.VolumeGuid, attachedHere, () => statuses.Dequeue(),
+            () => { locks++; if (refuseLock) throw new IOException("Synthetic lock refusal"); },
+            () => { detaches++; if (refuseDetach) throw new IOException("Synthetic detach refusal"); });
+        passed = true;
+    }
+    catch (Exception error) when (error is IOException or InvalidOperationException) { }
+    Check(passed == shouldPass && locks == expectedLocks && detaches == expectedDetaches,
+        "Preflight cleanup accepted unsafe state or issued an unexpected command");
+}
+CheckCleanup(false, [openVolume, lockedVolume], true, 1, 0);
+CheckCleanup(true, [openVolume, lockedVolume, null], true, 1, 1);
+CheckCleanup(false, [lockedVolume, lockedVolume], true, 1, 0);
+CheckCleanup(true, [null], false, 0, 0);
+CheckCleanup(true, [openVolume with { VolumeGuid = "other" }], false, 0, 0);
+CheckCleanup(true, [openVolume, null], false, 1, 0);
+CheckCleanup(true, [openVolume, openVolume], false, 1, 0);
+CheckCleanup(true, [openVolume, lockedVolume with { ReadyToUnlock = false }], false, 1, 0);
+CheckCleanup(true, [openVolume, lockedVolume with { VolumeGuid = "other" }], false, 1, 0);
+CheckCleanup(true, [openVolume, lockedVolume, lockedVolume], false, 1, 1);
+CheckCleanup(true, [openVolume], false, 1, 0, refuseLock: true);
+CheckCleanup(true, [openVolume, lockedVolume], false, 1, 1, refuseDetach: true);
+Console.WriteLine("PASS: exact-volume preflight cleanup, command refusal and detach observation");
+
+file sealed class SyntheticRetainedResource : IDisposable
+{
+    internal int Disposals { get; private set; }
+    internal bool Throw { get; init; }
+    public void Dispose()
+    {
+        Disposals++;
+        if (Throw) throw new IOException("synthetic disposal failure");
+    }
+}
+
+file sealed class SyntheticAdmissionClock : TimeProvider
+{
+    private long timestamp;
+    public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+    public override long GetTimestamp() => timestamp;
+    internal void Advance(TimeSpan duration) => timestamp += duration.Ticks;
+}
 
 file sealed class SyntheticLoginCapability : IEngineLoginForms
 {

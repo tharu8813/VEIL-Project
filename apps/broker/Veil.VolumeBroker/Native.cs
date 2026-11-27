@@ -8,8 +8,6 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Veil.VolumeBroker;
 
-internal sealed record ClientIdentity(int ProcessId, int SessionId, string UserSid, string ImagePath);
-
 internal static class Native
 {
     private const uint PipeAccessDuplex = 0x3, FirstPipeInstance = 0x00080000, Overlapped = 0x40000000;
@@ -34,25 +32,321 @@ internal static class Native
         finally { LocalFree(descriptor); }
     }
 
-    internal static ClientIdentity Identify(NamedPipeServerStream pipe)
+    internal static (ClientIdentity Identity, SafeProcessHandle Handle) Identify(NamedPipeServerStream pipe)
     {
         var handle = pipe.SafePipeHandle;
         if (!GetNamedPipeClientProcessId(handle, out uint pid) || !GetNamedPipeClientSessionId(handle, out uint session))
             throw new Win32Exception();
-        using var process = OpenProcess(QueryLimitedInformation | Synchronize, false, pid);
-        if (process.IsInvalid) throw new Win32Exception();
-        var image = new StringBuilder(1024);
+        var process = OpenProcess(QueryLimitedInformation | Synchronize, false, pid);
+        try
+        {
+            if (process.IsInvalid) throw new Win32Exception();
+            var observed = ObserveProcess(process);
+            if (observed.ProcessId != (int)pid || observed.SessionId != (int)session ||
+                !MatchesPipeClient(pipe, process, observed))
+                throw new UnauthorizedAccessException("Client pipe identity mismatch.");
+            return (observed, process);
+        }
+        catch { process.Dispose(); throw; }
+    }
+
+    internal static bool MatchesPipeClient(NamedPipeServerStream pipe, SafeProcessHandle process, ClientIdentity expected)
+    {
+        try
+        {
+            var handle = pipe.SafePipeHandle;
+            if (!GetNamedPipeClientProcessId(handle, out uint pid) ||
+                !GetNamedPipeClientSessionId(handle, out uint session) ||
+                pid != (uint)expected.ProcessId || session != (uint)expected.SessionId ||
+                ObserveProcess(process) != expected) return false;
+            using var current = OpenProcess(QueryLimitedInformation | Synchronize, false, pid);
+            return SameLiveProcess(process, current) && ObserveProcess(current) == expected;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException) { return false; }
+    }
+
+    internal static bool SameLiveProcess(SafeProcessHandle first, SafeProcessHandle second)
+    {
+        try
+        {
+            return IsRunning(first) && IsRunning(second) &&
+                CompareObjectHandles(first, second) && IsRunning(first) && IsRunning(second);
+        }
+        catch (ObjectDisposedException) { return false; }
+    }
+
+    [DllImport("kernelbase.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CompareObjectHandles(SafeProcessHandle first, SafeProcessHandle second);
+
+    // Compare an exited, retained child to the handle still owned by its
+    // authenticated parent. Do not reopen a PID or accept a numeric PID.
+    internal static bool MatchesExitedNomination(ClientIdentity owner, SafeProcessHandle ownerHandle,
+        long nomination, SafeProcessHandle retained, uint expectedExit)
+    {
+        if (nomination <= 0 || ObserveProcess(ownerHandle) != owner) return false;
+        using var source = OpenProcess(QueryLimitedInformation | Synchronize | 0x0040, false, (uint)owner.ProcessId);
+        if (!SameLiveProcess(source, ownerHandle) ||
+            !DuplicateHandle(source, new IntPtr(nomination), new IntPtr(-1), out var child,
+                QueryLimitedInformation | Synchronize, false, 0)) return false;
+        using (child)
+            return CompareObjectHandles(child, retained) &&
+                WaitForSingleObject(child, 0) == 0 &&
+                GetExitCodeProcess(child, out uint code) && code == expectedExit &&
+                SameLiveProcess(source, ownerHandle);
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(SafeProcessHandle process, out uint code);
+
+    internal static ClientIdentity ObserveProcess(SafeProcessHandle process)
+    {
+        uint pid = GetProcessId(process);
+        if (pid == 0 || !IsRunning(process)) throw new UnauthorizedAccessException("Process is unavailable.");
+        var image = new StringBuilder(32768);
         int length = image.Capacity;
         if (!QueryFullProcessImageNameW(process, 0, image, ref length)) throw new Win32Exception();
-        if (!ProcessIdToSessionId(pid, out uint processSession) || processSession != session)
-            throw new UnauthorizedAccessException("Client session mismatch.");
+        if (!ProcessIdToSessionId(pid, out uint session))
+            throw new Win32Exception();
         if (!OpenProcessToken(process, 0x8 /* TOKEN_QUERY */, out var token)) throw new Win32Exception();
         using (token)
         using (var identity = new WindowsIdentity(token.DangerousGetHandle()))
-            return new ClientIdentity((int)pid, (int)session, identity.User!.Value, image.ToString());
+        {
+            if (!GetProcessTimes(process, out long created, out _, out _, out _) ||
+                created <= 0 || !IsRunning(process))
+                throw new UnauthorizedAccessException("Client process identity is unavailable.");
+            return new ClientIdentity((int)pid, (int)session, identity.User!.Value, image.ToString(), created);
+        }
     }
 
-    internal static SafeProcessHandle OpenForWait(int pid) => OpenProcess(Synchronize, false, (uint)pid);
+    // Disconnected future launch-binding primitive. The source handle value
+    // must come from an authenticated owner's explicit launch nomination,
+    // never from the child or an environment variable. No authority is granted.
+    internal static (SafeProcessHandle Handle, ClientIdentity Identity) DuplicateNominatedChild(
+        ClientIdentity owner, SafeProcessHandle originalOwner, IntPtr nominatedHandle)
+    {
+        if (nominatedHandle.ToInt64() <= 0 || ObserveProcess(originalOwner) != owner)
+            throw new UnauthorizedAccessException("CEF owner or nominated handle is invalid.");
+
+        const uint duplicateHandleAccess = 0x0040;
+        using var source = OpenProcess(QueryLimitedInformation | Synchronize | duplicateHandleAccess,
+            false, (uint)owner.ProcessId);
+        if (source.IsInvalid || ObserveProcess(source) != owner ||
+            !SameLiveProcess(originalOwner, source) ||
+            !DuplicateHandle(source, nominatedHandle, new IntPtr(-1), out var child,
+                QueryLimitedInformation | Synchronize, false, 0))
+            throw new UnauthorizedAccessException("CEF child handle could not be duplicated.");
+        try
+        {
+            var identity = ObserveProcess(child);
+            if (identity.ProcessId == owner.ProcessId ||
+                identity.CreatedFileTime < owner.CreatedFileTime ||
+                identity.SessionId != owner.SessionId ||
+                !string.Equals(identity.UserSid, owner.UserSid, StringComparison.OrdinalIgnoreCase) ||
+                !HasReportedParent(identity.ProcessId, owner.ProcessId) ||
+                ObserveProcess(originalOwner) != owner || ObserveProcess(child) != identity)
+                throw new UnauthorizedAccessException("CEF child nomination did not match live process identities.");
+            return (child, identity);
+        }
+        catch
+        {
+            child.Dispose();
+            throw;
+        }
+    }
+
+    // Toolhelp parent PID is only corroborating metadata (parent selection can
+    // be overridden at creation); it is NOT proof of the original creator.
+    // Independent broker-side snapshot of the live process. Holding the
+    // original process object avoids treating a reused PID as this child.
+    // Toolhelp is a loader inventory, not an exhaustive memory attestation.
+    internal static string[] SnapshotModulePaths(SafeProcessHandle process, ClientIdentity expected)
+    {
+        if (ObserveProcess(process) != expected)
+            throw new UnauthorizedAccessException("CEF module process identity changed.");
+        using var snapshot = CreateToolhelp32Snapshot(0x00000008 | 0x00000010, (uint)expected.ProcessId);
+        if (snapshot.IsInvalid) throw new Win32Exception();
+        var entry = new ModuleEntry { Size = (uint)Marshal.SizeOf<ModuleEntry>(), ModuleName = "", ImagePath = "" };
+        if (!Module32FirstW(snapshot, ref entry)) throw new Win32Exception();
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        do
+        {
+            if (entry.ProcessId != (uint)expected.ProcessId || entry.Module == IntPtr.Zero ||
+                entry.ImagePath.Length is 0 or >= 259 || !paths.Add(entry.ImagePath) || paths.Count > 1024)
+                throw new UnauthorizedAccessException("Invalid CEF module snapshot.");
+            entry.Size = (uint)Marshal.SizeOf<ModuleEntry>();
+        } while (Module32NextW(snapshot, ref entry));
+        if (Marshal.GetLastWin32Error() != 18 || ObserveProcess(process) != expected ||
+            !paths.Contains(expected.ImagePath))
+            throw new UnauthorizedAccessException("Incomplete CEF module snapshot.");
+        return paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ModuleEntry
+    {
+        public uint Size, ModuleId, ProcessId, GlobalUsage, ProcessUsage;
+        public IntPtr BaseAddress;
+        public uint BaseSize;
+        public IntPtr Module;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string ModuleName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string ImagePath;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Module32FirstW(SafeFileHandle snapshot, ref ModuleEntry entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Module32NextW(SafeFileHandle snapshot, ref ModuleEntry entry);
+
+    private static bool HasReportedParent(int child, int parent)
+    {
+        using var snapshot = CreateToolhelp32Snapshot(0x00000002 /* TH32CS_SNAPPROCESS */, 0);
+        if (snapshot.IsInvalid) return false;
+        var entry = new ProcessEntry { Size = (uint)Marshal.SizeOf<ProcessEntry>(), ImageName = string.Empty };
+        if (!Process32FirstW(snapshot, ref entry)) return false;
+        do
+        {
+            if (entry.ProcessId == (uint)child) return entry.ParentProcessId == (uint)parent;
+        } while (Process32NextW(snapshot, ref entry));
+        return false;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry
+    {
+        public uint Size, Usage, ProcessId;
+        public UIntPtr DefaultHeapId;
+        public uint ModuleId, Threads, ParentProcessId;
+        public int Priority;
+        public uint Flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string ImageName;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DuplicateHandle(SafeProcessHandle sourceProcess, IntPtr sourceHandle,
+        IntPtr targetProcess, out SafeProcessHandle targetHandle, uint access,
+        [MarshalAs(UnmanagedType.Bool)] bool inherit, uint options);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeFileHandle CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32FirstW(SafeFileHandle snapshot, ref ProcessEntry entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32NextW(SafeFileHandle snapshot, ref ProcessEntry entry);
+
+    // Match the process generation observed on the pipe, not merely a PID
+    // that Windows could have reused while this request waited for serial.
+    internal static SafeProcessHandle OpenForWait(ClientIdentity client, SafeProcessHandle observed)
+    {
+        // Duplicate the actual pipe-observed handle, not a reopened PID.
+        using var self = OpenProcess(0x0040 /* PROCESS_DUP_HANDLE */, false, (uint)Environment.ProcessId);
+        if (self.IsInvalid || !IsRunning(observed) ||
+            !DuplicateHandle(self, observed.DangerousGetHandle(), new IntPtr(-1), out var process,
+                QueryLimitedInformation | Synchronize, false, 0))
+            return new SafeProcessHandle(IntPtr.Zero, ownsHandle: true);
+        try
+        {
+            if (SameLiveProcess(observed, process) && ObserveProcess(process) == client)
+                return process;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException) { }
+        process.Dispose();
+        return new SafeProcessHandle(IntPtr.Zero, ownsHandle: true);
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessTimes(SafeProcessHandle process, out long created,
+        out long exited, out long kernel, out long user);
+
+    // The crash watcher may dispose the handle concurrently after process exit.
+    // A closed, signaled, invalid or failed wait never attests a live owner.
+    // Only used after the nominated child has passed the production pin.
+    // Open a termination-capable handle and bind it to the retained object,
+    // never terminate based on a PID or executable name alone.
+    internal static SafeProcessHandle OpenCefTerminationHandle(ClientIdentity child, SafeProcessHandle observed)
+    {
+        var handle = OpenProcess(QueryLimitedInformation | Synchronize | 0x0001, false, (uint)child.ProcessId);
+        try
+        {
+            if (!SameLiveProcess(observed, handle) || ObserveProcess(handle) != child)
+                throw new UnauthorizedAccessException("CEF termination handle did not match the nominated child.");
+            return handle;
+        }
+        catch { handle.Dispose(); throw; }
+    }
+
+    // Broker-only job assignment needs PROCESS_SET_QUOTA and
+    // PROCESS_TERMINATE. Verify the exact retained process object again.
+    internal static SafeProcessHandle OpenCefAssignmentHandle(ClientIdentity child, SafeProcessHandle observed)
+    {
+        var handle = OpenProcess(QueryLimitedInformation | Synchronize | 0x0100 | 0x0001,
+            false, (uint)child.ProcessId);
+        try
+        {
+            if (!SameLiveProcess(observed, handle) || ObserveProcess(handle) != child)
+                throw new UnauthorizedAccessException("CEF job assignment process changed.");
+            return handle;
+        }
+        catch { handle.Dispose(); throw; }
+    }
+
+    internal static bool TerminateCefChildAndWait(SafeProcessHandle child)
+    {
+        if (child.IsClosed || child.IsInvalid) return false;
+        uint state = WaitForSingleObject(child, 0);
+        if (state == 0) return true;
+        if (state != 0x102) return false;
+        // 35 is forced termination, never the verified-disabled exit 29.
+        if (!TerminateProcess(child, 35) && WaitForSingleObject(child, 0) != 0)
+            return false;
+        return WaitForSingleObject(child, 2000) == 0;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateProcess(SafeProcessHandle process, uint exitCode);
+
+    // The job must be a broker-created object. The remote handle grants
+    // assignment and query only, never setting limits or termination.
+    internal static long DuplicateCefJobAssignment(SafeFileHandle job,
+        ClientIdentity owner, SafeProcessHandle observedOwner)
+    {
+        if (ObserveProcess(observedOwner) != owner)
+            throw new UnauthorizedAccessException("CEF job owner changed.");
+        using var destination = OpenProcess(QueryLimitedInformation | Synchronize | 0x0040,
+            false, (uint)owner.ProcessId);
+        if (!SameLiveProcess(observedOwner, destination) || ObserveProcess(destination) != owner ||
+            !DuplicateJobHandle(new IntPtr(-1), job, destination, out IntPtr remote, 0x0001 | 0x0004, false, 0))
+            throw new UnauthorizedAccessException("CEF job assignment handle could not be issued.");
+        // A remote numeric handle cannot safely be closed after the owner may
+        // have reused its value. On ambiguity deny; the job remains broker-owned.
+        if (!SameLiveProcess(observedOwner, destination) || ObserveProcess(destination) != owner)
+            throw new UnauthorizedAccessException("CEF job owner changed during duplication.");
+        return remote.ToInt64();
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "DuplicateHandle", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DuplicateJobHandle(IntPtr sourceProcess, SafeFileHandle source,
+        SafeProcessHandle destination, out IntPtr target, uint access,
+        [MarshalAs(UnmanagedType.Bool)] bool inherit, uint options);
+
+    internal static bool IsRunning(SafeProcessHandle handle)
+    {
+        if (handle.IsClosed || handle.IsInvalid) return false;
+        try { return WaitForSingleObject(handle, 0) == 0x102 /* WAIT_TIMEOUT */; }
+        catch (ObjectDisposedException) { return false; }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
 
     internal static void AttachRegisteredImage(string path, string userSid)
     {
@@ -75,6 +369,51 @@ internal static class Native
             finally { LocalFree(descriptor); }
         }
     }
+
+    // The process handle must be the original observed live child handle.
+    // Verify its generation and image name; this is not a measurement of
+    // loaded code, mapped DLLs or an actual parent/child relationship.
+    internal static bool MatchesLiveProcessImage(SafeProcessHandle process, ClientIdentity expected)
+    {
+        if (!IsRunning(process) || GetProcessId(process) != (uint)expected.ProcessId ||
+            !GetProcessTimes(process, out long created, out _, out _, out _) ||
+            created != expected.CreatedFileTime) return false;
+        var image = new StringBuilder(32768);
+        int length = image.Capacity;
+        return QueryFullProcessImageNameW(process, 0, image, ref length) &&
+            string.Equals(image.ToString(), expected.ImagePath, StringComparison.OrdinalIgnoreCase) &&
+            IsRunning(process);
+    }
+
+    internal static void RequireCanonicalSingleLinkImage(SafeFileHandle file, string path)
+    {
+        var resolved = new StringBuilder(32768);
+        uint length = GetFinalPathNameByHandleW(file, resolved, (uint)resolved.Capacity, 0);
+        if (length == 0 || length >= resolved.Capacity ||
+            !string.Equals(resolved.ToString(), @"\\?\" + path, StringComparison.OrdinalIgnoreCase) ||
+            !GetFileInformationByHandle(file, out var info) ||
+            (info.Attributes & ((uint)FileAttributes.ReparsePoint | (uint)FileAttributes.Directory)) != 0 ||
+            info.Links != 1)
+            throw new UnauthorizedAccessException("CEF executable is not a canonical single-link file.");
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ImageFileInformation
+    {
+        public uint Attributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME Creation, Access, Write;
+        public uint VolumeSerial, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetProcessId(SafeProcessHandle process);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(SafeFileHandle file, StringBuilder path, uint length, uint flags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandle(SafeFileHandle file, out ImageFileInformation info);
 
     internal static bool MatchesSha256(string path, string expected)
     {

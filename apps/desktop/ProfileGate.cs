@@ -11,10 +11,6 @@ namespace Veil.Desktop;
 /// existing fail-closed handlers and locked-volume expectations keep working.</summary>
 internal sealed class ProfileLocationException(string message) : IOException(message);
 
-/// <summary>Protection state of a registered profile volume, as reported by the privileged broker.</summary>
-internal sealed record VolumeStatus(string VolumeGuid, bool FullyEncrypted, bool ProtectionOn, bool Unlocked,
-    bool ReadyToUnlock, bool ProtectorPresent);
-
 /// <summary>Read-only view of the volume broker used before the engine starts.</summary>
 internal interface IVolumeBroker
 {

@@ -14,6 +14,10 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+#if VEIL_CEF_PREFLIGHT_ONLY
+        // Isolated validation configuration: cannot enter normal browsing.
+        return CefProtectedPreflightEntry.Run(args);
+#else
 #if DEBUG
         // Dedicated raster worker: no Application, profile unlock, network engine or file arguments.
         if (args is ["--pdf-preview-worker"]) return VaultPdfPreview.RunWorker();
@@ -166,6 +170,7 @@ internal static class Program
                 }
             }
         }
+#endif // VEIL_CEF_PREFLIGHT_ONLY
     }
 
     /// <summary>Development check of the gate against a running broker; never starts the engine.</summary>

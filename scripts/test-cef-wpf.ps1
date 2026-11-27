@@ -17,6 +17,7 @@ $repo = Split-Path -Parent $PSScriptRoot
 $git = (Get-Command git.exe -ErrorAction Stop).Source
 $node = (Get-Command node.exe -ErrorAction Stop).Source
 $cargo = (Get-Command cargo.exe -ErrorAction Stop).Source
+$dotnet = (Get-Command dotnet.exe -ErrorAction Stop).Source
 $head = (& $git -C $repo rev-parse HEAD | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $head -notmatch '^[0-9a-f]{40}$') { throw 'Cannot identify source commit.' }
 function Assert-CleanSource {
@@ -42,7 +43,7 @@ $report = [ordered]@{
     startedUtc = [DateTime]::UtcNow.ToString('o')
     finishedUtc = $null
     status = 'NOT RUN'
-    stages = [ordered]@{ build = 'NOT RUN'; vaultBuild = 'NOT RUN'; win32 = 'NOT RUN'; wpf = 'NOT RUN'; tabs = 'NOT RUN' }
+    stages = [ordered]@{ build = 'NOT RUN'; vaultBuild = 'NOT RUN'; win32 = 'NOT RUN'; nestedBuild = 'NOT RUN'; nestedWin32 = 'NOT RUN'; wpf = 'NOT RUN'; tabs = 'NOT RUN' }
     hashes = [ordered]@{}
     productReleaseGates = 'NOT RUN'
     limitations = @('No product credentials or profile.', 'Not independent token, site-isolation or OS write tracing evidence.', 'No release approval.')
@@ -133,6 +134,19 @@ try {
     Invoke-Stage 'win32' {
         Invoke-Bounded 'win32' $win32 @() 45
         Assert-NoTestProcesses $executables
+    }
+    $nestedOut = Join-Path $work 'nested-runner'
+    Invoke-Stage 'nestedBuild' {
+        Invoke-Bounded 'nested-build' $dotnet @('build', (Join-Path $repo 'tests/cef/CefNestedSmoke/CefNestedSmoke.csproj'),
+            '-c', 'Release', '-o', $nestedOut) 180
+    }
+    Invoke-Stage 'nestedWin32' {
+        $nested = Join-Path $nestedOut 'CefNestedSmoke.exe'
+        $report.hashes['CefNestedSmoke.exe'] = (Get-FileHash -Algorithm SHA256 -LiteralPath $nested).Hash
+        $report.hashes['CefNestedSmoke.dll'] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $nestedOut 'CefNestedSmoke.dll')).Hash
+        Write-Report
+        Invoke-Bounded 'nested-win32' $nested @($win32, (Join-Path $runtimeTemp 'nested-fixture')) 60
+        Assert-NoTestProcesses ($executables + @($nested))
     }
     Invoke-Stage 'wpf' {
         Invoke-Bounded 'wpf' $node @((Join-Path $repo 'tests/cef/wpf-smoke.mjs'), $wpf, $vault) 120
