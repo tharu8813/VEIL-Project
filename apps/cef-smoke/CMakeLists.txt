@@ -11,7 +11,11 @@ list(PREPEND CMAKE_MODULE_PATH "${CEF_ROOT}/cmake")
 find_package(CEF REQUIRED)
 add_subdirectory("${CEF_LIBCEF_DLL_WRAPPER_PATH}" libcef_dll_wrapper)
 
+add_executable(veil-cef-protected-path-test protected_paths_test.cc)
+target_compile_features(veil-cef-protected-path-test PRIVATE cxx_std_17)
+
 add_library(veil-cef-smoke SHARED smoke.cc)
+add_dependencies(veil-cef-smoke veil-cef-protected-path-test)
 SET_LIBRARY_TARGET_PROPERTIES(veil-cef-smoke)
 target_include_directories(veil-cef-smoke PRIVATE "${CEF_ROOT}")
 target_link_libraries(veil-cef-smoke PRIVATE libcef_dll_wrapper "${CEF_LIB_RELEASE}"

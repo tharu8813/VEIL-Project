@@ -31,8 +31,14 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/build-cef-smoke.ps1 -WorkRoot (Join-Path $env:RUNNER_TEMP "veil-cef-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT")
+      - name: Synthetic native path checks (no browser)
+        shell: pwsh
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP "veil-cef-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          & (Join-Path $work "build/Release/veil-cef-protected-path-test.exe")
+          if ($LASTEXITCODE -ne 0) { throw "Native path checks failed: $LASTEXITCODE" }
       - name: Record validation scope
         if: always()
         shell: pwsh
         run: |
-          'CEF compile-only job. No browser was launched; runtime security and product release gates are NOT RUN.' >> $env:GITHUB_STEP_SUMMARY
+          'CEF compile and synthetic native path checks. No browser was launched; runtime security and product release gates are NOT RUN.' >> $env:GITHUB_STEP_SUMMARY

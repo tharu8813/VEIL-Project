@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "include/cef_app.h"
+#include "protected_paths.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
 #include "include/cef_sandbox_win.h"
@@ -36,6 +37,9 @@ class SmokeClient final : public CefClient,
 
 int RunWinMain(HINSTANCE instance, LPWSTR, int, void* sandbox_info,
                cef_version_info_t*) {
+  // These are development-only hosts. Never interpret product paths as
+  // permission or fall back to an unprotected temporary profile.
+  if (veil_cef::HasProductEnvironment()) return 28;
   if (!sandbox_info) return 10;
   CefMainArgs args(instance);
   const int subprocess = CefExecuteProcess(args, nullptr, sandbox_info);
