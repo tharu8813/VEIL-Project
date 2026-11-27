@@ -130,8 +130,15 @@ try
     Reject(() => Native.DuplicateNominatedChild(identity, owner.SafeHandle,
         signal.SafeWaitHandle.DangerousGetHandle()).Handle.Dispose());
     await child.StandardInput.WriteLineAsync("exit");
+    await child.StandardInput.FlushAsync();
+    // Wait for the exact duplicated kernel object, not only the managed
+    // Process exit notification. A timeout/failure is still a test failure.
+    uint retainedWait = WaitForSingleObject(retained, 10000);
+    Check(retainedWait == 0,
+        $"Retained child did not signal: wait=0x{retainedWait:X8}, lastError={System.Runtime.InteropServices.Marshal.GetLastWin32Error()}.");
     await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-    Check(child.ExitCode == 0 && !Native.IsRunning(retained), "Exited child still considered live.");
+    Check(child.ExitCode == 0, $"Synthetic child returned unexpected exit code {child.ExitCode}.");
+    Check(!Native.IsRunning(retained), "Signaled retained child still considered live.");
     Check(!Native.SameLiveProcess(retained, child.SafeHandle), "Exited process objects matched as live.");
     Reject(() => Native.SnapshotModulePaths(retained, expected));
     Check(Native.MatchesExitedNomination(identity, owner.SafeHandle, child.SafeHandle.DangerousGetHandle().ToInt64(), retained, 0), "Exited nominated object did not match.");
@@ -205,6 +212,9 @@ finally
     }
 }
 
+
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+static extern uint WaitForSingleObject(Microsoft.Win32.SafeHandles.SafeProcessHandle process, uint milliseconds);
 
 [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
 [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]

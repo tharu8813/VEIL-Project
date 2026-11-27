@@ -345,3 +345,7 @@ Lock/Detach 및 서비스 정리 시작 시 실제 backend 상태 조회보다 �
 ### 통합: nested smoke 증거 결합 (#228)
 
 정확한 head 475d11a의 일반/네이티브 CI는 PASS (45946397415 / 45946397389), artifact `cef-nested-smoke-56b556458a45625c49b9c15d7a36f43cc62821db` 생성 확인. #226의 잠금 권한 철회 커밋 ce73c94와 변경 경로가 겹치지 않음을 확인하여 두 부모를 유지한 draft 통합 커밋으로 결합한다. 실제 파싱 stdout 원본 SHA-256, 최초 manifest hash 및 inventory 검증을 포함하며 이전 보고서 호환을 위해 검사를 약화하지 않는다. 통합 head CI와 독립 리뷰는 별도 필수. 실제 standard-user nested CEF 및 BitLocker runtime NOT RUN; 제품 startup disabled, WebView2 및 출시 게이트 유지.
+
+### CI 보완: retained process 종료 신호의 독립 검증
+
+통합 head 2d51601의 일반 CI (45947323875)에서 CefProcessBindingCheck가 `Exited child still considered live` 복합 단언으로 실패했다. Rust, .NET 빌드, source/evidence 및 NetworkPolicyCheck는 통과했으나 후속 containment/runtime file 테스트는 건너뛰었다. 실제 실패 조건(비정상 exit code 또는 retained handle liveness)은 기존 로그만으로 구분할 수 없다. 합성 자식 stdin을 명시적으로 flush하고 정확히 복제된 process handle의 WAIT_OBJECT_0를 제한 10초 내 요구하며 이후 managed exit code, production IsRunning, SameLiveProcess 및 기존 nomination 단언을 모두 보존한다. 실패 원인을 진단 가능하게 분리하며 timeout이나 오류를 성공으로 처리하지 않는다. production liveness 정책 변경 없음. 수정 head CI 및 실제 CEF/BitLocker/독립 리뷰 미확인; startup disabled 및 WebView2 유지.
