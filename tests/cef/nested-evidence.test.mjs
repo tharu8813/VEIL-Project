@@ -72,6 +72,21 @@ test('module inventory is scoped to named modules on the sampled fixture process
     f.sample.browser.Pid++;
     assert.throws(() => check(f), /Invalid browser process sample/);
 });
+test('best-effort Job notifications expose gaps without replacing live samples', () => {
+    const f = fixture();
+    Object.assign(f.sample, { schema: 4, rendererRestrictedLow: true,
+        browser: { Pid: 100, Role: 'browser', IntegrityRid: 8192, Restricted: false, AppContainer: false, Modules: null },
+        jobNotifications: [{ Job: 'outer', Kind: 'start', Pid: 101 },
+            { Job: 'outer', Kind: 'start', Pid: 103 }, { Job: 'inner', Kind: 'empty', Pid: 0 }] });
+    Object.assign(f.sample.observed[0], { Role: 'renderer', AppContainer: false, Modules: null });
+    Object.assign(f.sample.observed[1], { Role: 'network', AppContainer: false, Modules: null });
+    assert.deepEqual(check(f).jobNotifications.outer.sampledPidsWithoutStart, [100, 102]);
+    assert.deepEqual(check(f).jobNotifications.outer.startPidsWithoutLiveSample, [103]);
+    assert.deepEqual(check(f).jobNotifications.outer.startPidsWithoutExit, [101, 103]);
+    assert.deepEqual(check(f).jobNotifications.inner.sampledPidsWithoutExit, [100, 101, 102]);
+    f.sample.jobNotifications[2].Pid = 101;
+    assert.throws(() => check(f), /Invalid job notification/);
+});
 test('reject wrong checkout, manifest hash, scope and release claim', () => {
     assert.throws(() => check(fixture(), { expectedCommit: 'c'.repeat(40) }), /commit mismatch/);
     let f = fixture(); f.report.manifestSha256 = 'c'.repeat(64);

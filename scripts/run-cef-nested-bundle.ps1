@@ -95,8 +95,9 @@ try {
     $rendererSamples = @($sample.observed | Where-Object {
         $_.Role -ceq 'renderer' -and $_.Restricted -eq $true -and $_.IntegrityRid -le 0x1000
     })
-    if ($sample.schema -ne 3 -or $sample.scope -cne 'nested-win32-smoke-only' -or $sample.exit -ne 0 -or
+    if ($sample.schema -ne 4 -or $sample.scope -cne 'nested-win32-smoke-only' -or $sample.exit -ne 0 -or
         $sample.browser.Role -cne 'browser' -or $sample.browser.Pid -ne $sample.rootPid -or
+        $sample.jobNotifications -isnot [array] -or $sample.jobNotifications.Count -gt 512 -or
         $sample.outerEmpty -ne $true -or $sample.innerEmpty -ne $true -or $sample.restricted -ne $true -or
         $sample.rendererRestrictedLow -ne $true -or $rendererSamples.Count -eq 0) {
         throw 'Missing required fixture evidence.'

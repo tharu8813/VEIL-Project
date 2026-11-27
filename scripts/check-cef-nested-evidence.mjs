@@ -58,7 +58,8 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
     require(Array.isArray(sample.observed) && sample.observed.length > 0 && sample.observed.length <= 4096,
         'Missing or excessive token samples');
     const seen = new Set();
-    require(sample.schema === undefined || sample.schema === 2 || sample.schema === 3, 'Unsupported sample schema');
+    require(sample.schema === undefined || sample.schema === 2 || sample.schema === 3 || sample.schema === 4,
+        'Unsupported sample schema');
     const roleAware = sample.schema >= 2;
     const roles = new Set(['renderer', 'gpu', 'network', 'utility', 'unknown']);
     const locations = new Set(['runtime', 'windows', 'other']);
@@ -71,7 +72,7 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
         'Invalid module inventory');
         if (entry.Modules !== null) processesWithModuleInventory++;
     }
-    if (sample.schema === 3) {
+    if (sample.schema >= 3) {
         const browser = sample.browser;
         require(record(browser) && browser.Pid === sample.rootPid && browser.Role === 'browser' &&
             Number.isInteger(browser.IntegrityRid) && browser.IntegrityRid >= 0 &&
@@ -89,7 +90,7 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
         seen.add(entry.Pid);
         if (roleAware)
             require(roles.has(entry.Role) && typeof entry.AppContainer === 'boolean', 'Invalid role or AppContainer sample');
-        if (sample.schema === 3) checkModules(entry);
+        if (sample.schema >= 3) checkModules(entry);
         if (entry.Restricted && entry.IntegrityRid <= 0x1000) {
             restrictedLow++;
             if (entry.Role === 'renderer') restrictedLowRenderers++;
@@ -98,6 +99,36 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
     require(restrictedLow > 0, 'Restricted-low token assertion not supported by samples');
     if (roleAware)
         require(sample.rendererRestrictedLow === true && restrictedLowRenderers > 0, 'Renderer token assertion not supported by samples');
+    let jobNotifications = null;
+    if (sample.schema === 4) {
+        require(Array.isArray(sample.jobNotifications) && sample.jobNotifications.length <= 512,
+            'Invalid job notifications');
+        const summary = {
+            outer: { starts: new Set(), exits: new Set(), empty: false },
+            inner: { starts: new Set(), exits: new Set(), empty: false },
+        };
+        for (const event of sample.jobNotifications) {
+            require(record(event) && (event.Job === 'outer' || event.Job === 'inner') &&
+                ['start', 'exit', 'abnormal-exit', 'empty'].includes(event.Kind) &&
+                (event.Kind === 'empty' ? event.Pid === 0 : pid(event.Pid)), 'Invalid job notification');
+            const job = summary[event.Job];
+            if (event.Kind === 'empty') job.empty = true;
+            else (event.Kind === 'start' ? job.starts : job.exits).add(event.Pid);
+        }
+        jobNotifications = Object.fromEntries(Object.entries(summary).map(([name, job]) => {
+            const sampled = [sample.rootPid, ...seen];
+            return [name, {
+                startPids: job.starts.size,
+                exitPids: job.exits.size,
+                emptyNotification: job.empty,
+                sampledPidsWithoutStart: sampled.filter(id => !job.starts.has(id)),
+                sampledPidsWithoutExit: sampled.filter(id => !job.exits.has(id)),
+                startPidsWithoutLiveSample: [...job.starts].filter(id => !sampled.includes(id)),
+                startPidsWithoutExit: [...job.starts].filter(id => !job.exits.has(id)),
+                exitPidsWithoutStart: [...job.exits].filter(id => !job.starts.has(id)),
+            }];
+        }));
+    }
     return {
         status: 'CONSISTENT_REPORTED_SMOKE_PASS',
         sourceCommit: expectedCommit,
@@ -107,7 +138,8 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
         observedDescendants: seen.size,
         restrictedLowDescendants: restrictedLow,
         restrictedLowRenderers: roleAware ? restrictedLowRenderers : null,
-        processesWithModuleInventory: sample.schema === 3 ? processesWithModuleInventory : null,
+        processesWithModuleInventory: sample.schema >= 3 ? processesWithModuleInventory : null,
+        jobNotifications,
         independentRuntimeVerification: 'NOT ESTABLISHED',
         productReleaseGates: 'NOT RUN',
         limitations: 'Unsigned local evidence from sampled processes; no complete containment audit, site isolation, protected storage or product authorization.'

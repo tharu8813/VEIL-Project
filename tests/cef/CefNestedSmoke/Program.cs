@@ -43,11 +43,13 @@ if (initial.Length != 1 || initial[0] != rootPid)
 var observed = new Dictionary<uint, FixtureJob.TokenSample>();
 FixtureJob.TokenSample? browser = null;
 var timer = Stopwatch.StartNew();
+using var notifications = new FixtureJobNotifications(child.FixtureJobHandle, second.Handle);
 try
 {
     child.ResumeAfterVerification(() => second.Contains(root));
     while (true)
     {
+        notifications.Drain();
         foreach (uint pid in second.Members())
         {
             if (!second.TrySample(pid, image, child, out var sample)) continue;
@@ -64,17 +66,19 @@ try
     uint exit = child.ReadExitCode();
     bool outerEmpty = child.WaitForNaturalJobExit(5000);
     bool innerEmpty = second.Members().Length == 0;
+    notifications.Drain(100);
     bool restricted = observed.Values.Any(s => s.Restricted && s.IntegrityRid <= 0x1000);
     bool rendererRestrictedLow = observed.Values.Any(s =>
         s.Role == "renderer" && s.Restricted && s.IntegrityRid <= 0x1000);
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         scope = "nested-win32-smoke-only",
-        schema = 3,
+        schema = 4,
         rootPid, exit, outerEmpty, innerEmpty, restricted, rendererRestrictedLow,
         browser,
         observed = observed.Values.OrderBy(s => s.Pid),
-        limitations = "Sampled command-line role, token, job membership and loader inventory; no full site isolation, product authorization or OS write trace."
+        jobNotifications = notifications.Events,
+        limitations = "Job notifications have best-effort delivery and report PIDs. Live handle samples are separate; no complete process lifetime or product authorization."
     }));
     if (exit != 0 || !outerEmpty || !innerEmpty || !rendererRestrictedLow || browser is null)
         throw new InvalidOperationException("Nested CEF fixture did not establish required evidence.");
@@ -92,6 +96,7 @@ finally
 sealed class FixtureJob : IDisposable
 {
     private readonly SafeFileHandle job;
+    internal SafeFileHandle Handle => job;
     internal FixtureJob()
     {
         job = CreateJobObjectW(IntPtr.Zero, null);
