@@ -194,6 +194,48 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         return retained.Select(member => member.Identity).ToArray();
     }
 
+    // Disconnected P2-03 primitive. The second handle must be a trusted,
+    // independently owned desktop Job retained by the serialized observer.
+    // Never obtain it from a client message or expose this as launch authority.
+    internal ClientIdentity[] ObserveNestedRetainedMembers(SafeFileHandle desktopJob,
+        IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(desktopJob);
+        ArgumentNullException.ThrowIfNull(members);
+        if (desktopJob.IsInvalid || desktopJob.IsClosed || CompareJobObjects(job, desktopJob))
+            throw new UnauthorizedAccessException("Expected two distinct retained CEF jobs.");
+        var retained = members.ToArray();
+        var brokerBefore = Accounting();
+        var desktopBefore = Accounting(desktopJob);
+        if (desktopBefore.ActiveProcesses != (uint)retained.Length)
+            throw new UnauthorizedAccessException("Incomplete desktop CEF job membership.");
+        var snapshot = ObserveRetainedMembers(retained);
+        foreach (var member in retained)
+        {
+            CheckRetainedMember(member.Identity, member.Handle);
+            if (!IsProcessInJob(member.Handle, desktopJob, out bool inside) || !inside ||
+                Native.ObserveProcess(member.Handle) != member.Identity)
+                throw new UnauthorizedAccessException("CEF member missing from desktop job.");
+        }
+        // Bracket both jobs, including historical counters so equal active
+        // counts cannot hide observed member creation/termination churn.
+        var desktopAfter = Accounting(desktopJob);
+        var brokerAfter = Accounting();
+        if (!SameMembershipAccounting(desktopBefore, desktopAfter) ||
+            !SameMembershipAccounting(brokerBefore, brokerAfter))
+            throw new UnauthorizedAccessException("Nested CEF membership changed during observation.");
+        return snapshot;
+    }
+
+    private static bool SameMembershipAccounting(AccountingInfo before, AccountingInfo after) =>
+        before.ActiveProcesses == after.ActiveProcesses && before.TotalProcesses == after.TotalProcesses &&
+        before.TotalTerminatedProcesses == after.TotalTerminatedProcesses;
+
+    [DllImport("kernelbase.dll", EntryPoint = "CompareObjectHandles", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CompareJobObjects(SafeFileHandle first, SafeFileHandle second);
+
     private void CheckRetainedMember(ClientIdentity identity, SafeProcessHandle handle)
     {
         if (!Native.IsRunning(handle) || Native.ObserveProcess(handle) != identity ||
@@ -225,9 +267,11 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         return true;
     }
 
-    private AccountingInfo Accounting()
+    private AccountingInfo Accounting() => Accounting(job);
+
+    private static AccountingInfo Accounting(SafeFileHandle observedJob)
     {
-        if (!QueryInformationJobObject(job, 1, out var info,
+        if (!QueryInformationJobObject(observedJob, 1, out var info,
             (uint)Marshal.SizeOf<AccountingInfo>(), IntPtr.Zero))
             throw new Win32Exception();
         return info;
