@@ -141,7 +141,7 @@ internal sealed class CefRegisteredProfileLease : IDisposable
     internal IReadOnlyDictionary<string, string?> GetEnvironmentSnapshot()
     {
         RequireCurrent();
-        var environment = profile.VerifiedEnvironment();
+        var environment = profile.VerifiedExclusiveEnvironment();
         RequireCurrent();
         return environment;
     }

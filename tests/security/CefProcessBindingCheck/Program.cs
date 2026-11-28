@@ -10,6 +10,15 @@ if (args is ["--child"] or ["--child", "--type=renderer"])
     return Console.ReadLine() == "exit" ? 0 : 1;
 }
 
+// Isolated process for the cross-process sharing fixture. No real
+// installed profile, broker command or CEF launch is involved.
+if (args is ["--profile-lock-fixture", var lockPath])
+{
+    using var exclusive = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+    Console.WriteLine("ready");
+    return Console.ReadLine() == "exit" ? 0 : 1;
+}
+
 CefRoleTokenPolicyTests.Run();
 CefCommandRoleTests.Run();
 CefSystemModuleVerifierTests.Run();
@@ -72,6 +81,7 @@ try
     using (var profile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
         fixtureWindows, () => fixtureStatus, () => authority))
     {
+        Reject(() => profile.VerifiedExclusiveEnvironment());
         var plan = profile.VerifiedEnvironment();
         Check(plan.Count == 7 && plan["TEMP"] == profileLayout.Scratch &&
             plan[CefChildEnvironmentPlan.RootKey] == profileLayout.EngineRoot &&
@@ -143,6 +153,8 @@ try
     {
         owned.AcquireExclusiveLock();
         owned.RequireCurrent();
+        Check(owned.VerifiedExclusiveEnvironment().Count == 7,
+            "Exclusive owner could not obtain protected environment.");
         using var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
             fixtureWindows, () => fixtureStatus, () => authority);
         Reject(() => competing.AcquireExclusiveLock());
@@ -151,11 +163,46 @@ try
     }
     Check(File.ReadAllText(profileLockPath) == "original-lock",
         "Broker modified the profile lock contents.");
-    Check(CreateHardLinkW(alias, profileLockPath, IntPtr.Zero), "Cannot create fixture lock hard link.");
+    // Put the alias outside the CEF subtree so the assertion specifically
+    // exercises the lock-file check, not the earlier subtree refusal.
+    string lockAlias = Path.Combine(profileFixture, "profile-lock-alias");
+    Check(CreateHardLinkW(lockAlias, profileLockPath, IntPtr.Zero), "Cannot create fixture lock hard link.");
     using (var linkedLock = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
         fixtureWindows, () => fixtureStatus, () => authority))
         Reject(() => linkedLock.AcquireExclusiveLock());
-    File.Delete(alias);
+    File.Delete(lockAlias);
+
+    // Real separate process holding the existing lock. A busy attempt
+    // retires permanently; a new lease may acquire only after that owner
+    // exits. This is contention behavior, NOT a gapless transfer protocol.
+    using (var lockOwner = Process.Start(new ProcessStartInfo
+    {
+        FileName = Environment.ProcessPath!,
+        UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true,
+        CreateNoWindow = true, ArgumentList = { "--profile-lock-fixture", profileLockPath },
+    }) ?? throw new InvalidOperationException("Missing profile lock fixture process."))
+    {
+        try
+        {
+            Check(await lockOwner.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)) == "ready",
+                "Profile lock fixture not ready.");
+            using var refused = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+                fixtureWindows, () => fixtureStatus, () => authority);
+            Reject(() => refused.AcquireExclusiveLock());
+            Reject(() => refused.VerifiedExclusiveEnvironment());
+            await lockOwner.StandardInput.WriteLineAsync("exit");
+            Check(lockOwner.WaitForExit(10000) && lockOwner.ExitCode == 0, "Profile lock owner did not exit.");
+            Reject(() => refused.AcquireExclusiveLock());
+            using var fresh = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+                fixtureWindows, () => fixtureStatus, () => authority);
+            fresh.AcquireExclusiveLock();
+            Check(fresh.VerifiedExclusiveEnvironment().Count == 7, "Fresh owner could not acquire released lock.");
+        }
+        finally
+        {
+            if (!lockOwner.HasExited) { lockOwner.Kill(); lockOwner.WaitForExit(10000); }
+        }
+    }
     File.Delete(profileLockPath);
     Console.WriteLine("PASS: existing exclusive profile lock, busy/missing/linked refusal and release");
     Directory.Delete(profileLayout.Cache);

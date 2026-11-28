@@ -1076,5 +1076,17 @@ test('installed broker acquires existing exclusive profile lock without takeover
     assert.match(profile, /AcquireExclusiveLock\(\)\s*\{\s*RequireCurrent\(\);[\s\S]*?profileLock = CefProtectedDirectoryLease.OpenExclusiveProfileLock\(\s*layout.ProductRoot, volume, readStatus\);\s*RequireCurrent\(\);[\s\S]*?retired = true;/);
     assert.match(profile, /retired = disposed = true;\s*profileLock\?\.Dispose\(\);\s*log\?\.Dispose\(\);/);
     assert.match(registration, /profile = CefProtectedProfileLease.Open\(root, volumeGuid, windows, readStatus, authorityCurrent\);\s*profile.AcquireExclusiveLock\(\);\s*var lease = new CefRegisteredProfileLease/);
-    assert.match(fixture, /missingLock.AcquireExclusiveLock\(\)[\s\S]*?desktopLock = new FileStream\(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None\)[\s\S]*?owned.AcquireExclusiveLock\(\);[\s\S]*?CreateHardLinkW\(alias, profileLockPath, IntPtr.Zero\)/);
+    assert.match(fixture, /missingLock.AcquireExclusiveLock\(\)[\s\S]*?desktopLock = new FileStream\(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None\)[\s\S]*?owned.AcquireExclusiveLock\(\);[\s\S]*?CreateHardLinkW\(lockAlias, profileLockPath, IntPtr.Zero\)/);
+});
+
+
+test('registered environment requires the broker exclusive lock and separate process contention retires preparation', async () => {
+    const profile = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedProfileLease.cs', 'utf8');
+    const registration = await readFile('apps/broker/Veil.VolumeBroker/CefRegisteredProfileLease.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    assert.match(profile, /VerifiedExclusiveEnvironment\(\)\s*\{\s*ObjectDisposedException.ThrowIf\(disposed, this\);\s*if \(profileLock is null\)\s*throw new UnauthorizedAccessException[\s\S]*?return VerifiedEnvironment\(\);/);
+    assert.match(registration, /GetEnvironmentSnapshot\(\)\s*\{\s*RequireCurrent\(\);\s*var environment = profile.VerifiedExclusiveEnvironment\(\);\s*RequireCurrent\(\);/);
+    assert.match(fixture, /string lockAlias = Path.Combine\(profileFixture, "profile-lock-alias"\);\s*Check\(CreateHardLinkW\(lockAlias, profileLockPath, IntPtr.Zero\)/);
+    assert.match(fixture, /args is \["--profile-lock-fixture", var lockPath\][\s\S]*?new FileStream\(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None\)/);
+    assert.match(fixture, /ArgumentList = \{ "--profile-lock-fixture", profileLockPath \}[\s\S]*?Reject\(\(\) => refused.AcquireExclusiveLock\(\)\);[\s\S]*?lockOwner.WaitForExit\(10000\)[\s\S]*?Reject\(\(\) => refused.AcquireExclusiveLock\(\)\);[\s\S]*?fresh.AcquireExclusiveLock\(\);[\s\S]*?fresh.VerifiedExclusiveEnvironment\(\)/);
 });

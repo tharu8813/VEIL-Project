@@ -198,6 +198,18 @@ internal sealed class CefProtectedProfileLease : IDisposable
         return environment;
     }
 
+    // Installed preparation must not accidentally expose a launch
+    // environment from a mere read-only profile inspection. Only the
+    // broker's own retained exclusive lock qualifies, not a busy-file
+    // observation or a desktop claim. Still not permission to resume.
+    internal IReadOnlyDictionary<string, string?> VerifiedExclusiveEnvironment()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (profileLock is null)
+            throw new UnauthorizedAccessException("CEF exclusive profile ownership required.");
+        return VerifiedEnvironment();
+    }
+
     public void Dispose()
     {
         if (disposed) return;
