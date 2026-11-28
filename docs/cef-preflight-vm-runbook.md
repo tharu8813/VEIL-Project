@@ -185,3 +185,13 @@ $diagnosticPlan = .\scripts\stage-cef-preflight-package.ps1 -Diagnostic -Disposa
 ### 진단 전용 서비스 등록 및 확인 (시작 금지)
 
 `register-cef-preflight-service.ps1 -Diagnostic -DisposableVm`은 진단 게시 증거를 확인하고 보호 프로필 bootstrap 레지스트리 및 고정 SCM 서비스를 등록한다. 별도 `VEIL.cef-diagnostic-service` 기록을 사용한다. LocalSystem/Disabled/Stopped/PID 0, 명령 및 SCM DACL을 검증한다. `test-cef-preflight-service.ps1 -Diagnostic -DisposableVm`은 읽기 전용 확인만 가능하며 `-RunProbe` 조합을 거부한다. 일반 서비스 시험과 exit 29 증거 경로도 진단 등록을 거부한다. 실제 SCM/HKLM/BitLocker/VM NOT RUN. 독립 기준 신뢰 등록 및 별도 진단 실행 도구가 필요하다.
+
+### 진단 시스템 기준 신뢰 최초 등록 (독립 승인 필수)
+
+서비스를 Disabled/Stopped로 유지한 폐기용 VM에서 관리자 권한의 설치된 `CefDiagnostic` 브로커로만 실행한다. 아래 값은 독립적인 release policy에서 확보하며 같은 패키지/공개키에서 임의로 계산한 지문을 승인으로 간주하지 않는다. 공개키는 DER SPKI의 Base64이며 지문은 SHA-256 hex, 순번은 정확한 양의 정수이다.
+
+~~~powershell
+& "$env:ProgramFiles\VEIL\Broker\Veil.VolumeBroker.exe" --cef-enroll-diagnostic-trust --disposable-vm $baselineSpkiBase64 $independentBaselineKeySha256 $independentPayloadSha256 $exactSequence $approvalSpkiBase64 $independentApprovalKeySha256
+~~~
+
+설치된 고정 기준 파일 원본을 읽고 실제 호스트 메타데이터, 두 키의 독립성, 서명, 정확한 해시 및 순번을 먼저 확인한다. 기존 관리자 전용 create-only writer로 승인 키와 기준 기록을 순차 등록 후 다시 검증한다. 두 기록은 원자적 트랜잭션이 아니며 중단 시 기존 키를 삭제하거나 재등록하지 말고 VM을 검토한다. 이 CLI 자체는 SCM 상태나 패키지 저널을 재검증하지 않으므로 선행 서비스/패키지 검증 및 격리 VM 확인은 운영자 책임이다. 실제 HKLM/ACL/전원 손실/VM NOT RUN. 개인키는 인자로 전달하지 않는다. CEF 시작 또는 서비스 시작 없음.
