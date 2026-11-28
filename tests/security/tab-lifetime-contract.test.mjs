@@ -847,3 +847,14 @@ test('CEF browser fullscreen is host-owned and page exit is a narrow observed op
     assert.match(cefTabbed, /bool exited = await tab.View.TryExitPageFullScreenAsync\(\);[\s\S]*?ReferenceEquals\(active, tab\)[\s\S]*?tab.View.NativeHandle == id && tab.LastNavigationId == navigation/);
     assert.match(cefTabbed, /Browser full screen restored host state without changing page full screen/);
 });
+
+
+test('CEF fixture bookmark library is bounded, local and restricted to live committed sources', () => {
+    assert.match(cefTabbed, /private const int FixtureBookmarkLimit = 64;/);
+    assert.match(cefTabbed, /url.Scheme == Uri.UriSchemeHttp && url.UserInfo.Length == 0 &&\s*url.Port == root.Port/);
+    assert.match(cefTabbed, /private bool CanBookmark\(Tab tab\) =>[\s\S]*?AcceptTabEvent\(tab\) && ReferenceEquals\(active, tab\)[\s\S]*?tab.PendingNavigationId == 0 && tab.Status == "Page loaded." &&\s*IsFixtureBookmarkUrl\(tab.View.Source\);/);
+    assert.match(cefTabbed, /if \(bookmarks.Any\(entry => entry.Url == source\)\) return;/);
+    assert.match(cefTabbed, /!bookmarks.Contains\(entry\) \|\| !IsFixtureBookmarkUrl\(entry.Url\)\) return;\s*WithActive\(view => view.Navigate\(entry.Url\)\);/);
+    assert.match(cefTabbed, /shuttingDown = true;\s*bookmarks.Clear\(\);\s*bookmarkList.Items.Clear\(\);/);
+    assert.match(cefTabbed, /Fixture bookmarks used live committed sources, deduplicated and removed exact entries/);
+});

@@ -245,6 +245,7 @@ try {
   assert.match(evidence, /Blocked popup count visible only for the owning tab; no extra native view/);
   assert.match(evidence, /Zoom readback followed selected distinct-origin view and reset to 100 percent/);
   assert.match(evidence, /Browser full screen restored host state without changing page full screen/);
+  assert.match(evidence, /Fixture bookmarks used live committed sources, deduplicated and removed exact entries/);
   assert.equal(cookieChecks.get('/tabs-after-close'), '', 'Deleted domain must not send its cookie');
   assert.equal(cookieChecks.get('/tabs-preserved'), 'fixture_second=synthetic-two', 'Other domain must retain its synthetic cookie');
   assert.equal(cookieChecks.get('/tabs-cleared-first'), '', 'Profile cookie clear must remove first domain cookie');
