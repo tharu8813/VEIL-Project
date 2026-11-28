@@ -907,7 +907,7 @@ test('prepared broker candidate creation is single-root, token-bound and remains
     const launch = await readFile('apps/desktop/Engine/CefContainedProcess.cs', 'utf8');
     const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
     const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
-    assert.match(prep, /creationAttempted = true;\s*RequireCurrent\(\);\s*var environment = profile.GetEnvironmentSnapshot\(token\);\s*outer\.CreateRetainedDiagnosticPair\(inner, token, path, environment, custody\);\s*custody\.VerifyRetainedRoot\(root =>[\s\S]*?token\.RequireCreatedRoot\(root, path\);[\s\S]*?CefPinnedImage\.OpenVerified\(identity, root, path, digest\);\s*RequireCurrent\(\);/);
+    assert.match(prep, /creationAttempted = true;\s*RequireCurrent\(\);\s*var environment = profile.GetEnvironmentSnapshot\(token\);[\s\S]*?RequireCurrent\(\);\s*outer\.CreateRetainedDiagnosticPair\(inner, token, path, environment, custody\);\s*custody\.VerifyRetainedRoot\(root =>[\s\S]*?token\.RequireCreatedRoot\(root, path\);[\s\S]*?CefPinnedImage\.OpenVerified\(identity, root, path, digest\);\s*RequireCurrent\(\);/);
     assert.doesNotMatch(prep, /GetEnvironmentVariables|TakeVerified|ResumeRetainedRoot|ResumeThread/);
     assert.match(job, /#if VEIL_CEF_BROKER[\s\S]*?CreateRetainedDiagnosticPair[\s\S]*?activeLimit != 1 \|\| peer.activeLimit != 1[\s\S]*?assignmentExported \|\| peer.assignmentExported[\s\S]*?RequireContainmentLimits\(job, activeLimit\);[\s\S]*?lease\.RequireCurrent\(\);\s*assignmentIssued = peer.assignmentIssued = true;\s*lease\.CreateRetainedDiagnosticRoot/);
     assert.match(observer, /#if VEIL_CEF_BROKER[\s\S]*?CreateRetainedDiagnosticRoot[\s\S]*?RequireCurrent\(\);\s*Veil\.Desktop\.CefContainedProcess\.CreateRetainedUserRoot\(image, environment, outer, inner,\s*duplicate, custody\);[\s\S]*?RequireCreatedRoot[\s\S]*?ObserveLaunchToken\(root, identity\);\s*CefLaunchTokenPolicy\.RequirePair\(sourceSnapshot, observed\);[\s\S]*?RequireCurrent\(\);/);
@@ -1122,8 +1122,10 @@ test('suspended broker creation owns the registered profile and uses only its to
     assert.match(prep, /token = CefProcessTokenObserver.LaunchTokenLease.Acquire\(ownerHandle, owner\);[\s\S]*?profile = CefRegisteredProfileLease.OpenInstalled\(volumeId, volumeGuid, pipeName,\s*readStatus, authorityCurrent\);[\s\S]*?registration, image, token, verifier, owner, ownerHandle, profile\);\s*prepared.RequireCurrent\(\);/);
     assert.match(prep, /catch\s*\{[\s\S]*?try \{ profile\?\.Dispose\(\); \}[\s\S]*?try \{ token\?\.Dispose\(\); \}[\s\S]*?registration\?\.Dispose\(\)/);
     assert.match(prep, /token.RequireCurrent\(\);\s*profile.RequireCurrent\(\);\s*token.RequireCurrent\(\);\s*if \(!authorityCurrent\(\)\)/);
-    assert.match(prep, /creationAttempted = true;\s*RequireCurrent\(\);\s*var environment = profile.GetEnvironmentSnapshot\(token\);\s*outer.CreateRetainedDiagnosticPair\(inner, token, path, environment, custody\);/);
-    assert.equal((prep.match(/profile.GetEnvironmentSnapshot\(token\)/g) ?? []).length, 2);
+    assert.match(prep, /creationAttempted = true;\s*RequireCurrent\(\);\s*var environment = profile.GetEnvironmentSnapshot\(token\);[\s\S]*?RequireCurrent\(\);\s*outer.CreateRetainedDiagnosticPair\(inner, token, path, environment, custody\);/);
+    assert.equal((prep.match(/profile.GetEnvironmentSnapshot\(token\)/g) ?? []).length, 3);
+    assert.match(prep, /outer.RequirePreparedPrivateRoot\(inner, owner, ownerHandle, identity, root\);\s*RequireCurrent\(\);\s*\}\);/);
+    assert.match(prep, /session.RequirePreparedForHandoff\(\);[\s\S]*?_ = profile.GetEnvironmentSnapshot\(token\);\s*RequireCurrent\(\);\s*outer.RequirePreparedPrivateRoot\(inner, owner, ownerHandle, identity, root\);\s*RequireCurrent\(\);\s*return session;/);
     assert.doesNotMatch(prep, /GetEnvironmentVariables|new Dictionary<string, string\?>|ResumeThread|ResumeRetainedRoot|TakeVerified/);
     assert.match(prep, /public void Dispose\(\)[\s\S]*?try \{ profile.Dispose\(\); \}[\s\S]*?try \{ token.Dispose\(\); \}[\s\S]*?registration.Dispose\(\)/);
     assert.match(broker, /new CefPreparedCreationLifetime\(outer, inner, preparation,\s*preparation.CreateDiagnosticCandidate\);[\s\S]*?diagnosticSession.RegisterAndActivate/);
