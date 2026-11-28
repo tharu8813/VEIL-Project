@@ -7,7 +7,7 @@ using Veil.Shared;
 
 namespace Veil.VolumeBroker;
 
-internal sealed record CefSystemModulePin(string Name, long Bytes, string Sha256);
+internal sealed record CefSystemModulePin(string Name, long Bytes, string Sha256, string SignerSha256);
 
 // Provisional direct System32 disk-file verification. The caller must supply
 // an independently authenticated, OS-build-specific baseline, never hashes
@@ -24,6 +24,7 @@ internal sealed class CefSystemModuleVerifier
         {
             if (pin is null || !ValidName(pin.Name) || pin.Bytes <= 0 ||
                 pin.Sha256 is not { Length: 64 } || !pin.Sha256.All(Uri.IsHexDigit) ||
+                !CefSystemSignatureTrust.ValidSignerPin(pin.SignerSha256) ||
                 !pins.TryAdd(pin.Name, pin) || pins.Count > 1024)
                 throw new ArgumentException("Invalid or duplicate system module pin.");
         }
@@ -57,11 +58,11 @@ internal sealed class CefSystemModuleVerifier
                 throw new UnauthorizedAccessException("System module digest mismatch.");
 
             // Require offline Authenticode (embedded or SHA-256 catalog member)
-            // plus the Microsoft production root-key policy on its signer.
-            // This is not a unique publisher identity or live revocation check.
+            // plus Microsoft production root policy and the authenticated
+            // leaf certificate pin. No live revocation or provenance claim.
             retained.Position = 0;
-            if (!CefSystemSignatureTrust.Verify(path, retained.SafeFileHandle))
-                throw new UnauthorizedAccessException("System module Microsoft-root signature unavailable or invalid.");
+            if (!CefSystemSignatureTrust.Verify(path, retained.SafeFileHandle, pin.SignerSha256))
+                throw new UnauthorizedAccessException("System module signature or authenticated signer pin mismatch.");
             AdminOnlyFile.RequireProtectedExecutable(path);
             using var again = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             var current = RequireCanonical(again.SafeFileHandle, path);

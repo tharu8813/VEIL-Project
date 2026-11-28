@@ -7,7 +7,7 @@ internal static class CefSystemModuleVerifierTests
     {
         string system = Environment.SystemDirectory;
         string path = Path.Combine(system, "kernel32.dll");
-        var pin = new CefSystemModulePin("kernel32.dll", new FileInfo(path).Length, new string('0', 64));
+        var pin = new CefSystemModulePin("kernel32.dll", new FileInfo(path).Length, new string('0', 64), new string('1', 64));
         void Reject(Action action)
         {
             try { action(); }
@@ -20,6 +20,18 @@ internal static class CefSystemModuleVerifierTests
         Reject(() => new CefSystemModuleVerifier([pin with { Name = "kernel32.exe" }]));
         Reject(() => new CefSystemModuleVerifier([pin with { Bytes = 0 }]));
         Reject(() => new CefSystemModuleVerifier([pin with { Sha256 = "bad" }]));
+        Reject(() => new CefSystemModuleVerifier([pin with { SignerSha256 = "" }]));
+        Reject(() => new CefSystemModuleVerifier([pin with { SignerSha256 = "bad" }]));
+        Reject(() => new CefSystemModuleVerifier([pin with { SignerSha256 = new string('g', 64) }]));
+        byte[] syntheticSigner = System.Security.Cryptography.SHA256.HashData(new byte[] { 1, 2, 3 });
+        string syntheticPin = Convert.ToHexString(syntheticSigner);
+        if (!CefSystemSignatureTrust.MatchesSignerPin(syntheticPin, syntheticSigner) ||
+            !CefSystemSignatureTrust.MatchesSignerPin(syntheticPin.ToLowerInvariant(), syntheticSigner) ||
+            CefSystemSignatureTrust.MatchesSignerPin(new string('0', 64), syntheticSigner) ||
+            CefSystemSignatureTrust.MatchesSignerPin(null, syntheticSigner) ||
+            CefSystemSignatureTrust.MatchesSignerPin(syntheticPin, null) ||
+            CefSystemSignatureTrust.MatchesSignerPin(syntheticPin, new byte[31]))
+            throw new InvalidOperationException("Signer pin comparison regression.");
         var verifier = new CefSystemModuleVerifier([pin]);
         Reject(() => verifier.RequireModules([Path.Combine(system, "unregistered.dll")]));
         Reject(() => verifier.RequireModules([Path.Combine(Path.GetTempPath(), "kernel32.dll")]));
@@ -34,18 +46,27 @@ internal static class CefSystemModuleVerifierTests
         {
             File.WriteAllText(unsigned, "synthetic unsigned file");
             using var file = new FileStream(unsigned, FileMode.Open, FileAccess.Read, FileShare.Read);
-            if (CefSystemSignatureTrust.Verify(unsigned, file.SafeFileHandle))
+            if (CefSystemSignatureTrust.Verify(unsigned, file.SafeFileHandle, pin.SignerSha256))
                 throw new InvalidOperationException("Unsigned synthetic module was trusted.");
         }
         finally { File.Delete(unsigned); }
         using (var invalid = new Microsoft.Win32.SafeHandles.SafeFileHandle(IntPtr.Zero, false))
-            if (CefSystemSignatureTrust.Verify(path, invalid))
+            if (CefSystemSignatureTrust.Verify(path, invalid, pin.SignerSha256))
                 throw new InvalidOperationException("Invalid module handle was trusted.");
         // Hosted image compatibility diagnostic only, not a required success
         // or a replacement for an independently authenticated OS baseline.
         using (var real = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
-            Console.WriteLine("DIAGNOSTIC: kernel32 Microsoft-root signature = " +
-                CefSystemSignatureTrust.Verify(path, real.SafeFileHandle));
-        Console.WriteLine("PASS: system module baseline, wrong-pin and unsigned trust refusal");
+        {
+            var observed = CefSystemSignatureTrust.ObserveSignerSha256(path, real.SafeFileHandle);
+            Console.WriteLine("DIAGNOSTIC: kernel32 Microsoft-root signer observed = " + (observed is not null));
+            if (observed is not null)
+            {
+                var different = (byte[])observed.Clone();
+                different[0] ^= 1;
+                if (CefSystemSignatureTrust.Verify(path, real.SafeFileHandle, Convert.ToHexString(different)))
+                    throw new InvalidOperationException("Wrong signer pin accepted.");
+            }
+        }
+        Console.WriteLine("PASS: system module baseline, file/signer pin and unsigned trust refusal");
     }
 }

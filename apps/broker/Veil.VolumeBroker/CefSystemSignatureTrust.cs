@@ -1,72 +1,88 @@
 // SPDX-License-Identifier: MPL-2.0
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
 
 namespace Veil.VolumeBroker;
 
 // Offline disk signature observation only. Require Authenticode trust AND
 // Microsoft's production root-key policy on the actual verified signer chain.
-// Microsoft-root evidence is not a unique publisher or OS provenance pin.
+// The actual primary signer certificate must also match an independently
+// authenticated module-specific SHA-256 pin. No live revocation guarantee.
 internal static class CefSystemSignatureTrust
 {
     private static readonly Guid GenericVerify = new("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
     private static readonly Guid DriverSubsystem = new("F750E6C3-38EE-11D1-85E5-00C04FC295EE");
 
-    internal static bool Verify(string path, SafeFileHandle retained)
+    internal static bool ValidSignerPin(string? pin) =>
+        pin is { Length: 64 } && pin.All(Uri.IsHexDigit);
+
+    internal static bool MatchesSignerPin(string? expected, byte[]? observed) =>
+        ValidSignerPin(expected) && observed is { Length: 32 } &&
+        CryptographicOperations.FixedTimeEquals(Convert.FromHexString(expected!), observed);
+
+    internal static bool Verify(string path, SafeFileHandle retained, string signerSha256)
+    {
+        if (!ValidSignerPin(signerSha256)) return false;
+        return MatchesSignerPin(signerSha256, ObserveSignerSha256(path, retained));
+    }
+
+    // Root-policy observation is not authorization; never generate a baseline
+    // from this result. A mismatched signer does not trigger catalog fallback.
+    internal static byte[]? ObserveSignerSha256(string path, SafeFileHandle retained)
     {
         ArgumentNullException.ThrowIfNull(retained);
         if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess ||
-            retained.IsInvalid || retained.IsClosed) return false;
+            retained.IsInvalid || retained.IsClosed) return null;
         bool added = false;
         try
         {
             retained.DangerousAddRef(ref added);
             var member = retained.DangerousGetHandle();
             var file = new FileInfoNative { Size = Marshal.SizeOf<FileInfoNative>(), Path = path, File = member };
-            if (!Rewind(retained)) return false;
-            if (VerifySubject(file, 1)) return true;
-            return VerifyCatalog(path, retained, member);
+            if (!Rewind(retained)) return null;
+            return VerifySubject(file, 1) ?? VerifyCatalog(path, retained, member);
         }
         finally { if (added) retained.DangerousRelease(); }
     }
 
-    private static bool VerifyCatalog(string path, SafeFileHandle retained, IntPtr member)
+    private static byte[]? VerifyCatalog(string path, SafeFileHandle retained, IntPtr member)
     {
         var subsystem = DriverSubsystem;
         if (!CryptCATAdminAcquireContext2(out var admin, ref subsystem, "SHA256", IntPtr.Zero, 0))
-            return false;
+            return null;
         try
         {
             uint length = 0;
             if (!Rewind(retained) || !CryptCATAdminCalcHashFromFileHandle2(admin, retained, ref length, null, 0) || length != 32)
-                return false;
+                return null;
             byte[] hash = new byte[32];
             if (!Rewind(retained) || !CryptCATAdminCalcHashFromFileHandle2(admin, retained, ref length, hash, 0) || length != 32)
-                return false;
+                return null;
             // Deliberately first matching catalog only. No weaker hash fallback
             // or search past a failed trust check. Additional catalogs may be
             // legitimate but are not accepted without a reviewed policy.
             IntPtr catalog = CryptCATAdminEnumCatalogFromHash(admin, hash, length, 0, IntPtr.Zero);
-            if (catalog == IntPtr.Zero) return false;
+            if (catalog == IntPtr.Zero) return null;
             try
             {
                 var info = new CatalogPath { Size = Marshal.SizeOf<CatalogPath>(), Path = "" };
                 if (!CryptCATCatalogInfoFromContext(catalog, ref info, 0) || string.IsNullOrWhiteSpace(info.Path))
-                    return false;
+                    return null;
                 var data = new CatalogInfo
                 {
                     Size = Marshal.SizeOf<CatalogInfo>(),
                     CatalogPath = info.Path, MemberTag = Convert.ToHexString(hash),
                     MemberPath = path, MemberFile = member, Admin = admin
                 };
-                return Rewind(retained) && VerifySubject(data, 2);
+                return Rewind(retained) ? VerifySubject(data, 2) : null;
             }
             finally { CryptCATAdminReleaseCatalogContext(admin, catalog, 0); }
         }
         finally { CryptCATAdminReleaseContext(admin, 0); }
     }
 
-    private static bool VerifySubject<T>(T subject, int choice) where T : struct
+    private static byte[]? VerifySubject<T>(T subject, int choice) where T : struct
     {
         IntPtr pointer = Marshal.AllocHGlobal(Marshal.SizeOf<T>());
         bool initialized = false;
@@ -81,20 +97,34 @@ internal static class CefSystemSignatureTrust
             Marshal.StructureToPtr(subject, pointer, false);
             initialized = true;
             if (WinVerifyTrust(new IntPtr(-1), ref action, ref data) != 0 ||
-                data.StateData == IntPtr.Zero) return false;
+                data.StateData == IntPtr.Zero) return null;
             IntPtr provider = WTHelperProvDataFromStateData(data.StateData);
-            if (provider == IntPtr.Zero) return false;
+            if (provider == IntPtr.Zero) return null;
             IntPtr signer = WTHelperGetProvSignerFromChain(provider, 0, false, 0);
             if (signer == IntPtr.Zero || Marshal.ReadInt32(signer) < Marshal.SizeOf<ProviderSigner>())
-                return false;
+                return null;
             var signed = Marshal.PtrToStructure<ProviderSigner>(signer);
-            if (signed.Error != 0 || signed.ChainContext == IntPtr.Zero) return false;
+            if (signed.Error != 0 || signed.ChainContext == IntPtr.Zero) return null;
             var para = new ChainPolicyPara { Size = Marshal.SizeOf<ChainPolicyPara>() };
             var status = new ChainPolicyStatus { Size = Marshal.SizeOf<ChainPolicyStatus>() };
             // CERT_CHAIN_POLICY_MICROSOFT_ROOT. No test-root or alternate
             // application-root flags. This supplements, never replaces WVT.
-            return CertVerifyCertificateChainPolicy(new IntPtr(7), signed.ChainContext, ref para, ref status)
-                && status.Error == 0;
+            if (!CertVerifyCertificateChainPolicy(new IntPtr(7), signed.ChainContext, ref para, ref status)
+                || status.Error != 0 || signed.ChainCount == 0) return null;
+            // Use the leaf from the exact primary signer verified above, not
+            // a certificate selected by name, timestamp or a separate lookup.
+            IntPtr certificate = WTHelperGetProvCertFromChain(signer, 0);
+            if (certificate == IntPtr.Zero ||
+                Marshal.ReadInt32(certificate) < Marshal.SizeOf<ProviderCertificatePrefix>())
+                return null;
+            var providerCertificate = Marshal.PtrToStructure<ProviderCertificatePrefix>(certificate);
+            if (providerCertificate.Context == IntPtr.Zero) return null;
+            var context = Marshal.PtrToStructure<CertificateContextPrefix>(providerCertificate.Context);
+            if (context.Encoded == IntPtr.Zero || context.EncodedLength is 0 or > 1048576)
+                return null;
+            byte[] encoded = new byte[(int)context.EncodedLength];
+            Marshal.Copy(context.Encoded, encoded, 0, encoded.Length);
+            return SHA256.HashData(encoded);
         }
         finally
         {
@@ -160,6 +190,17 @@ internal static class CefSystemSignatureTrust
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct ProviderCertificatePrefix { public uint Size; public IntPtr Context; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CertificateContextPrefix
+    {
+        public uint Encoding;
+        public IntPtr Encoded;
+        public uint EncodedLength;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct ChainPolicyPara { public int Size; public uint Flags; public IntPtr Extra; }
     [StructLayout(LayoutKind.Sequential)]
     private struct ChainPolicyStatus { public int Size; public uint Error; public int ChainIndex, ElementIndex; public IntPtr Extra; }
@@ -193,6 +234,8 @@ internal static class CefSystemSignatureTrust
     private static extern IntPtr WTHelperProvDataFromStateData(IntPtr state);
     [DllImport("wintrust.dll", ExactSpelling = true)]
     private static extern IntPtr WTHelperGetProvSignerFromChain(IntPtr data, uint signer, [MarshalAs(UnmanagedType.Bool)] bool counter, uint index);
+    [DllImport("wintrust.dll", ExactSpelling = true)]
+    private static extern IntPtr WTHelperGetProvCertFromChain(IntPtr signer, uint index);
     [DllImport("crypt32.dll", ExactSpelling = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CertVerifyCertificateChainPolicy(IntPtr policy, IntPtr chain, ref ChainPolicyPara para, ref ChainPolicyStatus status);
