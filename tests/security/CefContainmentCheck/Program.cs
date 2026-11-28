@@ -101,6 +101,49 @@ try
         Check(observer.WaitForExit(10000), "Child survived job close.");
     }
     File.Delete(markerPath);
+    // Same-user synthetic atomic Job pair: handoff before resume, including
+    // a failure after resume actually ran. No product or BitLocker access.
+    using (var owner = Process.GetCurrentProcess())
+    {
+        var ownerIdentity = Native.ObserveProcess(owner.SafeHandle);
+        foreach (bool failAfterResume in new[] { false, true })
+        {
+            using var outer = CefBrokerOwnedJob.CreateMultiprocessFixture();
+            using var inner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+            using var candidate = outer.CreateAtomicPairFixture(inner, image, environment);
+            var binding = Native.DuplicateNominatedChild(ownerIdentity, owner.SafeHandle,
+                new IntPtr(candidate.NominatedHandle));
+            using var retained = binding.Handle;
+            outer.BindSingleCandidate(ownerIdentity, owner.SafeHandle, binding.Identity, retained);
+            inner.BindSingleCandidate(ownerIdentity, owner.SafeHandle, binding.Identity, retained);
+            outer.RequirePrivateNestedBinding(inner, ownerIdentity, owner.SafeHandle, binding.Identity, retained);
+            var session = new HandoffFixtureLifetime(candidate, outer, inner, retained);
+            var slot = new CefDiagnosticSessionSlot<HandoffFixtureLifetime>();
+            var generation = new object();
+            Check(!File.Exists(markerPath), "Fixture ran before ownership handoff.");
+            var outcome = slot.RegisterAndActivate(generation, session, () =>
+            {
+                Check(slot.Occupied && slot.Current(generation) is null, "Resume before handoff.");
+                candidate.ResumeAfterVerification(() => outer.ContainsFixtureRoot(binding.Identity, retained) &&
+                    inner.ContainsFixtureRoot(binding.Identity, retained));
+                Check(SpinWait.SpinUntil(() => File.Exists(markerPath), TimeSpan.FromSeconds(10)),
+                    "Handoff fixture did not start.");
+                if (failAfterResume) throw new UnauthorizedAccessException("Synthetic lost resume confirmation.");
+            }, out var failure);
+            Check(failAfterResume
+                ? outcome == CefDiagnosticActivationOutcome.Retired && failure is UnauthorizedAccessException &&
+                    slot.CleanupPending && slot.Current(generation) is null
+                : outcome == CefDiagnosticActivationOutcome.Activated && failure is null &&
+                    slot.Current(generation) == session, "Handoff result mismatch.");
+            Check(!slot.TryRegister(new object(), session), "Occupied handoff replaced.");
+            slot.Retire();
+            Check(slot.TryReleaseRetired(5000) && !slot.Occupied &&
+                candidate.WaitForExit(0) && outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses(),
+                "Handoff cleanup did not verify all exits.");
+            File.Delete(markerPath);
+        }
+    }
+    Console.WriteLine("PASS: actual synthetic atomic Job pair handoff and ambiguous resume drain");
     // Explicit VM test, never silently claim positive user-token creation
     // on an elevated CI account. The runner must have the required OS rights.
     if (Environment.GetEnvironmentVariable("VEIL_TEST_STANDARD_USER_CREATION") == "1")
@@ -579,3 +622,21 @@ finally { Directory.Delete(work, recursive: true); }
 
 [System.Runtime.InteropServices.DllImport("kernel32.dll")]
 static extern int GetProcessId(IntPtr process);
+
+
+// Fixture wrapper borrows handles from the surrounding using scope; the slot
+// controls retirement/drain, while the fixture scope disposes after exit proof.
+// This does not claim production resource ownership transfer or CEF admission.
+internal sealed class HandoffFixtureLifetime(CefContainedProcess child,
+    CefBrokerOwnedJob outer, CefBrokerOwnedJob inner,
+    Microsoft.Win32.SafeHandles.SafeProcessHandle root) : ICefDiagnosticLifetime
+{
+    private bool retired;
+    public void Revoke() => retired = true;
+    public bool RevokeAndRelease(int milliseconds)
+    {
+        if (!retired) throw new InvalidOperationException("Fixture not retired.");
+        return outer.TerminateAndVerifyPrivateDrain(inner, root, milliseconds) &&
+            child.WaitForNaturalJobExit(milliseconds);
+    }
+}

@@ -242,12 +242,15 @@ internal interface ICefDiagnosticLifetime
     bool RevokeAndRelease(int milliseconds);
 }
 
+internal enum CefDiagnosticActivationOutcome { Refused, Activated, Retired }
+
 internal sealed class CefDiagnosticSessionSlot<T> where T : class, ICefDiagnosticLifetime
 {
     private T? session;
     private object? generation;
     private bool retired;
     private bool releasing;
+    private bool activating;
     internal bool Occupied => session is not null;
     internal bool CleanupPending => Occupied && retired;
 
@@ -255,15 +258,51 @@ internal sealed class CefDiagnosticSessionSlot<T> where T : class, ICefDiagnosti
     {
         ArgumentNullException.ThrowIfNull(expectedGeneration);
         ArgumentNullException.ThrowIfNull(candidate);
-        if (Occupied || releasing) return false;
+        if (Occupied || releasing || activating) return false;
         session = candidate;
         generation = expectedGeneration;
         retired = false;
         return true;
     }
 
+    // Prepared lifetime is transferred BEFORE the one-shot resume callback.
+    // Refused means the caller still owns it. Activated and Retired both
+    // mean the slot owns it, including when resume failed after execution
+    // may have started. Caller must arrange cleanup of a retired slot.
+    // No reentrant observation, release or replacement during activation.
+    internal CefDiagnosticActivationOutcome RegisterAndActivate(object expectedGeneration, T candidate,
+        Action activate, out Exception? failure)
+    {
+        ArgumentNullException.ThrowIfNull(activate);
+        failure = null;
+        if (!TryRegister(expectedGeneration, candidate))
+            return CefDiagnosticActivationOutcome.Refused;
+        activating = true;
+        bool committed = false;
+        try
+        {
+            activate();
+            if (retired)
+                throw new UnauthorizedAccessException("CEF session retired during activation.");
+            committed = true;
+            return CefDiagnosticActivationOutcome.Activated;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            failure = error;
+            return CefDiagnosticActivationOutcome.Retired;
+        }
+        finally
+        {
+            // Even an unexpected exception cannot leave a partially
+            // activated session observable or its handles unowned.
+            try { if (!committed) Retire(); }
+            finally { activating = false; }
+        }
+    }
+
     internal T? Current(object? expectedGeneration) =>
-        !retired && ReferenceEquals(generation, expectedGeneration) ? session : null;
+        !retired && !activating && ReferenceEquals(generation, expectedGeneration) ? session : null;
 
     internal void Retire()
     {
@@ -276,7 +315,7 @@ internal sealed class CefDiagnosticSessionSlot<T> where T : class, ICefDiagnosti
     {
         ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
         if (session is null) return true;
-        if (!retired || releasing) return false;
+        if (!retired || releasing || activating) return false;
         releasing = true;
         try
         {

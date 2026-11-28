@@ -720,7 +720,7 @@ test('broker retains diagnostic slot through revocation and refuses unsafe opera
     assert.match(broker, /RetryUnresolvedCefStops\(\);\s*if \(diagnosticSession\.Occupied\)\s*throw new InvalidOperationException\("CEF diagnostic lifetime remains unconfirmed; service cleanup refused\."\)/);
     assert.match(broker, /RetryUnresolvedCefStops\(\);\s*if \(diagnosticSession\.Occupied\)\s*throw new InvalidOperationException\("CEF diagnostic lifetime remains unconfirmed; crash relock deferred\."\)/);
     assert.match(broker, /unresolvedCefStops\.Count == 0 && !diagnosticSession\.CleanupPending/);
-    assert.match(policy, /if \(Occupied \|\| releasing\) return false;[\s\S]*?session = candidate;/);
+    assert.match(policy, /if \(Occupied \|\| releasing \|\| activating\) return false;[\s\S]*?session = candidate;/);
     assert.match(policy, /retired = true;\s*session\.Revoke\(\);/);
     assert.match(policy, /if \(!session\.RevokeAndRelease\(milliseconds\)\) return false;\s*session = null;/);
 });
@@ -807,4 +807,17 @@ test('user-token atomic creation remains containment fixture only with no fallba
     assert.match(token, /#if VEIL_CEF_CONTAINMENT_TEST[\s\S]*?RequireCurrent\(\);\s*var child = Veil\.Desktop\.CefContainedProcess\.CreateSuspendedWithUserFixtureJobs[\s\S]*?RequireFixtureRoot\(borrowed, Native\.ObserveProcess\(borrowed\)\);[\s\S]*?catch \{ child\.Dispose\(\); throw; \}/);
     assert.match(job, /lease\.RequireCurrent\(\);\s*assignmentIssued = peer\.assignmentIssued = true;\s*return lease\.CreateUserFixture/);
     assert.match(fixture, /VEIL_TEST_STANDARD_USER_CREATION[\s\S]*?CreateAtomicUserPairFixture[\s\S]*?RequirePrivateNestedBinding[\s\S]*?ResumeAfterVerification[\s\S]*?lease\.RequireFixtureRoot[\s\S]*?TerminateAndVerifyPrivateDrain/);
+});
+
+
+test('prepared diagnostic lifetime is retained before activation and retired on ambiguous resume', async () => {
+    const policy = await readFile('apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    assert.match(policy, /if \(!TryRegister\(expectedGeneration, candidate\)\)\s*return CefDiagnosticActivationOutcome\.Refused;\s*activating = true;[\s\S]*?activate\(\);[\s\S]*?if \(retired\)[\s\S]*?committed = true/);
+    assert.match(policy, /failure = error;\s*return CefDiagnosticActivationOutcome\.Retired;[\s\S]*?try \{ if \(!committed\) Retire\(\); \}\s*finally \{ activating = false; \}/);
+    assert.match(policy, /!retired && !activating && ReferenceEquals\(generation, expectedGeneration\)/);
+    assert.match(policy, /if \(!retired \|\| releasing \|\| activating\) return false/);
+    assert.match(fixture, /slot\.RegisterAndActivate\(generation, session,[\s\S]*?candidate\.ResumeAfterVerification[\s\S]*?Synthetic lost resume confirmation[\s\S]*?slot\.TryReleaseRetired\(5000\)/);
+    assert.doesNotMatch(broker, /RegisterAndActivate/);
 });

@@ -220,6 +220,46 @@ internal static class CefSessionObservationTests
         slot.Retire();
         secondSession.ExitConfirmed = true;
         Check(slot.TryReleaseRetired(0) && !slot.Occupied);
+        var activationSlot = new CefDiagnosticSessionSlot<TrackedSession>();
+        var prepared = new TrackedSession();
+        var replacement = new TrackedSession();
+        int activations = 0;
+        var activated = activationSlot.RegisterAndActivate(generation, prepared, () =>
+        {
+            activations++;
+            Check(activationSlot.Occupied && activationSlot.Current(generation) is null);
+            Check(!activationSlot.TryRegister(nextGeneration, replacement));
+            Check(!activationSlot.TryReleaseRetired(0));
+        }, out var activationFailure);
+        Check(activated == CefDiagnosticActivationOutcome.Activated && activationFailure is null &&
+            activationSlot.Current(generation) == prepared && activations == 1);
+        Check(activationSlot.RegisterAndActivate(nextGeneration, replacement, () => activations++,
+            out activationFailure) == CefDiagnosticActivationOutcome.Refused && activationFailure is null && activations == 1);
+        Check(!replacement.Revoked && replacement.ReleaseAttempts == 0);
+        activationSlot.Retire();
+        prepared.ExitConfirmed = true;
+        Check(activationSlot.TryReleaseRetired(0));
+        var failedActivation = new TrackedSession();
+        var outcome = activationSlot.RegisterAndActivate(generation, failedActivation, () =>
+        {
+            activations++;
+            throw new UnauthorizedAccessException("Synthetic ambiguous resume.");
+        }, out activationFailure);
+        Check(outcome == CefDiagnosticActivationOutcome.Retired && activationFailure is UnauthorizedAccessException &&
+            failedActivation.Revoked && activationSlot.CleanupPending && activationSlot.Current(generation) is null);
+        Check(!activationSlot.TryReleaseRetired(0) && !activationSlot.TryRegister(nextGeneration, replacement));
+        failedActivation.ExitConfirmed = true;
+        Check(activationSlot.TryReleaseRetired(0) && !activationSlot.Occupied);
+        outcome = activationSlot.RegisterAndActivate(generation, replacement, () =>
+        {
+            activationSlot.Retire();
+            replacement.ExitConfirmed = true;
+            Check(!activationSlot.TryReleaseRetired(0) && !activationSlot.TryRegister(nextGeneration, prepared));
+        }, out activationFailure);
+        Check(outcome == CefDiagnosticActivationOutcome.Retired && activationFailure is UnauthorizedAccessException &&
+            activationSlot.CleanupPending && replacement.ReleaseAttempts == 0);
+        Check(activationSlot.TryReleaseRetired(0) && !activationSlot.Occupied);
+        Console.WriteLine("PASS: pre-resume lifetime handoff, ambiguous activation retirement and reentrant cleanup refusal");
         Console.WriteLine("PASS: diagnostic owner slot retires before release, preserves failed cleanup and rejects replacement");
         Console.WriteLine("PASS: retained resource cleanup waits for verified exit and resumes failed release");
         Console.WriteLine("PASS: broker unlock generation cannot resurrect after owner or protection failure");
