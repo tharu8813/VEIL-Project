@@ -1332,7 +1332,10 @@ test('runtime member authority compares the pipe object inside retained nested o
     const session = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
     const roles = await readFile('apps/broker/Veil.VolumeBroker/CefRoleTokenPolicy.cs', 'utf8');
     assert.match(jobs, /ContainsPrivateRuntimeMember[\s\S]*?RequireBoundPrivatePeer\(peer, rootHandle\)[\s\S]*?ObserveLiveMember\(member\) == identity[\s\S]*?IsProcessInJob\(member, job,[\s\S]*?IsProcessInJob\(member, peerHandle,/);
-    assert.match(session, /observeMember = \(client, pipeClient\) =>[\s\S]*?CefNestedProcessDiagnostics.Observe[\s\S]*?MatchesProvisionalRole[\s\S]*?Native.SameLiveProcess\(handle, pipeClient\)[\s\S]*?matches != 1/);
+    assert.match(session, /void RequireMemberRole\(ClientIdentity identity, CefRetainedProcessDiagnostic diagnostic\) =>\s*CefRuntimeRolePolicy.RequireProvisionalRole\(identity == root,\s*diagnostic.Role, diagnostic.TokenDecision\);/);
+    assert.match(session, /observe = \(\) => CefNestedProcessDiagnostics.Observe\(brokerJob, peerJob, root, rootHandle,\s*registration, systemVerifier, \(identity, _, diagnostic\) =>\s*RequireMemberRole\(identity, diagnostic\)\);/);
+    assert.match(session, /observeMember = \(client, pipeClient\) =>[\s\S]*?CefNestedProcessDiagnostics.Observe[\s\S]*?RequireMemberRole\(identity, diagnostic\);[\s\S]*?Native.SameLiveProcess\(handle, pipeClient\)[\s\S]*?matches != 1/);
+    assert.match(roles, /void RequireProvisionalRole[\s\S]*?if \(!MatchesProvisionalRole\(isRoot, role, decision\)\)\s*throw new UnauthorizedAccessException/);
     assert.match(session, /RequireRuntimeAuthority[\s\S]*?guard.Observe\(readContext,[\s\S]*?observeMember\(client, pipeClient\)/);
     assert.match(roles, /decision == CefRoleTokenDecision.MatchesProvisionalBaseline &&\s*\(isRoot \? role == CefObservedRole.Browser : role == CefObservedRole.Renderer\)/);
 });
