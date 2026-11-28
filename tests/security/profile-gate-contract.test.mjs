@@ -1313,3 +1313,15 @@ test('runtime authority wire remains separate from redemption and unreachable fo
     assert.match(wire, /CheckCefRuntimeAuthority/);
     assert.doesNotMatch(product, /RequestRuntimeAuthority|RunProtectedCefLifecycle/);
 });
+
+
+test('runtime authority samples retain one original broker object and never reopen after refusal', async () => {
+    const impl = await readFile('apps/cef-smoke/broker_verification.cc', 'utf8');
+    const wire = await readFile('apps/cef-smoke/broker_verification.h', 'utf8');
+    const check = impl.slice(impl.indexOf('bool RuntimeAuthoritySession::Check()'));
+    assert.match(impl, /struct RuntimeAuthoritySession::State[\s\S]*?process\(OpenProcess\(PROCESS_QUERY_LIMITED_INFORMATION \| SYNCHRONIZE, FALSE, pid\)\)/);
+    assert.match(impl, /WaitForSingleObject\(process, 0\) != WAIT_TIMEOUT \|\| ServicePid\(\) != pid/);
+    assert.match(check, /state\.latch\.Check[\s\S]*?state\.process\.get\(\), state\.pid/);
+    assert.doesNotMatch(check, /OpenProcess|make_unique|ServicePid\(/);
+    assert.match(wire, /if \(retired_ \|\| checking_\) \{ retired_ = true; return false; \}/);
+});
