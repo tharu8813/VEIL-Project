@@ -1351,3 +1351,11 @@ test('fixed protected fixture requires exact load and closure evidence without p
     assert.match(policy, /confirmed && ready_at_close_ && !failed_, confirmed/);
     assert.doesNotMatch(entry, /RunProtectedFixedFixture|RunProtectedCefLifecycle/);
 });
+
+
+test('nested diagnostics bind kernel token snapshots across module observation', async () => {
+    const observer = await readFile('apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs', 'utf8');
+    const nested = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    assert.match(observer, /ObserveRuntimeToken\(SafeProcessHandle process, ClientIdentity expected\)[\s\S]*?ReadSnapshot\(process, expected, inspectLaunchPrivileges: false\);\s*return new\(snapshot.Token, snapshot.AuthenticationId, snapshot.TokenId, snapshot.ModifiedId\);/);
+    assert.match(nested, /var rootToken = CefProcessTokenObserver.ObserveRuntimeToken\(rootHandle, root\);[\s\S]*?var token = CefProcessTokenObserver.ObserveRuntimeToken\(handle, identity\);\s*CefRuntimeTokenSnapshot.RequireLogon\(rootToken, token\);[\s\S]*?CefProcessModuleObserver.Observe\(handle, identity,[\s\S]*?CefRuntimeTokenSnapshot.RequireSame\(token,\s*CefProcessTokenObserver.ObserveRuntimeToken\(handle, identity\)\);[\s\S]*?CefRuntimeTokenSnapshot.RequireSame\(rootToken,\s*CefProcessTokenObserver.ObserveRuntimeToken\(rootHandle, root\)\);/);
+});
