@@ -190,6 +190,60 @@ internal static class CefSignedSystemModuleBaselineTests
         currentAuthorityRecord = wrongKey.ExportSubjectPublicKeyInfo();
         Reject(() => authorityBoundVerifier.RequireModules([]));
         Console.WriteLine("PASS: one-way approval stop and installed verifier authority-change refusal (synthetic)");
+        using var recoveryRoot = RSA.Create(3072);
+        using var recoveredBaselineKey = RSA.Create(3072);
+        using var recoveredApprovalKey = RSA.Create(3072);
+        byte[] recoveryPublic = recoveryRoot.ExportSubjectPublicKeyInfo();
+        byte[] recoveryAnchor = SHA256.HashData(recoveryPublic);
+        byte[] recoveredBaselinePublic = recoveredBaselineKey.ExportSubjectPublicKeyInfo();
+        byte[] recoveredApprovalPublic = recoveredApprovalKey.ExportSubjectPublicKeyInfo();
+        byte[] recoveryPayload = Payload(sequence: 10);
+        byte[] recoveryBaselineSignature = recoveredBaselineKey.SignData(recoveryPayload,
+            HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+        string[] recoveryHistory = new[] { CefSystemBaselineTrustState.KeyId(publicKey),
+            CefSystemBaselineTrustState.KeyId(approvalPublic) }.OrderBy(id => id, StringComparer.Ordinal).ToArray();
+        var expectedRecovered = CefSystemBaselineTrustState.CreateVerifiedRecord(recoveryPayload,
+            recoveredBaselinePublic, 10, recoveryHistory);
+        byte[] recoveryDigest = SHA256.HashData([.. "VEIL-CEF-APPROVAL-RECOVERY-V1"u8,
+            .. SHA256.HashData(stoppedAuthority), .. SHA256.HashData(nextState.CopyRecord()),
+            .. SHA256.HashData(recoveredApprovalPublic), .. SHA256.HashData(expectedRecovered.CopyRecord())]);
+        byte[] recoverySignature = recoveryRoot.SignHash(recoveryDigest,
+            HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+        CefApprovalAuthorityRecovery Recover(byte[] stopped, CefSystemBaselineTrustState current,
+            byte[] baselineKey, byte[] approvalCandidate, byte[] root, byte[] anchorValue, byte[] proof) =>
+            CefApprovalAuthorityRecovery.Prepare(stopped, current, recoveryPayload, recoveryBaselineSignature,
+                baselineKey, approvalCandidate, root, anchorValue, proof, host);
+        var recoveryPlan = Recover(stoppedAuthority, nextState, recoveredBaselinePublic,
+            recoveredApprovalPublic, recoveryPublic, recoveryAnchor, recoverySignature);
+        var recovered = CefSystemBaselineTrustState.Parse(recoveryPlan.RequireBaselineStage(stoppedAuthority, nextState, host));
+        expectedRecovered.RequireSame(recovered);
+        if (!recovered.CopyRetiredKeyIds().SequenceEqual(recoveryHistory))
+            throw new InvalidOperationException("Recovery lost compromised key identities.");
+        if (!recoveryPlan.RequireAuthorityStage(stoppedAuthority, recovered, host).SequenceEqual(recoveredApprovalPublic) ||
+            recoveryPlan.Classify(recoveredApprovalPublic, recovered, host) != CefApprovalRecoveryStatus.IntendedPairPresentUnconfirmed ||
+            recoveryPlan.Classify(recoveredApprovalPublic, nextState, host) != CefApprovalRecoveryStatus.UnexpectedRequiresReview ||
+            recoveryPlan.Classify(stoppedAuthority, null, host) != CefApprovalRecoveryStatus.UnexpectedRequiresReview)
+            throw new InvalidOperationException("Authority recovery ordering regression.");
+        Reject(() => recoveryPlan.RequireAuthorityStage(stoppedAuthority, nextState, host));
+        Reject(() => recoveryPlan.RequireBaselineStage(stoppedAuthority, recovered, host));
+        Reject(() => recoveryPlan.RequireBaselineStage(stoppedAuthority, nextState, host with { UpdateRevision = 1235 }));
+        Reject(() => Recover(approvalPublic, nextState, recoveredBaselinePublic, recoveredApprovalPublic,
+            recoveryPublic, recoveryAnchor, recoverySignature));
+        Reject(() => Recover(stoppedAuthority, enrolled, recoveredBaselinePublic, recoveredApprovalPublic,
+            recoveryPublic, recoveryAnchor, recoverySignature));
+        Reject(() => Recover(stoppedAuthority, nextState, recoveredBaselinePublic, recoveredApprovalPublic,
+            recoveryPublic, new byte[32], recoverySignature));
+        Reject(() => Recover(stoppedAuthority, nextState, recoveredBaselinePublic, recoveredApprovalPublic,
+            recoveryPublic, recoveryAnchor, approvalKey.SignHash(recoveryDigest, HashAlgorithmName.SHA256, RSASignaturePadding.Pss)));
+        Reject(() => Recover(stoppedAuthority, nextState, recoveredBaselinePublic, recoveredApprovalPublic,
+            approvalPublic, approvalAnchor, approvalKey.SignHash(recoveryDigest, HashAlgorithmName.SHA256, RSASignaturePadding.Pss)));
+        Reject(() => Recover(stoppedAuthority, nextState, recoveredBaselinePublic, approvalPublic,
+            recoveryPublic, recoveryAnchor, recoverySignature));
+        Reject(() => Recover(stoppedAuthority, nextState, recoveredBaselinePublic, recoveredBaselinePublic,
+            recoveryPublic, recoveryAnchor, recoverySignature));
+        Reject(() => recovered.CreateSuccessor(Payload(sequence: 11), approvalPublic, 11));
+        Reject(() => authority.RequireIndependent(recovered));
+        Console.WriteLine("PASS: independently signed two-record authority recovery plan and fail-closed ordering");
         byte[] Approve(byte[] digest) => approvalKey.SignHash(digest, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
         CefSystemBaselineTrustUpdate Rotate(CefSystemBaselineTrustState installed, byte[] payload,
             byte[] signature, byte[] newKey, byte[] digest, CefSystemBaselineHost expectedHost) =>

@@ -278,3 +278,118 @@ internal sealed class CefSystemBaselineTrustUpdate
         next.RequireSame(published);
     }
 }
+
+
+// Deliberately disconnected recovery plan. The offline recovery anchor is
+// obtained out of band from independent release policy, never from the
+// compromised authority or candidate package. No registry writer here.
+internal enum CefApprovalRecoveryStatus
+{
+    StoppedOriginal,
+    StoppedBaselineReplaced,
+    IntendedPairPresentUnconfirmed,
+    UnexpectedRequiresReview
+}
+
+internal sealed class CefApprovalAuthorityRecovery
+{
+    private readonly byte[] stoppedAuthority;
+    private readonly byte[] newAuthority;
+    private readonly CefSystemBaselineTrustState previous;
+    private readonly CefSystemBaselineTrustState next;
+    private readonly CefSystemBaselineHost host;
+
+    private CefApprovalAuthorityRecovery(byte[] stoppedAuthority, byte[] newAuthority,
+        CefSystemBaselineTrustState previous, CefSystemBaselineTrustState next, CefSystemBaselineHost host)
+    {
+        this.stoppedAuthority = stoppedAuthority;
+        this.newAuthority = newAuthority;
+        this.previous = previous;
+        this.next = next;
+        this.host = host;
+    }
+
+    internal static CefApprovalAuthorityRecovery Prepare(
+        ReadOnlySpan<byte> stoppedAuthorityRecord, CefSystemBaselineTrustState installed,
+        ReadOnlySpan<byte> payload, ReadOnlySpan<byte> baselineSignature,
+        ReadOnlySpan<byte> newBaselinePublicKey, ReadOnlySpan<byte> newApprovalPublicKey,
+        ReadOnlySpan<byte> recoveryPublicKey, ReadOnlySpan<byte> independentRecoverySpkiSha256,
+        ReadOnlySpan<byte> recoverySignature, CefSystemBaselineHost host)
+    {
+        ArgumentNullException.ThrowIfNull(installed);
+        if (stoppedAuthorityRecord.Length is <= 8 or > 4104 ||
+            !stoppedAuthorityRecord.StartsWith("VEILAPR1"u8) ||
+            installed.MinimumSequence == long.MaxValue ||
+            payload.Length is 0 or > 1048576 ||
+            newBaselinePublicKey.Length is 0 or > 4096 ||
+            newApprovalPublicKey.Length is 0 or > 4096)
+            throw new UnauthorizedAccessException("Invalid authority recovery inputs.");
+
+        byte[] stopped = stoppedAuthorityRecord.ToArray();
+        byte[] oldApprovalKey = stopped[8..];
+        byte[] baselineKey = newBaselinePublicKey.ToArray();
+        byte[] approvalKey = newApprovalPublicKey.ToArray();
+        byte[] document = payload.ToArray();
+        var recovery = new CefBaselineApprovalAuthority(recoveryPublicKey, independentRecoverySpkiSha256);
+        string recoveryId = CefSystemBaselineTrustState.KeyId(recovery.CopyPublicKey());
+        string oldApprovalId = CefSystemBaselineTrustState.KeyId(oldApprovalKey);
+        string oldBaselineId = CefSystemBaselineTrustState.KeyId(installed.CopyPublicKey());
+        string baselineId = CefSystemBaselineTrustState.KeyId(baselineKey);
+        string approvalId = CefSystemBaselineTrustState.KeyId(approvalKey);
+        var excluded = new HashSet<string>(installed.CopyRetiredKeyIds(), StringComparer.Ordinal);
+        excluded.Add(oldApprovalId);
+        excluded.Add(oldBaselineId);
+        if (!excluded.Add(baselineId) || !excluded.Add(approvalId) || !excluded.Add(recoveryId))
+            throw new UnauthorizedAccessException("Recovery key roles must be distinct and not retired.");
+
+        var validated = CefSignedSystemModuleBaseline.VerifyWithSequence(document, baselineSignature,
+            baselineKey, host, installed.MinimumSequence + 1);
+        // Carry both compromised key identities in the shared retired RSA
+        // history, so neither can return as a baseline or approval key.
+        var history = installed.CopyRetiredKeyIds().Append(oldBaselineId).Append(oldApprovalId)
+            .Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal).ToArray();
+        var replacement = CefSystemBaselineTrustState.CreateVerifiedRecord(document, baselineKey,
+            validated.Sequence, history);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData("VEIL-CEF-APPROVAL-RECOVERY-V1"u8);
+        hash.AppendData(SHA256.HashData(stopped));
+        hash.AppendData(SHA256.HashData(installed.CopyRecord()));
+        hash.AppendData(SHA256.HashData(approvalKey));
+        hash.AppendData(SHA256.HashData(replacement.CopyRecord()));
+        recovery.RequireApproval(hash.GetHashAndReset(), recoverySignature, installed, replacement);
+        return new(stopped, approvalKey, installed, replacement, host);
+    }
+
+    internal CefApprovalRecoveryStatus Classify(ReadOnlySpan<byte> authorityRecord,
+        CefSystemBaselineTrustState? baseline, CefSystemBaselineHost currentHost)
+    {
+        CefSystemBaselineHostObserver.RequireCurrent(host, currentHost);
+        if (CryptographicOperations.FixedTimeEquals(stoppedAuthority, authorityRecord))
+        {
+            if (previous.Matches(baseline)) return CefApprovalRecoveryStatus.StoppedOriginal;
+            if (next.Matches(baseline)) return CefApprovalRecoveryStatus.StoppedBaselineReplaced;
+        }
+        if (CryptographicOperations.FixedTimeEquals(newAuthority, authorityRecord) && next.Matches(baseline))
+            return CefApprovalRecoveryStatus.IntendedPairPresentUnconfirmed;
+        return CefApprovalRecoveryStatus.UnexpectedRequiresReview;
+    }
+
+    // Future transaction must hold the common writer lock. Baseline first,
+    // while the approval authority is still stopped; then verify/flush both
+    // records before publishing the new active authority LAST.
+    internal byte[] RequireBaselineStage(ReadOnlySpan<byte> authorityRecord,
+        CefSystemBaselineTrustState? baseline, CefSystemBaselineHost currentHost)
+    {
+        if (Classify(authorityRecord, baseline, currentHost) != CefApprovalRecoveryStatus.StoppedOriginal)
+            throw new UnauthorizedAccessException("Unexpected original recovery state.");
+        return next.CopyRecord();
+    }
+
+    internal byte[] RequireAuthorityStage(ReadOnlySpan<byte> authorityRecord,
+        CefSystemBaselineTrustState? baseline, CefSystemBaselineHost currentHost)
+    {
+        if (Classify(authorityRecord, baseline, currentHost) != CefApprovalRecoveryStatus.StoppedBaselineReplaced)
+            throw new UnauthorizedAccessException("Replacement baseline not present under stopped authority.");
+        return (byte[])newAuthority.Clone();
+    }
+}
