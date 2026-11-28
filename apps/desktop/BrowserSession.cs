@@ -15,6 +15,7 @@ internal sealed class BrowserSession
     private readonly BrowserSession? parent;
     private readonly List<BrowserSession> privateSessions = [];
     private bool ending, engineLost;
+    private readonly Dispatcher libraryDispatcher = Dispatcher.CurrentDispatcher;
     internal BrowserSession(string root, DownloadVault vault)
     {
         Root = root;
@@ -161,6 +162,25 @@ internal sealed class BrowserSession
     private readonly string? persistentStatePath;
     internal string StatePath => persistentStatePath ?? throw new InvalidOperationException("Private sessions have no state file.");
     internal BrowserData Data { get; }
+
+    // The existing mounted profile owns the path. An engine or library UI
+    // cannot choose a destination or borrow the main session's private data.
+    internal bool TrySaveLibrary(Func<bool> authorized)
+    {
+        libraryDispatcher.VerifyAccess();
+        if (IsPrivate || IsEnding || EngineLost || !EngineHost.IsReady || persistentStatePath is null ||
+            !authorized()) return false;
+        if (IsPrivate || IsEnding || EngineLost || !EngineHost.IsReady) return false;
+        try
+        {
+            Data.Save(persistentStatePath);
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
     internal Stack<ClosedTab> ClosedTabs { get; } = new();
     internal bool RestoringClosedTab { get; set; }
     internal int TabTransferDepth { get; set; }
