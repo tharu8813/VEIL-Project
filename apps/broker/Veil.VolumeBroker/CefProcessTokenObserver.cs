@@ -324,6 +324,30 @@ internal static class CefProcessTokenObserver
                 RequireCurrent();
             }
         }
+
+        // Prospective library access observation using the retained launch
+        // token. Not called by startup, IPC, or the diagnostic runtime.
+        internal void RequireLibraryAccess(CefProtectedProfileLease.LibraryFileInspection inspection)
+        {
+            ArgumentNullException.ThrowIfNull(inspection);
+            RequireCurrent();
+            if (!DuplicateTokenEx(duplicate, 0x000C, IntPtr.Zero, 2, 2, out var access))
+            {
+                int error = Marshal.GetLastWin32Error();
+                access?.Dispose();
+                throw new Win32Exception(error, "CEF library access token unavailable.");
+            }
+            using (access)
+            {
+                var snapshot = ReadTokenSnapshot(access, sourceSnapshot.Token.Identity, true, impersonation: true);
+                CefLaunchTokenPolicy.RequireDuplicate(duplicateSnapshot, snapshot);
+                RequireCurrent();
+                inspection.RequireUserAccess(access);
+                CefLaunchTokenPolicy.RequireSame(snapshot,
+                    ReadTokenSnapshot(access, sourceSnapshot.Token.Identity, true, impersonation: true));
+                RequireCurrent();
+            }
+        }
 #endif
 
 #if VEIL_CEF_BROKER

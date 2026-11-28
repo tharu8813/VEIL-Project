@@ -95,6 +95,16 @@ internal sealed class CefProtectedDirectoryLease : IDisposable
         RequireSameIdentity(handle, observed);
     }
 
+    // Check add-file and delete-child directory rights under the real user
+    // token. This is an OPEN_EXISTING access probe, not a rename permit.
+    internal void RequireLibraryDirectoryAccess()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        using var observed = OpenAccess(path, 0xE3); // list/add file/traverse/delete child/read attributes
+        RequireDirectory(observed, path, volume);
+        RequireSameIdentity(handle, observed);
+    }
+
     private static SafeFileHandle OpenAccess(string path, uint rights)
     {
         var result = CreateFileW(path, rights, FileShare.ReadWrite, IntPtr.Zero,
@@ -203,6 +213,16 @@ internal sealed class CefProtectedDirectoryLease : IDisposable
         {
             // READ_DATA | WRITE_DATA | APPEND_DATA | READ_ATTRIBUTES
             using var observed = OpenAccess(path, 0x87);
+            RequireRegularFile(observed, path, volume);
+            RequireSameIdentity(handle, observed);
+        }
+
+        // Committed data requires read access; staging additionally requires
+        // write and append. DELETE itself is intentionally not probed while
+        // the no-delete-sharing identity pin is retained.
+        internal void RequireLibraryDataAccess(bool staged)
+        {
+            using var observed = OpenAccess(path, staged ? 0x87u : 0x81u);
             RequireRegularFile(observed, path, volume);
             RequireSameIdentity(handle, observed);
         }
