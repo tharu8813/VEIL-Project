@@ -8,7 +8,8 @@ The trusted public SPKI, expected host identity and minimum allowed sequence are
 
 Remaining before integration:
 - Independently obtain authenticated OS-specific file and signer pins from a reviewed release pipeline. No production signing key or baseline is created by this code.
-- Establish protected trust-key installation, rotation/revocation and persistent minimum-sequence management; test rollback and update failures. The supplied minimum is not itself durable rollback protection.
+- Read-only installed trust reader: fixed HKLM 64-bit SOFTWARE\VEIL.CefSystemBaselineTrust, exact protected owner/DACL, no links or user-hive fallback, one binary TrustRecord. Format: VEILBST1 (8 ASCII), positive minimum sequence (LE int64), exact payload SHA-256 (32 bytes), SPKI size (LE int32), RSA SPKI. The exact digest prevents same-sequence substitution. VerifyInstalledTrust rechecks the snapshot around verification and inventories. Synthetic tests only; actual registry provisioning/ACL/link races NOT RUN.
+- Establish a reviewed administrator-only provisioning/update transaction, independent release trust anchor, key rotation/revocation and monotonic floor updates. The reader cannot prevent rollback of the entire registry by a privileged actor or VM snapshot. No automatic enrollment, key generation, or write path is provided.
 - A read-only observer now checks native x64 OS/process architecture, RtlGetVersion build and 64-bit HKLM CurrentBuildNumber/UBR twice. VerifyCurrentHost rechecks after signature validation and before/after inventory. Real servicing races and administrative registry trust remain unverified; metadata cannot establish loaded-image provenance.
 - Bind the resulting verifier to retained broker generation and runtime lease. Validate actual Windows catalog compatibility and protected CEF runtime in a disposable VM.
 - Keep WebView2 product path and startupEnabled=false. Synthetic tests and compilation do not satisfy Gate A–E.

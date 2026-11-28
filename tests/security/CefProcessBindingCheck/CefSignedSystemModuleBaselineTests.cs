@@ -99,6 +99,7 @@ internal static class CefSignedSystemModuleBaselineTests
             Sign(actualPayload), publicKey, 7);
         // Empty inventory exercises host binding only, not DLL trust.
         realHostVerifier.RequireModules([]);
+        CefSystemBaselineTrustStateTests.Run(publicKey, actualPayload, Sign(actualPayload));
         var wrongHost = Payload(build: actual.Build, revision: actual.UpdateRevision == 0 ? 1 : 0);
         Reject(() => CefSignedSystemModuleBaseline.VerifyCurrentHost(wrongHost, Sign(wrongHost), publicKey, 7));
         Console.WriteLine("PASS: native Windows build and HKLM revision binding, host-change refusal");

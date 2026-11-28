@@ -14,16 +14,43 @@ internal static class CefSignedSystemModuleBaseline
     private const int MaxPayloadBytes = 1024 * 1024;
     private const int MaxModules = 1024;
 
+    // Read-only installed trust path. Not connected to broker IPC/startup.
+    internal static CefSystemModuleVerifier VerifyInstalledTrust(
+        ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature)
+    {
+        var installed = CefSystemBaselineTrustRegistry.ReadStable();
+        return VerifyTrustedSnapshot(payload, signature, installed, CefSystemBaselineTrustRegistry.ReadStable);
+    }
+
+    internal static CefSystemModuleVerifier VerifyTrustedSnapshot(
+        ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature,
+        CefSystemBaselineTrustState installed, Func<CefSystemBaselineTrustState> readCurrent)
+    {
+        ArgumentNullException.ThrowIfNull(installed);
+        ArgumentNullException.ThrowIfNull(readCurrent);
+        if (payload.Length is 0 or > MaxPayloadBytes)
+            throw new UnauthorizedAccessException("Invalid system baseline payload size.");
+        byte[] document = payload.ToArray();
+        installed.RequirePayload(document);
+        void RequireTrust() => installed.RequireSame(readCurrent());
+        RequireTrust();
+        return VerifyCurrentHost(document, signature, installed.CopyPublicKey(),
+            installed.MinimumSequence, RequireTrust);
+    }
+
     // Use this path for real-host diagnostics, with independently trusted
     // key and sequence floor. Recheck the host before/after verification
     // and every subsequent module inventory check.
     internal static CefSystemModuleVerifier VerifyCurrentHost(
         ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature,
-        ReadOnlySpan<byte> trustedPublicKey, long minimumSequence)
+        ReadOnlySpan<byte> trustedPublicKey, long minimumSequence, Action? requireTrustCurrent = null)
     {
         var host = CefSystemBaselineHostObserver.Observe();
-        void RequireHost() => CefSystemBaselineHostObserver.RequireCurrent(host,
-            CefSystemBaselineHostObserver.Observe());
+        void RequireHost()
+        {
+            requireTrustCurrent?.Invoke();
+            CefSystemBaselineHostObserver.RequireCurrent(host, CefSystemBaselineHostObserver.Observe());
+        }
         var verifier = Verify(payload, signature, trustedPublicKey, host, minimumSequence, RequireHost);
         RequireHost();
         return verifier;
