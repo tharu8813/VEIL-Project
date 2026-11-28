@@ -38,7 +38,9 @@ test('tab transfer keeps source alive until adoption and defers intermediate sna
     assert.match(transfer, /finally\s*\{\s*session\.TabTransferDepth--;\s*SaveSession\(\);/);
     const detach = transfer.slice(transfer.indexOf('private void DetachTab'));
     assert.doesNotMatch(detach, /\b(?:Close|SaveTabs|SaveSession)\(\)/);
-    assert.match(session, /if \(IsPrivate \|\| TabTransferDepth != 0\) return;/);
+    const save = session.slice(session.indexOf('internal bool Save()'), session.indexOf('private bool CaptureOpenTabs()'));
+    assert.match(save, /if \(IsPrivate \|\| IsEnding \|\| TabTransferDepth != 0 \|\| persistentStatePath is null\) return false;/);
+    assert.match(save, /if \(!CaptureOpenTabs\(\) \|\| IsEnding\) return false;\s*Data\.Save\(persistentStatePath\);/);
 });
 test('a new window initializes before it adopts the tab and saves the completed layout', () => {
     const move = tabs.slice(tabs.indexOf('private BrowserWindow MoveTabToNewWindow'), tabs.indexOf('private static void DragWindowThenMerge'));

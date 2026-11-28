@@ -306,3 +306,5 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #288 exact head `51805c07a8588a51976d60267fc0dc8382fa3b04` Windows/Rust CI 46175662851 PASS, 독립 리뷰 없음.
 - 일반 BrowserSession.Save에도 이전 배치 rollback을 적용하고 실제 쓰기 성공 여부를 bool로 반환한다. dispatcher 확인, private/ending/transfer 및 불완전 복원 중 쓰기 거부. 엔진 손실 직후에는 기존 managed snapshot 저장을 허용하되 종료 후 쓰기는 거부한다. 엔진 crash 안내가 skip을 성공으로 표시하지 않도록 수정했다. 보호 종료 finally 순서 유지. fixture 프로필 scratch에서 .new 경로를 디렉터리로 막아 실제 파일 열기 실패, 기존 바이트/메모리 복원, 정상 재시도/readback을 확인하는 smoke 및 source contracts 작성. 새 CI, 실제 WPF runtime 및 보호 VM NOT RUN; 설정 데이터 직접 저장 경로는 별도 작업. CEF startupEnabled=false, WebView2 유지.
+
+- #289 최초 head `29633997f15180e524332f5c3f444d7c1f337c91` Windows CI 46176414282 FAIL: 이전 탭 이동 source contract가 `void Save()`의 return 형식을 요구했다. 일반 저장의 새 bool 반환/종료/transfer guard 및 실제 쓰기 전 snapshot 거부 조건을 검사하도록 수정했다. Rust PASS. 새 head CI 확인 필요; 기존 실패 증거 유지.
