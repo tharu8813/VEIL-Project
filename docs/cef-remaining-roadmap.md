@@ -221,3 +221,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - 기존 hash-bound `check-cef-nested-evidence.mjs`에서 schema 5의 선택적 mitigation 확장을 검증한다. 확장이 없던 과거 증거는 null로 유지하되 일부 필드만 존재하거나 관측 수/상태/정확한 6개 uint32 flags/오류가 모순이면 거부한다. 역할별 관측 수, 누락 PID 및 서로 다른 raw flag 조합을 집계하며 0을 누락과 혼동하거나 값 평균으로 정책 차이를 숨기지 않는다. 새로운 구조 검증 및 이전 schema 호환 회귀 시험을 추가했다. 자체 보고의 일관성일 뿐 실제 신뢰성/전체 수명/허용 기준은 NOT ESTABLISHED.
 - #270 수정 head Windows CI 46163853866 PASS, #271 head Windows CI 46163947798 PASS, Native 46163947800 실행 중 확인. 독립 리뷰 없음. 새 CI 및 실제 일반 사용자 CEF/보호 VM 실행 NOT RUN. 역할 허용 범위, Job cap=1, startupEnabled=false, WebView2 유지.
+
+### P2-05 실측 수집 목표 검사 및 실행 번들 확보 (미완료)
+
+- #271 exact head Windows 46163947798 / Native 46163947800 PASS, #272 exact head Windows 46164440580 PASS. Native 실행에서 mitigation 지원 nested bundle artifact 15270802631 확인(merge checkout `287cd139cc779765c59d09221914647f009c948a`, PR head `08f52fa25c67d1741581a7317a3cfcf412b69453`). 만료 전 사용하거나 정확한 새 checkout으로 재빌드한다. README에 일반 사용자 실행 및 분석 명령을 기록했다.
+- 기존 분석 CLI에 `--require-mitigation-collection` 선택 모드를 추가한다. Browser/Renderer/GPU/Network/Utility 표본, 정책 조회 성공, Unknown 부재 및 기록된 Job start의 live sample 대응을 요구한다. 미충족은 JSON 진단과 exit 1, 이전 증거는 일반 검토에서 호환한다. 다섯 역할이 모든 환경에서 반드시 실행된다는 보장은 없으며 best-effort Job 알림 및 마지막 표본에 한정된다. 실제 VM 실측, 독립 리뷰, 새 CI 및 역할별 보안 허용 기준 NOT RUN/NOT ESTABLISHED. 제품 실행 차단/Job cap=1/WebView2 유지.
