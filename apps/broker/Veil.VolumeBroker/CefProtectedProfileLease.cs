@@ -291,6 +291,33 @@ internal sealed class CefProtectedProfileLease : IDisposable
             }
         }
 
+        // Access observation only. No user handle escapes the impersonation
+        // scope and no broker status call occurs inside it.
+        internal void RequireUserAccess(SafeAccessTokenHandle access)
+        {
+            ArgumentNullException.ThrowIfNull(access);
+            RequireCurrent();
+            try
+            {
+                if (access.IsInvalid || access.IsClosed)
+                    throw new UnauthorizedAccessException("CEF library access token unavailable.");
+                WindowsIdentity.RunImpersonated(access, () =>
+                {
+                    // The final four retained directories are EngineRoot,
+                    // Cache, Scratch and Logs in CefProfileLayout order.
+                    owner.directories[^4].RequireLibraryDirectoryAccess();
+                    committed.RequireLibraryDataAccess(staged: false);
+                    staged.RequireLibraryDataAccess(staged: true);
+                });
+                RequireCurrent();
+            }
+            catch
+            {
+                owner.retired = true;
+                throw;
+            }
+        }
+
         public void Dispose()
         {
             if (disposed) return;

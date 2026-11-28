@@ -429,6 +429,65 @@ try
                 Console.WriteLine("PASS: opt-in standard-user token profile access");
             }
         }
+        // Library data access is read-only inspection under the fixture user
+        // token. Denied ACLs must not be retried as the service identity.
+        File.WriteAllText(libraryPath, "committed-acl-synthetic");
+        File.WriteAllText(libraryStage, "staged-acl-synthetic");
+        using (var libraryAclProfile = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority))
+        using (var libraryAclInspection = libraryAclProfile.InspectLibraryFiles())
+        {
+            libraryAclInspection.RequireUserAccess(fixtureUser.AccessToken);
+            if (Environment.GetEnvironmentVariable("VEIL_TEST_STANDARD_USER_PROFILE_ACCESS") == "1")
+            {
+                using var process = Process.GetCurrentProcess();
+                using var token = CefProcessTokenObserver.LaunchTokenLease.Acquire(process.SafeHandle,
+                    Native.ObserveProcess(process.SafeHandle));
+                token.RequireLibraryAccess(libraryAclInspection);
+            }
+        }
+        foreach (var (file, deniedRight) in new[] {
+            (libraryPath, FileSystemRights.ReadData),
+            (libraryStage, FileSystemRights.WriteData),
+            (libraryStage, FileSystemRights.AppendData) })
+        {
+            var info = new FileInfo(file);
+            var originalFileAcl = info.GetAccessControl();
+            var deniedFileAcl = info.GetAccessControl();
+            deniedFileAcl.AddAccessRule(new FileSystemAccessRule(fixtureUser.User!, deniedRight, AccessControlType.Deny));
+            using var deniedLibraryProfile = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+                fixtureWindows, () => fixtureStatus, () => authority);
+            using var deniedInspection = deniedLibraryProfile.InspectLibraryFiles();
+            try
+            {
+                info.SetAccessControl(deniedFileAcl);
+                Reject(() => deniedInspection.RequireUserAccess(fixtureUser.AccessToken));
+            }
+            finally { info.SetAccessControl(originalFileAcl); }
+            Reject(() => deniedInspection.RequireUserAccess(fixtureUser.AccessToken));
+        }
+        foreach (var deniedRight in new[] { FileSystemRights.CreateFiles, FileSystemRights.DeleteSubdirectoriesAndFiles })
+        {
+            var directory = new DirectoryInfo(profileLayout.EngineRoot);
+            var originalDirectoryAcl = directory.GetAccessControl();
+            var deniedDirectoryAcl = directory.GetAccessControl();
+            deniedDirectoryAcl.AddAccessRule(new FileSystemAccessRule(fixtureUser.User!, deniedRight, AccessControlType.Deny));
+            using var deniedLibraryProfile = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+                fixtureWindows, () => fixtureStatus, () => authority);
+            using var deniedInspection = deniedLibraryProfile.InspectLibraryFiles();
+            try
+            {
+                directory.SetAccessControl(deniedDirectoryAcl);
+                Reject(() => deniedInspection.RequireUserAccess(fixtureUser.AccessToken));
+            }
+            finally { directory.SetAccessControl(originalDirectoryAcl); }
+            Reject(() => deniedInspection.RequireCurrent());
+        }
+        Check(File.ReadAllText(libraryPath) == "committed-acl-synthetic" &&
+            File.ReadAllText(libraryStage) == "staged-acl-synthetic", "Library access probes changed data.");
+        File.Delete(libraryPath);
+        File.Delete(libraryStage);
+        Console.WriteLine("PASS: CEF library user-token data and directory ACL refusal (synthetic protection)");
         var scratch = new DirectoryInfo(profileLayout.Scratch);
         var originalAcl = scratch.GetAccessControl();
         var deniedAcl = scratch.GetAccessControl();

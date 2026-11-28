@@ -1438,3 +1438,19 @@ test('test-only native library first publication uses retained source identity a
     assert.doesNotMatch(pin, /\bFile\.(?:Move|Replace)\(/);
 });
 
+
+
+test('prospective library access uses retained user token and actual fixed file and directory rights without service fallback', async () => {
+    const pin = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedDirectoryLease.cs', 'utf8');
+    const profile = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedProfileLease.cs', 'utf8');
+    const observer = await readFile('apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    assert.match(pin, /RequireLibraryDirectoryAccess\(\)[\s\S]*?OpenAccess\(path, 0xE3\);[\s\S]*?RequireDirectory\(observed, path, volume\);\s*RequireSameIdentity\(handle, observed\);/);
+    assert.match(pin, /RequireLibraryDataAccess\(bool staged\)\s*\{\s*using var observed = OpenAccess\(path, staged \? 0x87u : 0x81u\);\s*RequireRegularFile\(observed, path, volume\);\s*RequireSameIdentity\(handle, observed\);/);
+    assert.match(profile, /WindowsIdentity.RunImpersonated\(access, \(\) =>\s*\{[\s\S]*?owner.directories\[\^4\].RequireLibraryDirectoryAccess\(\);\s*committed.RequireLibraryDataAccess\(staged: false\);\s*staged.RequireLibraryDataAccess\(staged: true\);\s*\}\);\s*RequireCurrent\(\);[\s\S]*?owner.retired = true;/);
+    assert.match(observer, /RequireLibraryAccess\(CefProtectedProfileLease.LibraryFileInspection inspection\)[\s\S]*?RequireCurrent\(\);\s*if \(!DuplicateTokenEx\(duplicate, 0x000C, IntPtr.Zero, 2, 2, out var access\)\)[\s\S]*?CefLaunchTokenPolicy.RequireDuplicate\(duplicateSnapshot, snapshot\);\s*RequireCurrent\(\);\s*inspection.RequireUserAccess\(access\);\s*CefLaunchTokenPolicy.RequireSame\(snapshot,[\s\S]*?RequireCurrent\(\);/);
+    assert.match(fixture, /FileSystemRights.ReadData[\s\S]*?FileSystemRights.WriteData[\s\S]*?FileSystemRights.AppendData[\s\S]*?Reject\(\(\) => deniedInspection.RequireUserAccess\(fixtureUser.AccessToken\)\);[\s\S]*?FileSystemRights.CreateFiles, FileSystemRights.DeleteSubdirectoriesAndFiles/);
+    assert.doesNotMatch(broker, /\bRequireLibraryAccess\s*\(/);
+});
+
