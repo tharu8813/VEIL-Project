@@ -773,7 +773,7 @@ test('CEF tab status publication is scoped to live tab and current navigation id
     assert.match(cefTabbed, /request.IsRedirected && tab.PendingNavigationId != request.NavigationId/);
     assert.match(cefTabbed, /!request.IsRedirected && request.NavigationId <= tab.LastNavigationId/);
     assert.match(cefTabbed, /view.NavigationCompleted \+= \(_, completed\) =>\s*\{\s*if \(!AcceptTabEvent\(tab\) \|\| completed.NavigationId == 0 \|\|\s*tab.PendingNavigationId != completed.NavigationId\) return;\s*tab.PendingNavigationId = 0;/);
-    assert.match(cefTabbed, /view.ProcessFailed \+= \(_, failure\) =>\s*\{\s*if \(!AcceptTabEvent\(tab\)\) return;\s*tab.PendingNavigationId = 0;\s*SetTabStatus\(tab, "CEF child process failed."\);/);
+    assert.match(cefTabbed, /view.ProcessFailed \+= \(_, failure\) =>\s*\{\s*if \(!AcceptTabEvent\(tab\)\) return;\s*tab.PendingNavigationId = 0;\s*if \(ReferenceEquals\(active, tab\)\) InvalidateFindUi\(\);\s*SetTabStatus\(tab, "CEF child process failed."\);/);
     assert.match(cefTabbed, /tab.LastSource = tab.View.Source;\s*status.Text = tab.Status;/);
     assert.match(cefTabbed, /SetTabStatus\(first, "Synthetic background status."\);[\s\S]*?Per-tab completion state and synthetic background status remained isolated/);
 });
