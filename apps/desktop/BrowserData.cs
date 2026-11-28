@@ -65,6 +65,24 @@ internal sealed class BrowserData
         return data;
     }
 
+    // CaptureOpenTabs replaces the layout collections; preserve the previous
+    // references and scalar values until the combined library write succeeds.
+    internal bool TryCommitTabLayout(Func<bool> commit)
+    {
+        var previous = (Tabs, Selected, PinnedCount, Windows);
+        bool committed = false;
+        try
+        {
+            committed = commit();
+            return committed;
+        }
+        finally
+        {
+            if (!committed)
+                (Tabs, Selected, PinnedCount, Windows) = previous;
+        }
+    }
+
     internal void Save(string path)
     {
         string temporary = path + ".new";

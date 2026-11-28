@@ -296,3 +296,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #286 exact Windows 46174176704 PASS; native workflow not triggered. 독립 리뷰 없음.
 - 기존 제품 완료 이벤트에서 동일 navigation ID 중복 방지, live owner/session/tab/navigation epoch/current source 검증과 LibraryMutation history rollback, 저장 성공 후 history UI publish를 연결했다. TrySaveLibrary 선택적 captureTabs로 기존 완료 시 tab+history 한 번의 저장을 유지하며 복원/이동 중에는 마지막 완전한 layout을 보존한다. 실패 시 history를 복구하고 자동 중복 저장을 피한다(메모리 tab layout snapshot은 기존 방식처럼 이후 저장 대상). 기존 JSON schema 및 저장 경로 유지. 기존 WebView2 동작에 적용되며 CEF fixture 영구 저장은 여전히 비활성. Desktop smoke에 합성 실패/성공 및 중복 완료와 실제 state readback 검사를 작성. 신규 CI/desktop runtime/보호 VM/독립 리뷰 미검증. 실제 물리 volume lock/relock 증거 아님. startupEnabled=false 유지.
+
+### P3-02 방문 기록과 탭 배치 저장 실패의 동시 rollback (미완료)
+
+- #287 정확한 head `5ff4262ea91afe88d64769fbd63536adad680386` Windows/Rust CI 46175279128 PASS. 독립 리뷰 없음. #229의 main 실패 수정 Windows/Rust/native CI PASS이나 아직 미병합.
+- 방문 기록 저장 실패/권한 거부/예외 때 history와 같은 상태 파일에 포함되는 primary tabs, selected, pinned count, additional windows의 이전 메모리 스냅샷을 함께 복원한다. 모든 창의 snapshot 수집 후에만 배치를 갱신한다. 새 합성 desktop smoke 및 source contract 작성. 일반 Save() 실패의 rollback, 물리 디스크/BitLocker 및 실제 WPF runtime 검증은 범위 밖. CEF fixture는 메모리 전용, 제품 WebView2 및 startupEnabled=false 유지. 신규 CI/독립 리뷰 미확인.

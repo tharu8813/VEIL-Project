@@ -173,12 +173,17 @@ internal sealed class BrowserSession
         if (IsPrivate || IsEnding || EngineLost || !EngineHost.IsReady) return false;
         try
         {
-            // History and tab layout share one state file. During restoration
-            // or transfer retain the last complete layout, not a partial snapshot.
-            if (captureTabs) CaptureOpenTabs();
-            if (!authorized() || IsPrivate || IsEnding || EngineLost || !EngineHost.IsReady) return false;
-            Data.Save(persistentStatePath);
-            return true;
+            bool Commit()
+            {
+                // History and tab layout share one state file. During restoration
+                // or transfer retain the last complete layout, not a partial snapshot.
+                if (captureTabs) CaptureOpenTabs();
+                if (!authorized() || IsPrivate || IsEnding || EngineLost || !EngineHost.IsReady ||
+                    persistentStatePath is null) return false;
+                Data.Save(persistentStatePath);
+                return true;
+            }
+            return captureTabs ? Data.TryCommitTabLayout(Commit) : Commit();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -223,15 +228,16 @@ internal sealed class BrowserSession
         var open = Windows.Where(window => !window.IsClosing).ToList();
         if (open.Count == 0 || open.Any(window => window.IsRestoring)) return false;
         var (tabs, selected) = open[0].Snapshot();
-        Data.Tabs = tabs;
-        Data.Selected = selected;
-        Data.PinnedCount = open[0].PinnedTabCount;
-        Data.Windows = open.Count == 1 ? null :
+        int pinned = open[0].PinnedTabCount;
+        var additional = open.Count == 1 ? null :
             open.Skip(1).Select(window =>
             {
                 var snapshot = window.Snapshot();
                 return new WindowTabs(snapshot.Tabs, snapshot.Selected, window.PinnedTabCount);
             }).ToList();
+        // Publish only after every window has supplied its complete snapshot.
+        (Data.Tabs, Data.Selected, Data.PinnedCount, Data.Windows) =
+            (tabs, selected, pinned, additional);
         return true;
     }
 }

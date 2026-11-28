@@ -103,6 +103,43 @@ public partial class BrowserWindow
                     ReferenceEquals(localData.History[0], pendingVisit),
                     "successful automatic history commit publishes exact entry");
                 localData.History.RemoveAt(0);
+                localData.Tabs = ["https://example.test/original", "https://example.test/selected"];
+                localData.Selected = 1;
+                localData.PinnedCount = 1;
+                localData.Windows = [new WindowTabs(["https://example.test/other"], 0, 1)];
+                var oldTabs = localData.Tabs;
+                var oldWindows = localData.Windows;
+                void CaptureReplacement()
+                {
+                    localData.Tabs = ["https://example.test/replacement"];
+                    localData.Selected = 0;
+                    localData.PinnedCount = 0;
+                    localData.Windows = null;
+                }
+                bool OriginalLayout() => ReferenceEquals(localData.Tabs, oldTabs) &&
+                    ReferenceEquals(localData.Windows, oldWindows) &&
+                    localData.Selected == 1 && localData.PinnedCount == 1;
+                Check(!LibraryMutation.TryCommit(localData.History, null, () => true,
+                    () => localData.History.Insert(0, pendingVisit),
+                    () => localData.TryCommitTabLayout(() => { CaptureReplacement(); return false; })) &&
+                    localData.History.SequenceEqual(originalHistory) && OriginalLayout(),
+                    "failed combined history and tab commit restores both snapshots");
+                Check(!LibraryMutation.TryCommit(localData.History, null, () => true,
+                    () => localData.History.Insert(0, pendingVisit),
+                    () => localData.TryCommitTabLayout(() =>
+                    {
+                        CaptureReplacement();
+                        throw new IOException("Synthetic state write failure");
+                    })) && localData.History.SequenceEqual(originalHistory) && OriginalLayout(),
+                    "combined state write exception restores history and tab layout");
+                Check(LibraryMutation.TryCommit(localData.History, null, () => true,
+                    () => localData.History.Insert(0, pendingVisit),
+                    () => localData.TryCommitTabLayout(() => { CaptureReplacement(); return true; })) &&
+                    ReferenceEquals(localData.History[0], pendingVisit) &&
+                    localData.Tabs.Single() == "https://example.test/replacement" &&
+                    localData.Selected == 0 && localData.PinnedCount == 0 && localData.Windows is null,
+                    "successful combined commit retains history and replacement layout");
+                localData.History.RemoveAt(0);
                 const string bookmarksHtml = """
                     <!DOCTYPE NETSCAPE-Bookmark-file-1>
                     <DL><p><DT><H3>Study &amp; Code</H3><DL><p>
