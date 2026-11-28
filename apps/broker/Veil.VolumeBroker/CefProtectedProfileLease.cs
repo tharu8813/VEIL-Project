@@ -15,13 +15,14 @@ internal sealed class CefProtectedProfileLease : IDisposable
     private readonly Func<BackendStatus> readStatus;
     private readonly Func<bool> authorityCurrent;
     private readonly List<CefProtectedDirectoryLease> directories;
+    private readonly CefProtectedDirectoryLease.RegularFilePin? log;
     private bool retired;
     private bool disposed;
 
     private CefProtectedProfileLease(CefProfileLayout layout,
         IReadOnlyDictionary<string, string?> environment, string volume,
         Func<BackendStatus> readStatus, Func<bool> authorityCurrent,
-        List<CefProtectedDirectoryLease> directories)
+        List<CefProtectedDirectoryLease> directories, CefProtectedDirectoryLease.RegularFilePin? log)
     {
         this.layout = layout;
         this.environment = environment;
@@ -29,6 +30,7 @@ internal sealed class CefProtectedProfileLease : IDisposable
         this.readStatus = readStatus;
         this.authorityCurrent = authorityCurrent;
         this.directories = directories;
+        this.log = log;
     }
 
     internal static CefProtectedProfileLease Open(string registeredProductRoot,
@@ -54,6 +56,7 @@ internal sealed class CefProtectedProfileLease : IDisposable
             ancestors.Push(path);
         }
         var pins = new List<CefProtectedDirectoryLease>(ancestors.Count + 4);
+        CefProtectedDirectoryLease.RegularFilePin? log = null;
         try
         {
             foreach (string path in ancestors.Concat(layout.Directories))
@@ -61,13 +64,16 @@ internal sealed class CefProtectedProfileLease : IDisposable
                 RequireAuthority(registeredVolume, readStatus, authorityCurrent);
                 pins.Add(CefProtectedDirectoryLease.Open(path, registeredVolume, readStatus));
             }
+            if (LogExists(layout.LogFile))
+                log = CefProtectedDirectoryLease.OpenRegularFile(layout.LogFile, registeredVolume, readStatus);
             var lease = new CefProtectedProfileLease(layout, environment, registeredVolume,
-                readStatus, authorityCurrent, pins);
+                readStatus, authorityCurrent, pins, log);
             lease.RequireCurrent();
             return lease;
         }
         catch
         {
+            log?.Dispose();
             for (int i = pins.Count - 1; i >= 0; --i) pins[i].Dispose();
             throw;
         }
@@ -83,14 +89,59 @@ internal sealed class CefProtectedProfileLease : IDisposable
             throw new UnauthorizedAccessException("CEF profile generation changed.");
     }
 
-    // Initial probe supports an absent log only. Existing files (including
-    // links), directories and uncertain I/O results are refused. A separate
-    // retained file policy is required before using existing log files.
-    private void RequireAbsentLog()
+    private static bool LogExists(string path)
     {
-        try { _ = File.GetAttributes(layout.LogFile); }
-        catch (FileNotFoundException) { return; }
-        throw new UnauthorizedAccessException("CEF existing log requires separate verification.");
+        try { _ = File.GetAttributes(path); return true; }
+        catch (FileNotFoundException) { return false; }
+    }
+
+    private void RequireLog()
+    {
+        if (log is not null)
+            log.RequireCurrent(readStatus);
+        else if (LogExists(layout.LogFile))
+            throw new UnauthorizedAccessException("CEF log appeared after preparation.");
+    }
+
+    // Bounded snapshot of the existing CEF subtree, not continuous
+    // filesystem monitoring. Keep the current ancestor chain open during
+    // traversal; never follow an unverified directory or skip hidden files.
+    private void InspectExistingTree()
+    {
+        int visited = 0;
+        var options = new EnumerationOptions
+        {
+            AttributesToSkip = 0,
+            IgnoreInaccessible = false,
+            RecurseSubdirectories = false,
+            ReturnSpecialDirectories = false,
+        };
+
+        void Inspect(string path, int depth)
+        {
+            if (depth > 64)
+                throw new UnauthorizedAccessException("CEF subtree depth exceeds bound.");
+            using var directory = CefProtectedDirectoryLease.Open(path, volume, readStatus);
+            foreach (string entry in Directory.EnumerateFileSystemEntries(path, "*", options))
+            {
+                if (++visited > 100000)
+                    throw new UnauthorizedAccessException("CEF subtree entry count exceeds bound.");
+                if (!authorityCurrent())
+                    throw new UnauthorizedAccessException("CEF profile generation changed.");
+                var attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new UnauthorizedAccessException("CEF subtree contains redirected entry.");
+                if ((attributes & FileAttributes.Directory) != 0)
+                    Inspect(entry, depth + 1);
+                else
+                {
+                    using var file = CefProtectedDirectoryLease.OpenRegularFile(entry, volume, readStatus);
+                }
+            }
+            directory.RequireCurrent(readStatus);
+        }
+
+        Inspect(layout.EngineRoot, 0);
     }
 
     internal void RequireCurrent()
@@ -102,7 +153,9 @@ internal sealed class CefProtectedProfileLease : IDisposable
         {
             RequireAuthority(volume, readStatus, authorityCurrent);
             foreach (var directory in directories) directory.RequireCurrent(readStatus);
-            RequireAbsentLog();
+            RequireLog();
+            InspectExistingTree();
+            RequireLog();
             RequireAuthority(volume, readStatus, authorityCurrent);
         }
         catch
@@ -124,6 +177,7 @@ internal sealed class CefProtectedProfileLease : IDisposable
     {
         if (disposed) return;
         retired = disposed = true;
+        log?.Dispose();
         for (int i = directories.Count - 1; i >= 0; --i) directories[i].Dispose();
     }
 }

@@ -1021,11 +1021,27 @@ test('protected profile lease pins ancestors and all fixed directories before ex
     const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
     const prep = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
     assert.match(profile, /RequireAuthority\(registeredVolume, readStatus, authorityCurrent\);\s*var environment = CefChildEnvironmentPlan.BuildBrokerProtected[\s\S]*?ancestors.Push\(path\);[\s\S]*?foreach \(string path in ancestors.Concat\(layout.Directories\)\)[\s\S]*?pins.Add\(CefProtectedDirectoryLease.Open\(path, registeredVolume, readStatus\)\);[\s\S]*?lease.RequireCurrent\(\);\s*return lease;/);
-    assert.match(profile, /catch\s*\{\s*for \(int i = pins.Count - 1; i >= 0; --i\) pins\[i\].Dispose\(\);\s*throw;/);
+    assert.match(profile, /catch\s*\{\s*log\?\.Dispose\(\);\s*for \(int i = pins.Count - 1; i >= 0; --i\) pins\[i\].Dispose\(\);\s*throw;/);
     assert.match(profile, /if \(!authorityCurrent\(\)\)[\s\S]*?CefProtectedDirectoryLease.RequireRegisteredProtection\(volume, readStatus\(\)\);[\s\S]*?if \(!authorityCurrent\(\)\)/);
-    assert.match(profile, /if \(retired\)[\s\S]*?RequireAuthority\(volume, readStatus, authorityCurrent\);\s*foreach \(var directory in directories\) directory.RequireCurrent\(readStatus\);\s*RequireAbsentLog\(\);\s*RequireAuthority\(volume, readStatus, authorityCurrent\);[\s\S]*?catch\s*\{\s*retired = true;\s*throw;/);
-    assert.match(profile, /try \{ _ = File.GetAttributes\(layout.LogFile\); \}\s*catch \(FileNotFoundException\) \{ return; \}\s*throw new UnauthorizedAccessException/);
+    assert.match(profile, /if \(retired\)[\s\S]*?RequireAuthority\(volume, readStatus, authorityCurrent\);\s*foreach \(var directory in directories\) directory.RequireCurrent\(readStatus\);\s*RequireLog\(\);\s*InspectExistingTree\(\);\s*RequireLog\(\);\s*RequireAuthority\(volume, readStatus, authorityCurrent\);[\s\S]*?catch\s*\{\s*retired = true;\s*throw;/);
+    assert.match(profile, /try \{ _ = File.GetAttributes\(path\); return true; \}\s*catch \(FileNotFoundException\) \{ return false; \}/);
+    assert.match(profile, /if \(log is not null\)\s*log.RequireCurrent\(readStatus\);\s*else if \(LogExists\(layout.LogFile\)\)\s*throw new UnauthorizedAccessException/);
     assert.match(profile, /VerifiedEnvironment\(\)\s*\{\s*RequireCurrent\(\);\s*return environment;/);
     assert.doesNotMatch(profile, /Directory\.CreateDirectory|File\.Write|Process\.Start|ResumeRetainedRoot/);
     assert.doesNotMatch(broker + prep, /CefProtectedProfileLease|VerifiedEnvironment\(/);
+});
+
+
+test('existing CEF log is pinned and descendant snapshot rejects redirected or multiply-linked files', async () => {
+    const pin = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedDirectoryLease.cs', 'utf8');
+    const profile = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedProfileLease.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    assert.match(pin, /internal static RegularFilePin OpenRegularFile[\s\S]*?var handle = OpenDirectory\(path\);[\s\S]*?RequireRegularFile\(handle, path, volume\);/);
+    assert.match(pin, /private static void RequireRegularFile[\s\S]*?FileAttributes.Directory \| \(uint\)FileAttributes.ReparsePoint[\s\S]*?info.Links != 1[\s\S]*?FinalPath\(handle, 0\)[\s\S]*?FinalPath\(handle, 1\)/);
+    assert.match(pin, /internal sealed class RegularFilePin[\s\S]*?RequireRegularFile\(handle, path, volume\);[\s\S]*?RequireRegularFile\(current, path, volume\);[\s\S]*?original.IndexHigh != observed.IndexHigh \|\| original.IndexLow != observed.IndexLow/);
+    assert.match(profile, /if \(LogExists\(layout.LogFile\)\)\s*log = CefProtectedDirectoryLease.OpenRegularFile/);
+    assert.match(profile, /AttributesToSkip = 0,\s*IgnoreInaccessible = false,\s*RecurseSubdirectories = false/);
+    assert.match(profile, /if \(depth > 64\)[\s\S]*?using var directory = CefProtectedDirectoryLease.Open[\s\S]*?if \(\+\+visited > 100000\)[\s\S]*?FileAttributes.ReparsePoint[\s\S]*?Inspect\(entry, depth \+ 1\);[\s\S]*?using var file = CefProtectedDirectoryLease.OpenRegularFile/);
+    assert.match(fixture, /CreateHardLinkW\(alias, payload, IntPtr.Zero\)[\s\S]*?Reject\(\(\) => profile.RequireCurrent\(\)\);[\s\S]*?CreateHardLinkW\(alias, profileLayout.LogFile, IntPtr.Zero\)/);
+    assert.doesNotMatch(profile, /File\.Write|Directory\.CreateDirectory|Process\.Start/);
 });

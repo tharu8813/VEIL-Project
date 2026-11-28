@@ -92,6 +92,34 @@ try
         File.Delete(profileLayout.LogFile);
         Reject(() => profile.RequireCurrent());
     }
+    // Existing regular log and nested regular files can be observed
+    // without modifying their data. A new hard link must retire the lease.
+    string nested = Path.Combine(profileLayout.Cache, "nested");
+    Directory.CreateDirectory(nested);
+    string payload = Path.Combine(nested, "data.bin");
+    string alias = Path.Combine(profileLayout.Scratch, "alias.bin");
+    File.WriteAllText(payload, "synthetic-data");
+    File.WriteAllText(profileLayout.LogFile, "synthetic-log");
+    using (var profile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        profile.RequireCurrent();
+        Check(File.ReadAllText(profileLayout.LogFile) == "synthetic-log" &&
+            File.ReadAllText(payload) == "synthetic-data", "Profile inspection modified data.");
+        Check(CreateHardLinkW(alias, payload, IntPtr.Zero), "Cannot create fixture hard link.");
+        Reject(() => profile.RequireCurrent());
+        File.Delete(alias);
+        Reject(() => profile.RequireCurrent());
+    }
+    Check(CreateHardLinkW(alias, profileLayout.LogFile, IntPtr.Zero), "Cannot create fixture log hard link.");
+    Reject(() =>
+    {
+        using var linked = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority);
+    });
+    File.Delete(alias);
+    File.Delete(profileLayout.LogFile);
+    Directory.Delete(nested, recursive: true);
     Directory.Delete(profileLayout.Cache);
     bool missingRefused = false;
     try { using var missing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
@@ -377,3 +405,9 @@ static extern bool TerminateJobObject(Microsoft.Win32.SafeHandles.SafeFileHandle
     ExactSpelling = true, SetLastError = true)]
 [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
 static extern bool GetVolumeNameForVolumeMountPointW(string root, System.Text.StringBuilder name, uint length);
+
+
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode,
+    ExactSpelling = true, SetLastError = true)]
+[return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+static extern bool CreateHardLinkW(string newName, string existingName, IntPtr reserved);

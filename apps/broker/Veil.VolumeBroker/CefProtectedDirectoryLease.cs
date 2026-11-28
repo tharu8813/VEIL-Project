@@ -122,6 +122,54 @@ internal sealed class CefProtectedDirectoryLease : IDisposable
             throw new UnauthorizedAccessException("CEF directory is outside the registered volume.");
     }
 
+    // File opens use the same no-follow, metadata-only, no-delete-sharing
+    // flags as directory opens. A log may be written by its future owner,
+    // but cannot be replaced through ordinary delete/rename while pinned.
+    internal static RegularFilePin OpenRegularFile(string path, string volume, Func<BackendStatus> readStatus)
+    {
+        RequireCanonicalPath(path);
+        RequireRegisteredProtection(volume, readStatus());
+        var handle = OpenDirectory(path);
+        try
+        {
+            RequireRegularFile(handle, path, volume);
+            RequireRegisteredProtection(volume, readStatus());
+            return new RegularFilePin(path, volume, handle);
+        }
+        catch { handle.Dispose(); throw; }
+    }
+
+    private static void RequireRegularFile(SafeFileHandle handle, string path, string volume)
+    {
+        var info = Identity(handle);
+        if ((info.Attributes & ((uint)FileAttributes.Directory | (uint)FileAttributes.ReparsePoint)) != 0 ||
+            info.Links != 1)
+            throw new UnauthorizedAccessException("CEF file is redirected, linked or not regular.");
+        string relative = path[Path.GetPathRoot(path)!.Length..];
+        if (!string.Equals(FinalPath(handle, 0), @"\\?\" + path, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(FinalPath(handle, 1), volume + relative, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("CEF file resolves outside its expected location.");
+    }
+
+    internal sealed class RegularFilePin(string path, string volume, SafeFileHandle handle) : IDisposable
+    {
+        internal void RequireCurrent(Func<BackendStatus> readStatus)
+        {
+            RequireRegisteredProtection(volume, readStatus());
+            RequireRegularFile(handle, path, volume);
+            using var current = OpenDirectory(path);
+            RequireRegularFile(current, path, volume);
+            var original = Identity(handle);
+            var observed = Identity(current);
+            if (original.VolumeSerial != observed.VolumeSerial ||
+                original.IndexHigh != observed.IndexHigh || original.IndexLow != observed.IndexLow)
+                throw new UnauthorizedAccessException("CEF regular file identity changed.");
+            RequireRegisteredProtection(volume, readStatus());
+        }
+
+        public void Dispose() => handle.Dispose();
+    }
+
     private static string FinalPath(SafeFileHandle handle, uint flags)
     {
         var buffer = new StringBuilder(32768);
