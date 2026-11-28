@@ -635,3 +635,14 @@ test('preflight success requires explicit exact-volume cleanup before best-effor
     assert.match(close, /locked\.Unlocked \|\| !locked\.ReadyToUnlock/);
     assert.match(close, /if \(attachedHere\)[\s\S]*?detach\(\);[\s\S]*?query\(\) is not null/);
 });
+
+
+test('authenticated owner is monitored even without an active CEF candidate', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const unlock = broker.slice(broker.indexOf('case BrokerCommand.Unlock:'), broker.indexOf('case BrokerCommand.Lock when'));
+    assert.match(unlock, /var authority = new CefAuthenticatedGeneration\(client, unlockOwner!\);\s*authenticatedGeneration = authority;\s*if \(!RefreshAuthenticatedOwner\(status\)\)[\s\S]*?else\s*_ = MonitorAuthenticatedGenerationAsync\(authority\);/);
+    const monitor = broker.slice(broker.indexOf('private async Task MonitorAuthenticatedGenerationAsync('), broker.indexOf('private async Task MonitorCompletedPreflightAsync('));
+    assert.match(monitor, /await Task\.Delay\(TimeSpan\.FromSeconds\(1\)\);\s*await serial\.WaitAsync\(\);[\s\S]*?if \(!ReferenceEquals\(authenticatedGeneration, expected\)\) return;\s*if \(!RefreshAuthenticatedOwner\(backend\.Status\(\)\)\) return;/);
+    assert.match(monitor, /catch \(Exception error\)[\s\S]*?if \(ReferenceEquals\(authenticatedGeneration, expected\)\)\s*ClearAuthenticatedOwner\(\);[\s\S]*?return;[\s\S]*?finally \{ serial\.Release\(\); \}/);
+    assert.doesNotMatch(monitor, /pendingCefChild|completedPreflight|backend\.(Lock|Unlock|Detach|Attach)\(/);
+});
