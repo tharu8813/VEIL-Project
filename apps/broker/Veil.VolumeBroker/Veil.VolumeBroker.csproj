@@ -13,5 +13,6 @@
     <!-- Same strict registration/retained file checks on both sides of the pipe. -->
     <Compile Include="../../desktop/Engine/CefRuntimeFileLease.cs" Link="Shared/CefRuntimeFileLease.cs" />
     <Compile Include="../../desktop/Engine/CefRuntimeRegistrationLease.cs" Link="Shared/CefRuntimeRegistrationLease.cs" />
+    <Compile Include="../../desktop/Engine/CefContainedProcess.cs" Link="Shared/CefContainedProcess.cs" />
   </ItemGroup>
 </Project>

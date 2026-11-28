@@ -567,10 +567,10 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         CefBrokerOwnedJob brokerJob, CefBrokerOwnedJob peerJob,
         Veil.Desktop.CefRuntimeRegistrationLease registration,
         ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature,
-        Action resumePreparedRoot, out bool ownershipTransferred)
+        Veil.Desktop.CefContainedProcess preparedRoot, out bool ownershipTransferred)
     {
         ownershipTransferred = false;
-        ArgumentNullException.ThrowIfNull(resumePreparedRoot);
+        ArgumentNullException.ThrowIfNull(preparedRoot);
         if (diagnosticRelock.Pending || config.Development || config.CefChildImage is not { } image ||
             config.CefChildSha256 is not { } digest ||
             diagnosticSession.Occupied || pendingCefChild is not null ||
@@ -599,11 +599,11 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     throw new UnauthorizedAccessException("CEF diagnostic generation retired.");
                 registration.RequireCurrent();
                 return (expectedGeneration, registration, true);
-            }, systemVerifier);
+            }, systemVerifier, preparedRoot);
         // Transfer before resume. The caller must NOT dispose any retained
         // resources after ownershipTransferred, even if cleanup throws.
         // Still disconnected: only a future reviewed internal launch path
-        // may supply the prepared root's one-shot resume action.
+        // may supply the original prepared process object.
         bool accepted = false;
         bool activated = false;
         try
@@ -611,7 +611,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             var outcome = diagnosticSession.RegisterAndActivate(expectedGeneration, session, () =>
             {
                 accepted = true;
-                session.ActivatePreparedRoot(resumePreparedRoot);
+                session.ActivatePreparedRoot();
             }, out var failure);
             activated = outcome == CefDiagnosticActivationOutcome.Activated;
             if (failure is not null)

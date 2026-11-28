@@ -124,8 +124,18 @@ try
             var outcome = slot.RegisterAndActivate(generation, session, () =>
             {
                 Check(slot.Occupied && slot.Current(generation) is null, "Resume before handoff.");
-                candidate.ResumeAfterVerification(() => outer.ContainsFixtureRoot(binding.Identity, retained) &&
-                    inner.ContainsFixtureRoot(binding.Identity, retained));
+                Check(outer.ContainsFixtureRoot(binding.Identity, retained) &&
+                    inner.ContainsFixtureRoot(binding.Identity, retained), "Prepared pair changed.");
+                bool wrongRootRefused = false;
+                try { candidate.RequireRetainedPreparedRoot(owner.SafeHandle); }
+                catch (UnauthorizedAccessException) { wrongRootRefused = true; }
+                Check(wrongRootRefused && candidate.IsAlive && !File.Exists(markerPath),
+                    "Wrong retained root accepted or handles lost.");
+                candidate.ResumeRetainedRoot(retained);
+                bool repeatedResumeRefused = false;
+                try { candidate.ResumeRetainedRoot(retained); }
+                catch (UnauthorizedAccessException) { repeatedResumeRefused = true; }
+                Check(repeatedResumeRefused, "Retained root resumed twice.");
                 Check(SpinWait.SpinUntil(() => File.Exists(markerPath), TimeSpan.FromSeconds(10)),
                     "Handoff fixture did not start.");
                 if (failAfterResume) throw new UnauthorizedAccessException("Synthetic lost resume confirmation.");

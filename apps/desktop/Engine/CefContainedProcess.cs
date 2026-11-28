@@ -18,6 +18,7 @@ internal sealed class CefContainedProcess : IDisposable
     private readonly SafeProcessHandle process;
     private readonly SafeFileHandle thread;
     private bool resumed;
+    private bool retainedResumeAttempted;
     private bool disposed;
 
     private CefContainedProcess(SafeFileHandle job, SafeProcessHandle process, SafeFileHandle thread)
@@ -185,7 +186,7 @@ internal sealed class CefContainedProcess : IDisposable
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(verified);
-        if (resumed || !IsAlive) throw new InvalidOperationException("Child cannot be resumed.");
+        if (resumed || retainedResumeAttempted || !IsAlive) throw new InvalidOperationException("Child cannot be resumed.");
         try
         {
             if (!verified() || !IsProcessInJob(process, job, out bool contained) || !contained ||
@@ -198,6 +199,36 @@ internal sealed class CefContainedProcess : IDisposable
             Dispose();
             throw;
         }
+    }
+
+    // Broker-owned path: no caller-supplied thread or arbitrary resume
+    // callback. Match the retained process object and original creation
+    // thread. Failure never disposes handles needed for verified drain.
+    internal void RequireRetainedPreparedRoot(SafeProcessHandle expectedRoot)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(expectedRoot);
+        uint pid = GetProcessId(process);
+        if (resumed || retainedResumeAttempted || !IsAlive ||
+            expectedRoot.IsClosed || expectedRoot.IsInvalid ||
+            !CompareRootHandles(process, expectedRoot) ||
+            WaitForSingleObject(expectedRoot, 0) != 0x102 ||
+            pid == 0 ||
+            GetProcessIdOfThread(thread) != pid ||
+            !IsProcessInJob(process, job, out bool contained) || !contained ||
+            !HasImageLoadMitigations(process))
+            throw new UnauthorizedAccessException("CEF prepared process or creation thread mismatch.");
+    }
+
+    internal void ResumeRetainedRoot(SafeProcessHandle expectedRoot)
+    {
+        RequireRetainedPreparedRoot(expectedRoot);
+        retainedResumeAttempted = true;
+        // A non-one previous suspend count is ambiguous, not permission to
+        // retry or close the handles. The owning slot must retire and drain.
+        if (ResumeThread(thread) != 1)
+            throw new UnauthorizedAccessException("CEF retained resume unconfirmed.");
+        resumed = true;
     }
 
     internal bool WaitForExit(int milliseconds)
@@ -427,6 +458,13 @@ internal sealed class CefContainedProcess : IDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsProcessInJob(SafeProcessHandle process, SafeFileHandle job,
         [MarshalAs(UnmanagedType.Bool)] out bool result);
+    [DllImport("kernelbase.dll", EntryPoint = "CompareObjectHandles", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CompareRootHandles(SafeProcessHandle first, SafeProcessHandle second);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetProcessId(SafeProcessHandle process);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetProcessIdOfThread(SafeFileHandle thread);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint ResumeThread(SafeFileHandle thread);
     [DllImport("kernel32.dll", SetLastError = true)]

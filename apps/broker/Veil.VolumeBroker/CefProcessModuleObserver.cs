@@ -89,6 +89,8 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
     private readonly Func<CefDiagnosticSessionContext> readContext;
     private readonly Func<CefRetainedProcessDiagnostic[]> observe;
     private readonly Action requirePreparedRoot;
+    private readonly CefContainedProcess preparedRoot;
+    private readonly SafeProcessHandle retainedRoot;
     private bool activationAttempted;
     private bool activated;
     private readonly Func<int, bool> drain;
@@ -99,9 +101,13 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
         CefBrokerOwnedJob brokerJob, CefBrokerOwnedJob peerJob,
         ClientIdentity root, SafeProcessHandle rootHandle,
         Func<(object Generation, CefRuntimeRegistrationLease RuntimeLease, bool VolumeProtected)> readCurrent,
-        CefSystemModuleVerifier systemVerifier)
+        CefSystemModuleVerifier systemVerifier, CefContainedProcess preparedRoot)
     {
         ArgumentNullException.ThrowIfNull(readCurrent);
+        ArgumentNullException.ThrowIfNull(preparedRoot);
+        preparedRoot.RequireRetainedPreparedRoot(rootHandle);
+        this.preparedRoot = preparedRoot;
+        retainedRoot = rootHandle;
         ArgumentNullException.ThrowIfNull(systemVerifier);
         systemVerifier.RequireBoundTrust();
         ArgumentNullException.ThrowIfNull(registration);
@@ -135,23 +141,28 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
         requirePreparedRoot = () => brokerJob.RequirePreparedPrivateRoot(peerJob, owner, ownerHandle, root, rootHandle);
         observe = () => CefNestedProcessDiagnostics.Observe(brokerJob, peerJob, root, rootHandle,
             registration, systemVerifier);
-        drain = milliseconds => brokerJob.TerminateAndVerifyPrivateDrain(peerJob, rootHandle, milliseconds);
-        lifetime = new CefRetainedLifetime(registration, peerJob, brokerJob, rootHandle);
+        drain = milliseconds =>
+        {
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            if (!brokerJob.TerminateAndVerifyPrivateDrain(peerJob, rootHandle, milliseconds)) return false;
+            int remaining = (int)Math.Max(0L, milliseconds - started.ElapsedMilliseconds);
+            return preparedRoot.WaitForNaturalJobExit(remaining);
+        };
+        lifetime = new CefRetainedLifetime(registration, preparedRoot, peerJob, brokerJob, rootHandle);
     }
 
     // The slot owns this lifetime before invoking this method. No module
     // inventory is required while the loader has not yet executed; the
     // regular post-resume monitor checks it independently.
-    internal void ActivatePreparedRoot(Action resume)
+    internal void ActivatePreparedRoot()
     {
-        ArgumentNullException.ThrowIfNull(resume);
         if (activationAttempted)
             throw new UnauthorizedAccessException("CEF activation already attempted.");
         activationAttempted = true;
         _ = guard.Observe(readContext, () =>
         {
             requirePreparedRoot();
-            resume();
+            preparedRoot.ResumeRetainedRoot(retainedRoot);
             return true;
         });
         activated = true;
