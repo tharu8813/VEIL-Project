@@ -30,6 +30,11 @@ const isDownloadFile = file => /\.crdownload$/i.test(file) ||
   file.toLowerCase().endsWith(deniedFile) || file.toLowerCase().endsWith(deniedBlob);
 const server = http.createServer((request, response) => {
   requests.push(request.url);
+  if (request.url === '/wpf-blocked-redirect') {
+    // Same local server, wrong scheme. No external traffic is needed.
+    response.writeHead(302, { Location: 'https://' + request.headers.host + '/wpf-blocked-redirect-target' }).end();
+    return;
+  }
   if (request.url === '/wpf-address') {
     response.writeHead(302, { Location: '/wpf-first' }).end();
     return;
@@ -204,6 +209,9 @@ try {
   assert.ok(requests.includes('/wpf-address'), 'The address bar did not navigate');
   assert.ok(requests.includes('/wpf-first'), 'The redirect did not navigate');
   assert.ok(!requests.includes('/wpf-denied'), 'Canceled navigation contacted the server');
+  assert.equal(requests.filter(route => route === '/wpf-blocked-redirect').length, 1);
+  assert.ok(!requests.includes('/wpf-blocked-redirect-target'), 'Disallowed redirect reached the fixture target');
+  assert.match(evidence, /Native navigation refused non-HTTP redirect and completed original request as canceled/);
   assert.ok(requests.includes('/wpf-second'), 'The second address did not navigate');
   assert.equal(requests.filter(request => request === '/wpf-isolation').length, 1, 'Secondary view must navigate once');
   assert.equal(requests.filter(request => request === '/wpf-isolation-reopened').length, 1, 'Reopened view must navigate once');

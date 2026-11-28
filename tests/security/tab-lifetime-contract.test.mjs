@@ -755,3 +755,13 @@ test('CEF managed navigation commands require a live dispatcher-owned view befor
     assert.match(cefView, /onStarting = \(url, id, redirect\) =>\s*\{\s*if \(disposed\) return 1;/);
     assert.match(cefView, /onCompleted = \(id, success, canceled, code\) =>\s*\{\s*if \(disposed\) return;/);
 });
+
+
+test('CEF native navigation rejects credential URLs and invalidated callback decisions', () => {
+    assert.match(cefNative, /!CefString\(&parts.username\).empty\(\) \|\| !CefString\(&parts.password\).empty\(\)/);
+    assert.match(cefNative, /if \(sequence_ == \(std::numeric_limits<uint64_t>::max\)\(\)\) return true;/);
+    assert.match(cefNative, /const auto expected_id = active_id_;\s*const auto starting = state_->before_browse;[\s\S]*?if \(state_->closing \|\| state_->before_browse != starting \|\|\s*active_id_ != expected_id \|\| active_url_ != url\) return true;\s*if \(canceled\)/);
+    assert.match(cefNative, /if \(!state_->closing && active_id_ != 0 && frame->IsMain\(\) && frame->GetURL\(\) == active_url_\)/);
+    assert.match(cefNative, /if \(!state_->closing && active_id_ != 0 && frame->IsMain\(\) && failed_url == active_url_\)/);
+    assert.match(cefSmoke, /phase == -2 && blockedRedirect[\s\S]*?Native navigation refused non-HTTP redirect/);
+});

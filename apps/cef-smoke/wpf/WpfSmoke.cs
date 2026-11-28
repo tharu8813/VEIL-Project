@@ -82,6 +82,7 @@ public static class WpfSmoke
         var pendingRequests = new Dictionary<ulong, string>();
         var completedRequests = new HashSet<string>();
         var canceledByPolicy = false;
+        var blockedRedirect = false;
         var redirectMatched = false;
         var failedHttpLoad = false;
         FixtureVault? vaultStream = null;
@@ -130,6 +131,7 @@ public static class WpfSmoke
                 return;
             }
             if (path == "/wpf-denied" && completed.IsCanceled) canceledByPolicy = true;
+            if (path == "/wpf-blocked-redirect" && completed.IsCanceled) blockedRedirect = true;
             // Empty error responses can surface as ERR_HTTP_RESPONSE_CODE_FAILURE.
             if (path == "/wpf-error" && !completed.IsSuccess && !completed.IsCanceled &&
                 completed.Error is { Domain: EngineErrorDomain.Cef, NativeCode: 404 or -379 })
@@ -327,8 +329,14 @@ public static class WpfSmoke
             if (fixture is null) return;
             if (phase == -1 && canceledByPolicy)
             {
-                phase = 0;
+                phase = -2;
                 Trace("Navigation request canceled before HTTP");
+                browser.Navigate(new Uri(new Uri(fixture), "/wpf-blocked-redirect").AbsoluteUri);
+            }
+            else if (phase == -2 && blockedRedirect)
+            {
+                phase = 0;
+                Trace("Native navigation refused non-HTTP redirect and completed original request as canceled");
                 address.Text = fixture;
                 go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             }
