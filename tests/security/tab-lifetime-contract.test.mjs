@@ -777,3 +777,13 @@ test('CEF tab status publication is scoped to live tab and current navigation id
     assert.match(cefTabbed, /tab.LastSource = tab.View.Source;\s*status.Text = tab.Status;/);
     assert.match(cefTabbed, /SetTabStatus\(first, "Synthetic background status."\);[\s\S]*?Per-tab completion state and synthetic background status remained isolated/);
 });
+
+
+test('CEF popup denial feedback reads only selected live view and never adopts or replays the target', () => {
+    assert.match(cefTabbed, /uint blocked = live && !shuttingDown \? CefNative.VeilCefPopupsBlocked\(active!.View.NativeHandle\) : 0;/);
+    assert.match(cefTabbed, /popupNotice.Text = blocked == 0 \? "" : \$"Popups blocked in this tab: \{blocked\}";/);
+    assert.match(cefTabbed, /popupNotice.Visibility = blocked == 0 \? Visibility.Collapsed : Visibility.Visible;/);
+    assert.match(cefTabbed, /CefNative.VeilCefPopupsBlocked\(firstId\) != 1 \|\|\s*CefNative.VeilCefPopupsBlocked\(secondId\) != 0/);
+    assert.match(cefTabbed, /Blocked popup count visible only for the owning tab; no extra native view/);
+    assert.match(cefNative, /bool OnBeforePopup\([\s\S]*?\+\+state_->popups_blocked;\s*return true;/);
+});
