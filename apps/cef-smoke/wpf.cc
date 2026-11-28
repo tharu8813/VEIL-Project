@@ -527,6 +527,7 @@ class Client final : public CefClient,
     const bool parsed = CefParseURL(url, parts);
     const CefString host(&parts.host);
     if (!parsed || CefString(&parts.scheme) != "http" ||
+        !CefString(&parts.username).empty() || !CefString(&parts.password).empty() ||
         (host != "127.0.0.1" && host != "[::1]" && host != "localhost")) {
       if (frame->IsMain() && redirect && active_id_) Complete(false, true, ERR_ABORTED);
       return true;
@@ -541,16 +542,26 @@ class Client final : public CefClient,
     // a WebView2-style navigation ID, so refuse overlapping fixture requests.
     if (active_id_ != 0 && !redirect) return true;
     const bool continuation = active_id_ != 0;
-    if (!continuation) active_id_ = ++sequence_;
+    if (!continuation) {
+      if (sequence_ == (std::numeric_limits<uint64_t>::max)()) return true;
+      active_id_ = ++sequence_;
+    }
     active_url_ = url;
-    if (!state_->before_browse || state_->before_browse(url.ToWString().c_str(), active_id_, continuation)) {
-      Complete(0, true, ERR_ABORTED);
+    const auto expected_id = active_id_;
+    const auto starting = state_->before_browse;
+    const bool canceled = !starting || starting(url.ToWString().c_str(), expected_id, continuation);
+    // Host callbacks can close the view or reenter navigation. Never
+    // authorize the stale request or complete a replacement navigation.
+    if (state_->closing || state_->before_browse != starting ||
+        active_id_ != expected_id || active_url_ != url) return true;
+    if (canceled) {
+      Complete(false, true, ERR_ABORTED);
       return true;
     }
     return false;
   }
   void OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, int http_status) override {
-    if (frame->IsMain() && frame->GetURL() == active_url_) {
+    if (!state_->closing && active_id_ != 0 && frame->IsMain() && frame->GetURL() == active_url_) {
       const bool loaded = http_status >= 200 && http_status < 400;
       if (loaded) state_->login_renderer_failed = false;
       Complete(loaded, false, http_status);
@@ -558,7 +569,7 @@ class Client final : public CefClient,
   }
   void OnLoadError(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
                    ErrorCode error, const CefString&, const CefString& failed_url) override {
-    if (frame->IsMain() && failed_url == active_url_)
+    if (!state_->closing && active_id_ != 0 && frame->IsMain() && failed_url == active_url_)
       Complete(false, error == ERR_ABORTED, error);
   }
   void OnAddressChange(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
