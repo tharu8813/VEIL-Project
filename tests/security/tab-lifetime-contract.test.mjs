@@ -922,3 +922,12 @@ test('search preferences use session-owned persistence and publish only after th
     assert.doesNotMatch(search, /\bdata\.Save\(|\bdata\.(?:SearchEngine|LocalAddressSuggestions)\s*=(?!=)/);
 });
 
+
+
+test('site permission edits commit a validated detached rule set through the shared profile boundary', () => {
+    assert.match(layoutData, /if \(!authorized\(\)\) return false;\s*var candidate = rules.ToList\(\);\s*if \(!SitePermissionPolicy.ValidRules\(candidate\)\) return false;\s*var previous = SitePermissions;[\s\S]*?SitePermissions = candidate.Count == 0 \? null : candidate;\s*committed = authorized\(\) && save\(\);[\s\S]*?if \(!committed\) SitePermissions = previous;/);
+    assert.match(session, /internal bool TryCommitSitePermissions\([^)]*\)\s*\{\s*libraryDispatcher.VerifyAccess\(\);\s*bool Authorized\(\) => !IsPrivate && !IsEnding && !EngineLost && EngineHost.IsReady &&\s*persistentStatePath is not null && authorized\(\);\s*return Data.TryCommitSitePermissions\(rules, Authorized,\s*\(\) => TrySaveLibrary\(Authorized\)\);/);
+    assert.match(permissions, /bool Authorized\(\) => SettingsReady\(\) && IsActive && session.PermissionUiOpen;\s*if \(!session.TryCommitSitePermissions\(dialog.Result, Authorized\)\)[\s\S]*?return;\s*\}\s*Status.Text = "사이트 권한을 저장했습니다/);
+    assert.doesNotMatch(permissions, /\bdata\.Save\(|\bdata\.SitePermissions\s*=(?!=)/);
+});
+

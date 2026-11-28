@@ -1,4 +1,3 @@
-using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using Microsoft.Web.WebView2.Core;
@@ -17,12 +16,9 @@ public partial class BrowserWindow
             var dialog = new SitePermissionsDialog(this, SitePermissionPolicy.Origin(Active?.Url), data.SitePermissions);
             if (await ShowManagementPageAsync("veil://settings/permissions", dialog) != true || closing || session.IsEnding || session.EngineLost) return;
             if (!SitePermissionPolicy.ValidRules(dialog.Result.ToList())) return;
-            var previous = data.SitePermissions;
-            data.SitePermissions = dialog.Result.Count == 0 ? null : dialog.Result.ToList();
-            try { data.Save(statePath); }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            bool Authorized() => SettingsReady() && IsActive && session.PermissionUiOpen;
+            if (!session.TryCommitSitePermissions(dialog.Result, Authorized))
             {
-                data.SitePermissions = previous;
                 Status.Text = "사이트 권한을 저장하지 못했습니다. 이전 설정을 유지합니다.";
                 return;
             }

@@ -105,6 +105,27 @@ internal sealed class BrowserData
         }
     }
 
+    // Accept a detached copy of the UI draft; never retain a mutable dialog list.
+    internal bool TryCommitSitePermissions(IReadOnlyList<SitePermissionRule> rules,
+        Func<bool> authorized, Func<bool> save)
+    {
+        if (!authorized()) return false;
+        var candidate = rules.ToList();
+        if (!SitePermissionPolicy.ValidRules(candidate)) return false;
+        var previous = SitePermissions;
+        bool committed = false;
+        try
+        {
+            SitePermissions = candidate.Count == 0 ? null : candidate;
+            committed = authorized() && save();
+            return committed;
+        }
+        finally
+        {
+            if (!committed) SitePermissions = previous;
+        }
+    }
+
     internal void Save(string path)
     {
         string temporary = path + ".new";

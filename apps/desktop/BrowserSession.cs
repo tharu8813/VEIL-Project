@@ -201,6 +201,15 @@ internal sealed class BrowserSession
             () => TrySaveLibrary(Authorized));
     }
 
+    internal bool TryCommitSitePermissions(IReadOnlyList<SitePermissionRule> rules, Func<bool> authorized)
+    {
+        libraryDispatcher.VerifyAccess();
+        bool Authorized() => !IsPrivate && !IsEnding && !EngineLost && EngineHost.IsReady &&
+            persistentStatePath is not null && authorized();
+        return Data.TryCommitSitePermissions(rules, Authorized,
+            () => TrySaveLibrary(Authorized));
+    }
+
     internal Stack<ClosedTab> ClosedTabs { get; } = new();
     internal bool RestoringClosedTab { get; set; }
     internal int TabTransferDepth { get; set; }
