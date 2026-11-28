@@ -591,7 +591,13 @@ test('failed initial broker job assignment transfers only verified handles into 
     assert.match(stage, /CefPinnedImage.OpenVerified[\s\S]*?runtime.RequireCurrent\(\)[\s\S]*?termination = Native.OpenCefTerminationHandle[\s\S]*?job.AssignVerifiedCandidate/);
     assert.match(stage, /catch\s*\{\s*try\s*\{\s*if \(termination is not null\)[\s\S]*?termination = null;\s*job = null;\s*image = null;\s*runtime = null;\s*stopRejected\(rejected, rejectedJob, rejectedImage, rejectedRuntime\)/);
     assert.match(broker, /CefChildPreflight.Stage[\s\S]*?\(child, job, image, runtime\) => StopOrRetain\(new CandidateStop\(child, job, image, runtime\)\)/);
-    assert.match(broker, /RevokeCompletedPreflight\(\);[\s\S]*?if \(unresolvedCefStops.Count != 0 &&[\s\S]*?BrokerCommand.StageCefChild\)\s*return Protocol.Error\("CefExitUnconfirmed"\);\s*switch \(request.Command\)/);
+    // Revocation may leave three independent blockers. All must be
+    // checked again after the owner/volume refresh and before dispatch.
+    const execute = broker.slice(broker.indexOf('private async Task<byte[]> Execute('),
+        broker.indexOf('private static string? LockCode('));
+    const afterRevocation = execute.slice(execute.indexOf('RevokeCompletedPreflight();'),
+        execute.indexOf('switch (request.Command)'));
+    assert.match(afterRevocation, /RevokeCompletedPreflight\(\);[\s\S]*?if \(unresolvedCefStops\.Count != 0 &&\s*request\.Command is BrokerCommand\.Detach or BrokerCommand\.Unlock or BrokerCommand\.StageCefChild\)\s*return Protocol\.Error\("CefExitUnconfirmed"\);\s*if \(diagnosticSession\.Occupied &&\s*request\.Command is BrokerCommand\.Lock or BrokerCommand\.Detach or BrokerCommand\.Unlock or BrokerCommand\.StageCefChild\)\s*return Protocol\.Error\("CefExitUnconfirmed"\);\s*if \(diagnosticRelock\.Pending && request\.Command != BrokerCommand\.Status\)\s*return Protocol\.Error\("LockRefused"\);\s*$/);
     assert.match(broker, /bool drained = Attempt\([\s\S]*?bool exited = Attempt\([\s\S]*?bool empty = Attempt\([\s\S]*?return drained && exited && empty/);
 });
 
