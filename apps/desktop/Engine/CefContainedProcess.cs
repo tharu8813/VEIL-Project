@@ -17,16 +17,21 @@ internal sealed class CefContainedProcess : IDisposable
     private readonly SafeFileHandle job;
     private readonly SafeProcessHandle process;
     private readonly SafeFileHandle thread;
+    // Borrowed private Job handles: the caller must keep both alive until
+    // the retained creation is drained or ownership is transferred.
+    private readonly SafeFileHandle[] retainedPeerJobs;
     private bool resumed;
     private bool retainedResumeAttempted;
     private bool creationVerified;
     private bool disposed;
 
-    private CefContainedProcess(SafeFileHandle job, SafeProcessHandle process, SafeFileHandle thread)
+    private CefContainedProcess(SafeFileHandle job, SafeProcessHandle process, SafeFileHandle thread,
+        SafeFileHandle[]? retainedPeerJobs)
     {
         this.job = job;
         this.process = process;
         this.thread = thread;
+        this.retainedPeerJobs = retainedPeerJobs ?? [];
     }
 
 #if VEIL_CEF_NESTED_SMOKE || VEIL_CEF_CONTAINMENT_TEST
@@ -93,8 +98,8 @@ internal sealed class CefContainedProcess : IDisposable
     // One-shot serialized ownership escrow. The caller retains this object
     // from BEFORE creation until either verified transfer or confirmed
     // exit. No IDisposable shortcut or raw handle export on refusal.
-    // The two external Jobs remain owned by the caller and require their
-    // own independent drain proof before relock.
+    // The two external Jobs remain owned by the caller. Cleanup checks
+    // their accounting too, but does not dispose those borrowed handles.
     internal sealed class CreationCustody
     {
         private bool attempted;
@@ -193,7 +198,7 @@ internal sealed class CefContainedProcess : IDisposable
             finally { Marshal.FreeHGlobal(env); }
             process = new SafeProcessHandle(info.Process, ownsHandle: true);
             thread = new SafeFileHandle(info.Thread, ownsHandle: true);
-            captured = new CefContainedProcess(job, process, thread);
+            captured = new CefContainedProcess(job, process, thread, custody is null ? null : additionalJobs);
             custody?.Capture(captured);
 #if VEIL_CEF_CONTAINMENT_TEST
             if (injectFailure)
@@ -351,9 +356,11 @@ internal sealed class CefContainedProcess : IDisposable
         return code;
     }
 
-    private uint ActiveProcesses()
+    private uint ActiveProcesses() => ActiveProcesses(job);
+
+    private static uint ActiveProcesses(SafeFileHandle observedJob)
     {
-        if (!QueryInformationJobObject(job, 1, out var info,
+        if (!QueryInformationJobObject(observedJob, 1, out var info,
             (uint)Marshal.SizeOf<BasicAccountingInformation>(), IntPtr.Zero))
             throw Failure("QueryInformationJobObject");
         return info.ActiveProcesses;
@@ -376,17 +383,45 @@ internal sealed class CefContainedProcess : IDisposable
         return WaitForExit(remaining);
     }
 
-    // A failed membership check may mean the root is outside the local
-    // Job. Terminate the exact original process as well as the private Job,
-    // then require both accounting and root signal before releasing either.
+    // A failed membership check may mean the root is outside a Job.
+    // Issue termination only against original creation handles and the
+    // private Jobs supplied by the serialized creator. Requests can race
+    // with pending termination: neither success nor failure is exit proof.
     private bool TryDrainRejectedCreation(int milliseconds)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        if (ActiveProcesses() != 0 && !TerminateJobObject(job, ForcedTerminationExit))
-            return false;
-        if (!WaitForExit(0) && !TerminateProcess(process, ForcedTerminationExit) && !WaitForExit(0))
-            return false;
-        return WaitForNaturalJobExit(milliseconds);
+        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        if (ActiveProcesses() != 0) _ = TerminateJobObject(job, ForcedTerminationExit);
+        foreach (var peer in retainedPeerJobs)
+        {
+            if (peer.IsClosed || peer.IsInvalid) return false;
+            if (ActiveProcesses(peer) != 0) _ = TerminateJobObject(peer, ForcedTerminationExit);
+        }
+        if (!WaitForExit(0)) _ = TerminateProcess(process, ForcedTerminationExit);
+        int remaining = (int)Math.Max(0L, milliseconds - started.ElapsedMilliseconds);
+        return WaitForRetainedCreationExit(remaining);
+    }
+
+    // Observe all three private Jobs and the exact root with a single
+    // deadline. Accounting updates can lag behind a signaled process.
+    // A closed/missing peer or failed query must never count as empty.
+    internal bool WaitForRetainedCreationExit(int milliseconds)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        if (retainedPeerJobs.Length != 2) return false;
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            if (retainedPeerJobs.Any(peer => peer.IsClosed || peer.IsInvalid)) return false;
+            if (ActiveProcesses() == 0 && retainedPeerJobs.All(peer => ActiveProcesses(peer) == 0) &&
+                WaitForExit(0))
+                return true;
+            int remaining = (int)Math.Max(0L, milliseconds - started.ElapsedMilliseconds);
+            if (remaining == 0) return false;
+            Thread.Sleep(Math.Min(20, remaining));
+        }
     }
 
     // Forced cleanup is explicitly different from natural exit verification.

@@ -884,11 +884,14 @@ test('retained creation captures original handles before verification and never 
     const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
     assert.match(project, /<DefineConstants>\$\(DefineConstants\);VEIL_CEF_BROKER<\/DefineConstants>/);
     assert.match(launch, /#if VEIL_CEF_BROKER[\s\S]*?CreateRetainedUserRoot[\s\S]*?token\.IsInvalid \|\| token\.IsClosed[\s\S]*?CreateSuspendedCore\(image, environment, \[outer, inner\], token, custody\);[\s\S]*?#endif/);
-    assert.match(launch, /captured = new CefContainedProcess\(job, process, thread\);\s*custody\?\.Capture\(captured\);[\s\S]*?IsProcessInJob\(process, job[\s\S]*?captured\.creationVerified = true;/);
+    assert.match(launch, /captured = new CefContainedProcess\(job, process, thread, custody is null \? null : additionalJobs\);\s*custody\?\.Capture\(captured\);[\s\S]*?IsProcessInJob\(process, job[\s\S]*?captured\.creationVerified = true;/);
     assert.match(launch, /custody\.Reject\(\);[\s\S]*?if \(captured is not null\) throw;[\s\S]*?TerminateProcess\(process, ForcedTerminationExit\)/);
     assert.match(launch, /if \(rejected \|\| transferred \|\| retained is not \{ creationVerified: true \} child\)/);
     assert.match(launch, /if \(transferred\) return false;[\s\S]*?rejected = true;[\s\S]*?if \(!child\.TryDrainRejectedCreation\(milliseconds\)\) return false;\s*child\.Dispose\(\);\s*retained = null;/);
-    assert.match(launch, /if \(!WaitForExit\(0\) && !TerminateProcess\(process, ForcedTerminationExit\) && !WaitForExit\(0\)\)\s*return false;\s*return WaitForNaturalJobExit\(milliseconds\);/);
+    assert.match(launch, /if \(ActiveProcesses\(\) != 0\) _ = TerminateJobObject\(job, ForcedTerminationExit\);[\s\S]*?foreach \(var peer in retainedPeerJobs\)[\s\S]*?if \(peer.IsClosed \|\| peer.IsInvalid\) return false;[\s\S]*?if \(ActiveProcesses\(peer\) != 0\) _ = TerminateJobObject\(peer, ForcedTerminationExit\);[\s\S]*?if \(!WaitForExit\(0\)\) _ = TerminateProcess\(process, ForcedTerminationExit\);[\s\S]*?return WaitForRetainedCreationExit\(remaining\);/);
+    const proof = launch.slice(launch.indexOf('internal bool WaitForRetainedCreationExit'), launch.indexOf('internal void TerminateAndDrain'));
+    assert.match(proof, /if \(retainedPeerJobs.Length != 2\) return false;[\s\S]*?if \(retainedPeerJobs.Any\(peer => peer.IsClosed \|\| peer.IsInvalid\)\) return false;[\s\S]*?if \(ActiveProcesses\(\) == 0 && retainedPeerJobs.All\(peer => ActiveProcesses\(peer\) == 0\) &&\s*WaitForExit\(0\)\)\s*return true;[\s\S]*?if \(remaining == 0\) return false;/);
+    assert.doesNotMatch(proof, /\b(?:TerminateJobObject|TerminateProcess|Dispose)\s*\(/);
     assert.match(fixture, /CreateAtomicRetainedPairFixture[\s\S]*?custody\.HasRetainedProcess[\s\S]*?custody\.TryDrainAndRelease\(5000\)[\s\S]*?outer\.HasNoActiveProcesses\(\) && inner\.HasNoActiveProcesses\(\)/);
     assert.doesNotMatch(broker, /CreateRetainedUserRoot|CreateRetainedFixture/);
 });

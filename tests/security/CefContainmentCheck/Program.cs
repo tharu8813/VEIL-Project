@@ -122,9 +122,11 @@ try
             Check(!outer.HasNoActiveProcesses() && !inner.HasNoActiveProcesses(),
                 "Injected refusal did not retain both live Job members.");
             Reject(() => custody.TakeVerified());
-            Check(custody.TryDrainAndRelease(5000) && !custody.HasRetainedProcess &&
-                outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses() && !File.Exists(markerPath),
-                "Rejected creation did not drain all three Jobs.");
+            bool drained = custody.TryDrainAndRelease(5000);
+            Check(drained, "Rejected creation did not confirm root and three-Job exit.");
+            Check(!custody.HasRetainedProcess, "Drained custody retained child.");
+            Check(outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses(), "Rejected creation peer accounting not empty.");
+            Check(!File.Exists(markerPath), "Rejected creation executed.");
             Check(custody.TryDrainAndRelease(0), "Repeated cleanup refused.");
             Reject(() => custody.TakeVerified());
         }
@@ -134,9 +136,12 @@ try
             Check(created.IsAlive && !custody.HasRetainedProcess && !custody.TryDrainAndRelease(0),
                 "Custody retained cleanup authority after verified transfer.");
             Reject(() => custody.TakeVerified());
+            var deadline = Stopwatch.StartNew();
             created.TerminateAndDrain(5000);
-            Check(created.WaitForExit(0) && outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses(),
-                "Transferred child did not drain.");
+            int remaining = (int)Math.Max(0L, 5000 - deadline.ElapsedMilliseconds);
+            Check(created.WaitForRetainedCreationExit(remaining) &&
+                outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses(),
+                "Transferred child did not drain all three Jobs.");
         }
         using var freshOuter = CefBrokerOwnedJob.CreateMultiprocessFixture();
         using var freshInner = CefBrokerOwnedJob.CreateMultiprocessFixture();
