@@ -59,6 +59,11 @@ const server = http.createServer((request, response) => {
       'document.title="TAB_FRESH_PROFILE";})();</script>');
     return;
   }
+  if (request.url === '/tabs-history-error') {
+    response.writeHead(404, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+    response.end('<!doctype html><title>TAB_HISTORY_ERROR</title>Not found');
+    return;
+  }
   if (request.url === '/tabs-login-frame-child') {
     response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
     response.end('<!doctype html><form><input><input type="password"></form>');
@@ -246,6 +251,8 @@ try {
   assert.match(evidence, /Zoom readback followed selected distinct-origin view and reset to 100 percent/);
   assert.match(evidence, /Browser full screen restored host state without changing page full screen/);
   assert.match(evidence, /Fixture bookmarks used live committed sources, deduplicated and removed exact entries/);
+  assert.equal(requests.filter(x => x === '/tabs-history-error').length, 1);
+  assert.match(evidence, /Fixture history recorded both live completions and removed exact selected visit then cleared[\s\S]*Failed HTTP navigation did not create a fixture visit[\s\S]*Successful recovery navigation created a new fixture visit/);
   assert.equal(cookieChecks.get('/tabs-after-close'), '', 'Deleted domain must not send its cookie');
   assert.equal(cookieChecks.get('/tabs-preserved'), 'fixture_second=synthetic-two', 'Other domain must retain its synthetic cookie');
   assert.equal(cookieChecks.get('/tabs-cleared-first'), '', 'Profile cookie clear must remove first domain cookie');
