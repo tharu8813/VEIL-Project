@@ -202,11 +202,21 @@ internal sealed class CefBrokerOwnedJob : IDisposable
     // independently owned desktop Job retained by the serialized observer.
     // Never obtain it from a client message or expose this as launch authority.
     internal ClientIdentity[] ObserveNestedRetainedMembers(SafeFileHandle desktopJob,
-        IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members)
+        IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members) =>
+        ObserveNestedRetainedDiagnostics(desktopJob, members, (identity, _) => identity);
+
+    // Run broker-internal read-only diagnostics inside the SAME two-job
+    // accounting bracket. The caller must serialize and retain both jobs and
+    // the original process handles. Results are observations, not admission.
+    // The callback must not be supplied by a client or publish partial results.
+    internal T[] ObserveNestedRetainedDiagnostics<T>(SafeFileHandle desktopJob,
+        IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members,
+        Func<ClientIdentity, SafeProcessHandle, T> observe)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(desktopJob);
         ArgumentNullException.ThrowIfNull(members);
+        ArgumentNullException.ThrowIfNull(observe);
         if (desktopJob.IsInvalid || desktopJob.IsClosed || CompareJobObjects(job, desktopJob))
             throw new UnauthorizedAccessException("Expected two distinct retained CEF jobs.");
         var retained = members.ToArray();
@@ -214,14 +224,25 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         var desktopBefore = Accounting(desktopJob);
         if (desktopBefore.ActiveProcesses != (uint)retained.Length)
             throw new UnauthorizedAccessException("Incomplete desktop CEF job membership.");
-        var snapshot = ObserveRetainedMembers(retained);
-        foreach (var member in retained)
+        _ = ObserveRetainedMembers(retained);
+        void RequireNestedMembers()
         {
-            CheckRetainedMember(member.Identity, member.Handle);
-            if (!IsProcessInJob(member.Handle, desktopJob, out bool inside) || !inside ||
-                Native.ObserveProcess(member.Handle) != member.Identity)
-                throw new UnauthorizedAccessException("CEF member missing from desktop job.");
+            foreach (var member in retained)
+            {
+                CheckRetainedMember(member.Identity, member.Handle);
+                if (!IsProcessInJob(member.Handle, desktopJob, out bool inside) || !inside ||
+                    Native.ObserveProcess(member.Handle) != member.Identity)
+                    throw new UnauthorizedAccessException("CEF member missing from desktop job.");
+            }
         }
+        RequireNestedMembers();
+        var diagnostics = new T[retained.Length];
+        for (int i = 0; i < retained.Length; i++)
+        {
+            CheckRetainedMember(retained[i].Identity, retained[i].Handle);
+            diagnostics[i] = observe(retained[i].Identity, retained[i].Handle);
+        }
+        RequireNestedMembers();
         // Bracket both jobs, including historical counters so equal active
         // counts cannot hide observed member creation/termination churn.
         var desktopAfter = Accounting(desktopJob);
@@ -229,7 +250,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         if (!SameMembershipAccounting(desktopBefore, desktopAfter) ||
             !SameMembershipAccounting(brokerBefore, brokerAfter))
             throw new UnauthorizedAccessException("Nested CEF membership changed during observation.");
-        return snapshot;
+        return diagnostics;
     }
 
     private static bool SameMembershipAccounting(AccountingInfo before, AccountingInfo after) =>
