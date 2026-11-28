@@ -267,15 +267,15 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     }
 
 #if VEIL_CEF_DIAGNOSTIC_IPC
-    // Serialized snapshot for the exact retained browser root ONLY. The
-    // current borrowing path cannot activate, so no positive receipt can
+    // Serialized snapshot for an independently observed private Job member.
+    // The current borrowing path cannot activate, so no positive receipt can
     // be produced by the existing suspended probe or legacy redemption.
     private byte[] CheckCefRuntimeAuthority(BrokerRequest request, ClientIdentity client, SafeProcessHandle pipeClient)
     {
         if (config.Development || config.Backend != "bitlocker" || request.VolumeId != config.VolumeId ||
             diagnosticRelock.Pending || unlockOwner is not { } generation || authenticatedGeneration is null ||
             diagnosticSession.Current(generation) is not CefBoundDiagnosticSession bound ||
-            !bound.MatchesRuntimeRoot(client, pipeClient))
+            !bound.MatchesRuntimeMember(client, pipeClient))
             return Protocol.Error("CefRuntimeAuthorityRefused");
         try
         {

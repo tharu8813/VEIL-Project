@@ -340,6 +340,17 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         RequireContainmentLimits(peerHandle, peer.activeLimit);
     }
 
+    // Initial transport screening only. The full retained observation
+    // must compare this pipe object with an independently collected member.
+    internal bool ContainsPrivateRuntimeMember(CefBrokerOwnedJob peer,
+        SafeProcessHandle rootHandle, ClientIdentity identity, SafeProcessHandle member)
+    {
+        var peerHandle = RequireBoundPrivatePeer(peer, rootHandle);
+        return ObserveLiveMember(member) == identity &&
+            IsProcessInJob(member, job, out bool inOuter) && inOuter &&
+            IsProcessInJob(member, peerHandle, out bool inInner) && inInner;
+    }
+
     internal T[] ObservePrivateNestedDiagnostics<T>(CefBrokerOwnedJob peer,
         ClientIdentity root, SafeProcessHandle rootHandle, Func<ClientIdentity, SafeProcessHandle, T> observe)
     {

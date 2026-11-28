@@ -301,6 +301,16 @@ try
     RejectAuthority(() => observedSlot.ObserveCurrent(observedGeneration, _ => throw new UnauthorizedAccessException("Synthetic observation failure.")));
     Check(observedSlot.CleanupPending && observedSlot.TryReleaseRetired(0), "Observation failure left authority active.");
     Console.WriteLine("PASS: exact monitor slot, stale generation, reentrant revocation and terminal observation failure");
+    foreach (bool isRoot in new[] { false, true })
+    foreach (var role in Enum.GetValues<CefObservedRole>())
+    foreach (var decision in Enum.GetValues<CefRoleTokenDecision>())
+    {
+        bool expectedRole = decision == CefRoleTokenDecision.MatchesProvisionalBaseline &&
+            (isRoot ? role == CefObservedRole.Browser : role == CefObservedRole.Renderer);
+        Check(CefRuntimeRolePolicy.MatchesProvisionalRole(isRoot, role, decision) == expectedRole,
+            "Runtime provisional role policy mismatch.");
+    }
+    Console.WriteLine("PASS: runtime member role boundary refuses unknown/unverified roles and role substitution");
     // Fault injection exercises the same drain orchestration, without
     // pretending that a synthetic refusal is a real Windows Job failure.
     foreach (int failedStage in new[] { 0, 1, 2, 3 })
