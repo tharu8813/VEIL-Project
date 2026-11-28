@@ -562,6 +562,24 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     // Prepared internal registration only; no request handler calls this.
     // Caller holds serial, owns the already assigned private pair and pins,
     // and must retain/stop them if registration refuses or throws.
+    // Called only under serial by a future reviewed launch coordinator.
+    // This preparation does not create a process or authorize IPC/startup.
+    private CefBrokerLaunchPreparation PrepareDiagnosticLaunch(object expectedGeneration,
+        ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature)
+    {
+        bool Available() => !diagnosticRelock.Pending && !config.Development &&
+            !diagnosticSession.Occupied && pendingCefChild is null &&
+            completedPreflight is null && unresolvedCefStops.Count == 0 &&
+            CandidateAuthorityCurrent(expectedGeneration);
+        if (!Available() || config.CefChildImage is not { } image ||
+            config.CefChildSha256 is not { } digest ||
+            authenticatedOwner is not { } owner ||
+            authenticatedOwnerHandle is not { } ownerHandle)
+            throw new UnauthorizedAccessException("CEF preparation unavailable.");
+        return CefBrokerLaunchPreparation.Open(image, digest, owner, ownerHandle,
+            Available, baselinePayload, baselineSignature);
+    }
+
     private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession(object expectedGeneration,
         ClientIdentity root, SafeProcessHandle rootHandle,
         CefBrokerOwnedJob brokerJob, CefBrokerOwnedJob peerJob,

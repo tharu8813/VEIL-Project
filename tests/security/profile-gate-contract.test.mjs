@@ -850,3 +850,22 @@ test('internal prepared launch retains exact creation handles through three-job 
     assert.match(nested, /TerminateAndVerifyPrivateDrain\(peerJob, rootHandle, milliseconds\)\) return false;[\s\S]*?preparedRoot\.WaitForNaturalJobExit\(remaining\);[\s\S]*?new CefRetainedLifetime\(registration, preparedRoot, peerJob, brokerJob, rootHandle\)/);
     assert.doesNotMatch(broker, /Action resumePreparedRoot|CefContainedProcess\.CreateSuspended/);
 });
+
+
+test('broker pre-creation preparation independently pins executable, runtime, trust and owner', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const prep = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
+    const pin = await readFile('apps/broker/Veil.VolumeBroker/CefPinnedImage.cs', 'utf8');
+    const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
+    assert.match(prep, /if \(!authorityCurrent\(\)\)[\s\S]*?OpenInstalled\(serializedBrokerAccess: true\)[\s\S]*?OpenVerifiedBeforeCreation\(registeredPath, digest\)[\s\S]*?VerifyInstalledTrust\(baselinePayload, baselineSignature\)[\s\S]*?verifier\.RequireBoundTrust\(\);[\s\S]*?if \(!authorityCurrent\(\)\)[\s\S]*?LaunchTokenLease\.Acquire\(ownerHandle, owner\)[\s\S]*?prepared\.RequireCurrent\(\);/);
+    assert.match(prep, /catch\s*\{[\s\S]*?token\?\.Dispose\(\);[\s\S]*?image\?\.Dispose\(\);[\s\S]*?registration\?\.Dispose\(\);/);
+    assert.match(prep, /internal void RequireCurrent\(\)[\s\S]*?if \(!authorityCurrent\(\)\)[\s\S]*?registration\.RequireCurrent\(\);[\s\S]*?RequireRetainedBeforeCreation\(image, path, digest\);[\s\S]*?verifier\.RequireBoundTrust\(\);[\s\S]*?token\.RequireCurrent\(\);[\s\S]*?if \(!authorityCurrent\(\)\)/);
+    assert.match(pin, /RequireRegisteredPath\(registeredPath\);\s*AdminOnlyFile\.RequireProtectedExecutable\(registeredPath\);[\s\S]*?FileShare\.Read\);[\s\S]*?RequireRetainedBeforeCreation\(image, registeredPath, digest\)/);
+    assert.match(pin, /var image = OpenVerifiedBeforeCreation\(registeredPath, digest\);[\s\S]*?!Native\.MatchesLiveProcessImage\(process, child\)/);
+    const entry = broker.slice(broker.indexOf('private CefBrokerLaunchPreparation PrepareDiagnosticLaunch('), broker.indexOf('private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession('));
+    assert.match(entry, /!diagnosticRelock\.Pending && !config\.Development &&[\s\S]*?!diagnosticSession\.Occupied && pendingCefChild is null &&[\s\S]*?completedPreflight is null && unresolvedCefStops\.Count == 0 &&[\s\S]*?CandidateAuthorityCurrent\(expectedGeneration\)/);
+    assert.match(entry, /config\.CefChildImage is not \{ \} image[\s\S]*?config\.CefChildSha256 is not \{ \} digest[\s\S]*?CefBrokerLaunchPreparation\.Open\(image, digest, owner, ownerHandle,\s*Available, baselinePayload, baselineSignature\)/);
+    assert.equal((broker.match(/PrepareDiagnosticLaunch\(/g) ?? []).length, 1);
+    assert.doesNotMatch(protocol, /PrepareDiagnosticLaunch|CefBrokerLaunchPreparation/);
+    assert.doesNotMatch(prep, /CreateProcessAsUser|CreateSuspended|ResumeThread|ResumeRetainedRoot/);
+});

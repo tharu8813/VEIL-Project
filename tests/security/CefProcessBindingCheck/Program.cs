@@ -14,6 +14,18 @@ CefRoleTokenPolicyTests.Run();
 CefCommandRoleTests.Run();
 CefSystemModuleVerifierTests.Run();
 
+// Refusal before any file open or process creation. The test is independent
+// of signed installed runtime, elevation or machine trust provisioning.
+foreach (string invalidPath in new[] { "", "relative.exe", @"\serversharecef.exe",
+    Path.Combine(Path.GetTempPath(), "cef.dll") })
+{
+    bool refused = false;
+    try { using var invalid = CefPinnedImage.OpenVerifiedBeforeCreation(invalidPath, new CefImageDigest(new string('0', 64))); }
+    catch (UnauthorizedAccessException) { refused = true; }
+    if (!refused) throw new InvalidOperationException("Invalid pre-creation executable path accepted.");
+}
+Console.WriteLine("PASS: invalid pre-creation executable paths refused");
+
 // Exercise the actual production parser with no broker or volume access.
 using (var parsed = Protocol.Parse("""{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"123"}"""u8))
 {
