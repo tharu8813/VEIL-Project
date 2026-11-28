@@ -1405,3 +1405,19 @@ test('broker lock and prospective library publication use the same serialized op
     assert.doesNotMatch(gate, /\b(?:File|Directory|Path|Native|Protocol)\./);
 });
 
+
+
+test('CEF library inspection uses fixed existing file pins under exclusive profile ownership without granting replacement', async () => {
+    const layout = await readFile('apps/desktop/Engine/CefProfileLayout.cs', 'utf8');
+    const profile = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedProfileLease.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const pin = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedDirectoryLease.cs', 'utf8');
+    assert.match(layout, /LibraryFile = Path.Combine\(EngineRoot, "library-state.json"\);\s*LibraryStageFile = Path.Combine\(EngineRoot, "library-state.stage"\);/);
+    assert.match(profile, /internal LibraryFileInspection InspectLibraryFiles\(\)\s*\{\s*RequireCurrent\(\);\s*if \(profileLock is null\)[\s\S]*?committed = CefProtectedDirectoryLease.OpenRegularFile\(layout.LibraryFile, volume, readStatus\);\s*staged = CefProtectedDirectoryLease.OpenRegularFile\(layout.LibraryStageFile, volume, readStatus\);\s*var inspection = new LibraryFileInspection\(this, committed, staged\);\s*inspection.RequireCurrent\(\);\s*return inspection;/);
+    assert.match(profile, /owner.RequireCurrent\(\);\s*if \(owner.profileLock is null\)[\s\S]*?committed.RequireCurrent\(owner.readStatus\);\s*staged.RequireCurrent\(owner.readStatus\);\s*owner.RequireCurrent\(\);[\s\S]*?owner.retired = true;/);
+    assert.match(pin, /FileShare.ReadWrite, IntPtr.Zero,\s*FileMode.Open, 0x02000000 \| 0x00200000/);
+    assert.match(pin, /info.Links != 1/);
+    assert.doesNotMatch(profile, /\bFile\.(?:Move|Replace|WriteAllText|Delete)\(/);
+    assert.doesNotMatch(broker, /\bInspectLibraryFiles\s*\(/);
+});
+

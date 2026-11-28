@@ -253,6 +253,56 @@ try
         Check(freshProfile.VerifiedExclusiveEnvironment().Count == 7,
             "Fresh profile owner could not acquire after retired owner disposal.");
     Console.WriteLine("PASS: retired broker-first profile refuses revival and retains exclusive lock until disposal");
+    // Fixed library inspection exercises real Windows file handles on a
+    // synthetic directory and fake protected status. It does not write
+    // through the broker or establish actual BitLocker protection.
+    string libraryPath = profileLayout.LibraryFile;
+    string libraryStage = profileLayout.LibraryStageFile;
+    Check(libraryPath == Path.Combine(profileLayout.EngineRoot, "library-state.json") &&
+        libraryStage == Path.Combine(profileLayout.EngineRoot, "library-state.stage"),
+        "Library paths escaped fixed CEF layout.");
+    File.WriteAllText(libraryPath, "committed-synthetic");
+    File.WriteAllText(libraryStage, "staged-synthetic");
+    using (var readOnlyProfile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+        Reject(() => readOnlyProfile.InspectLibraryFiles());
+    using (var libraryProfile = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    using (var inspection = libraryProfile.InspectLibraryFiles())
+    {
+        inspection.RequireCurrent();
+        bool moveRefused = false;
+        try { File.Move(libraryStage, libraryPath, overwrite: true); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { moveRefused = true; }
+        Check(moveRefused && File.ReadAllText(libraryPath) == "committed-synthetic" &&
+            File.ReadAllText(libraryStage) == "staged-synthetic", "Inspection pins allowed replacement.");
+        inspection.RequireCurrent();
+        authority = false;
+        Reject(() => inspection.RequireCurrent());
+        authority = true;
+        Reject(() => inspection.RequireCurrent());
+        Reject(() => libraryProfile.InspectLibraryFiles());
+    }
+    string libraryAlias = Path.Combine(profileFixture, "library-alias");
+    using (var linkedLibrary = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        Check(CreateHardLinkW(libraryAlias, libraryStage, IntPtr.Zero), "Cannot create library fixture hard link.");
+        Reject(() => linkedLibrary.InspectLibraryFiles());
+        File.Delete(libraryAlias);
+        Reject(() => linkedLibrary.InspectLibraryFiles());
+    }
+    File.Delete(libraryStage);
+    using (var missingStage = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        Reject(() => missingStage.InspectLibraryFiles());
+        Check(!File.Exists(libraryStage) && File.ReadAllText(libraryPath) == "committed-synthetic",
+            "Inspection manufactured missing staging file or changed committed bytes.");
+        Reject(() => missingStage.InspectLibraryFiles());
+    }
+    File.Delete(libraryPath);
+    Console.WriteLine("PASS: fixed CEF library file inspection, replacement refusal and terminal revocation");
     using (var desktopLock = new FileStream(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
     using (var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
         fixtureWindows, () => fixtureStatus, () => authority))
