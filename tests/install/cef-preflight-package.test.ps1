@@ -99,6 +99,25 @@ try {
     $diagStage = Join-Path $work 'diagnostic-stage-refused'
     Reject { Copy-VeilVerifiedPreflightPackage $root $cefEvidence $diagEvidence $diagStage $cert.Thumbprint $commit }
     if (Test-Path -LiteralPath $diagStage) { throw 'Ordinary staging created diagnostic output.' }
+    $diagnosticStage = Join-Path $work 'diagnostic-stage'
+    $diagnosticPlan = Copy-VeilVerifiedPreflightPackage $root $cefEvidence $diagEvidence $diagnosticStage $cert.Thumbprint $commit -Diagnostic
+    if ($diagnosticPlan.kind -cne 'cef-diagnostic-stage-plan' -or $diagnosticPlan.installable -or
+        $diagnosticPlan.startupEnabled -or $diagnosticPlan.runtimePins.startupEnabled -or
+        $diagnosticPlan.baselinePayloadSha256 -cne (Get-FileHash -LiteralPath $baseline).Hash.ToLowerInvariant() -or
+        $diagnosticPlan.baselineSignatureSha256 -cne (Get-FileHash -LiteralPath $detached).Hash.ToLowerInvariant()) {
+        throw 'Unexpected diagnostic stage plan.'
+    }
+    [void](Get-VeilPreflightStagePlan $diagnosticStage $cert.Thumbprint $commit -Diagnostic)
+    Reject { Get-VeilPreflightStagePlan $diagnosticStage $cert.Thumbprint $commit }
+    Reject { Copy-VeilVerifiedPreflightPackage $root $cefEvidence $diagEvidence $diagnosticStage $cert.Thumbprint $commit -Diagnostic }
+    $wrongStage = Join-Path $work 'wrong-diagnostic-mode'
+    Reject { Copy-VeilVerifiedPreflightPackage $root $cefEvidence $packageEvidence $wrongStage $cert.Thumbprint $commit -Diagnostic }
+    if (Test-Path -LiteralPath $wrongStage) { throw 'Wrong diagnostic proof created staging.' }
+    $stagedBaseline = Join-Path $diagnosticStage 'payload/Broker/cef-system-baseline.json'
+    [IO.File]::AppendAllText($stagedBaseline,'changed')
+    Reject { Get-VeilPreflightStagePlan $diagnosticStage $cert.Thumbprint $commit -Diagnostic }
+    [IO.File]::Copy($baseline,$stagedBaseline,$true)
+    [void](Get-VeilPreflightStagePlan $diagnosticStage $cert.Thumbprint $commit -Diagnostic)
     [IO.File]::WriteAllBytes($detached,(New-Object byte[] 512))
     Reject { Read-VeilPreflightPackageEvidence $root $cefEvidence $diagEvidence $cert.Thumbprint $commit -Diagnostic }
     Remove-Item -LiteralPath $baseline,$detached
@@ -151,6 +170,7 @@ try {
     $bin = 'C:\Program Files\VEIL'
     $image = 'C:\Program Files\VEIL-test-volume\profile.vhdx'
     $profile = 'V:\VEIL\profile'
+    Reject { New-VeilPreflightRegistrationDraft $diagnosticPlan $bin $image $profile $volumeGuid $primary $recovery $sid 'synthetic' }
     $draft = New-VeilPreflightRegistrationDraft $plan $bin $image $profile $volumeGuid $primary $recovery $sid 'synthetic'
     if ($draft['broker.json'].clientSha256 -cne $plan.desktopSha256 -or
         $draft['broker.json'].cefChildSha256 -cne $plan.cefChildSha256 -or

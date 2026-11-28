@@ -163,3 +163,13 @@ SCM에 고정 경로의 Veil.VolumeBroker를 LocalSystem / Disabled / Stopped �
 - `CefPreflight` 데스크톱과 `CefDiagnostic` 브로커를 별도 출력으로 빌드하고 서명한다. 기존 CEF 후보와 함께 관리자 관리 payload의 `Broker/cef-system-baseline.json`, `Broker/cef-system-baseline.sig`에 독립적으로 승인된 호스트별 원본 자료를 준비한다. 서명 자료의 키·순번·해시 및 신뢰 레지스트리 준비는 별도 절차이며 이 검사로 승인되지 않는다.
 - 기존 `check-cef-preflight-package.ps1`에 명시적 `-Diagnostic`을 추가하여 별도 빈 증거 디렉터리에서 `-Sign`으로 CMS 증거를 작성하고, 같은 `-Diagnostic`으로 검증한다. 별도 manifest kind `cef-diagnostic-vm-package`, configuration `CefDiagnostic`, installable=false, startupEnabled=false를 사용한다. 일반 패키지 검증은 해당 증거와 브로커 마커, 진단 기준 파일을 거부한다. CMS는 정확한 파일 목록과 바이트를 바인딩하지만 호스트별 독립 RSA 기준 신뢰 검증의 대체가 아니다.
 - 기존 staging/등록/게시/SCM 실행 및 exit 29 자동 시험 도구에는 진단 모드를 추가하지 않았다. 따라서 아직 이 진단 패키지를 설치하거나 실행하지 않는다. 별도 staging 및 증거 체인, trust provisioning, exit 31 시험 도구와 실제 VM 검증이 필요하다. 기존 제품 Release 배포 절차는 변경하지 않는다.
+
+### 진단 패키지 별도 스테이징 (설치 전 준비만)
+
+이전 진단 패키지 증거를 독립적으로 확인한 후 깨끗한 폐기용 VM에서 관리자 Windows PowerShell 5.1 x64로만 실행한다.
+
+~~~powershell
+$diagnosticPlan = .\scripts\stage-cef-preflight-package.ps1 -Diagnostic -DisposableVm -PayloadRoot $payload -CefEvidenceDirectory $evidence -PackageEvidenceDirectory $diagnosticEvidence -SignerThumbprint $pin -SourceCommit $commit
+~~~
+
+고정 Program Files\VEIL.cef-diagnostic-staging에만 신규 복사하며 일반 스테이징 또는 설치/서비스가 존재하면 거부한다. 복사 전과 복사 후 원본/복사본 CMS, 파일 목록 및 해시를 다시 비교한다. 별도 `cef-diagnostic-stage-plan`에 기준 JSON과 서명 SHA-256을 추가하되 installable=false/startupEnabled=false 유지. 기존 일반 등록 초안은 이 plan을 거부한다. 부분 상태는 자동 삭제·재사용하지 않는다. 실제 서명 패키지/ACL/복사 경합/VM 검증 NOT RUN. 진단용 등록 초안, 게시 및 서비스/exit 31 검증은 아직 연결하지 않았다.
