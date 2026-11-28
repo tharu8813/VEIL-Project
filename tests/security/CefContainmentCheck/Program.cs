@@ -121,6 +121,19 @@ try
             brokerJob.AssignVerifiedCandidate(ownerIdentity, owner.SafeHandle, nomination.Identity, observed);
             Check(brokerJob.ContainsVerifiedCandidate(nomination.Identity, observed) &&
                 !File.Exists(markerPath), "Broker did not bind suspended candidate.");
+            brokerJob.RequireInitialNestedBinding(candidate.FixtureJobHandle,
+                ownerIdentity, owner.SafeHandle, nomination.Identity, observed);
+            void RefuseInitialBinding(Action action)
+            {
+                try { action(); }
+                catch (UnauthorizedAccessException) { return; }
+                throw new InvalidOperationException("Invalid initial nested binding accepted.");
+            }
+            RefuseInitialBinding(() => brokerJob.RequireInitialNestedBinding(candidate.FixtureJobHandle,
+                ownerIdentity, owner.SafeHandle, nomination.Identity, owner.SafeHandle));
+            RefuseInitialBinding(() => brokerJob.RequireInitialNestedBinding(candidate.FixtureJobHandle,
+                ownerIdentity with { CreatedFileTime = ownerIdentity.CreatedFileTime + 1 },
+                owner.SafeHandle, nomination.Identity, observed));
             var nested = brokerJob.ObserveNestedRetainedMembers(candidate.FixtureJobHandle,
                 [(nomination.Identity, observed)]);
             Check(nested.Length == 1 && nested[0] == nomination.Identity,
@@ -134,6 +147,8 @@ try
                     [(nomination.Identity, observed)]); }
                 catch (UnauthorizedAccessException) { rejected = true; }
                 Check(rejected, "Unrelated Job with the same count accepted.");
+                RefuseInitialBinding(() => brokerJob.RequireInitialNestedBinding(unrelated.FixtureJobHandle,
+                    ownerIdentity, owner.SafeHandle, nomination.Identity, observed));
             }
             candidate.ResumeAfterVerification(() => brokerJob.ContainsVerifiedCandidate(nomination.Identity, observed));
             Check(SpinWait.SpinUntil(() => File.Exists(markerPath), TimeSpan.FromSeconds(10)),
@@ -163,6 +178,8 @@ try
             using var rootObserver = Process.GetProcessById(checked((int)binding.Identity.ProcessId));
             _ = rootObserver.SafeHandle;
             brokerJob.AssignVerifiedCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+            brokerJob.RequireInitialNestedBinding(candidate.FixtureJobHandle,
+                identity, owner.SafeHandle, binding.Identity, retained);
             Check(brokerJob.ContainsVerifiedCandidate(binding.Identity, retained) == (mode == 0),
                 "Fixture job was mistaken for disabled preflight admission.");
             candidate.ResumeAfterVerification(() => mode == 0
@@ -208,6 +225,8 @@ try
                     catch (UnauthorizedAccessException) { return; }
                     throw new InvalidOperationException("Invalid retained job observation accepted.");
                 }
+                RefuseObservation(() => brokerJob.RequireInitialNestedBinding(candidate.FixtureJobHandle,
+                    identity, owner.SafeHandle, binding.Identity, retained));
                 RefuseObservation(() => brokerJob.ObserveRetainedMembers([(binding.Identity, retained)]));
                 RefuseObservation(() => brokerJob.ObserveRetainedMembers([
                     (binding.Identity, retained), (binding.Identity, retained)]));
