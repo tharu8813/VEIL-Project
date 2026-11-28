@@ -41,6 +41,27 @@ internal static class CefRoleTokenPolicyTests
             Expect(role, browser, unverified);
             Expect(role, browser with { Elevated = true }, reject);
         }
+        var owner = new CefLaunchTokenSnapshot(browser, 11, 12, 13, false, true);
+        var root = owner with { Token = browser with { Identity = identity with { ProcessId = 101, CreatedFileTime = 124 } },
+            TokenId = 14, ModifiedId = 15 };
+        CefLaunchTokenPolicy.RequirePair(owner, root);
+        CefLaunchTokenPolicy.RequireSame(owner, owner);
+        void Refuse(Action action)
+        {
+            try { action(); }
+            catch (UnauthorizedAccessException) { return; }
+            throw new InvalidOperationException("Invalid launch token accepted.");
+        }
+        Refuse(() => CefLaunchTokenPolicy.RequirePair(owner, root with { AuthenticationId = 99 }));
+        Refuse(() => CefLaunchTokenPolicy.RequirePair(owner, owner));
+        Refuse(() => CefLaunchTokenPolicy.RequirePair(owner, root with { AdministratorGroupPresent = true }));
+        Refuse(() => CefLaunchTokenPolicy.RequirePair(owner, root with { OnlyStandardPrivileges = false }));
+        Refuse(() => CefLaunchTokenPolicy.RequireStandard(owner with { Token = browser with { Elevated = true } }));
+        Refuse(() => CefLaunchTokenPolicy.RequireStandard(owner with { Token = browser with { ElevationType = 3 } }));
+        Refuse(() => CefLaunchTokenPolicy.RequireStandard(owner with { Token = browser with { Identity = identity with { UserSid = "S-1-5-18" } } }));
+        Refuse(() => CefLaunchTokenPolicy.RequireSame(owner, owner with { ModifiedId = 99 }));
+        Refuse(() => CefLaunchTokenPolicy.RequireSame(owner, owner with { TokenId = 99 }));
+        Console.WriteLine("PASS: separate standard-user launch token and logon binding policy (synthetic)");
         Console.WriteLine("PASS: conservative CEF role token baselines and unknown/unverified role refusal");
     }
 }

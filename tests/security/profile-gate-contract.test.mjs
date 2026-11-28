@@ -770,3 +770,15 @@ test('atomic private Job pair is fixture-only and both handles are retained at c
     assert.match(job, /#if VEIL_CEF_CONTAINMENT_TEST[\s\S]*?CreateAtomicPairFixture[\s\S]*?assignmentIssued = peer\.assignmentIssued = true;\s*return Veil\.Desktop\.CefContainedProcess\.CreateSuspendedWithFixtureJobs\(image, environment, job, peer\.job\);[\s\S]*?#endif/);
     assert.match(fixture, /mode == 6[\s\S]*?CreateAtomicPairFixture\(privatePeer!, image, environment\)[\s\S]*?brokerJob\.BindSingleCandidate[\s\S]*?privatePeer!\.BindSingleCandidate[\s\S]*?RequirePrivateNestedBinding[\s\S]*?candidate\.ResumeAfterVerification/);
 });
+
+
+test('internal diagnostic root and owner require separate standard-user tokens and same logon', async () => {
+    const observer = await readFile('apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs', 'utf8');
+    const nested = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    assert.match(observer, /ReadVariable\(token, 2\); \/\/ TokenGroups/);
+    assert.match(observer, /ReadVariable\(token, 3\); \/\/ TokenPrivileges/);
+    assert.match(observer, /snapshot\.AdministratorGroupPresent \|\|\s*!snapshot\.OnlyStandardPrivileges/);
+    assert.match(observer, /owner\.AuthenticationId != root\.AuthenticationId/);
+    assert.match(nested, /ObserveLaunchToken\(ownerHandle, owner\);[\s\S]*?ObserveLaunchToken\(rootHandle, root\);[\s\S]*?CefLaunchTokenPolicy\.RequirePair\(ownerToken, rootToken\);[\s\S]*?RequirePrivateNestedBinding/);
+    assert.match(nested, /CefLaunchTokenPolicy\.RequireSame\(ownerToken, CefProcessTokenObserver\.ObserveLaunchToken\(ownerHandle, owner\)\);[\s\S]*?CefLaunchTokenPolicy\.RequireSame\(rootToken, CefProcessTokenObserver\.ObserveLaunchToken\(rootHandle, root\)\);/);
+});

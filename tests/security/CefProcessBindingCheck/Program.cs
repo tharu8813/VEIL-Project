@@ -141,6 +141,15 @@ try
         expected with { CreatedFileTime = expected.CreatedFileTime + 1 }));
     Reject(() => CefProcessTokenObserver.Observe(retained,
         expected with { SessionId = expected.SessionId + 1 }));
+    var launchToken = CefProcessTokenObserver.ObserveLaunchToken(retained, expected);
+    Check(launchToken.Token == tokenObservation &&
+        launchToken == CefProcessTokenObserver.ObserveLaunchToken(child.SafeHandle, expected),
+        "Independent retained handles disagreed on group/privilege launch snapshot.");
+    Reject(() => CefProcessTokenObserver.ObserveLaunchToken(owner.SafeHandle, expected));
+    if (launchToken.Token.Elevated || launchToken.Token.ElevationType != 1 ||
+        launchToken.AdministratorGroupPresent || !launchToken.OnlyStandardPrivileges)
+        Reject(() => CefLaunchTokenPolicy.RequireStandard(launchToken));
+    Console.WriteLine("PASS: actual retained launch token inventory (not a launch authorization)");
     Console.WriteLine("PASS: retained process token snapshot and wrong-object refusal");
     Check(Native.SameLiveProcess(retained, child.SafeHandle), "Different handles to the same child did not match.");
     Check(!Native.SameLiveProcess(retained, owner.SafeHandle), "Different process objects matched.");

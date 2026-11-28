@@ -111,6 +111,9 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
             root.CreatedFileTime < owner.CreatedFileTime ||
             !string.Equals(root.ImagePath, registration.ImagePath, StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException("CEF diagnostic session identity mismatch.");
+        var ownerToken = CefProcessTokenObserver.ObserveLaunchToken(ownerHandle, owner);
+        var rootToken = CefProcessTokenObserver.ObserveLaunchToken(rootHandle, root);
+        CefLaunchTokenPolicy.RequirePair(ownerToken, rootToken);
         // Before accepting ownership, require two private broker-created Jobs.
         // Failure leaves ownership with the caller for stop recovery.
         registration.RequireCurrent();
@@ -120,6 +123,8 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
         readContext = () =>
         {
             systemVerifier.RequireBoundTrust();
+            CefLaunchTokenPolicy.RequireSame(ownerToken, CefProcessTokenObserver.ObserveLaunchToken(ownerHandle, owner));
+            CefLaunchTokenPolicy.RequireSame(rootToken, CefProcessTokenObserver.ObserveLaunchToken(rootHandle, root));
             var current = readCurrent();
             return new(Native.ObserveProcess(ownerHandle), current.Generation, current.RuntimeLease,
                 Native.IsRunning(ownerHandle), current.VolumeProtected);

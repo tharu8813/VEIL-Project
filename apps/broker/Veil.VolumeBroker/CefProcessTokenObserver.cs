@@ -11,9 +11,58 @@ namespace Veil.VolumeBroker;
 internal sealed record CefProcessTokenObservation(ClientIdentity Identity, uint IntegrityRid,
     bool Restricted, bool AppContainer, bool Elevated, uint ElevationType);
 
+// Launch-source policy is stricter than the provisional role diagnostic.
+// The authenticated interactive owner and browser root must be distinct
+// process objects in the same non-elevated logon session. Never treat a
+// filtered administrator token as a separate standard-user account.
+internal sealed record CefLaunchTokenSnapshot(CefProcessTokenObservation Token,
+    long AuthenticationId, long TokenId, long ModifiedId,
+    bool AdministratorGroupPresent, bool OnlyStandardPrivileges);
+
+internal static class CefLaunchTokenPolicy
+{
+    internal static void RequireStandard(CefLaunchTokenSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var token = snapshot.Token;
+        if (CefRoleTokenPolicy.Evaluate(token.Identity, CefObservedRole.Browser, token) !=
+            CefRoleTokenDecision.MatchesProvisionalBaseline ||
+            snapshot.AuthenticationId == 0 || snapshot.AdministratorGroupPresent ||
+            !snapshot.OnlyStandardPrivileges ||
+            token.Identity.UserSid is "S-1-5-18" or "S-1-5-19" or "S-1-5-20")
+            throw new UnauthorizedAccessException("CEF requires a separate standard-user launch token.");
+    }
+
+    internal static void RequirePair(CefLaunchTokenSnapshot owner, CefLaunchTokenSnapshot root)
+    {
+        RequireStandard(owner);
+        RequireStandard(root);
+        if (owner.Token.Identity.ProcessId == root.Token.Identity.ProcessId ||
+            root.Token.Identity.CreatedFileTime < owner.Token.Identity.CreatedFileTime ||
+            owner.Token.Identity.SessionId != root.Token.Identity.SessionId ||
+            !string.Equals(owner.Token.Identity.UserSid, root.Token.Identity.UserSid, StringComparison.OrdinalIgnoreCase) ||
+            owner.AuthenticationId != root.AuthenticationId)
+            throw new UnauthorizedAccessException("CEF root is outside the authenticated owner's logon.");
+    }
+
+    internal static void RequireSame(CefLaunchTokenSnapshot expected, CefLaunchTokenSnapshot current)
+    {
+        RequireStandard(current);
+        if (expected != current)
+            throw new UnauthorizedAccessException("CEF launch token changed.");
+    }
+}
+
 internal static class CefProcessTokenObserver
 {
-    internal static CefProcessTokenObservation Observe(SafeProcessHandle process, ClientIdentity expected)
+    internal static CefProcessTokenObservation Observe(SafeProcessHandle process, ClientIdentity expected) =>
+        ReadSnapshot(process, expected, inspectLaunchPrivileges: false).Token;
+
+    internal static CefLaunchTokenSnapshot ObserveLaunchToken(SafeProcessHandle process, ClientIdentity expected) =>
+        ReadSnapshot(process, expected, inspectLaunchPrivileges: true);
+
+    private static CefLaunchTokenSnapshot ReadSnapshot(SafeProcessHandle process, ClientIdentity expected,
+        bool inspectLaunchPrivileges)
     {
         ArgumentNullException.ThrowIfNull(process);
         ArgumentNullException.ThrowIfNull(expected);
@@ -37,6 +86,8 @@ internal static class CefProcessTokenObserver
         if (elevationType is < 1 or > 3)
             throw new UnauthorizedAccessException("Unknown token elevation type.");
 
+        bool administratorGroup = inspectLaunchPrivileges && HasAdministratorGroup(token);
+        bool standardPrivileges = inspectLaunchPrivileges && HasOnlyStandardPrivileges(token);
         var after = ReadFixed<TokenStatistics>(token, 10);
         // Reopen the token of the same retained process, not a PID. A
         // replaced or modified token must not be accepted as this snapshot.
@@ -45,8 +96,102 @@ internal static class CefProcessTokenObserver
         if (!SameToken(before, after) || !SameToken(after, currentStats) ||
             Native.ObserveProcess(process) != expected)
             throw new UnauthorizedAccessException("CEF token changed during observation.");
-        return new(expected, integrity, restricted, appContainer, elevated, elevationType);
+        return new(new(expected, integrity, restricted, appContainer, elevated, elevationType),
+            after.AuthenticationId, after.TokenId, after.ModifiedId, administratorGroup, standardPrivileges);
     }
+
+    // Inspect raw TokenGroups, including disabled and deny-only SIDs.
+    // WindowsIdentity.Groups alone may omit groups that are not enabled.
+    private static bool HasAdministratorGroup(SafeAccessTokenHandle token)
+    {
+        var (buffer, length) = ReadVariable(token, 2); // TokenGroups
+        try
+        {
+            int count = Marshal.ReadInt32(buffer);
+            int entrySize = IntPtr.Size * 2;
+            if (count < 0 || count > 4096 || (long)IntPtr.Size + (long)count * entrySize > length)
+                throw new UnauthorizedAccessException("Invalid token group inventory.");
+            bool administrator = false;
+            for (int i = 0; i < count; i++)
+            {
+                IntPtr sid = Marshal.ReadIntPtr(buffer, IntPtr.Size + i * entrySize);
+                long offset = sid.ToInt64() - buffer.ToInt64();
+                if (offset < IntPtr.Size + (long)count * entrySize || offset > length - 8L ||
+                    Marshal.ReadByte(sid) != 1)
+                    throw new UnauthorizedAccessException("Invalid token group SID.");
+                int subAuthorities = Marshal.ReadByte(sid, 1);
+                int sidLength = 8 + 4 * subAuthorities;
+                if (subAuthorities > 15 || offset > length - sidLength)
+                    throw new UnauthorizedAccessException("Invalid token group SID length.");
+                byte[] bytes = new byte[sidLength];
+                Marshal.Copy(sid, bytes, 0, sidLength);
+                string value = new SecurityIdentifier(bytes, 0).Value;
+                // Builtin Administrators, domain Administrators and
+                // Enterprise/Schema Admins are refused even if deny-only.
+                administrator |= value == "S-1-5-32-544" ||
+                    (value.StartsWith("S-1-5-21-", StringComparison.Ordinal) &&
+                        (value.EndsWith("-512", StringComparison.Ordinal) ||
+                         value.EndsWith("-518", StringComparison.Ordinal) ||
+                         value.EndsWith("-519", StringComparison.Ordinal)));
+            }
+            return administrator;
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    private static bool HasOnlyStandardPrivileges(SafeAccessTokenHandle token)
+    {
+        // Conservative allowlist of ordinary desktop privileges, including
+        // disabled privileges. Unknown or additional privileges fail closed.
+        var allowed = new HashSet<long>();
+        foreach (string name in new[] { "SeChangeNotifyPrivilege", "SeShutdownPrivilege",
+            "SeUndockPrivilege", "SeIncreaseWorkingSetPrivilege", "SeTimeZonePrivilege" })
+        {
+            if (!LookupPrivilegeValueW(null, name, out long luid))
+                throw new Win32Exception();
+            allowed.Add(luid);
+        }
+        var (buffer, length) = ReadVariable(token, 3); // TokenPrivileges
+        try
+        {
+            int count = Marshal.ReadInt32(buffer);
+            // LUID (8) + attributes (4), DWORD aligned, after count.
+            if (count < 0 || count > 1024 || 4L + 12L * count != length)
+                throw new UnauthorizedAccessException("Invalid token privilege inventory.");
+            var seen = new HashSet<long>();
+            bool standard = true;
+            for (int i = 0; i < count; i++)
+            {
+                long luid = Marshal.ReadInt64(buffer, 4 + 12 * i);
+                if (!seen.Add(luid))
+                    throw new UnauthorizedAccessException("Duplicate token privilege.");
+                standard &= allowed.Contains(luid);
+            }
+            return standard;
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    private static (IntPtr Buffer, int Length) ReadVariable(SafeAccessTokenHandle token, int infoClass)
+    {
+        if (GetTokenInformation(token, infoClass, IntPtr.Zero, 0, out uint needed) ||
+            Marshal.GetLastWin32Error() != 122 || needed < 4 || needed > 262144)
+            throw new UnauthorizedAccessException("Invalid variable token information size.");
+        IntPtr buffer = Marshal.AllocHGlobal((int)needed);
+        try
+        {
+            if (!GetTokenInformation(token, infoClass, buffer, needed, out uint returned))
+                throw new Win32Exception();
+            if (returned < 4 || returned > needed)
+                throw new UnauthorizedAccessException("Invalid returned token information size.");
+            return (buffer, (int)returned);
+        }
+        catch { Marshal.FreeHGlobal(buffer); throw; }
+    }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool LookupPrivilegeValueW(string? system, string name, out long luid);
 
     private static SafeAccessTokenHandle OpenQueryToken(SafeProcessHandle process)
     {
