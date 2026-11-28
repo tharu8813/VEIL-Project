@@ -5,6 +5,7 @@ internal static class CefSystemModuleVerifierTests
 {
     internal static void Run()
     {
+        CefSignedSystemModuleBaselineTests.Run();
         string system = Environment.SystemDirectory;
         string path = Path.Combine(system, "kernel32.dll");
         var pin = new CefSystemModulePin("kernel32.dll", new FileInfo(path).Length, new string('0', 64), new string('1', 64));
