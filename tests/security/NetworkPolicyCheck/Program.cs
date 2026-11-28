@@ -1034,6 +1034,57 @@ Console.WriteLine("PASS: exact-volume preflight cleanup, command refusal and det
     Console.WriteLine("PASS: bounded immutable generation namespace, rollback and pending-stage refusal");
 }
 
+// Authenticated chain is pure data: no real key, disk format or anchor service.
+{
+    var store = Guid.NewGuid();
+    byte[] key = Enumerable.Range(1, 32).Select(i => (byte)i).ToArray();
+    byte[] zero = new byte[32];
+    var first = Veil.VolumeBroker.CefLibraryGenerationChain.Seal(store, key, 1, zero, "first"u8);
+    var second = Veil.VolumeBroker.CefLibraryGenerationChain.Seal(store, key, 2, first.Tag, "second"u8);
+    var anchor = new Veil.VolumeBroker.CefLibraryGenerationAnchor(2, second.Tag);
+    var catalog = new Veil.VolumeBroker.CefLibraryGenerationSnapshot(2, null, 3, false);
+    Veil.VolumeBroker.CefLibraryGenerationRecord? Read(int n) => n == 1 ? first : n == 2 ? second : null;
+    Veil.VolumeBroker.CefLibraryChainObservation Verify(Veil.VolumeBroker.CefLibraryGenerationSnapshot c,
+        Veil.VolumeBroker.CefLibraryGenerationAnchor a, Func<int, Veil.VolumeBroker.CefLibraryGenerationRecord?> read) =>
+        Veil.VolumeBroker.CefLibraryGenerationChain.Inspect(store, key, c, a, read);
+    void Reject(Action operation)
+    {
+        bool refused = false;
+        try { operation(); }
+        catch (InvalidDataException) { refused = true; }
+        Check(refused, "invalid library content chain accepted");
+    }
+    Check(Verify(catalog, anchor, Read) is { AuthenticatedThrough: 2, AnchoredThrough: 2, RecoveryRequired: false },
+        "fully anchored chain");
+    Check(Verify(catalog, new(1, first.Tag), Read) is
+        { AuthenticatedThrough: 2, AnchoredThrough: 1, RecoveryRequired: true }, "unanchored suffix requires recovery");
+    Check(Verify(new(2, 3, null, true), anchor, Read) is { RecoveryRequired: true },
+        "pending stage cannot be replayed");
+    Check(Verify(new(0, null, 1, false), new(0, zero), _ => throw new InvalidOperationException()) is
+        { AuthenticatedThrough: 0, RecoveryRequired: false }, "anchored genesis");
+    Reject(() => Verify(new(1, null, 2, false), anchor, Read));
+    Reject(() => Verify(catalog, anchor with { Tag = zero }, Read));
+    Reject(() => Verify(catalog, new(0, first.Tag), Read));
+    Reject(() => Verify(new(2, 3, 3, true), anchor, Read));
+    Reject(() => Verify(catalog, anchor, n => n == 1 ? first : null));
+    Reject(() => Verify(catalog, anchor, n => n == 1 ? second : first));
+    Reject(() => Verify(catalog, anchor, n => n == 1 ? first with { Payload = "altered"u8.ToArray() } : second));
+    Reject(() => Verify(catalog, anchor, n => n == 1 ? first : second with { PreviousTag = zero }));
+    Reject(() => Verify(catalog, anchor, n => n == 1 ? first : second with { Tag = zero }));
+    Reject(() => Verify(catalog, anchor, n => n == 1 ? first with { Payload = [] } : second));
+    Reject(() => Verify(catalog, anchor, n => n == 1 ? first with
+        { Payload = new byte[Veil.VolumeBroker.CefLibraryGenerationChain.MaximumPayloadBytes + 1] } : second));
+    Reject(() => Veil.VolumeBroker.CefLibraryGenerationChain.Inspect(Guid.NewGuid(), key, catalog, anchor, Read));
+    Reject(() => Veil.VolumeBroker.CefLibraryGenerationChain.Inspect(store, new byte[32], catalog, anchor, Read));
+    var fork = Veil.VolumeBroker.CefLibraryGenerationChain.Seal(store, key, 2, first.Tag, "fork"u8);
+    Reject(() => Verify(catalog, anchor, n => n == 1 ? first : fork));
+    byte[] mutable = "detached"u8.ToArray();
+    var sealedCopy = Veil.VolumeBroker.CefLibraryGenerationChain.Seal(store, key, 1, zero, mutable);
+    mutable[0] ^= 1;
+    Check(Encoding.UTF8.GetString(sealedCopy.Payload) == "detached", "seal retained mutable input");
+    Console.WriteLine("PASS: authenticated immutable library chain, rollback anchor and recovery refusal");
+}
+
 file sealed class SyntheticRetainedResource : IDisposable
 {
     internal int Disposals { get; private set; }
