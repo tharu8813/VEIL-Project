@@ -271,3 +271,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #280 exact Windows/native PASS. #281 최초 Windows 46169261111 FAIL: ProcessFailed 소스 계약이 검색 UI 폐기 추가 이전 순서를 검사했다. 수정 head `e35778eee85145ca3b26c8b697d3ed06a0d69cb5`, CI 대기.
 - TabbedDevelopmentHost에 25%p 확대/축소, 100% 초기화 버튼 및 WPF routed Ctrl+Plus/Minus/0, 현재 선택된 live view의 실제 native readback 표시를 추가한다. managed/native 50~300% 유한값 제한, native closing/UI thread 검사. 서로 다른 loopback origin의 두 view에서 125%/100% readback 및 선택/초기화 회귀를 작성했다. Chromium origin별 zoom 공유 가능성을 유지하므로 동일 origin tab 독립성이나 저장/복원 보증은 하지 않는다. native HWND 단축키 전달, 실제 WPF runtime, 새 CI, 보호 VM 및 독립 리뷰 미검증. WebView2/startupEnabled=false 유지.
+
+### P3-02 개발용 브라우저 전체 화면 및 페이지 전체 화면 분리 (미완료)
+
+- #281 수정 head Windows 46169740661 / Native 46169740665 PASS, #282 exact Windows 46169834248 PASS / Native 46169834303 실행 중 확인. 독립 리뷰 없음.
+- WPF 창의 F11/버튼 host fullscreen은 기존 style/state/resize를 복원하고 탭/toolbar만 숨기며 하단 종료 제어는 남긴다. 페이지 전체 화면은 선택된 view의 관측 상태만 별도 안내하며 host fullscreen을 자동 활성화하지 않는다. 사용자 요청 시 native IsFullscreen/ExitFullscreen(false) 및 managed ID/epoch/timeout 확인을 추가한다. 실제 페이지 fullscreen 진입/종료 실측은 없음. 합성 fixture는 WPF host fullscreen 전환/복원과 page state 불변 조건을 요구한다. 새 CI, 실제 WPF runtime, native HWND keyboard routing, 보호 VM, 독립 리뷰 미검증. WebView2/startupEnabled=false 유지.

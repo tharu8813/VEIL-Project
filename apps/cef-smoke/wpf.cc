@@ -966,6 +966,16 @@ extern "C" __declspec(dllexport) int VeilCefIsPageFullScreen(uint64_t id) {
   const auto state = LookupView(id);
   return state && state->page_fullscreen ? 1 : 0;
 }
+extern "C" __declspec(dllexport) int VeilCefExitPageFullscreen(uint64_t id) {
+  if (!CefCurrentlyOn(TID_UI)) return 0;
+  const auto state = LookupView(id);
+  const auto browser = LookupBrowser(id);
+  if (!state || !browser || state->closing || !state->page_fullscreen ||
+      !browser->GetHost()->IsFullscreen()) return 0;
+  // Explicit user action; the host keeps its own window geometry unchanged.
+  browser->GetHost()->ExitFullscreen(false);
+  return 1;
+}
 extern "C" __declspec(dllexport) const wchar_t* VeilCefSource(uint64_t id) {
   const auto state = LookupView(id);
   return state ? state->page_source.c_str() : L"";

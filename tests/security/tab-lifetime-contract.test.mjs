@@ -422,7 +422,7 @@ test('CEF opt-in tab shell keeps native views parented and routes commands to th
 test('page fullscreen exit is a narrow adapter operation and window shutdown disposes pending views', () => {
     assert.match(engineContract, /Task<bool> TryExitPageFullScreenAsync\(\);/);
     assert.match(webView2, /public async Task<bool> TryExitPageFullScreenAsync\(\)[\s\S]*?if \(IsPageFullScreen != true\) return false;\s*await Core\.ExecuteScriptAsync\("document\.fullscreenElement && document\.exitFullscreen\(\)"\);/);
-    assert.match(cefView, /TryExitPageFullScreenAsync\(\) => Task\.FromResult\(false\);/);
+    assert.match(cefView, /public async Task<bool> TryExitPageFullScreenAsync\(\)/);
     assert.doesNotMatch(tabs, /CoreWebView2|ExecuteScriptAsync/);
     assert.match(tabs, /bool Current\(\) => AcceptTabEvents\(tab\) && Active == tab && tab\.NavigationEpoch == epoch;[\s\S]*?await tab\.EngineView\.TryExitPageFullScreenAsync\(\) && Current\(\)/);
     assert.match(browser, /initializingViews\.Add\(engineView\);\s*try\s*\{\s*Pages\.Children\.Add\(element\);\s*await engineView\.InitializeAsync\(\);/);
@@ -816,7 +816,7 @@ test('CEF fixture find is bounded, serialized and tied to native view and docume
 
 
 test('CEF fixture find UI scopes result publication to exact tab, query, navigation and request', () => {
-    assert.match(cefTabbed, /window.PreviewKeyDown \+= \(_, e\) =>[\s\S]*?e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control/);
+    assert.match(cefTabbed, /window.PreviewKeyDown \+= async \(_, e\) =>[\s\S]*?e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control/);
     assert.match(cefTabbed, /findQuery.TextChanged \+= \(_, _\) => InvalidateFindUi\(\);/);
     assert.match(cefTabbed, /private bool CanPublishFind\(FindRequest request\) =>[\s\S]*?ReferenceEquals\(currentFind, request\)[\s\S]*?ReferenceEquals\(active, request.Tab\)[\s\S]*?request.Tab.View.NativeHandle == request.ViewId[\s\S]*?request.Tab.LastNavigationId == request.NavigationId[\s\S]*?request.Tab.View.Source == request.Source && findQuery.Text == request.Query;/);
     assert.match(cefTabbed, /private void PublishFindResult\(FindRequest request, bool\? found\)\s*\{\s*if \(!CanPublishFind\(request\)\) return;/);
@@ -834,4 +834,16 @@ test('CEF development zoom controls clamp requests and show actual selected-view
     assert.match(cefTabbed, /double zoom = live && !shuttingDown \? active!.View.ZoomFactor : double.NaN;/);
     assert.match(cefTabbed, /zoomLabel.Text = zoomKnown \? \$"\{Math.Round\(zoom \* 100\)\}%" : "";/);
     assert.match(cefTabbed, /Zoom readback followed selected distinct-origin view and reset to 100 percent/);
+});
+
+
+test('CEF browser fullscreen is host-owned and page exit is a narrow observed operation', () => {
+    assert.match(cefNative, /VeilCefExitPageFullscreen\(uint64_t id\)[\s\S]*?state->closing \|\| !state->page_fullscreen \|\|\s*!browser->GetHost\(\)->IsFullscreen\(\)\) return 0;[\s\S]*?browser->GetHost\(\)->ExitFullscreen\(false\);/);
+    assert.match(cefView, /if \(CefNative.VeilCefExitPageFullscreen\(id\) == 0\) return false;[\s\S]*?while \(!disposed && NativeHandle == id && loginContextEpoch == epoch[\s\S]*?if \(IsPageFullScreen == false\) return true;/);
+    assert.match(cefTabbed, /e.Key == Key.F11 && Keyboard.Modifiers == ModifierKeys.None/);
+    assert.match(cefTabbed, /savedWindowStyle = window.WindowStyle;\s*savedWindowState = window.WindowState;\s*savedResizeMode = window.ResizeMode;/);
+    assert.match(cefTabbed, /window.WindowStyle = savedWindowStyle;\s*window.ResizeMode = savedResizeMode;\s*window.WindowState = savedWindowState;/);
+    assert.match(cefTabbed, /fullscreenControls.Children.Add\(fullscreenToggle\);\s*fullscreenControls.Children.Add\(pageFullscreenExit\);/);
+    assert.match(cefTabbed, /bool exited = await tab.View.TryExitPageFullScreenAsync\(\);[\s\S]*?ReferenceEquals\(active, tab\)[\s\S]*?tab.View.NativeHandle == id && tab.LastNavigationId == navigation/);
+    assert.match(cefTabbed, /Browser full screen restored host state without changing page full screen/);
 });
