@@ -41,6 +41,10 @@ $script:markerAccepted = $true
 function Assert-VeilPreflightDesktopMarker([string]$Root) {
     if (-not $script:markerAccepted) { throw 'Synthetic wrong build marker.' }
 }
+$script:diagnosticMarker = $false
+function Assert-VeilPreflightBrokerMarker([string]$Root,[switch]$Diagnostic) {
+    if ([bool]$Diagnostic -ne $script:diagnosticMarker) { throw 'Synthetic broker marker mismatch.' }
+}
 $rsa = [Security.Cryptography.RSA]::Create(2048)
 $req = [Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=VEIL preflight test',$rsa,
     [Security.Cryptography.HashAlgorithmName]::SHA256,[Security.Cryptography.RSASignaturePadding]::Pkcs1)
@@ -70,6 +74,36 @@ try {
     $manifest = Verify
     if ($manifest.kind -cne 'cef-preflight-vm-package' -or $manifest.installable -or $manifest.startupEnabled -or
         $manifest.files.Count -ne 12) { throw 'Unexpected package manifest.' }
+    # Distinct signed diagnostic inventory: ordinary paths must refuse it.
+    $diagEvidence = Join-Path $work 'diagnostic-evidence'
+    [void][IO.Directory]::CreateDirectory($diagEvidence)
+    $baseline = Join-Path $root 'Broker/cef-system-baseline.json'
+    $detached = Join-Path $root 'Broker/cef-system-baseline.sig'
+    Reject { Read-VeilPreflightPackageEvidence $root $cefEvidence $packageEvidence $cert.Thumbprint $commit -Diagnostic }
+    $script:diagnosticMarker = $true
+    Reject { Verify }
+    Reject { Write-VeilPreflightPackageEvidence $root $cefEvidence $diagEvidence $commit $cert -Diagnostic }
+    [IO.File]::WriteAllText($baseline,'synthetic baseline bytes; not trusted')
+    [IO.File]::WriteAllBytes($detached,(New-Object byte[] 383))
+    Reject { Write-VeilPreflightPackageEvidence $root $cefEvidence $diagEvidence $commit $cert -Diagnostic }
+    [IO.File]::WriteAllBytes($detached,(New-Object byte[] 384))
+    Reject { Verify }
+    $script:diagnosticMarker = $false
+    Reject { Write-VeilPreflightPackageEvidence $root $cefEvidence $diagEvidence $commit $cert -Diagnostic }
+    $script:diagnosticMarker = $true
+    Write-VeilPreflightPackageEvidence $root $cefEvidence $diagEvidence $commit $cert -Diagnostic
+    $diag = Read-VeilPreflightPackageEvidence $root $cefEvidence $diagEvidence $cert.Thumbprint $commit -Diagnostic
+    if ($diag.kind -cne 'cef-diagnostic-vm-package' -or $diag.configuration -cne 'CefDiagnostic' -or
+        $diag.installable -or $diag.startupEnabled -or $diag.files.Count -ne 14) { throw 'Unexpected diagnostic package.' }
+    Reject { Read-VeilPreflightPackageEvidence $root $cefEvidence $diagEvidence $cert.Thumbprint $commit }
+    $diagStage = Join-Path $work 'diagnostic-stage-refused'
+    Reject { Copy-VeilVerifiedPreflightPackage $root $cefEvidence $diagEvidence $diagStage $cert.Thumbprint $commit }
+    if (Test-Path -LiteralPath $diagStage) { throw 'Ordinary staging created diagnostic output.' }
+    [IO.File]::WriteAllBytes($detached,(New-Object byte[] 512))
+    Reject { Read-VeilPreflightPackageEvidence $root $cefEvidence $diagEvidence $cert.Thumbprint $commit -Diagnostic }
+    Remove-Item -LiteralPath $baseline,$detached
+    $script:diagnosticMarker = $false
+    [void](Verify)
     Reject { Read-VeilPreflightPackageEvidence $root $cefEvidence $packageEvidence ('0'*40) $commit }
     Reject { Read-VeilPreflightPackageEvidence $root $cefEvidence $packageEvidence $cert.Thumbprint ('b'*40) }
     Reject { Write-VeilPreflightPackageEvidence $root $cefEvidence $packageEvidence $commit $cert }

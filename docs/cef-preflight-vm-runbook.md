@@ -157,3 +157,9 @@ SCM에 고정 경로의 Veil.VolumeBroker를 LocalSystem / Disabled / Stopped �
 - 같은 CefPreflight 전용 빌드에 `--cef-prepare-profile`이라는 별도 모드를 추가했다. 실제 서명된 시험용 설치, 등록된 표준 사용자, 시험 VHDX에서만 수동 검증 대상으로 사용한다. 기존 자동 사전 검사 도구는 `--cef-protected-preflight`와 종료 코드 29만 사용하며 변경하지 않았다.
 - 초기 준비 모드는 기존 사용자 인증, 독점 `profile.lock`, 고정 CEF 디렉터리 준비를 사용한다. CEF 런타임/환경 내보내기, 자식 실행, 브로커 소유권 전달을 하지 않는다. 데스크톱 lock을 해제한 뒤 정확한 볼륨의 비강제 재잠금 및 필요 시 분리를 명시적으로 확인한다. 정상 종료 코드 30은 레이아웃 준비만을 뜻한다. 29 또는 제품 실행 성공으로 해석하지 않는다. 취소/오류/알림 철회는 실패이며 부분 생성된 디렉터리를 자동 삭제하지 않는다.
 - 이후 브로커 우선 준비는 완전히 새로운 인증 세션 및 기존 파일/디렉터리 재검증이 필요하다. 동일 세션의 잠금 인계나 보안 검증을 주장하지 않는다. 실제 VM 실행은 NOT RUN이며 자동 테스트 스크립트 및 증거 형식에 아직 통합하지 않았다.
+
+## 별도 브로커 정지 프로세스 진단 패키지 증거 (준비만 가능)
+
+- `CefPreflight` 데스크톱과 `CefDiagnostic` 브로커를 별도 출력으로 빌드하고 서명한다. 기존 CEF 후보와 함께 관리자 관리 payload의 `Broker/cef-system-baseline.json`, `Broker/cef-system-baseline.sig`에 독립적으로 승인된 호스트별 원본 자료를 준비한다. 서명 자료의 키·순번·해시 및 신뢰 레지스트리 준비는 별도 절차이며 이 검사로 승인되지 않는다.
+- 기존 `check-cef-preflight-package.ps1`에 명시적 `-Diagnostic`을 추가하여 별도 빈 증거 디렉터리에서 `-Sign`으로 CMS 증거를 작성하고, 같은 `-Diagnostic`으로 검증한다. 별도 manifest kind `cef-diagnostic-vm-package`, configuration `CefDiagnostic`, installable=false, startupEnabled=false를 사용한다. 일반 패키지 검증은 해당 증거와 브로커 마커, 진단 기준 파일을 거부한다. CMS는 정확한 파일 목록과 바이트를 바인딩하지만 호스트별 독립 RSA 기준 신뢰 검증의 대체가 아니다.
+- 기존 staging/등록/게시/SCM 실행 및 exit 29 자동 시험 도구에는 진단 모드를 추가하지 않았다. 따라서 아직 이 진단 패키지를 설치하거나 실행하지 않는다. 별도 staging 및 증거 체인, trust provisioning, exit 31 시험 도구와 실제 VM 검증이 필요하다. 기존 제품 Release 배포 절차는 변경하지 않는다.

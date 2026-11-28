@@ -9,7 +9,17 @@ function Assert-VeilPreflightDesktopMarker([string]$Root) {
     }
 }
 
-function Get-VeilPreflightPackageFiles([string]$Root,[string]$CefEvidence,[string]$Thumbprint,[string]$Commit) {
+function Assert-VeilPreflightBrokerMarker([string]$Root,[switch]$Diagnostic) {
+    $dll = Join-Path $Root 'Broker\Veil.VolumeBroker.dll'
+    $marker = [Diagnostics.FileVersionInfo]::GetVersionInfo($dll).ProductName
+    if ($Diagnostic) {
+        if ($marker -cne 'VEIL CEF Broker Diagnostic Only') { throw 'Expected separate CefDiagnostic broker build marker.' }
+    } elseif ($marker -ceq 'VEIL CEF Broker Diagnostic Only') {
+        throw 'Diagnostic broker refused in ordinary preflight package.'
+    }
+}
+
+function Get-VeilPreflightPackageFiles([string]$Root,[string]$CefEvidence,[string]$Thumbprint,[string]$Commit,[switch]$Diagnostic) {
     $entries = @(Get-VeilTreeFiles $Root -Restricted -WithRelativePath)
     $folders = @(Get-ChildItem -LiteralPath $Root -Force)
     if ($folders.Count -ne 3 -or @($folders | Where-Object { -not $_.PSIsContainer -or $_.Name -cnotin @('Desktop','Broker','Cef') }).Count -ne 0) {
@@ -26,7 +36,17 @@ function Get-VeilPreflightPackageFiles([string]$Root,[string]$CefEvidence,[strin
             if ($record.File.Extension -eq '.exe' -and $name -cnotin @('Desktop/Veil.Desktop.exe','Desktop/veil-vault.exe','Broker/Veil.VolumeBroker.exe')) {
                 throw 'Unexpected executable in preflight payload.'
             }
-            if ($record.File.Extension -notin @('.exe','.dll','.json','.txt','.md') -and $record.File.Name -cnotin @('LICENSE','NOTICE')) {
+            if ($name -iin @('Broker/cef-system-baseline.json','Broker/cef-system-baseline.sig')) {
+                if (-not $Diagnostic -or $name -cnotin @('Broker/cef-system-baseline.json','Broker/cef-system-baseline.sig')) {
+                    throw 'Unexpected diagnostic baseline input.'
+                }
+                if ($name -ceq 'Broker/cef-system-baseline.json' -and ($record.File.Length -lt 1 -or $record.File.Length -gt 1MB)) {
+                    throw 'Diagnostic baseline payload size refused.'
+                }
+                if ($name -ceq 'Broker/cef-system-baseline.sig' -and $record.File.Length -notin @(384,512)) {
+                    throw 'Diagnostic detached signature size refused.'
+                }
+            } elseif ($record.File.Extension -notin @('.exe','.dll','.json','.txt','.md') -and $record.File.Name -cnotin @('LICENSE','NOTICE')) {
                 throw 'Unexpected preflight payload file type.'
             }
         }
@@ -36,6 +56,13 @@ function Get-VeilPreflightPackageFiles([string]$Root,[string]$CefEvidence,[strin
     foreach ($required in @('Desktop/Veil.Desktop.exe','Desktop/Veil.Desktop.dll','Desktop/Veil.Desktop.deps.json','Desktop/Veil.Desktop.runtimeconfig.json',
         'Broker/Veil.VolumeBroker.exe','Broker/Veil.VolumeBroker.dll','Broker/Veil.VolumeBroker.deps.json','Broker/Veil.VolumeBroker.runtimeconfig.json')) {
         if (-not $seen.ContainsKey($required) -or $seen[$required].path -cne $required) { throw 'Required preflight file missing.' }
+    }
+    if ($Diagnostic) {
+        foreach ($required in @('Broker/cef-system-baseline.json','Broker/cef-system-baseline.sig')) {
+            if (-not $seen.ContainsKey($required) -or $seen[$required].path -cne $required) {
+                throw 'Required diagnostic baseline input missing.'
+            }
+        }
     }
     foreach ($pin in $runtime.files) {
         $name = 'Cef/' + $pin.path
@@ -50,16 +77,19 @@ function Get-VeilPreflightPackageFiles([string]$Root,[string]$CefEvidence,[strin
     }
     if ($seen.ContainsKey('Desktop/veil-vault.exe')) { Assert-VeilSignedImage (Join-Path $Root 'Desktop/veil-vault.exe') $Thumbprint }
     Assert-VeilPreflightDesktopMarker $Root
+    Assert-VeilPreflightBrokerMarker $Root -Diagnostic:$Diagnostic
     return @($seen.Values | Sort-Object path)
 }
 
 function Write-VeilPreflightPackageEvidence([string]$Root,[string]$CefEvidence,[string]$Evidence,[string]$Commit,
-    [Security.Cryptography.X509Certificates.X509Certificate2]$Certificate) {
+    [Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[switch]$Diagnostic) {
     Assert-VeilCefEvidenceLocation $Root $Evidence
     Assert-VeilCefEvidenceLocation $CefEvidence $Evidence
     if (@(Get-ChildItem -LiteralPath $Evidence -Force).Count -ne 0 -or -not $Certificate.HasPrivateKey) { throw 'Expected fresh evidence and private signing key.' }
-    $files = @(Get-VeilPreflightPackageFiles $Root $CefEvidence $Certificate.Thumbprint $Commit)
-    $manifest = [ordered]@{kind='cef-preflight-vm-package';format=1;architecture='win-x64';configuration='CefPreflight';sourceCommit=$Commit;installable=$false;startupEnabled=$false;files=$files}
+    $files = @(Get-VeilPreflightPackageFiles $Root $CefEvidence $Certificate.Thumbprint $Commit -Diagnostic:$Diagnostic)
+    $kind = if ($Diagnostic) { 'cef-diagnostic-vm-package' } else { 'cef-preflight-vm-package' }
+    $configuration = if ($Diagnostic) { 'CefDiagnostic' } else { 'CefPreflight' }
+    $manifest = [ordered]@{kind=$kind;format=1;architecture='win-x64';configuration=$configuration;sourceCommit=$Commit;installable=$false;startupEnabled=$false;files=$files}
     $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($manifest | ConvertTo-Json -Depth 6))
     if ($bytes.Length -gt 4MB) { throw 'Preflight manifest oversized.' }
     $cms = [Security.Cryptography.Pkcs.SignedCms]::new([Security.Cryptography.Pkcs.ContentInfo]::new($bytes),$true)
@@ -72,7 +102,7 @@ function Write-VeilPreflightPackageEvidence([string]$Root,[string]$CefEvidence,[
     }
 }
 
-function Read-VeilPreflightPackageEvidence([string]$Root,[string]$CefEvidence,[string]$Evidence,[string]$Thumbprint,[string]$Commit) {
+function Read-VeilPreflightPackageEvidence([string]$Root,[string]$CefEvidence,[string]$Evidence,[string]$Thumbprint,[string]$Commit,[switch]$Diagnostic) {
     Assert-VeilCefEvidenceLocation $Root $Evidence
     Assert-VeilCefEvidenceLocation $CefEvidence $Evidence
     if (@(Get-ChildItem -LiteralPath $Evidence -Force).Count -ne 2) { throw 'Unexpected package evidence entries.' }
@@ -90,11 +120,13 @@ function Read-VeilPreflightPackageEvidence([string]$Root,[string]$CefEvidence,[s
     $cms.CheckSignature($false)
     if ($cms.SignerInfos[0].Certificate.Thumbprint -ne $Thumbprint) { throw 'Package signer mismatch.' }
     $manifest = [Text.UTF8Encoding]::new($false,$true).GetString($bytes) | ConvertFrom-Json
-    if ($manifest.kind -cne 'cef-preflight-vm-package' -or $manifest.format -isnot [int] -or $manifest.format -ne 1 -or
-        $manifest.configuration -cne 'CefPreflight' -or $manifest.architecture -cne 'win-x64' -or $manifest.sourceCommit -cne $Commit -or
+    $kind = if ($Diagnostic) { 'cef-diagnostic-vm-package' } else { 'cef-preflight-vm-package' }
+    $configuration = if ($Diagnostic) { 'CefDiagnostic' } else { 'CefPreflight' }
+    if ($manifest.kind -cne $kind -or $manifest.format -isnot [int] -or $manifest.format -ne 1 -or
+        $manifest.configuration -cne $configuration -or $manifest.architecture -cne 'win-x64' -or $manifest.sourceCommit -cne $Commit -or
         $manifest.installable -isnot [bool] -or $manifest.installable -or $manifest.startupEnabled -isnot [bool] -or $manifest.startupEnabled -or
         $manifest.files -isnot [array] -or @($manifest.PSObject.Properties).Count -ne 8) { throw 'Unsupported preflight package evidence.' }
-    $actual = @(Get-VeilPreflightPackageFiles $Root $CefEvidence $Thumbprint $Commit)
+    $actual = @(Get-VeilPreflightPackageFiles $Root $CefEvidence $Thumbprint $Commit -Diagnostic:$Diagnostic)
     if ($actual.Count -ne $manifest.files.Count) { throw 'Preflight package inventory count mismatch.' }
     $expected = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($entry in $manifest.files) {
