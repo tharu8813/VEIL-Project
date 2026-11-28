@@ -323,7 +323,44 @@ try {
     [IO.File]::WriteAllBytes($pendingBaseline,$baselineBytes)
     $diagResumed = Resume-VeilPreflightPublication $diagnosticStage $diagPrepared $diagBin $diagData $diagTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} -Diagnostic
     if ($diagResumed.state -cne 'files-published-only' -or $diagResumed.kind -cne 'cef-diagnostic-publication') { throw 'Diagnostic recovery failed.' }
+    # Fake SCM with real signed diagnostic publication and journal evidence.
+    $diagCommand = '"{0}" --service' -f (Join-Path $diagBin 'Broker\Veil.VolumeBroker.exe')
+    $script:diagService = $null
+    $script:diagDacl = $null
+    $script:diagCreates = 0
+    $diagVerify = { Inspect-DiagnosticPublication }
+    $diagRead = { $script:diagService }
+    $diagCreate = {
+        param($binary)
+        $script:diagCreates++
+        $script:diagService = [pscustomobject]@{Name='Veil.VolumeBroker';PathName=$binary;StartName='LocalSystem';
+            StartMode='Disabled';State='Stopped';ProcessId=0;ServiceType='Own Process'}
+    }
+    $diagSetDacl = { param($sddl) $script:diagDacl = $sddl }
+    $diagReadDacl = { $script:diagDacl }
+    $diagServiceJournal = Join-Path $work 'diagnostic-service'
+    Reject { Register-VeilDisabledPreflightService $diagServiceJournal $diagCommand $diagVerify $diagRead $diagCreate $diagSetDacl $diagReadDacl }
+    if ((Test-Path -LiteralPath $diagServiceJournal) -or $script:diagCreates -ne 0) { throw 'Ordinary registration adopted diagnostic publication.' }
+    $diagRegistered = Register-VeilDisabledPreflightService $diagServiceJournal $diagCommand $diagVerify $diagRead $diagCreate $diagSetDacl $diagReadDacl -Diagnostic
+    if ($diagRegistered.kind -cne 'cef-diagnostic-service' -or $diagRegistered.state -cne 'registered-disabled' -or
+        $diagRegistered.startupEnabled -or $script:diagCreates -ne 1) { throw 'Diagnostic service registration mismatch.' }
+    $diagVerifyRegistration = {
+        Read-VeilPreflightServiceRegistration $diagServiceJournal $diagCommand $diagVerify $diagRead $diagReadDacl -Diagnostic
+    }
+    if ((& $diagVerifyRegistration).kind -cne 'cef-diagnostic-service') { throw 'Diagnostic registration inspection mismatch.' }
+    Reject { Read-VeilPreflightServiceRegistration $diagServiceJournal $diagCommand $diagVerify $diagRead $diagReadDacl }
+    $diagProbeRoot = Join-Path $work 'diagnostic-service-probe-refused'
+    Reject { Invoke-VeilPreflightServiceProbe $diagProbeRoot $diagCommand $diagVerifyRegistration $diagRead $diagReadDacl {} {} {} {} {} }
+    if (Test-Path -LiteralPath $diagProbeRoot) { throw 'Ordinary probe adopted diagnostic registration.' }
+    $script:diagService.StartMode = 'Auto'
+    Reject { & $diagVerifyRegistration }
+    $script:diagService.StartMode = 'Disabled'
+    $script:diagDacl = 'D:(A;;RPWP;;;AU)'
+    Reject { & $diagVerifyRegistration }
+    $script:diagDacl = $script:VeilPreflightServiceDacl
+    [void](& $diagVerifyRegistration)
     $script:diagnosticMarker = $false
+    Write-Host 'PASS: diagnostic service disabled registration, mode separation and SCM identity/DACL refusal'
     Write-Host 'PASS: diagnostic publication, mode separation, tamper refusal and verified recovery'
     # Real temporary-directory copies and same-parent renames; no OS service
     # or BitLocker. The registration binds to the temporary destination.

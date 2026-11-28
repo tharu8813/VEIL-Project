@@ -25,12 +25,21 @@ function Assert-VeilPreflightServiceDacl([string]$Sddl) {
     }
 }
 
+function Assert-VeilServicePublicationMode($Publication,[switch]$Diagnostic) {
+    $kind = $Publication.PSObject.Properties['kind']
+    if ($Diagnostic) {
+        if ($null -eq $kind -or $kind.Value -cne 'cef-diagnostic-publication') { throw 'Verified diagnostic publication required.' }
+    } elseif ($null -ne $kind) { throw 'Diagnostic publication refused in ordinary service registration.' }
+}
+
 function Register-VeilDisabledPreflightService([string]$JournalRoot,[string]$Command,
     [scriptblock]$VerifyPublication,[scriptblock]$ReadService,[scriptblock]$CreateDisabled,
-    [scriptblock]$SetDacl,[scriptblock]$ReadDacl) {
+    [scriptblock]$SetDacl,[scriptblock]$ReadDacl,[switch]$Diagnostic) {
+    $kind = if ($Diagnostic) { 'cef-diagnostic-service' } else { 'cef-preflight-service' }
     if (Test-Path -LiteralPath $JournalRoot) { throw 'Existing or interrupted service registration must be preserved.' }
     if ($null -ne (& $ReadService)) { throw 'Existing broker service refused.' }
     $publication = & $VerifyPublication
+    Assert-VeilServicePublicationMode $publication -Diagnostic:$Diagnostic
     if ($publication.state -cne 'files-published-only' -or $publication.startupEnabled -isnot [bool] -or
         $publication.startupEnabled -or $publication.serviceCreated -isnot [bool] -or $publication.serviceCreated -or
         $publication.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or $publication.intentSha256 -cnotmatch '\A[0-9a-f]{64}\z') {
@@ -39,7 +48,7 @@ function Register-VeilDisabledPreflightService([string]$JournalRoot,[string]$Com
     Assert-VeilAdminPath (Split-Path -Parent $JournalRoot)
     New-VeilRestrictedDirectory $JournalRoot
     $intent = [ordered]@{
-        kind='cef-preflight-service';format=1;state='registration-intent'
+        kind=$kind;format=1;state='registration-intent'
         sourceCommit=$publication.sourceCommit;publicationIntentSha256=$publication.intentSha256
         serviceName=$script:VeilPreflightServiceName;command=$Command;startupEnabled=$false
     }
@@ -58,7 +67,7 @@ function Register-VeilDisabledPreflightService([string]$JournalRoot,[string]$Com
     Assert-VeilDisabledPreflightService (& $ReadService) $Command
     Assert-VeilPreflightServiceDacl (& $ReadDacl)
     $final = [ordered]@{
-        kind='cef-preflight-service';format=1;state='registered-disabled'
+        kind=$kind;format=1;state='registered-disabled'
         sourceCommit=$publication.sourceCommit;intentSha256=$intentHash
         serviceCreated=$true;startupEnabled=$false
     }
@@ -68,7 +77,8 @@ function Register-VeilDisabledPreflightService([string]$JournalRoot,[string]$Com
 
 
 function Read-VeilPreflightServiceRegistration([string]$JournalRoot,[string]$Command,
-    [scriptblock]$VerifyPublication,[scriptblock]$ReadService,[scriptblock]$ReadDacl) {
+    [scriptblock]$VerifyPublication,[scriptblock]$ReadService,[scriptblock]$ReadDacl,[switch]$Diagnostic) {
+    $kind = if ($Diagnostic) { 'cef-diagnostic-service' } else { 'cef-preflight-service' }
     Assert-VeilAdminPath $JournalRoot
     $items = @(Get-ChildItem -LiteralPath $JournalRoot -Force)
     if ($items.Count -ne 2 -or @($items | Where-Object {
@@ -77,26 +87,29 @@ function Read-VeilPreflightServiceRegistration([string]$JournalRoot,[string]$Com
     Assert-VeilDisabledPreflightService (& $ReadService) $Command
     Assert-VeilPreflightServiceDacl (& $ReadDacl)
     $publication = & $VerifyPublication
+    Assert-VeilServicePublicationMode $publication -Diagnostic:$Diagnostic
     if ($publication.state -cne 'files-published-only' -or $publication.startupEnabled -isnot [bool] -or
         $publication.startupEnabled -or $publication.serviceCreated -isnot [bool] -or $publication.serviceCreated -or
         $publication.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or $publication.intentSha256 -cnotmatch '\A[0-9a-f]{64}\z') {
         throw 'Fully verified file publication required.'
     }
     $intent = [ordered]@{
-        kind='cef-preflight-service';format=1;state='registration-intent'
+        kind=$kind;format=1;state='registration-intent'
         sourceCommit=$publication.sourceCommit;publicationIntentSha256=$publication.intentSha256
         serviceName=$script:VeilPreflightServiceName;command=$Command;startupEnabled=$false
     }
     $intentHash = Assert-VeilPreflightDraftBytes (Read-VeilPreflightDraftBytes (Join-Path $JournalRoot '01-service-intent.json')) $intent
     $final = [ordered]@{
-        kind='cef-preflight-service';format=1;state='registered-disabled'
+        kind=$kind;format=1;state='registered-disabled'
         sourceCommit=$publication.sourceCommit;intentSha256=$intentHash
         serviceCreated=$true;startupEnabled=$false
     }
     $finalHash = Assert-VeilPreflightDraftBytes (Read-VeilPreflightDraftBytes (Join-Path $JournalRoot '02-service-registered.json')) $final
     Assert-VeilDisabledPreflightService (& $ReadService) $Command
     Assert-VeilPreflightServiceDacl (& $ReadDacl)
-    return [pscustomobject]@{state='registered-disabled';sourceCommit=$publication.sourceCommit;registrationSha256=$finalHash;startupEnabled=$false}
+    $result = [ordered]@{state='registered-disabled';sourceCommit=$publication.sourceCommit;registrationSha256=$finalHash;startupEnabled=$false}
+    if ($Diagnostic) { $result.Add('kind',$kind) }
+    return [pscustomobject]$result
 }
 
 function Assert-VeilPreflightServiceIdentity($Service,[string]$Command) {
@@ -113,6 +126,7 @@ function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
     [scriptblock]$Exercise) {
     if (Test-Path -LiteralPath $ProbeRoot) { throw 'Existing or interrupted probe must be preserved.' }
     $registrationEvidence = & $VerifyRegistration
+    if ($null -ne $registrationEvidence.PSObject.Properties['kind']) { throw 'Diagnostic registration requires a separate lifecycle probe.' }
     if ($registrationEvidence.state -cne 'registered-disabled' -or $registrationEvidence.startupEnabled -isnot [bool] -or
         $registrationEvidence.startupEnabled -or $registrationEvidence.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or
         $registrationEvidence.registrationSha256 -cnotmatch '\A[0-9a-f]{64}\z') { throw 'Verified disabled registration required.' }
@@ -201,6 +215,7 @@ function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
 
 
 function Assert-VeilCompletedServiceProbe([string]$ProbeRoot,$RegistrationEvidence) {
+    if ($null -ne $RegistrationEvidence.PSObject.Properties['kind']) { throw 'Diagnostic registration cannot authorize ordinary probe evidence.' }
     Assert-VeilAdminPath $ProbeRoot
     $items = @(Get-ChildItem -LiteralPath $ProbeRoot -Force)
     if ($items.Count -ne 3 -or @($items | Where-Object {
@@ -226,6 +241,7 @@ function Assert-VeilCompletedServiceProbe([string]$ProbeRoot,$RegistrationEviden
 # This inspects trusted administrator records; it cannot prove historical
 # runtime behavior independently of the administrator who collected them.
 function Read-VeilCompletedProtectedSession([string]$ProbeRoot,$RegistrationEvidence) {
+    if ($null -ne $RegistrationEvidence.PSObject.Properties['kind']) { throw 'Diagnostic registration cannot authorize ordinary probe evidence.' }
     if ($RegistrationEvidence.state -cne 'registered-disabled' -or
         $RegistrationEvidence.startupEnabled -isnot [bool] -or $RegistrationEvidence.startupEnabled -or
         $RegistrationEvidence.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or
