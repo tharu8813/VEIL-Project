@@ -886,12 +886,29 @@ test('retained creation captures original handles before verification and never 
     assert.match(launch, /#if VEIL_CEF_BROKER[\s\S]*?CreateRetainedUserRoot[\s\S]*?token\.IsInvalid \|\| token\.IsClosed[\s\S]*?CreateSuspendedCore\(image, environment, \[outer, inner\], token, custody\);[\s\S]*?#endif/);
     assert.match(launch, /captured = new CefContainedProcess\(job, process, thread, custody is null \? null : additionalJobs\);\s*custody\?\.Capture\(captured\);[\s\S]*?IsProcessInJob\(process, job[\s\S]*?captured\.creationVerified = true;/);
     assert.match(launch, /custody\.Reject\(\);[\s\S]*?if \(captured is not null\) throw;[\s\S]*?TerminateProcess\(process, ForcedTerminationExit\)/);
-    assert.match(launch, /if \(rejected \|\| transferred \|\| retained is not \{ creationVerified: true \} child\)/);
-    assert.match(launch, /if \(transferred\) return false;[\s\S]*?rejected = true;[\s\S]*?if \(!child\.TryDrainRejectedCreation\(milliseconds\)\) return false;\s*child\.Dispose\(\);\s*retained = null;/);
+    assert.match(launch, /if \(rejected \|\| transferred \|\| validating \|\| retained is not \{ creationVerified: true \} child\)/);
+    assert.match(launch, /if \(transferred \|\| validating\) return false;[\s\S]*?rejected = true;[\s\S]*?if \(!child\.TryDrainRejectedCreation\(milliseconds\)\) return false;\s*child\.Dispose\(\);\s*retained = null;/);
     assert.match(launch, /if \(ActiveProcesses\(\) != 0\) _ = TerminateJobObject\(job, ForcedTerminationExit\);[\s\S]*?foreach \(var peer in retainedPeerJobs\)[\s\S]*?if \(peer.IsClosed \|\| peer.IsInvalid\) return false;[\s\S]*?if \(ActiveProcesses\(peer\) != 0\) _ = TerminateJobObject\(peer, ForcedTerminationExit\);[\s\S]*?if \(!WaitForExit\(0\)\) _ = TerminateProcess\(process, ForcedTerminationExit\);[\s\S]*?return WaitForRetainedCreationExit\(remaining\);/);
     const proof = launch.slice(launch.indexOf('internal bool WaitForRetainedCreationExit'), launch.indexOf('internal void TerminateAndDrain'));
     assert.match(proof, /if \(retainedPeerJobs.Length != 2\) return false;[\s\S]*?if \(retainedPeerJobs.Any\(peer => peer.IsClosed \|\| peer.IsInvalid\)\) return false;[\s\S]*?if \(ActiveProcesses\(\) == 0 && retainedPeerJobs.All\(peer => ActiveProcesses\(peer\) == 0\) &&\s*WaitForExit\(0\)\)\s*return true;[\s\S]*?if \(remaining == 0\) return false;/);
     assert.doesNotMatch(proof, /\b(?:TerminateJobObject|TerminateProcess|Dispose)\s*\(/);
     assert.match(fixture, /CreateAtomicRetainedPairFixture[\s\S]*?custody\.HasRetainedProcess[\s\S]*?custody\.TryDrainAndRelease\(5000\)[\s\S]*?outer\.HasNoActiveProcesses\(\) && inner\.HasNoActiveProcesses\(\)/);
     assert.doesNotMatch(broker, /CreateRetainedUserRoot|CreateRetainedFixture/);
+});
+
+
+test('prepared broker candidate creation is single-root, token-bound and remains disconnected from activation', async () => {
+    const prep = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
+    const observer = await readFile('apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs', 'utf8');
+    const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
+    const launch = await readFile('apps/desktop/Engine/CefContainedProcess.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    assert.match(prep, /creationAttempted = true;\s*RequireCurrent\(\);[\s\S]*?\["SystemRoot"\] = windows,\s*\["WINDIR"\] = windows,[\s\S]*?outer\.CreateRetainedDiagnosticPair\(inner, token, path, environment, custody\);\s*custody\.VerifyRetainedRoot\(root =>[\s\S]*?token\.RequireCreatedRoot\(root, path\);[\s\S]*?CefPinnedImage\.OpenVerified\(identity, root, path, digest\);\s*RequireCurrent\(\);/);
+    assert.doesNotMatch(prep, /GetEnvironmentVariables|TakeVerified|ResumeRetainedRoot|ResumeThread/);
+    assert.match(job, /#if VEIL_CEF_BROKER[\s\S]*?CreateRetainedDiagnosticPair[\s\S]*?activeLimit != 1 \|\| peer.activeLimit != 1[\s\S]*?assignmentExported \|\| peer.assignmentExported[\s\S]*?RequireContainmentLimits\(job, activeLimit\);[\s\S]*?lease\.RequireCurrent\(\);\s*assignmentIssued = peer.assignmentIssued = true;\s*lease\.CreateRetainedDiagnosticRoot/);
+    assert.match(observer, /#if VEIL_CEF_BROKER[\s\S]*?CreateRetainedDiagnosticRoot[\s\S]*?RequireCurrent\(\);\s*Veil\.Desktop\.CefContainedProcess\.CreateRetainedUserRoot\(image, environment, outer, inner,\s*duplicate, custody\);[\s\S]*?RequireCreatedRoot[\s\S]*?ObserveLaunchToken\(root, identity\);\s*CefLaunchTokenPolicy\.RequirePair\(sourceSnapshot, observed\);[\s\S]*?RequireCurrent\(\);/);
+    assert.match(launch, /validating = true;\s*try\s*\{\s*child\.RequireRetainedPreparedRoot\(child.process\);\s*verify\(child.process\);\s*child\.RequireRetainedPreparedRoot\(child.process\);\s*\}\s*catch\s*\{\s*rejected = true;\s*throw;\s*\}\s*finally \{ validating = false; \}/);
+    assert.match(fixture, /custody\.VerifyRetainedRoot\(root =>[\s\S]*?Reject\(\(\) => custody\.TakeVerified\(\)\);[\s\S]*?!custody\.TryDrainAndRelease\(0\)[\s\S]*?Synthetic post-create token refusal[\s\S]*?custody\.HasRetainedProcess[\s\S]*?custody\.TryDrainAndRelease\(5000\)/);
+    assert.doesNotMatch(broker, /CreateDiagnosticCandidate|CreateRetainedDiagnosticPair/);
 });

@@ -4,8 +4,9 @@ using Veil.Desktop;
 
 namespace Veil.VolumeBroker;
 
-// Serialized, disconnected pre-creation preparation. Owns every prerequisite
-// until disposed; no creation, resume, raw token export or admission here.
+// Serialized, disconnected preparation and single-root suspended creation.
+// No resume, raw token export or admission here. The caller must retain
+// its custody and both private Jobs until confirmed drain or transfer.
 // The owner process handle is borrowed from the authenticated generation.
 internal sealed class CefBrokerLaunchPreparation : IDisposable
 {
@@ -17,6 +18,7 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
     private readonly CefProcessTokenObserver.LaunchTokenLease token;
     private readonly CefSystemModuleVerifier verifier;
     private bool disposed;
+    private bool creationAttempted;
 
     private CefBrokerLaunchPreparation(string path, CefImageDigest digest,
         Func<bool> authorityCurrent, CefRuntimeRegistrationLease registration,
@@ -86,6 +88,40 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
         token.RequireCurrent();
         if (!authorityCurrent())
             throw new UnauthorizedAccessException("CEF preparation generation retired.");
+    }
+
+    // No inherited service/user environment and no profile paths at this
+    // stage. The disabled candidate must not be resumed as a browser.
+    // A future coordinator must own both Jobs and custody before invoking.
+    internal void CreateDiagnosticCandidate(CefBrokerOwnedJob outer, CefBrokerOwnedJob inner,
+        CefContainedProcess.CreationCustody custody)
+    {
+        ArgumentNullException.ThrowIfNull(outer);
+        ArgumentNullException.ThrowIfNull(inner);
+        ArgumentNullException.ThrowIfNull(custody);
+        if (creationAttempted)
+            throw new UnauthorizedAccessException("CEF preparation already consumed.");
+        creationAttempted = true;
+        RequireCurrent();
+        string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        if (string.IsNullOrWhiteSpace(windows) || !Path.IsPathFullyQualified(windows) ||
+            !string.Equals(Path.Combine(windows, "System32"), Environment.SystemDirectory,
+                StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("CEF system environment unavailable.");
+        var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["SystemRoot"] = windows,
+            ["WINDIR"] = windows,
+        };
+        outer.CreateRetainedDiagnosticPair(inner, token, path, environment, custody);
+        custody.VerifyRetainedRoot(root =>
+        {
+            var identity = token.RequireCreatedRoot(root, path);
+            using var verified = CefPinnedImage.OpenVerified(identity, root, path, digest);
+            RequireCurrent();
+        });
+        // Keep preparation, Jobs and custody alive. No ownership transfer,
+        // activation or cleanup/relock authorization occurs here.
     }
 
     public void Dispose()

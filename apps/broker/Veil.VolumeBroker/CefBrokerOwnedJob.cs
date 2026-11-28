@@ -29,6 +29,31 @@ internal sealed class CefBrokerOwnedJob : IDisposable
 
     internal static CefBrokerOwnedJob CreateDisabledCandidate() => Create(1);
 
+#if VEIL_CEF_BROKER
+    // The internal preparation path remains restricted to single-root
+    // diagnostics; multiprocess product limits require separate approval.
+    internal void CreateRetainedDiagnosticPair(CefBrokerOwnedJob peer,
+        CefProcessTokenObserver.LaunchTokenLease lease, string image,
+        IReadOnlyDictionary<string, string?> environment,
+        Veil.Desktop.CefContainedProcess.CreationCustody custody)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(custody);
+        if (ReferenceEquals(this, peer) || disposed || peer.disposed ||
+            activeLimit != 1 || peer.activeLimit != 1 ||
+            assignmentIssued || peer.assignmentIssued || bound || peer.bound ||
+            assignmentExported || peer.assignmentExported || CompareJobObjects(job, peer.job) ||
+            Accounting().TotalProcesses != 0 || peer.Accounting().TotalProcesses != 0)
+            throw new UnauthorizedAccessException("CEF diagnostic creation Jobs must be fresh and private.");
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peer.job, peer.activeLimit);
+        lease.RequireCurrent();
+        assignmentIssued = peer.assignmentIssued = true;
+        lease.CreateRetainedDiagnosticRoot(image, environment, job, peer.job, custody);
+    }
+#endif
+
 #if VEIL_CEF_CONTAINMENT_TEST
     // Linked into the isolated test app only. No IPC, product option or
     // production build can select this two-process limit.

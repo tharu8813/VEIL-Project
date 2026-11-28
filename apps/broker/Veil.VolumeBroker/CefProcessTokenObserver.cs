@@ -268,6 +268,31 @@ internal static class CefProcessTokenObserver
                 ReadTokenSnapshot(duplicate, sourceSnapshot.Token.Identity, true));
         }
 
+#if VEIL_CEF_BROKER
+        // No primary-token handle leaves the lease. Custody must already
+        // belong to a serialized caller before this native creation attempt.
+        internal void CreateRetainedDiagnosticRoot(string image,
+            IReadOnlyDictionary<string, string?> environment, SafeFileHandle outer, SafeFileHandle inner,
+            Veil.Desktop.CefContainedProcess.CreationCustody custody)
+        {
+            RequireCurrent();
+            Veil.Desktop.CefContainedProcess.CreateRetainedUserRoot(image, environment, outer, inner,
+                duplicate, custody);
+        }
+
+        internal ClientIdentity RequireCreatedRoot(SafeProcessHandle root, string image)
+        {
+            RequireCurrent();
+            var identity = Native.ObserveProcess(root);
+            var observed = ObserveLaunchToken(root, identity);
+            CefLaunchTokenPolicy.RequirePair(sourceSnapshot, observed);
+            if (!string.Equals(identity.ImagePath, image, StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("CEF created root image mismatch.");
+            RequireCurrent();
+            return identity;
+        }
+#endif
+
 #if VEIL_CEF_CONTAINMENT_TEST
         // Same-user synthetic apphost only; no token export to the caller.
         internal Veil.Desktop.CefContainedProcess CreateUserFixture(string image,

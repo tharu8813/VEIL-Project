@@ -150,6 +150,32 @@ try
             "Reused custody created a process.");
     }
     Console.WriteLine("PASS: post-create failure retains handles until verified exit; successful transfer is one-shot");
+    // A second-stage validation refusal must retain the actual created
+    // process, not permit a transfer or reentrant cleanup.
+    using (var outer = CefBrokerOwnedJob.CreateMultiprocessFixture())
+    using (var inner = CefBrokerOwnedJob.CreateMultiprocessFixture())
+    {
+        var custody = new CefContainedProcess.CreationCustody();
+        outer.CreateAtomicRetainedPairFixture(inner, image, environment, custody, false);
+        bool refused = false;
+        try
+        {
+            custody.VerifyRetainedRoot(root =>
+            {
+                Check(Native.IsRunning(root) && !File.Exists(markerPath), "Post-create root not suspended/live.");
+                Reject(() => custody.TakeVerified());
+                Check(!custody.TryDrainAndRelease(0), "Reentrant cleanup accepted.");
+                throw new UnauthorizedAccessException("Synthetic post-create token refusal.");
+            });
+        }
+        catch (UnauthorizedAccessException error) when (error.Message == "Synthetic post-create token refusal.")
+        { refused = true; }
+        Check(refused && custody.HasRetainedProcess, "Post-create refusal lost custody.");
+        Reject(() => custody.TakeVerified());
+        Check(custody.TryDrainAndRelease(5000) && outer.HasNoActiveProcesses() &&
+            inner.HasNoActiveProcesses() && !File.Exists(markerPath), "Post-create refusal did not drain.");
+    }
+    Console.WriteLine("PASS: second-stage validation refusal retains original root and blocks transfer");
     // Same-user synthetic atomic Job pair: handoff before resume, including
     // a failure after resume actually ran. No product or BitLocker access.
     using (var owner = Process.GetCurrentProcess())

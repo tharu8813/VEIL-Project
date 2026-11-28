@@ -105,6 +105,7 @@ internal sealed class CefContainedProcess : IDisposable
         private bool attempted;
         private bool rejected;
         private bool transferred;
+        private bool validating;
         private CefContainedProcess? retained;
 
         internal bool HasRetainedProcess => retained is not null;
@@ -119,9 +120,31 @@ internal sealed class CefContainedProcess : IDisposable
         internal void Capture(CefContainedProcess child) => retained = child;
         internal void Reject() => rejected = true;
 
+        // Borrow the exact creation handle only during serialized
+        // post-create validation. A failed check leaves custody intact.
+        internal void VerifyRetainedRoot(Action<SafeProcessHandle> verify)
+        {
+            ArgumentNullException.ThrowIfNull(verify);
+            if (rejected || transferred || validating || retained is not { creationVerified: true } child)
+                throw new InvalidOperationException("CEF retained validation unavailable.");
+            validating = true;
+            try
+            {
+                child.RequireRetainedPreparedRoot(child.process);
+                verify(child.process);
+                child.RequireRetainedPreparedRoot(child.process);
+            }
+            catch
+            {
+                rejected = true;
+                throw;
+            }
+            finally { validating = false; }
+        }
+
         internal CefContainedProcess TakeVerified()
         {
-            if (rejected || transferred || retained is not { creationVerified: true } child)
+            if (rejected || transferred || validating || retained is not { creationVerified: true } child)
                 throw new InvalidOperationException("Verified CEF creation unavailable.");
             transferred = true;
             retained = null;
@@ -131,7 +154,7 @@ internal sealed class CefContainedProcess : IDisposable
         internal bool TryDrainAndRelease(int milliseconds)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
-            if (transferred) return false; // The recipient now owes the proof.
+            if (transferred || validating) return false; // The recipient or current validation owns access.
             rejected = true; // Never allow a later take or another attempt.
             if (retained is not { } child) return true;
             if (!child.TryDrainRejectedCreation(milliseconds)) return false;
