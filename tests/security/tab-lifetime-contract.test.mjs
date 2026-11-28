@@ -813,3 +813,14 @@ test('CEF fixture find is bounded, serialized and tied to native view and docume
     assert.match(cefView, /if \(ticket != 0\) CefNative.VeilCefEndFind\(id, ticket\);/);
     assert.match(cefSmoke, /Native page find observed match, no match and independent view results/);
 });
+
+
+test('CEF fixture find UI scopes result publication to exact tab, query, navigation and request', () => {
+    assert.match(cefTabbed, /window.PreviewKeyDown \+= \(_, e\) =>[\s\S]*?e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control/);
+    assert.match(cefTabbed, /findQuery.TextChanged \+= \(_, _\) => InvalidateFindUi\(\);/);
+    assert.match(cefTabbed, /private bool CanPublishFind\(FindRequest request\) =>[\s\S]*?ReferenceEquals\(currentFind, request\)[\s\S]*?ReferenceEquals\(active, request.Tab\)[\s\S]*?request.Tab.View.NativeHandle == request.ViewId[\s\S]*?request.Tab.LastNavigationId == request.NavigationId[\s\S]*?request.Tab.View.Source == request.Source && findQuery.Text == request.Query;/);
+    assert.match(cefTabbed, /private void PublishFindResult\(FindRequest request, bool\? found\)\s*\{\s*if \(!CanPublishFind\(request\)\) return;/);
+    assert.match(cefTabbed, /bool\? found = await tab.View.FindTextAsync\(request.Query, backwards\);\s*PublishFindResult\(request, found\);/);
+    assert.match(cefTabbed, /findOpen.Visibility = fixture is null \? Visibility.Collapsed : Visibility.Visible;/);
+    assert.match(cefTabbed, /Find UI showed per-tab match results and discarded stale publication on switch, edit and close/);
+});
