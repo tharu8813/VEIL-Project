@@ -165,6 +165,11 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     stop.ThrowIfCancellationRequested();
                     if (!Native.MatchesPipeClient(pipe, pipeClient, client))
                         response = Protocol.Error("ClientRejected");
+#if VEIL_CEF_DIAGNOSTIC_IPC
+                    else if (request.Command == BrokerCommand.CheckCefRuntimeAuthority)
+                        response = redemptionCandidate
+                            ? CheckCefRuntimeAuthority(request, client, pipeClient) : Protocol.Error("ClientRejected");
+#endif
                     else if (redemptionCandidate)
                         response = request.Command == BrokerCommand.RedeemCefChild
                             ? RedeemCefChild(request, client, pipeClient) : Protocol.Error("ClientRejected");
@@ -260,6 +265,42 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             }
         }
     }
+
+#if VEIL_CEF_DIAGNOSTIC_IPC
+    // Serialized snapshot for the exact retained browser root ONLY. The
+    // current borrowing path cannot activate, so no positive receipt can
+    // be produced by the existing suspended probe or legacy redemption.
+    private byte[] CheckCefRuntimeAuthority(BrokerRequest request, ClientIdentity client, SafeProcessHandle pipeClient)
+    {
+        if (config.Development || config.Backend != "bitlocker" || request.VolumeId != config.VolumeId ||
+            diagnosticRelock.Pending || unlockOwner is not { } generation || authenticatedGeneration is null ||
+            diagnosticSession.Current(generation) is not CefBoundDiagnosticSession bound ||
+            !bound.MatchesRuntimeRoot(client, pipeClient))
+            return Protocol.Error("CefRuntimeAuthorityRefused");
+        try
+        {
+            if (!CandidateAuthorityCurrent(generation))
+                return Protocol.Error("CefRuntimeAuthorityRefused");
+            diagnosticSession.ObserveCurrent(generation, candidate =>
+            {
+                if (!ReferenceEquals(candidate, bound))
+                    throw new UnauthorizedAccessException("CEF runtime slot changed.");
+                bound.RequireRuntimeAuthority(client, pipeClient);
+            });
+            if (!CandidateAuthorityCurrent(generation) ||
+                !ReferenceEquals(diagnosticSession.Current(generation), bound))
+                throw new UnauthorizedAccessException("CEF runtime authority changed.");
+            return Protocol.CefRuntimeAuthorityCurrent();
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            if (ReferenceEquals(unlockOwner, generation))
+                ClearAuthenticatedOwner();
+            log.Write("cef-runtime-authority-refused", new { type = error.GetType().Name });
+            return Protocol.Error("CefRuntimeAuthorityRefused");
+        }
+    }
+#endif
 
     private async Task<byte[]> Execute(BrokerRequest request, ClientIdentity client, SafeProcessHandle pipeClient)
     {
