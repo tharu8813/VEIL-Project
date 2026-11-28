@@ -130,6 +130,33 @@ internal static class CefSessionObservationTests
             Check(!CefWindowsSessionRevocation.TryDecode(7, 8, sessionId, out uint ignored) && ignored == 0);
         Check(CefWindowsSessionRevocation.TryDecode(6, 8, int.MaxValue, out uint lastSession) &&
             lastSession == int.MaxValue);
+        CefAuthenticatedGeneration NewAuthority() => new(owner, generation);
+        var authority = NewAuthority();
+        Check(authority.Observe(owner, generation, true, true));
+        Check(authority.Observe(owner, generation, true, true));
+        authority.Revoke();
+        Check(!authority.Observe(owner, generation, true, true));
+        foreach (var invalid in new (ClientIdentity? Owner, object? Generation, bool Live, bool Protected)[]
+        {
+            (null, generation, true, true),
+            (owner with { CreatedFileTime = 101 }, generation, true, true),
+            (owner, null, true, true),
+            (owner, new object(), true, true),
+            (owner, generation, false, true),
+            (owner, generation, true, false)
+        })
+        {
+            var stale = NewAuthority();
+            Check(stale.Observe(owner, generation, true, true));
+            Check(!stale.Observe(invalid.Owner, invalid.Generation, invalid.Live, invalid.Protected));
+            Check(!stale.Observe(owner, generation, true, true));
+        }
+        // Only a newly authenticated generation can establish new authority.
+        var nextGeneration = new object();
+        var next = new CefAuthenticatedGeneration(owner, nextGeneration);
+        Check(next.Observe(owner, nextGeneration, true, true));
+        Check(!authority.Observe(owner, nextGeneration, true, true));
+        Console.WriteLine("PASS: broker unlock generation cannot resurrect after owner or protection failure");
         Console.WriteLine("PASS: Windows lock/logoff notification filtering and authenticated owner isolation");
         Console.WriteLine("PASS: diagnostic session pre/post checks, irreversible retirement and retryable drain");
         Console.WriteLine("PASS: pure CEF multi-process observation, generation/lease binding and irreversible revocation");
