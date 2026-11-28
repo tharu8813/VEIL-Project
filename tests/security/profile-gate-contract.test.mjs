@@ -1279,3 +1279,15 @@ test('diagnostic trust enrollment is create-only and binds independent release a
     assert.match(update, /PrepareDiagnosticEnrollment[\s\S]*?FixedTimeEquals\(SHA256.HashData\(payload\), independentPayloadSha256\)[\s\S]*?PrepareEnrollment\(payload, signature, publicKey, independentKeySha256,[\s\S]*?prepared.next.MinimumSequence != independentSequence[\s\S]*?authority.RequireIndependent\(prepared.next\);\s*return new\(null, prepared.next, host, authority\);/);
     assert.match(registry, /InstallDiagnosticTrust[\s\S]*?RequireMaintenanceAuthority\(\);[\s\S]*?PrepareDiagnosticEnrollment[\s\S]*?CefSystemBaselineWriterLock.Acquire\(\)[\s\S]*?RequireExpectedAndCopyRecord\(null,[\s\S]*?InstallApprovalAuthority\(approvalKey, approvalAnchor\);\s*authority.RequireSame\(ReadApprovalAuthorityStable\(\)\);\s*Publish\(update\);[\s\S]*?VerifyInstalledTrust\(payload, signature\).RequireBoundTrust\(\);/);
 });
+
+
+test('protected lifecycle adapter remains disconnected from product startup', async () => {
+    const cmake = await readFile('apps/cef-smoke/CMakeLists.txt', 'utf8');
+    const product = await readFile('apps/cef-smoke/product_candidate.cc', 'utf8');
+    const adapter = await readFile('apps/cef-smoke/protected_cef_lifecycle.cc', 'utf8');
+    const lifecycle = await readFile('apps/cef-smoke/protected_lifecycle.h', 'utf8');
+    assert.match(cmake, /target_sources\(veil-cef-product PRIVATE protected_cef_lifecycle\.cc\)/);
+    assert.doesNotMatch(product, /RunProtectedCefLifecycle|CefInitialize\s*\(|CefExecuteProcess\s*\(|CefShutdown\s*\(/);
+    assert.match(adapter, /CefExecuteProcess\(args, nullptr, sandbox_info\)[\s\S]*?PrepareProtectedInitializationSettings\(registration\)[\s\S]*?CefInitialize\(args, \*settings, nullptr, sandbox_info\)[\s\S]*?run_fixture\(kProtectedSyntheticPage\)[\s\S]*?CefShutdown\(\)/);
+    assert.match(lifecycle, /if \(!outcome\.browsers_closed\) return \{Status::kCleanupUnconfirmed\};[\s\S]*?try \{ shutdown\(\); \}/);
+});
