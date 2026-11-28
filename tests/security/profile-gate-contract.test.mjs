@@ -1308,7 +1308,7 @@ test('runtime authority wire remains separate from redemption and unreachable fo
     const wire = await readFile('apps/cef-smoke/broker_verification.h', 'utf8');
     const product = await readFile('apps/cef-smoke/product_candidate.cc', 'utf8');
     assert.match(broker, /#if VEIL_CEF_DIAGNOSTIC_IPC\s*else if \(request.Command == BrokerCommand.CheckCefRuntimeAuthority\)[\s\S]*?redemptionCandidate[\s\S]*?CheckCefRuntimeAuthority\(request, client, pipeClient\)[\s\S]*?#endif/);
-    assert.match(session, /MatchesRuntimeRoot[\s\S]*?borrowedCreation is null \|\| !activated[\s\S]*?Native.SameLiveProcess\(retainedRoot, pipeClient\)/);
+    assert.match(session, /MatchesRuntimeMember[\s\S]*?borrowedCreation is null \|\| !activated[\s\S]*?matchesMember\(client, pipeClient\)/);
     assert.match(session, /if \(borrowedCreation is not null\)\s*throw new UnauthorizedAccessException\("CEF prepared successor activation is disabled."\);/);
     assert.match(wire, /CheckCefRuntimeAuthority/);
     assert.doesNotMatch(product, /RequestRuntimeAuthority|RunProtectedCefLifecycle/);
@@ -1324,4 +1324,15 @@ test('runtime authority samples retain one original broker object and never reop
     assert.match(check, /state\.latch\.Check[\s\S]*?state\.process\.get\(\), state\.pid/);
     assert.doesNotMatch(check, /OpenProcess|make_unique|ServicePid\(/);
     assert.match(wire, /if \(retired_ \|\| checking_\) \{ retired_ = true; return false; \}/);
+});
+
+
+test('runtime member authority compares the pipe object inside retained nested observation', async () => {
+    const jobs = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
+    const session = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    const roles = await readFile('apps/broker/Veil.VolumeBroker/CefRoleTokenPolicy.cs', 'utf8');
+    assert.match(jobs, /ContainsPrivateRuntimeMember[\s\S]*?RequireBoundPrivatePeer\(peer, rootHandle\)[\s\S]*?ObserveLiveMember\(member\) == identity[\s\S]*?IsProcessInJob\(member, job,[\s\S]*?IsProcessInJob\(member, peerHandle,/);
+    assert.match(session, /observeMember = \(client, pipeClient\) =>[\s\S]*?CefNestedProcessDiagnostics.Observe[\s\S]*?MatchesProvisionalRole[\s\S]*?Native.SameLiveProcess\(handle, pipeClient\)[\s\S]*?matches != 1/);
+    assert.match(session, /RequireRuntimeAuthority[\s\S]*?guard.Observe\(readContext,[\s\S]*?observeMember\(client, pipeClient\)/);
+    assert.match(roles, /decision == CefRoleTokenDecision.MatchesProvisionalBaseline &&\s*\(isRoot \? role == CefObservedRole.Browser : role == CefObservedRole.Renderer\)/);
 });
