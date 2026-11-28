@@ -231,7 +231,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
             {
                 CheckRetainedMember(member.Identity, member.Handle);
                 if (!IsProcessInJob(member.Handle, desktopJob, out bool inside) || !inside ||
-                    Native.ObserveProcess(member.Handle) != member.Identity)
+                    ObserveLiveMember(member.Handle) != member.Identity)
                     throw new UnauthorizedAccessException("CEF member missing from desktop job.");
             }
         }
@@ -267,7 +267,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         ArgumentNullException.ThrowIfNull(rootHandle);
         ArgumentNullException.ThrowIfNull(observe);
         if (!bound || desktopJob.IsInvalid || desktopJob.IsClosed ||
-            CompareJobObjects(job, desktopJob) || Native.ObserveProcess(rootHandle) != root)
+            CompareJobObjects(job, desktopJob) || ObserveLiveMember(rootHandle) != root)
             throw new UnauthorizedAccessException("CEF collection root or jobs unavailable.");
 
         var brokerBefore = Accounting();
@@ -287,7 +287,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
                 try
                 {
                     if (handle.IsInvalid) throw new Win32Exception();
-                    var identity = Native.ObserveProcess(handle);
+                    var identity = ObserveLiveMember(handle);
                     if (identity.ProcessId != pid || identity.SessionId != root.SessionId ||
                         !string.Equals(identity.UserSid, root.UserSid, StringComparison.OrdinalIgnoreCase) ||
                         identity.CreatedFileTime < root.CreatedFileTime ||
@@ -305,7 +305,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
                 !pids.SequenceEqual(QueryMemberPids(desktopJob, desktopBefore.ActiveProcesses)) ||
                 !SameMembershipAccounting(brokerBefore, Accounting()) ||
                 !SameMembershipAccounting(desktopBefore, Accounting(desktopJob)) ||
-                Native.ObserveProcess(rootHandle) != root)
+                ObserveLiveMember(rootHandle) != root)
                 throw new UnauthorizedAccessException("CEF membership changed during collection.");
             foreach (var member in retained)
                 CheckRetainedMember(member.Identity, member.Handle);
@@ -367,10 +367,22 @@ internal sealed class CefBrokerOwnedJob : IDisposable
 
     private void CheckRetainedMember(ClientIdentity identity, SafeProcessHandle handle)
     {
-        if (!Native.IsRunning(handle) || Native.ObserveProcess(handle) != identity ||
+        if (!Native.IsRunning(handle) || ObserveLiveMember(handle) != identity ||
             !IsProcessInJob(handle, job, out bool inside) || !inside ||
-            Native.ObserveProcess(handle) != identity)
+            ObserveLiveMember(handle) != identity)
             throw new UnauthorizedAccessException("CEF retained job member did not match.");
+    }
+
+    // The process can enter termination between a successful wait check and
+    // an identity query. Native errors are observation refusals, never proof
+    // that a process exited. Preserve the native exception for diagnostics.
+    private static ClientIdentity ObserveLiveMember(SafeProcessHandle handle)
+    {
+        try { return Native.ObserveProcess(handle); }
+        catch (Win32Exception error)
+        {
+            throw new UnauthorizedAccessException("CEF live member identity could not be verified.", error);
+        }
     }
 
     internal bool HasNoActiveProcesses()
@@ -411,11 +423,22 @@ internal sealed class CefBrokerOwnedJob : IDisposable
             return false;
         // Terminate only the broker-owned Job. A live member outside it
         // must not be killed by trusting an arbitrary desktop Job handle.
+        var elapsed = Stopwatch.StartNew();
         if (!TerminateAndDrain(milliseconds)) return false;
-        // WAIT_OBJECT_0 is required; WAIT_FAILED is not evidence of exit.
-        if (WaitForObservedRoot(rootHandle, 0) != 0) return false;
-        return Accounting(desktopJob).ActiveProcesses == 0 &&
-            Accounting().ActiveProcesses == 0 && WaitForObservedRoot(rootHandle, 0) == 0;
+        // Job accounting can reach zero before the retained process object
+        // is signaled. Use only the remaining shared timeout, not a second
+        // full timeout, and never interpret WAIT_FAILED as process exit.
+        int remaining = (int)Math.Max(0L, milliseconds - elapsed.ElapsedMilliseconds);
+        if (WaitForObservedRoot(rootHandle, (uint)remaining) != 0) return false;
+        while (true)
+        {
+            if (Accounting(desktopJob).ActiveProcesses == 0 &&
+                Accounting().ActiveProcesses == 0 && WaitForObservedRoot(rootHandle, 0) == 0)
+                return true;
+            remaining = (int)Math.Max(0L, milliseconds - elapsed.ElapsedMilliseconds);
+            if (remaining == 0) return false;
+            Thread.Sleep(Math.Min(20, remaining));
+        }
     }
 
     [DllImport("kernel32.dll", EntryPoint = "WaitForSingleObject", SetLastError = true)]
