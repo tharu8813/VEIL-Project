@@ -323,3 +323,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #291 exact head `a1042ded8588eb7d6a5efb4361c3a244e779b341` Windows/Rust CI 46177932325 PASS, 독립 리뷰 없음.
 - 네트워크 저장을 session-owned profile writer에 연결. 기존 NetworkSettings.Problem 검증 및 private/ending/lost/dispatcher/engine/UI guard 유지. 저장 거부/철회/예외에서 이전 선택을 복원하며, 현재 적용된 session.Network, 엔진, vault transport는 변경하지 않는다. 표준 기본값 null 및 DoH 저장 형식 유지. 합성 회귀 6개 및 source contract 작성. 기존 프록시/DoH 런타임 정책 변경 없음. 신규 CI 및 실제 WPF/보호 VM/독립 리뷰 미검증, CEF startupEnabled=false 유지.
+
+### P3-02 SmartScreen 보안 설정 공통 저장 경계 (미완료)
+
+- #292 exact head `109e3c1ed3eabc1fefc99a1802d38c9d1b532c32` Windows/Rust CI 46178371861 PASS, 독립 리뷰 없음.
+- 보안 설정 저장을 session-owned writer에 연결. private/ending/lost/dispatcher/engine/UI authorization 유지. SecurityManager.Change는 bool persist 거부 시 Saved/State/뷰를 변경하지 않으며 예외에서도 저장 이전 값을 보존한다. 저장 성공 후에만 기존 다중 창 적용을 수행하고 Pending/Failed를 적용 성공으로 표시하지 않는다. 기본 SmartScreen on/null 및 복구 마커 의미 유지. 합성/기존 live smoke 확장 및 source contracts 작성. 실제 CEF SmartScreen 대체 구현이 아니며 신규 CI/실제 Windows 및 보호 VM/독립 리뷰 미검증. CEF startupEnabled=false 유지.

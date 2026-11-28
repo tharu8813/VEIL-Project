@@ -220,6 +220,15 @@ internal sealed class BrowserSession
             () => TrySaveLibrary(Authorized));
     }
 
+    internal bool TryCommitSecuritySettings(SecuritySettings chosen, Func<bool> authorized)
+    {
+        libraryDispatcher.VerifyAccess();
+        bool Authorized() => !IsPrivate && !IsEnding && !EngineLost && EngineHost.IsReady &&
+            persistentStatePath is not null && authorized();
+        return Data.TryCommitSecuritySettings(chosen, Authorized,
+            () => TrySaveLibrary(Authorized));
+    }
+
     internal Stack<ClosedTab> ClosedTabs { get; } = new();
     internal bool RestoringClosedTab { get; set; }
     internal int TabTransferDepth { get; set; }

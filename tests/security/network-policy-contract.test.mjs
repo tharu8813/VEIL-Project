@@ -78,3 +78,15 @@ test('network choice uses session-owned persistence without changing the applied
     assert.match(sessionSource, /internal NetworkSettings Network \{ get; \}/);
 });
 
+
+
+const securityUi = await readFile('apps/desktop/BrowserWindow.Security.cs', 'utf8');
+test('security policy uses profile commit before touching the live manager or views', () => {
+    assert.match(networkDataSource, /internal bool TryCommitSecuritySettings\([^)]*\)\s*\{\s*if \(!authorized\(\)\) return false;\s*var previous = Security;[\s\S]*?var normalized = chosen with \{ Recovered = false \};\s*Security = normalized == SecuritySettings.Default \? null : normalized;\s*committed = authorized\(\) && save\(\);[\s\S]*?if \(!committed\) Security = previous;/);
+    assert.match(sessionSource, /internal bool TryCommitSecuritySettings\([^)]*\)\s*\{\s*libraryDispatcher.VerifyAccess\(\);\s*bool Authorized\(\) => !IsPrivate && !IsEnding && !EngineLost && EngineHost.IsReady &&\s*persistentStatePath is not null && authorized\(\);\s*return Data.TryCommitSecuritySettings\(chosen, Authorized,\s*\(\) => TrySaveLibrary\(Authorized\)\);/);
+    assert.match(manager, /if \(!persist\(normalized\)\) return false;\s*Saved = normalized;\s*var current = views\(\).ToList\(\);[\s\S]*?foreach \(var view in current\) all &= Set\(view, Saved.SmartScreen\);/);
+    assert.match(securityUi, /bool Authorized\(\) => SettingsReady\(\) && IsActive && session.SettingsUiOpen && session.PermissionUiOpen;\s*ChangeSecurity\(chosen, Authorized\);/);
+    assert.match(securityUi, /if \(!session.Security.Change\(chosen, settings => session.TryCommitSecuritySettings\(settings, authorized\)\)\)[\s\S]*?return false;\s*\}\s*UpdateSecurityIndicators\(\);\s*Status.Text = session.Security.State != SmartScreenState.Applied/);
+    assert.doesNotMatch(securityUi, /\bdata\.Save\(|\bdata\.Security\s*=(?!=)/);
+});
+
