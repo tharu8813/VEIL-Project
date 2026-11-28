@@ -211,3 +211,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - `GetProcessMitigationPolicy`의 6개 DWORD 정책(ASLR, DynamicCode, SystemCallDisable, CFG, ImageLoad, ChildProcess)을 읽기 전용으로 조회한다. 원본 retained handle과 동일한 live object의 query/synchronize handle만 사용하고 두 차례 스냅샷 및 모듈 관측 전후를 비교한다. 0은 관측된 실제 값이며 실패는 예외로 구분한다. 원본 비트를 보존하되 허용 정책으로 해석하지 않는다. 합성 조회 실패/정책 변경 및 실제 합성 프로세스 handle/종료 검사, 소스 계약을 추가했다.
 - API 기준: https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocessmitigationpolicy 및 https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-process_mitigation_policy. #269 정확한 head Windows CI PASS, 독립 리뷰 없음. 새 CI 및 실제 CEF GPU/Utility/Network 정책 실측은 NOT RUN. 다른 정책, thread opt-out, 변경 후 복원 및 전체 sandbox 동작은 미검증. 조회 권한 거부도 실패로 처리하며 실제 CEF 제한 token 호환성은 별도 확인 필요. 역할 허용 범위, Job cap=1, borrowed activation 차단 및 WebView2 유지.
+
+### P2-05 독립 nested smoke mitigation 증거 준비 (미완료)
+
+- #270 최초 Windows CI 46163370054의 실패는 CefMitigationTests.cs의 int→uint 변환(CS0266/CS1662)이며 `0u` 수정 head `0e64dfbaca0f377dec454976339728e0e90a8d26`에서 재검증 중(46163853866). Rust 검사 PASS. 수정 head 성공은 아직 미확인.
+- 기존 독립 `CefNestedSmoke`가 Browser/Renderer/GPU/Utility/Network 마지막 live 표본에 6개 Windows mitigation raw flag와 관측 상태를 추가한다. 원래 process와 query handle의 동일 object 및 양쪽 Job 소속/생존을 확인하고 두 스냅샷을 비교한다. 실패·불안정은 null flags 및 명시 상태로 보존하며 0으로 대체하지 않는다. 추가 필드는 schema 5의 선택적 진단 확장이다. 기존 종료 및 renderer 제한 확인 기준은 변경하지 않으며, mitigationCoverage는 마지막 표본만 집계한다. 전체 생애, 모든 자식, 정책의 적정성 또는 보호 VM 증명이 아니다. 새 Windows CI, 번들 검증 및 실제 일반 사용자 VM 측정 NOT RUN. 기존 역할 차단, Job cap=1 및 startupEnabled=false 유지.
