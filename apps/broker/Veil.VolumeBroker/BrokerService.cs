@@ -13,7 +13,6 @@ internal sealed class BrokerService
     private const uint Stop = 1, Shutdown = 5, Interrogate = 4;
     private const uint SessionChange = 14;
     private const uint AcceptStopShutdownAndSessionChange = 1 | 4 | 0x80;
-    private const uint SessionLogoff = 6, SessionLock = 7;
     private const uint ErrorGeneralFailure = 31, ErrorNotImplemented = 120;
     private readonly CancellationTokenSource stop = new();
     private readonly ControlHandler handler;
@@ -95,13 +94,11 @@ internal sealed class BrokerService
         {
             // WTSSESSION_NOTIFICATION has two DWORDs. The event pointer is
             // valid only during this callback; do not retain it or accept IPC data.
-            if (eventType is SessionLogoff or SessionLock && eventData != IntPtr.Zero &&
-                Marshal.ReadInt32(eventData) == 8)
-            {
-                uint sessionId = unchecked((uint)Marshal.ReadInt32(eventData, 4));
-                if (sessionId != 0 && sessionId <= int.MaxValue)
-                    sessionNotifications.Writer.TryWrite(sessionId);
-            }
+            if (CefWindowsSessionRevocation.IsRevocationEvent(eventType) &&
+                eventData != IntPtr.Zero && Marshal.ReadInt32(eventData) == 8 &&
+                CefWindowsSessionRevocation.TryDecode(eventType, 8,
+                    unchecked((uint)Marshal.ReadInt32(eventData, 4)), out uint sessionId))
+                sessionNotifications.Writer.TryWrite(sessionId);
             return 0;
         }
         if (control is not (Stop or Shutdown)) return ErrorNotImplemented;
