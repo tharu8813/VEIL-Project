@@ -273,6 +273,47 @@ try
             "Relock policy did not complete after creation drain.");
     }
     Console.WriteLine("PASS: owned suspended creation probe retires, drains, and gates relock");
+    // Fault injection exercises the same drain orchestration, without
+    // pretending that a synthetic refusal is a real Windows Job failure.
+    foreach (int failedStage in new[] { 0, 1, 2, 3 })
+    foreach (bool throws in new[] { false, true })
+    {
+        using var pin = new MemoryStream();
+        var retained = new CefRetainedLifetime(pin);
+        var attempts = new List<int>();
+        var budgets = new List<int>();
+        bool retried = false;
+        bool Attempt(int stage, int budget)
+        {
+            attempts.Add(stage);
+            budgets.Add(budget);
+            if (retried || stage != failedStage) return true;
+            if (throws) throw new IOException("Synthetic private drain failure.");
+            return false;
+        }
+        bool Verify()
+        {
+            attempts.Add(3);
+            if (retried || failedStage != 3) return true;
+            if (throws) throw new IOException("Synthetic final empty check failure.");
+            return false;
+        }
+        bool Drain() => CefPreparedCreationLifetime.TryDrainAll(0,
+            budget => Attempt(0, budget), budget => Attempt(1, budget),
+            budget => Attempt(2, budget), Verify);
+        bool released = false, faulted = false;
+        try { released = retained.TryRelease(Drain); }
+        catch (Exception error) when (error is IOException or InvalidOperationException) { faulted = true; }
+        Check(!released && pin.CanRead && faulted == throws, "Failed private drain released prerequisites.");
+        Check(attempts.SequenceEqual(failedStage == 3 ? new[] { 0, 1, 2, 3 } : new[] { 0, 1, 2 }) &&
+            budgets.Count == 3 && budgets.All(budget => budget == 0),
+            "Private drain skipped a stop attempt, reused a deadline or verified incomplete exit.");
+        attempts.Clear();
+        retried = true;
+        Check(retained.TryRelease(Drain) && !pin.CanRead &&
+            attempts.SequenceEqual(new[] { 0, 1, 2, 3 }), "Private drain retry did not release after proof.");
+    }
+    Console.WriteLine("PASS: private drain failures still attempt every stop and retain prerequisites until retry proof");
     // Exercise in-place ownership handoff using the actual synthetic root.
     // No apphost execution and no second native handle owner.
     foreach (int mode in new[] { 0, 1, 2 })
