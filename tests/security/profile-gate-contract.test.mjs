@@ -598,7 +598,7 @@ test('broker retains executable and runtime pins until confirmed candidate exit'
     assert.match(broker, /CefRetainedLifetime Lifetime \{ get; \} = new\(Runtime, Image, Job, Child\)/);
     assert.match(broker, /candidate\.Lifetime\.TryRelease\(\(\) => exitAlreadyConfirmed \|\| TryStopVerifiedChild\(candidate\)\)/);
     assert.match(policy, /if \(!exitConfirmed\)\s*\{\s*if \(!verifyExit\(\)\) return false;\s*exitConfirmed = true;\s*\}[\s\S]*?retained\[next\]\?\.Dispose\(\);\s*retained\[next\+\+\] = null;/);
-    assert.match(nested, /lifetime = new CefRetainedLifetime\(registration, desktopJob, brokerJob, rootHandle\)/);
+    assert.match(nested, /lifetime = new CefRetainedLifetime\(registration, peerJob, brokerJob, rootHandle\)/);
     assert.match(nested, /guard\.Revoke\(\);\s*return lifetime\.TryRelease\(\(\) => guard\.RevokeAndCheckDrain\(\(\) => drain\(milliseconds\)\)\)/);
 });
 
@@ -665,6 +665,22 @@ test('nested diagnostic lifetime requires an independently trusted initial root-
     assert.match(initial, /RequireInitialState\(\);\s*_ = ObserveNestedRetainedMembers\(desktopJob, \[\(root, rootHandle\)\]\);\s*RequireInitialState\(\)/);
     assert.match(initial, /const uint killOnClose = 0x00002000, breakaway = 0x00000800 \| 0x00001000;/);
     assert.match(initial, /\(flags & killOnClose\) == 0 \|\| \(flags & breakaway\) != 0/);
-    assert.match(nested, /registration\.RequireCurrent\(\);\s*brokerJob\.RequireInitialNestedBinding\(desktopJob, owner, ownerHandle, root, rootHandle\);\s*registration\.RequireCurrent\(\);[\s\S]*?lifetime = new CefRetainedLifetime/);
+    assert.match(nested, /registration\.RequireCurrent\(\);\s*brokerJob\.RequirePrivateNestedBinding\(peerJob, owner, ownerHandle, root, rootHandle\);\s*registration\.RequireCurrent\(\);[\s\S]*?lifetime = new CefRetainedLifetime/);
     assert.doesNotMatch(broker, /new CefBoundDiagnosticSession|IssueAssignmentHandle|DuplicateCefJobAssignment/);
+});
+
+
+test('private diagnostic pair binds the original broker-created Jobs and retained root once', async () => {
+    const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
+    const nested = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    assert.match(job, /assignmentExported = true;[\s\S]*?return Native\.DuplicateCefJobAssignment/);
+    assert.match(job, /assignmentExported \|\| peer\.assignmentExported \|\| activeLimit != peer\.activeLimit/);
+    assert.match(job, /if \(privatePeer is not null \|\| peer\.privatePeer is not null\)[\s\S]*?RequireInitialNestedBinding\(peerHandle, owner, ownerHandle, root, rootHandle\);[\s\S]*?privatePeer = peer;\s*peer\.privatePeer = this;\s*privateRoot = peer\.privateRoot = rootHandle;/);
+    assert.match(job, /!ReferenceEquals\(privatePeer, peer\) \|\| !ReferenceEquals\(peer\.privatePeer, this\) \|\|[\s\S]*?!ReferenceEquals\(privateRoot, rootHandle\) \|\| !ReferenceEquals\(peer\.privateRoot, rootHandle\)/);
+    assert.match(job, /TerminateAndVerifyNestedDrain\(RequireBoundPrivatePeer\(peer, rootHandle\), rootHandle, milliseconds\)/);
+    assert.match(nested, /brokerJob\.ObservePrivateNestedDiagnostics\(peerJob, root, rootHandle,/);
+    assert.match(nested, /brokerJob\.TerminateAndVerifyPrivateDrain\(peerJob, rootHandle, milliseconds\)/);
+    assert.doesNotMatch(nested, /SafeFileHandle desktopJob|ObserveCollectedNestedDiagnostics\(/);
+    assert.doesNotMatch(broker, /new CefBoundDiagnosticSession|RequirePrivateNestedBinding/);
 });
