@@ -359,6 +359,25 @@ try {
     Reject { & $diagVerifyRegistration }
     $script:diagDacl = $script:VeilPreflightServiceDacl
     [void](& $diagVerifyRegistration)
+    $diagManual = { $script:diagService.StartMode = 'Manual' }
+    $diagStart = { $script:diagService.State = 'Running'; $script:diagService.ProcessId = 100 }
+    $diagDisable = { $script:diagService.StartMode = 'Disabled' }
+    $diagStop = { $script:diagService.State = 'Stopped'; $script:diagService.ProcessId = 0 }
+    $diagExercise = { [pscustomobject]@{kind='standard-user-exit-observation';exitCode=[int]31;processId=[int]200;sessionId=[int]1;tokenVerified=$true} }
+    $diagWrongExit = { [pscustomobject]@{kind='standard-user-exit-observation';exitCode=[int]29;processId=[int]200;sessionId=[int]1;tokenVerified=$true} }
+    $diagFailed = Join-Path $work 'diagnostic-wrong-exit'
+    Reject { Invoke-VeilPreflightServiceProbe $diagFailed $diagCommand $diagVerifyRegistration $diagRead $diagReadDacl $diagManual $diagStart $diagDisable $diagStop {} $diagWrongExit -Diagnostic }
+    Assert-VeilDisabledPreflightService (& $diagRead) $diagCommand
+    if (Test-Path -LiteralPath (Join-Path $diagFailed '03-stopped-verified.json')) { throw 'Wrong diagnostic exit recorded success.' }
+    $diagSession = Join-Path $work 'diagnostic-protected-session'
+    $diagResult = Invoke-VeilPreflightServiceProbe $diagSession $diagCommand $diagVerifyRegistration $diagRead $diagReadDacl $diagManual $diagStart $diagDisable $diagStop {} $diagExercise -Diagnostic
+    if ($diagResult.kind -cne 'cef-diagnostic-session-probe' -or $diagResult.startupEnabled) { throw 'Diagnostic session kind mismatch.' }
+    $diagReadback = Read-VeilCompletedProtectedSession $diagSession (& $diagVerifyRegistration) -Diagnostic
+    if ($diagReadback.state -cne 'verified-diagnostic-suspended-records') { throw 'Diagnostic session readback mismatch.' }
+    Reject { Read-VeilCompletedProtectedSession $diagSession (& $diagVerifyRegistration) }
+    $diagObservation = Join-Path $diagSession '02a-protected-preflight.json'
+    [IO.File]::AppendAllText($diagObservation,' ')
+    Reject { Read-VeilCompletedProtectedSession $diagSession (& $diagVerifyRegistration) -Diagnostic }
     $script:diagnosticMarker = $false
     Write-Host 'PASS: diagnostic service disabled registration, mode separation and SCM identity/DACL refusal'
     Write-Host 'PASS: diagnostic publication, mode separation, tamper refusal and verified recovery'
