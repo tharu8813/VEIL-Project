@@ -720,13 +720,12 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         authenticatedGeneration = null;
         authenticatedOwner = null;
         authenticatedOwnerHandle = null;
-        diagnosticSession.Retire();
-        try { RevokePendingCefChild(); }
-        finally
-        {
-            RetryDiagnosticSession();
-            if (diagnosticSession.CleanupPending || diagnosticRelock.Pending) EnsureCefStopRetry();
-        }
+        CefOwnerRevocationCleanup.Run(diagnosticSession.Retire, RevokePendingCefChild,
+            RetryDiagnosticSession, () =>
+            {
+                if (unresolvedCefStops.Count != 0 || diagnosticSession.CleanupPending || diagnosticRelock.Pending)
+                    EnsureCefStopRetry();
+            });
     }
 
     private void RevokePendingCefChild()
