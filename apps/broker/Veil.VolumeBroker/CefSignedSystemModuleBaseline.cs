@@ -6,7 +6,7 @@ namespace Veil.VolumeBroker;
 
 // Independent trust inputs, not values supplied by the signed document.
 // A future protected installation must derive these from the actual host
-// and an authenticated release policy. This class does not perform that IO.
+// and an authenticated release policy. VerifyCurrentHost observes OS metadata;
 internal sealed record CefSystemBaselineHost(string Architecture, int Build, int UpdateRevision);
 
 internal static class CefSignedSystemModuleBaseline
@@ -14,13 +14,28 @@ internal static class CefSignedSystemModuleBaseline
     private const int MaxPayloadBytes = 1024 * 1024;
     private const int MaxModules = 1024;
 
+    // Use this path for real-host diagnostics, with independently trusted
+    // key and sequence floor. Recheck the host before/after verification
+    // and every subsequent module inventory check.
+    internal static CefSystemModuleVerifier VerifyCurrentHost(
+        ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature,
+        ReadOnlySpan<byte> trustedPublicKey, long minimumSequence)
+    {
+        var host = CefSystemBaselineHostObserver.Observe();
+        void RequireHost() => CefSystemBaselineHostObserver.RequireCurrent(host,
+            CefSystemBaselineHostObserver.Observe());
+        var verifier = Verify(payload, signature, trustedPublicKey, host, minimumSequence, RequireHost);
+        RequireHost();
+        return verifier;
+    }
+
     // Detached RSA-PSS/SHA-256 signature of the exact UTF-8 JSON bytes.
     // The public SPKI, host identity and minimum sequence are supplied
     // independently; the payload cannot replace any of them.
     internal static CefSystemModuleVerifier Verify(
         ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature,
         ReadOnlySpan<byte> trustedPublicKey, CefSystemBaselineHost expectedHost,
-        long minimumSequence)
+        long minimumSequence, Action? requireHostCurrent = null)
     {
         ArgumentNullException.ThrowIfNull(expectedHost);
         if (expectedHost.Architecture != "x64" || expectedHost.Build <= 0 ||
@@ -73,7 +88,7 @@ internal static class CefSignedSystemModuleBaseline
             }
             // Existing verifier independently validates every name, length,
             // digest, signer pin and case-insensitive uniqueness.
-            return new CefSystemModuleVerifier(pins);
+            return new CefSystemModuleVerifier(pins, requireHostCurrent);
         }
         catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException or ArgumentException)
         {

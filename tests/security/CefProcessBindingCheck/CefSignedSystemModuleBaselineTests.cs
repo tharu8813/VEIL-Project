@@ -2,6 +2,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Win32;
 using Veil.VolumeBroker;
 
 internal static class CefSignedSystemModuleBaselineTests
@@ -69,6 +70,38 @@ internal static class CefSignedSystemModuleBaselineTests
         RejectSigned(Encoding.UTF8.GetBytes(json.Replace("veil-cef-system-modules-v1", "other-schema")));
         RejectSigned(Encoding.UTF8.GetBytes(json[..^1]));
         RejectSigned(new byte[1024 * 1024 + 1]);
+        var observed = CefSystemBaselineHostObserver.Reconcile(26100, "26100",
+            RegistryValueKind.String, 1234, RegistryValueKind.DWord);
+        if (observed != host) throw new InvalidOperationException("Host reconciliation regression.");
+        Reject(() => CefSystemBaselineHostObserver.Reconcile(26100, "26101",
+            RegistryValueKind.String, 1234, RegistryValueKind.DWord));
+        Reject(() => CefSystemBaselineHostObserver.Reconcile(26100, "026100",
+            RegistryValueKind.String, 1234, RegistryValueKind.DWord));
+        Reject(() => CefSystemBaselineHostObserver.Reconcile(26100, 26100,
+            RegistryValueKind.DWord, 1234, RegistryValueKind.DWord));
+        Reject(() => CefSystemBaselineHostObserver.Reconcile(26100, "26100",
+            RegistryValueKind.String, "1234", RegistryValueKind.String));
+        Reject(() => CefSystemBaselineHostObserver.Reconcile(26100, "26100",
+            RegistryValueKind.String, -1, RegistryValueKind.DWord));
+        Reject(() => CefSystemBaselineHostObserver.Reconcile(26100, "26100",
+            RegistryValueKind.String, null, RegistryValueKind.DWord));
+        int reads = 0;
+        Reject(() => CefSystemBaselineHostObserver.RequireStable(() => ++reads == 1
+            ? host : host with { UpdateRevision = 1235 }));
+        int guardCalls = 0;
+        var guarded = CefSignedSystemModuleBaseline.Verify(good, signature, publicKey, host, 7,
+            () => { if (++guardCalls == 2) throw new UnauthorizedAccessException("Synthetic host change."); });
+        Reject(() => guarded.RequireModules([]));
+        if (guardCalls != 2) throw new InvalidOperationException("Host inventory guard not rechecked.");
+        var actual = CefSystemBaselineHostObserver.Observe();
+        var actualPayload = Payload(build: actual.Build, revision: actual.UpdateRevision);
+        var realHostVerifier = CefSignedSystemModuleBaseline.VerifyCurrentHost(actualPayload,
+            Sign(actualPayload), publicKey, 7);
+        // Empty inventory exercises host binding only, not DLL trust.
+        realHostVerifier.RequireModules([]);
+        var wrongHost = Payload(build: actual.Build, revision: actual.UpdateRevision == 0 ? 1 : 0);
+        Reject(() => CefSignedSystemModuleBaseline.VerifyCurrentHost(wrongHost, Sign(wrongHost), publicKey, 7));
+        Console.WriteLine("PASS: native Windows build and HKLM revision binding, host-change refusal");
         Console.WriteLine("PASS: signed system module baseline, host binding, sequence and malformed input refusal");
     }
 }

@@ -9,6 +9,6 @@ The trusted public SPKI, expected host identity and minimum allowed sequence are
 Remaining before integration:
 - Independently obtain authenticated OS-specific file and signer pins from a reviewed release pipeline. No production signing key or baseline is created by this code.
 - Establish protected trust-key installation, rotation/revocation and persistent minimum-sequence management; test rollback and update failures. The supplied minimum is not itself durable rollback protection.
-- Independently measure actual OS build/UBR and architecture, including servicing races. The verifier compares supplied values only.
+- A read-only observer now checks native x64 OS/process architecture, RtlGetVersion build and 64-bit HKLM CurrentBuildNumber/UBR twice. VerifyCurrentHost rechecks after signature validation and before/after inventory. Real servicing races and administrative registry trust remain unverified; metadata cannot establish loaded-image provenance.
 - Bind the resulting verifier to retained broker generation and runtime lease. Validate actual Windows catalog compatibility and protected CEF runtime in a disposable VM.
 - Keep WebView2 product path and startupEnabled=false. Synthetic tests and compilation do not satisfy Gate A–E.

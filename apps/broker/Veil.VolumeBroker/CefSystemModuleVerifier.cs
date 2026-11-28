@@ -17,9 +17,13 @@ internal sealed class CefSystemModuleVerifier
     private readonly Dictionary<string, CefSystemModulePin> pins = new(StringComparer.OrdinalIgnoreCase);
     private readonly string root = Environment.SystemDirectory;
 
-    internal CefSystemModuleVerifier(IEnumerable<CefSystemModulePin> authenticatedPins)
+    private readonly Action? requireHostCurrent;
+
+    internal CefSystemModuleVerifier(IEnumerable<CefSystemModulePin> authenticatedPins,
+        Action? requireHostCurrent = null)
     {
         ArgumentNullException.ThrowIfNull(authenticatedPins);
+        this.requireHostCurrent = requireHostCurrent;
         foreach (var pin in authenticatedPins)
         {
             if (pin is null || !ValidName(pin.Name) || pin.Bytes <= 0 ||
@@ -42,6 +46,7 @@ internal sealed class CefSystemModuleVerifier
         ArgumentNullException.ThrowIfNull(modules);
         if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess)
             throw new PlatformNotSupportedException("Expected Windows x64 module verification.");
+        requireHostCurrent?.Invoke();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (string path in modules)
         {
@@ -70,6 +75,7 @@ internal sealed class CefSystemModuleVerifier
                 original.IndexLow != current.IndexLow || again.Length != pin.Bytes)
                 throw new UnauthorizedAccessException("System module disk object changed.");
         }
+        requireHostCurrent?.Invoke();
     }
 
     private static FileInformation RequireCanonical(SafeFileHandle file, string path)
