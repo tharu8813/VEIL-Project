@@ -127,13 +127,24 @@ function Assert-VeilProbeRegistrationMode($Evidence,[switch]$Diagnostic) {
     } elseif ($null -ne $kind) { throw 'Diagnostic registration refused in ordinary probe.' }
 }
 
+function Get-VeilDiagnosticPreparationHash([string]$PreparationRoot,$RegistrationEvidence,[switch]$Diagnostic,[switch]$PrepareProfile) {
+    if ($PrepareProfile -and -not $Diagnostic) { throw 'Profile preparation requires diagnostic mode.' }
+    if (-not $Diagnostic -or $PrepareProfile) {
+        if ($PreparationRoot) { throw 'Unexpected profile preparation evidence.' }
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($PreparationRoot)) { throw 'Verified profile preparation required before suspended probe.' }
+    $prepared = Read-VeilCompletedProtectedSession $PreparationRoot $RegistrationEvidence -Diagnostic -PrepareProfile
+    return $prepared.sessionSha256
+}
+
 function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
     [scriptblock]$VerifyRegistration,[scriptblock]$ReadService,[scriptblock]$ReadDacl,
     [scriptblock]$SetManual,[scriptblock]$Start,[scriptblock]$Disable,[scriptblock]$Stop,[scriptblock]$RequireDetached,
-    [scriptblock]$Exercise,[switch]$Diagnostic) {
-    $kind = if ($Diagnostic) { 'cef-diagnostic-session-probe' } else { 'cef-preflight-service-probe' }
-    $exitCode = if ($Diagnostic) { 31 } else { 29 }
-    $observationState = if ($Diagnostic) { 'diagnostic-suspended-exit-observed' } else { 'protected-preflight-exit-observed' }
+    [scriptblock]$Exercise,[switch]$Diagnostic,[switch]$PrepareProfile,[string]$PreparationRoot) {
+    $kind = if ($PrepareProfile) { 'cef-diagnostic-profile-preparation' } elseif ($Diagnostic) { 'cef-diagnostic-session-probe' } else { 'cef-preflight-service-probe' }
+    $exitCode = if ($PrepareProfile) { 30 } elseif ($Diagnostic) { 31 } else { 29 }
+    $observationState = if ($PrepareProfile) { 'diagnostic-profile-prepared-observed' } elseif ($Diagnostic) { 'diagnostic-suspended-exit-observed' } else { 'protected-preflight-exit-observed' }
     if ($Diagnostic -and $null -eq $Exercise) { throw 'Diagnostic exercise required.' }
     if (Test-Path -LiteralPath $ProbeRoot) { throw 'Existing or interrupted probe must be preserved.' }
     $registrationEvidence = & $VerifyRegistration
@@ -141,6 +152,7 @@ function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
     if ($registrationEvidence.state -cne 'registered-disabled' -or $registrationEvidence.startupEnabled -isnot [bool] -or
         $registrationEvidence.startupEnabled -or $registrationEvidence.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or
         $registrationEvidence.registrationSha256 -cnotmatch '\A[0-9a-f]{64}\z') { throw 'Verified disabled registration required.' }
+    $preparationHash = Get-VeilDiagnosticPreparationHash $PreparationRoot $registrationEvidence -Diagnostic:$Diagnostic -PrepareProfile:$PrepareProfile
     & $RequireDetached
     Assert-VeilAdminPath (Split-Path -Parent $ProbeRoot)
     New-VeilRestrictedDirectory $ProbeRoot
@@ -149,8 +161,12 @@ function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
         sourceCommit=$registrationEvidence.sourceCommit;registrationSha256=$registrationEvidence.registrationSha256
         startupEnabled=$false
     }
+    if ($preparationHash) { $intent.Add('profilePreparationSha256',$preparationHash) }
     $intentHash = Write-VeilPreflightDraftFile (Join-Path $ProbeRoot '01-probe-intent.json') $intent
     Assert-VeilPreflightPublicationEqual (& $VerifyRegistration) $registrationEvidence
+    if ((Get-VeilDiagnosticPreparationHash $PreparationRoot $registrationEvidence -Diagnostic:$Diagnostic -PrepareProfile:$PrepareProfile) -cne $preparationHash) {
+        throw 'Profile preparation evidence changed before start.'
+    }
     & $RequireDetached
     # Once mutation is attempted, always try to disable and stop the exact
     # service, including when the start call itself reports an error.
@@ -213,6 +229,9 @@ function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
         & $RequireDetached
     }
     Assert-VeilPreflightPublicationEqual (& $VerifyRegistration) $registrationEvidence
+    if ((Get-VeilDiagnosticPreparationHash $PreparationRoot $registrationEvidence -Diagnostic:$Diagnostic -PrepareProfile:$PrepareProfile) -cne $preparationHash) {
+        throw 'Profile preparation evidence changed during exercise.'
+    }
     $final = [ordered]@{
         kind=$kind;format=1;state='running-then-stopped'
         intentSha256=$intentHash;sourceCommit=$registrationEvidence.sourceCommit;startupEnabled=$false
@@ -251,12 +270,12 @@ function Assert-VeilCompletedServiceProbe([string]$ProbeRoot,$RegistrationEviden
 # Reconstruct every byte and bind the observation to the final cleanup marker.
 # This inspects trusted administrator records; it cannot prove historical
 # runtime behavior independently of the administrator who collected them.
-function Read-VeilCompletedProtectedSession([string]$ProbeRoot,$RegistrationEvidence,[switch]$Diagnostic) {
+function Read-VeilCompletedProtectedSession([string]$ProbeRoot,$RegistrationEvidence,[switch]$Diagnostic,[switch]$PrepareProfile,[string]$PreparationRoot) {
     Assert-VeilProbeRegistrationMode $RegistrationEvidence -Diagnostic:$Diagnostic
-    $kind = if ($Diagnostic) { 'cef-diagnostic-session-probe' } else { 'cef-preflight-service-probe' }
-    $exitCode = if ($Diagnostic) { 31 } else { 29 }
-    $observationState = if ($Diagnostic) { 'diagnostic-suspended-exit-observed' } else { 'protected-preflight-exit-observed' }
-    $verifiedState = if ($Diagnostic) { 'verified-diagnostic-suspended-records' } else { 'verified-protected-preflight-records' }
+    $kind = if ($PrepareProfile) { 'cef-diagnostic-profile-preparation' } elseif ($Diagnostic) { 'cef-diagnostic-session-probe' } else { 'cef-preflight-service-probe' }
+    $exitCode = if ($PrepareProfile) { 30 } elseif ($Diagnostic) { 31 } else { 29 }
+    $observationState = if ($PrepareProfile) { 'diagnostic-profile-prepared-observed' } elseif ($Diagnostic) { 'diagnostic-suspended-exit-observed' } else { 'protected-preflight-exit-observed' }
+    $verifiedState = if ($PrepareProfile) { 'verified-diagnostic-profile-preparation-records' } elseif ($Diagnostic) { 'verified-diagnostic-suspended-records' } else { 'verified-protected-preflight-records' }
     if ($RegistrationEvidence.state -cne 'registered-disabled' -or
         $RegistrationEvidence.startupEnabled -isnot [bool] -or $RegistrationEvidence.startupEnabled -or
         $RegistrationEvidence.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or
@@ -275,6 +294,8 @@ function Read-VeilCompletedProtectedSession([string]$ProbeRoot,$RegistrationEvid
         kind=$kind;format=1;state='probe-intent'
         sourceCommit=$RegistrationEvidence.sourceCommit;registrationSha256=$RegistrationEvidence.registrationSha256;startupEnabled=$false
     }
+    $preparationHash = Get-VeilDiagnosticPreparationHash $PreparationRoot $RegistrationEvidence -Diagnostic:$Diagnostic -PrepareProfile:$PrepareProfile
+    if ($preparationHash) { $intent.Add('profilePreparationSha256',$preparationHash) }
     $digest = Assert-VeilPreflightDraftBytes $bytes['01-probe-intent.json'] $intent
     [void](Assert-VeilPreflightDraftBytes $bytes['02-running-observed.json'] ([ordered]@{
         state='running-observed';intentSha256=$digest;startupEnabled=$false
