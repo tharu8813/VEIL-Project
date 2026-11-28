@@ -365,19 +365,35 @@ try {
     $diagStop = { $script:diagService.State = 'Stopped'; $script:diagService.ProcessId = 0 }
     $diagExercise = { [pscustomobject]@{kind='standard-user-exit-observation';exitCode=[int]31;processId=[int]200;sessionId=[int]1;tokenVerified=$true} }
     $diagWrongExit = { [pscustomobject]@{kind='standard-user-exit-observation';exitCode=[int]29;processId=[int]200;sessionId=[int]1;tokenVerified=$true} }
+    $diagPreparation = Join-Path $work 'diagnostic-profile-preparation'
+    $diagPrepareExercise = { [pscustomobject]@{kind='standard-user-exit-observation';exitCode=[int]30;processId=[int]201;sessionId=[int]1;tokenVerified=$true} }
+    $diagMissing = Join-Path $work 'diagnostic-missing-preparation'
+    Reject { Invoke-VeilPreflightServiceProbe $diagMissing $diagCommand $diagVerifyRegistration $diagRead $diagReadDacl $diagManual $diagStart $diagDisable $diagStop {} $diagExercise -Diagnostic -PreparationRoot $diagPreparation }
+    if (Test-Path -LiteralPath $diagMissing) { throw 'Missing preparation created diagnostic intent.' }
+    $preparedProfile = Invoke-VeilPreflightServiceProbe $diagPreparation $diagCommand $diagVerifyRegistration $diagRead $diagReadDacl $diagManual $diagStart $diagDisable $diagStop {} $diagPrepareExercise -Diagnostic -PrepareProfile
+    if ($preparedProfile.kind -cne 'cef-diagnostic-profile-preparation' -or $preparedProfile.startupEnabled) { throw 'Profile preparation kind mismatch.' }
+    $profileReadback = Read-VeilCompletedProtectedSession $diagPreparation (& $diagVerifyRegistration) -Diagnostic -PrepareProfile
+    if ($profileReadback.state -cne 'verified-diagnostic-profile-preparation-records') { throw 'Profile preparation readback mismatch.' }
+    Reject { Read-VeilCompletedProtectedSession $diagPreparation (& $diagVerifyRegistration) -Diagnostic -PreparationRoot $diagPreparation }
     $diagFailed = Join-Path $work 'diagnostic-wrong-exit'
-    Reject { Invoke-VeilPreflightServiceProbe $diagFailed $diagCommand $diagVerifyRegistration $diagRead $diagReadDacl $diagManual $diagStart $diagDisable $diagStop {} $diagWrongExit -Diagnostic }
+    Reject { Invoke-VeilPreflightServiceProbe $diagFailed $diagCommand $diagVerifyRegistration $diagRead $diagReadDacl $diagManual $diagStart $diagDisable $diagStop {} $diagWrongExit -Diagnostic -PreparationRoot $diagPreparation }
     Assert-VeilDisabledPreflightService (& $diagRead) $diagCommand
     if (Test-Path -LiteralPath (Join-Path $diagFailed '03-stopped-verified.json')) { throw 'Wrong diagnostic exit recorded success.' }
     $diagSession = Join-Path $work 'diagnostic-protected-session'
-    $diagResult = Invoke-VeilPreflightServiceProbe $diagSession $diagCommand $diagVerifyRegistration $diagRead $diagReadDacl $diagManual $diagStart $diagDisable $diagStop {} $diagExercise -Diagnostic
+    $diagResult = Invoke-VeilPreflightServiceProbe $diagSession $diagCommand $diagVerifyRegistration $diagRead $diagReadDacl $diagManual $diagStart $diagDisable $diagStop {} $diagExercise -Diagnostic -PreparationRoot $diagPreparation
     if ($diagResult.kind -cne 'cef-diagnostic-session-probe' -or $diagResult.startupEnabled) { throw 'Diagnostic session kind mismatch.' }
-    $diagReadback = Read-VeilCompletedProtectedSession $diagSession (& $diagVerifyRegistration) -Diagnostic
+    $diagReadback = Read-VeilCompletedProtectedSession $diagSession (& $diagVerifyRegistration) -Diagnostic -PreparationRoot $diagPreparation
     if ($diagReadback.state -cne 'verified-diagnostic-suspended-records') { throw 'Diagnostic session readback mismatch.' }
     Reject { Read-VeilCompletedProtectedSession $diagSession (& $diagVerifyRegistration) }
+    $prepRecord = Join-Path $diagPreparation '03-stopped-verified.json'
+    $prepBytes = [IO.File]::ReadAllBytes($prepRecord)
+    [IO.File]::AppendAllText($prepRecord,' ')
+    Reject { Read-VeilCompletedProtectedSession $diagSession (& $diagVerifyRegistration) -Diagnostic -PreparationRoot $diagPreparation }
+    [IO.File]::WriteAllBytes($prepRecord,$prepBytes)
+    [void](Read-VeilCompletedProtectedSession $diagSession (& $diagVerifyRegistration) -Diagnostic -PreparationRoot $diagPreparation)
     $diagObservation = Join-Path $diagSession '02a-protected-preflight.json'
     [IO.File]::AppendAllText($diagObservation,' ')
-    Reject { Read-VeilCompletedProtectedSession $diagSession (& $diagVerifyRegistration) -Diagnostic }
+    Reject { Read-VeilCompletedProtectedSession $diagSession (& $diagVerifyRegistration) -Diagnostic -PreparationRoot $diagPreparation }
     $script:diagnosticMarker = $false
     Write-Host 'PASS: diagnostic service disabled registration, mode separation and SCM identity/DACL refusal'
     Write-Host 'PASS: diagnostic publication, mode separation, tamper refusal and verified recovery'
