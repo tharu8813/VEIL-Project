@@ -85,16 +85,37 @@ internal sealed class CefPreparedCreationLifetime : ICefDiagnosticLifetime
         ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
         Revoke();
         if (creating) return false;
-        return lifetime.TryRelease(() =>
+        return lifetime.TryRelease(() => TryDrainAll(milliseconds,
+            custody.TryDrainAndRelease, outer.TerminateAndDrain, inner.TerminateAndDrain,
+            () => outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses()));
+    }
+
+    // Each independently owned private Job gets a stop attempt even if
+    // another drain refuses or throws. Never reinterpret a failed attempt
+    // as proof of exit; the retained lifetime stays occupied for retry.
+    // The callbacks share a single deadline (zero still attempts cleanup).
+    internal static bool TryDrainAll(int milliseconds, Func<int, bool> drainCustody,
+        Func<int, bool> drainOuter, Func<int, bool> drainInner, Func<bool> verifyEmpty)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        var elapsed = Stopwatch.StartNew();
+        Exception? failure = null;
+        int Remaining() => (int)Math.Max(0L, milliseconds - elapsed.ElapsedMilliseconds);
+        bool Attempt(Func<int, bool> drain)
         {
-            var elapsed = Stopwatch.StartNew();
-            int Remaining() => (int)Math.Max(0L, milliseconds - elapsed.ElapsedMilliseconds);
-            if (!custody.TryDrainAndRelease(Remaining())) return false;
-            // Also cover native refusal before a root was captured.
-            // Both Jobs were created privately, never exported or reused.
-            if (!outer.TerminateAndDrain(Remaining()) || !inner.TerminateAndDrain(Remaining()))
+            try { return drain(Remaining()); }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                failure ??= error;
                 return false;
-            return outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses();
-        });
+            }
+        }
+
+        bool custodyDrained = Attempt(drainCustody);
+        bool outerDrained = Attempt(drainOuter);
+        bool innerDrained = Attempt(drainInner);
+        if (failure is not null)
+            throw new InvalidOperationException("CEF private drain attempt failed.", failure);
+        return custodyDrained && outerDrained && innerDrained && verifyEmpty();
     }
 }
