@@ -216,3 +216,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #270 최초 Windows CI 46163370054의 실패는 CefMitigationTests.cs의 int→uint 변환(CS0266/CS1662)이며 `0u` 수정 head `0e64dfbaca0f377dec454976339728e0e90a8d26`에서 재검증 중(46163853866). Rust 검사 PASS. 수정 head 성공은 아직 미확인.
 - 기존 독립 `CefNestedSmoke`가 Browser/Renderer/GPU/Utility/Network 마지막 live 표본에 6개 Windows mitigation raw flag와 관측 상태를 추가한다. 원래 process와 query handle의 동일 object 및 양쪽 Job 소속/생존을 확인하고 두 스냅샷을 비교한다. 실패·불안정은 null flags 및 명시 상태로 보존하며 0으로 대체하지 않는다. 추가 필드는 schema 5의 선택적 진단 확장이다. 기존 종료 및 renderer 제한 확인 기준은 변경하지 않으며, mitigationCoverage는 마지막 표본만 집계한다. 전체 생애, 모든 자식, 정책의 적정성 또는 보호 VM 증명이 아니다. 새 Windows CI, 번들 검증 및 실제 일반 사용자 VM 측정 NOT RUN. 기존 역할 차단, Job cap=1 및 startupEnabled=false 유지.
+
+### P2-05 mitigation 증거 구조 및 역할별 집계 (미완료)
+
+- 기존 hash-bound `check-cef-nested-evidence.mjs`에서 schema 5의 선택적 mitigation 확장을 검증한다. 확장이 없던 과거 증거는 null로 유지하되 일부 필드만 존재하거나 관측 수/상태/정확한 6개 uint32 flags/오류가 모순이면 거부한다. 역할별 관측 수, 누락 PID 및 서로 다른 raw flag 조합을 집계하며 0을 누락과 혼동하거나 값 평균으로 정책 차이를 숨기지 않는다. 새로운 구조 검증 및 이전 schema 호환 회귀 시험을 추가했다. 자체 보고의 일관성일 뿐 실제 신뢰성/전체 수명/허용 기준은 NOT ESTABLISHED.
+- #270 수정 head Windows CI 46163853866 PASS, #271 head Windows CI 46163947798 PASS, Native 46163947800 실행 중 확인. 독립 리뷰 없음. 새 CI 및 실제 일반 사용자 CEF/보호 VM 실행 NOT RUN. 역할 허용 범위, Job cap=1, startupEnabled=false, WebView2 유지.
