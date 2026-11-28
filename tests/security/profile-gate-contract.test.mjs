@@ -1421,3 +1421,20 @@ test('CEF library inspection uses fixed existing file pins under exclusive profi
     assert.doesNotMatch(broker, /\bInspectLibraryFiles\s*\(/);
 });
 
+
+
+test('test-only native library first publication uses retained source identity and never replaces existing state', async () => {
+    const pin = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedDirectoryLease.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const project = await readFile('apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    assert.match(pin, /#if VEIL_CEF_PROFILE_ACCESS_TEST[\s\S]*?TryPublishNewLibraryFixture[\s\S]*?NtSetInformationFile[\s\S]*?#endif/);
+    assert.match(pin, /OpenAccess\(engineRoot, 0xA1\);[\s\S]*?RequireSameIdentity\(directory.handle, directoryAccess\);[\s\S]*?CreateFileW\(stagedPath, 0x00110081, FileShare.Read, IntPtr.Zero,\s*FileMode.Open, 0x00200000, IntPtr.Zero\);/);
+    assert.match(pin, /RequireRegisteredProtection\(volume, readStatus\(\)\);\s*if \(!current\(\)\) return false;\s*RequireRegularFile\(source, stagedPath, volume\);/);
+    assert.match(pin, /byte\[\] name = Encoding.Unicode.GetBytes\("library-state.json"\);\s*byte\[\] buffer = new byte\[24 \+ name.Length\];[\s\S]*?WriteInt32LittleEndian\(buffer.AsSpan\(16, 4\), name.Length\);\s*name.CopyTo\(buffer, 20\);\s*int status = NtSetInformationFile\(source, out _, buffer, \(uint\)buffer.Length, 10\);\s*if \(status == 0\) return true;/);
+    assert.match(fixture, /Native rename overwrote existing destination[\s\S]*?Revocation did not stop native rename[\s\S]*?Linked staging file was published[\s\S]*?Busy staging file was published[\s\S]*?Native handle first publication failed/);
+    assert.doesNotMatch(broker, /\bTryPublishNewLibraryFixture\b/);
+    assert.doesNotMatch(project, /VEIL_CEF_PROFILE_ACCESS_TEST/);
+    assert.doesNotMatch(pin, /\bFile\.(?:Move|Replace)\(/);
+});
+

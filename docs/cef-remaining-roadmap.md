@@ -358,3 +358,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #297 exact native compile 46180598781 최종 PASS (runtime 아님). #298 exact head `e4598c6018925e7eeac315fdb45809281e675a6b` Windows/Rust CI 46181058474 PASS, 독립 리뷰 없음.
 - CefProfileLayout에 CEF 전용 library-state.json/library-state.stage 고정 경로 정의. 기존 broker-owned exclusive profile lease 하에서 두 기존 파일의 실제 핸들, 단일 링크, no-follow, DOS/GUID 위치, 파일 identity 및 보호 상태 검사 재사용. no-delete-sharing 유지, 권한 변경 후 lease 재사용 금지. 기존 파일 모두 있어야 하며 첫 생성/rename/실제 writer 권한은 제공하지 않는다. 실제 Windows synthetic 파일 핸들 검사 추가 (읽기 전용 profile 거부, 교체 거부, hardlink, authority loss, missing stage); 실제 BitLocker 상태는 합성. 보존된 핸들을 버린 뒤 경로 기반 교체하는 방식 금지. 최종 handle-relative replace, 파일 내용 변경 방지 및 token/ACL, broker generation/runtime admission 및 cleanup coupling 미완료. 신규 CI/실제 보호 VM/독립 리뷰 미검증. startupEnabled=false 유지.
+
+### P3-02 합성 전용 native handle first publication (미완료)
+
+- #299 exact head `26ba190c59ec3b0200d059f524e45dde3e4ee0eb` Windows/Rust CI 46181468760 PASS; native compile CI 46181468761 success, 독립 리뷰 없음.
+- VEIL_CEF_PROFILE_ACCESS_TEST 한정 실제 Windows NtSetInformationFile(FileRenameInformation) no-overwrite, 같은 디렉터리 고정 단일 이름, retained directory/data-access handle 및 DELETE-capable source handle, no-write/delete sharing, canonical/volume/single link 및 권한 검사. 기존 파일 덮어쓰기/파일 생성/제품 호출/IPC 없음. 실제 synthetic Windows collision, revoked callback, hardlink, busy source, first publication 회귀 작성. Microsoft FILE_RENAME_INFORMATION/NtSetInformationFile 문서 참조. 기존 파일 교체는 destination identity와 rename 사이 경합 및 사용자 ACL/토큰·브로커 직렬화·보호 runtime 증명 필요; 일반 경로 rename fallback 금지. 새 CI/실제 Windows 실행/보호 VM/독립 리뷰 미검증. startupEnabled=false 유지.
