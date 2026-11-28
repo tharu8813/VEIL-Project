@@ -241,12 +241,25 @@ public static class WpfSmoke
                 // An unattached reservation must count toward capacity and be released by disposal.
                 var reservation = engine.CreateView();
                 bool reservedLimit = Rejects(() => engine.CreateView());
+                bool RejectsInactiveCommands(IBrowserEngineView view) =>
+                    Rejects(view.GoBack) && Rejects(view.GoForward) &&
+                    Rejects(view.Reload) && Rejects(view.Stop) &&
+                    Rejects(() => view.ReloadIgnoringCacheAsync()) &&
+                    Rejects(() => view.InitializeAsync()) &&
+                    Rejects(() => view.SetMuted(true)) &&
+                    Rejects(() => { _ = view.ZoomFactor; }) &&
+                    Rejects(() => view.ZoomFactor = 1.25) &&
+                    Rejects(() => view.Navigate(new Uri(new Uri(fixture), "/wpf-isolation").AbsoluteUri));
+                bool unattachedRefused = RejectsInactiveCommands(reservation);
                 reservation.Dispose();
-                if (!reservedLimit || !OpenSecondary("/wpf-isolation"))
+                bool disposedRefused = RejectsInactiveCommands(reservation);
+                if (!reservedLimit || !unattachedRefused || !disposedRefused ||
+                    browser.IsMuted != false || !OpenSecondary("/wpf-isolation"))
                 {
                     window.Close();
                     return;
                 }
+                Trace("Unattached and disposed view commands rejected without changing live mute state");
                 address.Text = new Uri(new Uri(fixture), "/wpf-denied").AbsoluteUri;
                 Trace("WPF loaded and submitting address");
                 go.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
