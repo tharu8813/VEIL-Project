@@ -236,3 +236,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - P2 실제 VM 차단과 독립적인 제품 통합 준비. CEF development adapter의 GoBack/GoForward/Reload/Stop 및 ZoomFactor 읽기에 dispatcher/live view guard를 추가한다. RequireView는 disposed, zero HWND/ID, 닫힌 native ID를 거부한다. Dispose 시작 시 권한 세대를 폐기하고 late callbacks를 거부한다. 개발용 합성 WPF runner에서 미연결/폐기 view의 명령 거부 및 기존 view mute 보존을 확인하는 코드, JS 로그 계약과 source tests를 추가했다. 제품 엔진/기능을 변경하지 않는다.
 - #273 exact Windows/native PASS, #274 Windows PASS, Native 46165492128 실행 중 확인. 새 CI, 실제 WPF runtime 및 보호 CEF VM NOT RUN. P2-03~05 및 P3-01 미완료; startupEnabled=false 및 WebView2 유지.
+
+### P3-01 native navigation callback 수명 및 redirect 검증 (미완료)
+
+- #275 최초 Windows CI 46166085021 FAIL: 기존 source contract가 base.Dispose 이후 disposed 설정을 요구했다. 신규 사전 권한 폐기 순서를 검사하도록 수정 head `78af961bea2ca05792b9904cb994ba69891d04d7`. 수정 head CI 대기. #274 Windows/native PASS.
+- CEF WPF fixture OnBeforeBrowse에서 URL username/password 거부, ID overflow 차단, host callback 후 closing/callback/active ID/URL 재확인으로 stale decision 거부, 닫힌/비활성 load completion 무시를 추가한다. 기존 loopback HTTP 제한은 유지한다. 합성 WPF fixture는 non-HTTP redirect를 원래 navigation ID의 canceled completion으로 관측하고 정상 탐색 재개를 요구한다. 소스 계약 추가. 실제 runtime NOT RUN, URL 기반 completion은 동일 URL의 오래된 callback을 완전히 식별하지 못하며 전체 수명/네트워크 보호 증명이 아니다. 신규 CI, 독립 리뷰, 보호 VM 미검증. WebView2 및 startupEnabled=false 유지.
