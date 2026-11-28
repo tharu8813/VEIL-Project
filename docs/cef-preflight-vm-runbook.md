@@ -173,3 +173,7 @@ $diagnosticPlan = .\scripts\stage-cef-preflight-package.ps1 -Diagnostic -Disposa
 ~~~
 
 고정 Program Files\VEIL.cef-diagnostic-staging에만 신규 복사하며 일반 스테이징 또는 설치/서비스가 존재하면 거부한다. 복사 전과 복사 후 원본/복사본 CMS, 파일 목록 및 해시를 다시 비교한다. 별도 `cef-diagnostic-stage-plan`에 기준 JSON과 서명 SHA-256을 추가하되 installable=false/startupEnabled=false 유지. 기존 일반 등록 초안은 이 plan을 거부한다. 부분 상태는 자동 삭제·재사용하지 않는다. 실제 서명 패키지/ACL/복사 경합/VM 검증 NOT RUN. 진단용 등록 초안, 게시 및 서비스/exit 31 검증은 아직 연결하지 않았다.
+
+### 진단 전용 등록 초안 및 읽기 전용 확인 (준비만)
+
+기존 준비·검사 스크립트에 `-Diagnostic -DisposableVm`을 추가하고 동일한 독립 입력을 사용한다. 고정 `Program Files\VEIL.cef-diagnostic-registration`에만 초안을 생성한다. 일반 준비/스테이징 또는 설치 흔적은 거부한다. 기존 복구 자격 증명 확인과 시험 볼륨 분리 후 서명된 스테이징을 재검증하고, 세 등록 JSON 및 별도 `cef-diagnostic-registration-journal`을 생성한다. 기준 파일 두 SHA-256과 CMS 증거 해시를 기록하며 원본 등록 JSON 스키마는 변경하지 않는다. 확인 스크립트는 독립 입력과 재검증된 스테이지로 정확한 원본 바이트를 재구성한다. 일반 게시/등록 도구는 진단 계획을 받아들이지 않는다. 이 단계는 레지스트리/서비스/설치 게시를 수행하지 않으며 시스템 기준 신뢰 레지스트리 준비도 별도이다. 실제 VM 복구/ACL/등록 검증 NOT RUN.
