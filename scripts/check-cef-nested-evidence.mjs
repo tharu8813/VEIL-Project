@@ -218,6 +218,32 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
     };
 }
 
+// An opt-in collection target, not a sandbox or production admission gate.
+// The target is deliberately strict: if a service was not spawned or a
+// query was refused, the operator must retain the incomplete result.
+export function assessMitigationCollection(result) {
+    const requiredRoles = ['browser', 'renderer', 'gpu', 'network', 'utility'];
+    const evidence = result.mitigationEvidence;
+    const missingRoles = requiredRoles.filter(role => !evidence?.byRole[role]);
+    const rolesWithoutFlags = requiredRoles.filter(role =>
+        evidence?.byRole[role] && evidence.byRole[role].available === 0);
+    const unknownRoleSamples = evidence?.byRole.unknown?.sampled ?? 0;
+    const unsampledJobPids = result.jobNotifications === null ? null :
+        [...new Set(Object.values(result.jobNotifications)
+            .flatMap(job => job.startPidsWithoutLiveSample))].sort((a, b) => a - b);
+    const ready = evidence !== null && evidence.unavailable === 0 &&
+        missingRoles.length === 0 && rolesWithoutFlags.length === 0 &&
+        unknownRoleSamples === 0 && unsampledJobPids !== null && unsampledJobPids.length === 0;
+    return {
+        status: ready ? 'COLLECTION_TARGET_MET' : 'COLLECTION_INCOMPLETE',
+        requiredRoles, missingRoles, rolesWithoutFlags, unknownRoleSamples,
+        unavailableSamples: evidence?.unavailable ?? null, unsampledJobPids,
+        roleBaselineStatus: 'NOT ESTABLISHED',
+        independentRuntimeVerification: 'NOT ESTABLISHED',
+        productReleaseGates: 'NOT RUN'
+    };
+}
+
 async function readBounded(path, limit) {
     const info = await lstat(path);
     require(info.isFile() && !info.isSymbolicLink() && info.size > 0 && info.size <= limit, 'Invalid evidence file: ' + path);
@@ -227,15 +253,19 @@ async function readBounded(path, limit) {
 }
 
 async function main(args) {
-    require(args.length === 6 && args[0] === '--commit' && args[2] === '--manifest' && args[4] === '--evidence',
-        'Usage: node scripts/check-cef-nested-evidence.mjs --commit <checkout-sha> --manifest <original-manifest.json> --evidence <result-directory>');
+    const strict = args.length === 7 && args[6] === '--require-mitigation-collection';
+    require((args.length === 6 || strict) && args[0] === '--commit' && args[2] === '--manifest' && args[4] === '--evidence',
+        'Usage: node scripts/check-cef-nested-evidence.mjs --commit <checkout-sha> --manifest <original-manifest.json> --evidence <result-directory> [--require-mitigation-collection]');
     const evidence = resolve(args[5]);
     const [manifestBytes, reportBytes, sampleBytes] = await Promise.all([
         readBounded(resolve(args[3]), 4 * 1024 * 1024),
         readBounded(join(evidence, 'result.json'), 64 * 1024),
         readBounded(join(evidence, 'stdout.json'), 1024 * 1024)
     ]);
-    console.log(JSON.stringify(checkNestedEvidence({ expectedCommit: args[1], manifestBytes, reportBytes, sampleBytes }), null, 2));
+    const result = checkNestedEvidence({ expectedCommit: args[1], manifestBytes, reportBytes, sampleBytes });
+    const mitigationCollection = assessMitigationCollection(result);
+    console.log(JSON.stringify({ ...result, mitigationCollection }, null, 2));
+    if (strict && mitigationCollection.status !== 'COLLECTION_TARGET_MET') process.exitCode = 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
