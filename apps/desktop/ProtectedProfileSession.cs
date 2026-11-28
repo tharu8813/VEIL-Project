@@ -170,6 +170,17 @@ internal sealed class ProtectedProfileSession : IDisposable
             return true;
         }
 
+#if VEIL_CEF_PREFLIGHT_ONLY
+        // Prepare only the fixed layout under the authenticated desktop lock.
+        // No runtime/environment export, child creation or broker handoff.
+        internal void PrepareLayoutOnly()
+        {
+            RequireCurrentPreparation();
+            _ = CefProtectedProfilePreparation.Prepare(ProductRoot, session.broker, StillAuthorized);
+            RequireCurrentPreparation();
+        }
+#endif
+
         // This plan uses the same authenticated broker as the lease. The
         // caller owns the lease and must dispose it before the parent session.
         // Returned paths/environment are a snapshot, never launch authority.

@@ -9,10 +9,15 @@ namespace Veil.Desktop;
 // browsing, external activation forwarding, development broker or fallback.
 internal static class CefProtectedPreflightEntry
 {
+    // Distinct exit status: layout provisioning is not a verified candidate.
+    internal const uint ProfilePreparedOnly = 30;
+
     internal static int Run(string[] args)
     {
-        if (args is not ["--cef-protected-preflight"] || !ExternalAddress.Installed)
+        bool prepareOnly = args is ["--cef-prepare-profile"];
+        if ((!prepareOnly && args is not ["--cef-protected-preflight"]) || !ExternalAddress.Installed)
             return 2;
+        uint expected = prepareOnly ? ProfilePreparedOnly : CefDisabledPreflight.VerifiedButDisabled;
         try
         {
             ProfileGate.RejectElevated();
@@ -34,8 +39,20 @@ internal static class CefProtectedPreflightEntry
                 ProtectedProfileSession.ClearPassword(password);
                 password = null;
                 if (session is null || notifications.LockRequested) return 1;
-                result = CefDisabledLaunchCoordinator.RunPreflight(session);
-                if (result != CefDisabledPreflight.VerifiedButDisabled) return 1;
+                if (prepareOnly)
+                {
+                    // Release the desktop lock before non-forced relock.
+                    // The next broker-first attempt requires a NEW unlock,
+                    // not a transfer of this session or this handle.
+                    using (var profile = session.AcquireCefPreparationLease())
+                        profile.PrepareLayoutOnly();
+                    result = ProfilePreparedOnly;
+                }
+                else
+                {
+                    result = CefDisabledLaunchCoordinator.RunPreflight(session);
+                }
+                if (result != expected || notifications.LockRequested) return 1;
                 session.CompleteCefPreflightCleanup();
             }
             finally
@@ -45,8 +62,8 @@ internal static class CefProtectedPreflightEntry
             }
             // Only explicit verified cleanup above can reach this point.
             // Best-effort Dispose alone is never sufficient for success.
-            return !notifications.LockRequested && result == CefDisabledPreflight.VerifiedButDisabled
-                ? (int)CefDisabledPreflight.VerifiedButDisabled : 1;
+            return !notifications.LockRequested && result == expected
+                ? (int)expected : 1;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or
             InvalidOperationException or System.ComponentModel.Win32Exception or
