@@ -381,6 +381,16 @@ internal sealed class CefDiagnosticRelock
         Pending = true;
     }
 
+    // Terminal probe may only latch a relock for its own current unlock.
+    // Do not overwrite a previously latched obligation.
+    internal bool RequestIfCurrent(object expectedGeneration, object? currentGeneration)
+    {
+        ArgumentNullException.ThrowIfNull(expectedGeneration);
+        if (!ReferenceEquals(expectedGeneration, currentGeneration)) return false;
+        Request(expectedGeneration);
+        return ReferenceEquals(generation, expectedGeneration);
+    }
+
     internal bool TryComplete(object? currentGeneration, bool cleanupConfirmed, Func<bool> lockAndVerify)
     {
         ArgumentNullException.ThrowIfNull(lockAndVerify);

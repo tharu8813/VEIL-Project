@@ -394,6 +394,32 @@ try
             "Verified cleanup did not permit relock.");
     }
     Console.WriteLine("PASS: owner revocation faults preserve retired slot and attempt all cleanup phases");
+    // Terminal preparation refusal has no creation slot, but still owns
+    // a generation-bound relock obligation. Stale requests cannot latch
+    // or overwrite another generation's obligation.
+    {
+        var currentGeneration = new object();
+        var staleGeneration = new object();
+        var terminalRelock = new CefDiagnosticRelock();
+        Check(!terminalRelock.RequestIfCurrent(staleGeneration, currentGeneration) &&
+            !terminalRelock.RequestIfCurrent(currentGeneration, null) && !terminalRelock.Pending,
+            "Stale preparation latched a relock.");
+        Check(terminalRelock.RequestIfCurrent(currentGeneration, currentGeneration) &&
+            terminalRelock.Pending, "Terminal preparation did not latch relock.");
+        Check(!terminalRelock.RequestIfCurrent(staleGeneration, staleGeneration) &&
+            terminalRelock.RequestIfCurrent(currentGeneration, currentGeneration),
+            "Another generation overwrote terminal relock.");
+        int lockAttempts = 0;
+        bool LockAndVerify() { ++lockAttempts; return lockAttempts == 2; }
+        Check(!terminalRelock.TryComplete(staleGeneration, true, LockAndVerify) &&
+            !terminalRelock.TryComplete(currentGeneration, false, LockAndVerify) &&
+            lockAttempts == 0, "Stale or incomplete preparation attempted lock.");
+        Check(!terminalRelock.TryComplete(currentGeneration, true, LockAndVerify) &&
+            terminalRelock.Pending && lockAttempts == 1, "Unverified lock cleared terminal obligation.");
+        Check(terminalRelock.TryComplete(currentGeneration, true, LockAndVerify) &&
+            !terminalRelock.Pending && lockAttempts == 2, "Verified lock did not clear obligation.");
+    }
+    Console.WriteLine("PASS: terminal preparation relock is generation-bound and requires verified lock");
     // Exercise in-place ownership handoff using the actual synthetic root.
     // No apphost execution and no second native handle owner.
     foreach (int mode in new[] { 0, 1, 2 })
