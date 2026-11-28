@@ -551,6 +551,41 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     };
 
     /// <summary>Locks the volume when the client that unlocked it exits without locking.</summary>
+    // Prepared internal registration only; no request handler calls this.
+    // Caller holds serial, owns the already assigned private pair and pins,
+    // and must retain/stop them if registration refuses or throws.
+    private bool TryRegisterDiagnosticSession(object expectedGeneration,
+        ClientIdentity root, SafeProcessHandle rootHandle,
+        CefBrokerOwnedJob brokerJob, CefBrokerOwnedJob peerJob,
+        Veil.Desktop.CefRuntimeRegistrationLease registration)
+    {
+        if (config.Development || config.CefChildImage is not { } image ||
+            config.CefChildSha256 is not { } digest ||
+            diagnosticSession.Occupied || pendingCefChild is not null ||
+            completedPreflight is not null || unresolvedCefStops.Count != 0 ||
+            !CandidateAuthorityCurrent(expectedGeneration) ||
+            authenticatedOwner is not { } owner ||
+            authenticatedOwnerHandle is not { } ownerHandle)
+            return false;
+        // The installed runtime lease pins the image throughout the session.
+        // Independently verify the broker's signed image/digest before transfer.
+        using var verified = CefPinnedImage.OpenVerified(root, rootHandle, image, new CefImageDigest(digest));
+        registration.RequireCurrent();
+        if (!string.Equals(registration.ImagePath, image, StringComparison.OrdinalIgnoreCase) ||
+            !CandidateAuthorityCurrent(expectedGeneration))
+            return false;
+        var session = new CefBoundDiagnosticSession(owner, ownerHandle, expectedGeneration,
+            registration, brokerJob, peerJob, root, rootHandle, () =>
+            {
+                if (!CandidateAuthorityCurrent(expectedGeneration))
+                    throw new UnauthorizedAccessException("CEF diagnostic generation retired.");
+                registration.RequireCurrent();
+                return (expectedGeneration, registration, true);
+            });
+        // All operations are serialized; no IPC or startup enablement.
+        return diagnosticSession.TryRegister(expectedGeneration, session);
+    }
+
     private void ClearAuthenticatedOwner()
     {
         // Retire authorization before stopping candidates: cleanup can fail.
