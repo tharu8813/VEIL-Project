@@ -29,6 +29,7 @@ internal sealed class TabbedDevelopmentHost
     private readonly Grid pages = new();
     private readonly TextBox address = new() { VerticalContentAlignment = VerticalAlignment.Center };
     private readonly TextBlock status = new() { Margin = new Thickness(6) };
+    private readonly TextBlock popupNotice = new() { Margin = new Thickness(6), TextWrapping = TextWrapping.Wrap };
     private readonly Button add = new() { Content = "+" };
     private readonly Button close = new() { Content = "Close tab" };
     private readonly Button back = new() { Content = "Back" };
@@ -90,6 +91,8 @@ internal sealed class TabbedDevelopmentHost
         toolbar.Children.Add(address);
         DockPanel.SetDock(status, Dock.Bottom);
         layout.Children.Add(status);
+        DockPanel.SetDock(popupNotice, Dock.Bottom);
+        layout.Children.Add(popupNotice);
         layout.Children.Add(pages);
         window.Content = layout;
 
@@ -263,6 +266,11 @@ internal sealed class TabbedDevelopmentHost
         forward.IsEnabled = live && !shuttingDown && active!.View.CanGoForward;
         close.IsEnabled = active is { Closing: false } && !shuttingDown;
         add.IsEnabled = !shuttingDown && tabs.Count + retired.Count < CefNative.VeilCefViewLimit();
+        // Read the selected live view only. A denial is informational, not
+        // a deferred popup request or a permission to replay the target URL.
+        uint blocked = live && !shuttingDown ? CefNative.VeilCefPopupsBlocked(active!.View.NativeHandle) : 0;
+        popupNotice.Text = blocked == 0 ? "" : $"Popups blocked in this tab: {blocked}";
+        popupNotice.Visibility = blocked == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void Tick()
@@ -365,16 +373,24 @@ internal sealed class TabbedDevelopmentHost
         }
         else if (phase == 2 && first?.View.DocumentTitle == "TAB_FIRST" && second?.View.DocumentTitle == "TAB_SECOND" &&
                  first.PendingNavigationId == 0 && second.PendingNavigationId == 0 &&
-                 first.Status == "Page loaded." && second.Status == "Page loaded.")
+                 first.Status == "Page loaded." && second.Status == "Page loaded." &&
+                 CefNative.VeilCefPopupsBlocked(firstId) > 0)
         {
             Select(first);
-            if (address.Text != Url("/tabs-first") || first.View.NativeHandle != firstId ||
+            if (CefNative.VeilCefPopupsBlocked(firstId) != 1 ||
+                CefNative.VeilCefPopupsBlocked(secondId) != 0 ||
+                popupNotice.Text != "Popups blocked in this tab: 1" ||
+                popupNotice.Visibility != Visibility.Visible ||
+                address.Text != Url("/tabs-first") || first.View.NativeHandle != firstId ||
                 second.View.NativeHandle != secondId || first.View.Element.Visibility != Visibility.Visible ||
                 second.View.Element.Visibility != Visibility.Hidden) { Fail(); return; }
             Select(second);
             if (address.Text != Url("/tabs-second") || first.View.NativeHandle != firstId ||
-                second.View.NativeHandle != secondId) { Fail(); return; }
+                second.View.NativeHandle != secondId || popupNotice.Text != "" ||
+                popupNotice.Visibility != Visibility.Collapsed ||
+                CefNative.VeilCefLiveViewCount() != 2) { Fail(); return; }
             Log("Tab selection preserved both native identities and active address");
+            Log("Blocked popup count visible only for the owning tab; no extra native view");
             // Exercise the same status publication path used by real callbacks.
             // This is a synthetic background status update, not a renderer crash.
             SetTabStatus(first, "Synthetic background status.");

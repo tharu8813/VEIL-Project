@@ -246,3 +246,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #275 수정 head `78af961bea2ca05792b9904cb994ba69891d04d7` Windows 46166527119 / Native 46166527123 PASS. #276 exact head Windows 46166617260 PASS, Native 46166617290 실행 중 확인. 독립 리뷰 없음.
 - 개발용 TabbedDevelopmentHost에서 tab별 pending/last navigation ID 및 상태 메시지를 보존한다. 동일 ID의 redirect 및 현재 ID의 completion만 적용하고, 닫히거나 제거된 tab과 shutdown 중 이벤트를 무시한다. 선택된 tab만 전역 상태 표시를 변경하며 전환 시 해당 tab 상태를 복원한다. child failure 및 command error도 tab별로 보존한다. 실제 두 tab 탐색 완료와 합성 background status 변경의 분리 검사를 fixture 및 source contracts에 추가했다. 합성 상태 갱신은 실제 background renderer crash 실측이 아니다. 동일 URL의 오래된 native callback 한계 유지. 신규 CI, WPF runtime, 보호 VM NOT RUN. WebView2 및 startupEnabled=false 유지.
+
+### P3-02 개발용 탭별 팝업 차단 피드백 (미완료)
+
+- #276 exact head Windows 46166617260 / Native 46166617290 PASS, #277 exact head Windows 46167133738 / Native 46167133734 PASS. 승인 리뷰 없음.
+- 개발용 탭 toolbar에 선택된 live view의 native popup denial count만 읽는 별도 안내를 추가한다. 닫힌/종료 중 view와 0건에서는 숨기고 기존 탐색 상태 메시지를 덮어쓰지 않는다. 팝업 URL을 전달하거나 재실행하지 않고 기존 OnBeforePopup 무조건 거부 및 NewWindowRequested 미지원 유지. 합성 loopback 페이지에서 한 번 window.open 요청을 발생시켜 첫 탭 1건, 두 번째 0건, 전환 UI 및 native view count=2, 대상 HTTP 요청 부재를 요구하는 runtime/source 회귀 추가. 실제 WPF 실행 및 새 CI NOT RUN, 이 구현은 다중 창 adoption 지원이나 제품 popup 허용이 아니다. WebView2 및 startupEnabled=false 유지.
