@@ -276,3 +276,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #281 수정 head Windows 46169740661 / Native 46169740665 PASS, #282 exact Windows 46169834248 PASS / Native 46169834303 실행 중 확인. 독립 리뷰 없음.
 - WPF 창의 F11/버튼 host fullscreen은 기존 style/state/resize를 복원하고 탭/toolbar만 숨기며 하단 종료 제어는 남긴다. 페이지 전체 화면은 선택된 view의 관측 상태만 별도 안내하며 host fullscreen을 자동 활성화하지 않는다. 사용자 요청 시 native IsFullscreen/ExitFullscreen(false) 및 managed ID/epoch/timeout 확인을 추가한다. 실제 페이지 fullscreen 진입/종료 실측은 없음. 합성 fixture는 WPF host fullscreen 전환/복원과 page state 불변 조건을 요구한다. 새 CI, 실제 WPF runtime, native HWND keyboard routing, 보호 VM, 독립 리뷰 미검증. WebView2/startupEnabled=false 유지.
+
+### P3-02 개발용 북마크 라이브러리 준비 (미완료)
+
+- #282 exact Windows 46169834248 / Native 46169834303 PASS, #283 exact Windows 46170338813 / Native 46170338825 PASS. 독립 리뷰 없음.
+- 기존 제품 BrowserWindow의 PageEntry/SettingsReady/암호화 상태 저장 경로는 변경하지 않았다. 개발 TabbedDevelopmentHost fixture에서만 64개 한도의 메모리 북마크 목록, 추가/열기/삭제, 현재 live 성공 탐색 source 검증, exact duplicate 차단, fixture port 및 loopback HTTP/userinfo 제한, 종료 시 폐기를 추가했다. 두 origin의 추가/중복/정확 삭제 및 외부/credential URL 거부 회귀를 작성했으며 실제 bookmark reopen, 저장/복원, 폴더, 제품 보호 데이터 연동 및 방문 기록은 미구현/미검증. 신규 CI/WPF runtime/보호 VM/독립 리뷰 NOT RUN. WebView2/startupEnabled=false 유지.
