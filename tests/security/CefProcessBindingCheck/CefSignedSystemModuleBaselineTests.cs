@@ -33,6 +33,30 @@ internal static class CefSignedSystemModuleBaselineTests
 
         byte[] good = Payload();
         byte[] signature = Sign(good);
+        using (var input = new MemoryStream(good, writable: false))
+        {
+            input.Position = 1;
+            byte[] snapshot = CefSignedSystemModuleBaseline.ReadBoundedInput(input, 1, 1024 * 1024);
+            if (!snapshot.AsSpan().SequenceEqual(good))
+                throw new InvalidOperationException("Baseline snapshot changed exact signed bytes.");
+            _ = CefSignedSystemModuleBaseline.Verify(snapshot, signature, publicKey, host, 7);
+        }
+        foreach (int length in new[] { 0, 1024 * 1024 + 1 })
+        {
+            using var invalid = new MemoryStream(new byte[length]);
+            Reject(() => CefSignedSystemModuleBaseline.ReadBoundedInput(invalid, 1, 1024 * 1024));
+        }
+        foreach (int length in new[] { 383, 513 })
+        {
+            using var invalid = new MemoryStream(new byte[length]);
+            Reject(() => CefSignedSystemModuleBaseline.ReadBoundedInput(invalid, 384, 512));
+        }
+        using (var detached = new MemoryStream(signature, writable: false))
+        {
+            if (!CefSignedSystemModuleBaseline.ReadBoundedInput(detached, 384, 512).AsSpan().SequenceEqual(signature))
+                throw new InvalidOperationException("Detached signature snapshot changed.");
+        }
+        Console.WriteLine("PASS: exact bounded baseline input snapshots and length refusal");
         _ = CefSignedSystemModuleBaseline.Verify(good, signature, publicKey, host, 7);
         byte[] changed = (byte[])good.Clone();
         changed[^2] ^= 1;
