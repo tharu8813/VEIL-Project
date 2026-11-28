@@ -21,6 +21,38 @@ if (args is ["--profile-lock-fixture", var lockPath])
     return Console.ReadLine() == "exit" ? 0 : 1;
 }
 
+// Same strict parser compiled in both ordinary and diagnostic configurations.
+const string probeRequest = """{"command":"ProbeCefSuspended","volumeId":"synthetic"}""";
+#if VEIL_CEF_DIAGNOSTIC_IPC
+using (var probe = Protocol.Parse(System.Text.Encoding.UTF8.GetBytes(probeRequest)))
+    Check(probe.Command == BrokerCommand.ProbeCefSuspended && probe.Secret is null &&
+        probe.ChildHandle is null, "Diagnostic command rejected.");
+var lockedProbe = new BackendStatus(true, "synthetic-guid", true, true, false, true);
+using (var receipt = JsonDocument.Parse(Protocol.CefSuspendedProbeVerified(lockedProbe)))
+    Check(receipt.RootElement.GetProperty("cefSuspendedProbeVerified").GetBoolean() &&
+        receipt.RootElement.GetProperty("volumeGuid").GetString() == "synthetic-guid",
+        "Diagnostic receipt mismatch.");
+Reject(() => Protocol.CefSuspendedProbeVerified(lockedProbe with { Unlocked = true }));
+#else
+RejectProbe(probeRequest);
+#endif
+foreach (string malformed in new[] {
+    """{"command":"ProbeCefSuspended","volumeId":"synthetic","path":"synthetic"}""",
+    """{"command":"ProbeCefSuspended","volumeId":"synthetic","childHandle":"1"}""",
+    """{"command":"ProbeCefSuspended","volumeId":"synthetic","secret":"synthetic"}""",
+    """{"command":"ProbeCefSuspended","volumeId":"synthetic","baseline":"synthetic"}"""
+})
+    RejectProbe(malformed);
+static void RejectProbe(string json)
+{
+    bool rejected = false;
+    try { using var parsed = Protocol.Parse(System.Text.Encoding.UTF8.GetBytes(json)); }
+    catch (ProtocolException error) { rejected = error.Code == "BadRequest"; }
+    Check(rejected, "Unexpected diagnostic wire request accepted.");
+}
+Console.WriteLine("PASS: diagnostic IPC configuration boundary and strict request fields");
+if (args is ["--diagnostic-wire-only"]) return 0;
+
 CefRoleTokenPolicyTests.Run();
 CefCommandRoleTests.Run();
 CefSystemModuleVerifierTests.Run();
