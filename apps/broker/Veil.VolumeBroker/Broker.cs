@@ -6,7 +6,7 @@ namespace Veil.VolumeBroker;
 
 internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, BrokerLog log)
 {
-    private readonly SemaphoreSlim serial = new(1, 1);
+    private readonly CefBrokerOperationGate serial = new();
     private int unlockFailures;
     private object? unlockOwner;
     private ClientIdentity? authenticatedOwner;

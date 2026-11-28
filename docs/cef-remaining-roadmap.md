@@ -348,3 +348,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #295 exact native compile 46179722552 최종 PASS (runtime 아님). #296 exact head `81d9c81699be2d1eeacea2deb229d95b5a9fc87a` Windows/Rust CI 46180159555 PASS; native compile CI 46180159559 미완료, 독립 리뷰 없음.
 - CefLibraryLifetime/Authority에 stage → authority/request/data 재검증 → irreversible publish → abort cleanup 경계 추가. cleanup 실패 시 lifetime revoke, 이미 완료된 publish는 이후 revoke로 rollback하지 않는다. NetworkPolicyCheck의 실제 synthetic JSON 파일에서 flush, same-directory rename, lock/lease 교체/요청 거부/예외/충돌/cleanup 실패/commit 후 철회와 디스크·메모리 일치 회귀 작성. 실제 파일 접근은 test harness만 수행, 제품/CEF fixture 연결 및 브로커 IPC/atomic lock-replace는 미구현. 실제 publish와 revocation의 직렬화 및 retained handle 기반 경로 검증이 필요하다. 신규 CI/보호 VM/실제 CEF/독립 리뷰 미검증. startupEnabled=false 유지.
+
+### P3-02 브로커 저장/잠금 공통 직렬화 경계 (미완료)
+
+- #296 exact native compile 46180159559 최종 PASS (runtime 아님). #297 exact head `7ac765e528b2cf236812d90511eb6787af7265c2` Windows/Rust CI 46180598778 PASS; native compile CI 46180598781 미완료, 독립 리뷰 없음.
+- 기존 Broker.serial의 SemaphoreSlim(1,1)을 동등한 WaitAsync/Release를 제공하는 CefBrokerOperationGate로 감싼다. 기존 lock/detach/SCM revoke/crash/monitor와 동일 gate 아래 미래의 synchronous trusted publisher를 위한 TryPublishAsync 추가. 획득 후 current 재검증 및 cancellation 확인, 예외에도 release, publish 이후 cancellation으로 commit 결과 뒤집지 않음. NetworkPolicyCheck에 lock-first/old generation/cancelled waiter/cancel during observation/refusal/exception/publish-first 동시성 회귀 작성. 실제 publisher/IPC/파일 경로 권한 부여 없음; 기존 broker 명령에서 신규 publish 호출 금지. future caller는 retained handle/current generation 및 별도 runtime admission 검증, bounded publication, non-reentrant 규칙 및 OS lock race 검증 필요. 신규 CI/실제 보호 VM/독립 리뷰 미검증, startupEnabled=false 유지.
