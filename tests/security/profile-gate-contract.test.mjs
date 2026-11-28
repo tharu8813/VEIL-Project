@@ -1221,3 +1221,20 @@ test('terminal broker probe latches relock after pre-creation refusal without to
     assert.match(policy, /internal bool RequestIfCurrent\(object expectedGeneration, object\? currentGeneration\)\s*\{[\s\S]*?if \(!ReferenceEquals\(expectedGeneration, currentGeneration\)\) return false;\s*Request\(expectedGeneration\);\s*return ReferenceEquals\(generation, expectedGeneration\);/);
     assert.match(fixture, /!terminalRelock\.RequestIfCurrent\(staleGeneration, currentGeneration\)[\s\S]*?terminalRelock\.RequestIfCurrent\(currentGeneration, currentGeneration\)[\s\S]*?!terminalRelock\.RequestIfCurrent\(staleGeneration, staleGeneration\)[\s\S]*?lockAttempts == 0[\s\S]*?terminalRelock.Pending && lockAttempts == 1[\s\S]*?!terminalRelock.Pending && lockAttempts == 2/);
 });
+
+
+test('terminal diagnostic obtains only fixed installed baseline input before independent trust verification', async () => {
+    const signed = await readFile('apps/broker/Veil.VolumeBroker/CefSignedSystemModuleBaseline.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const prep = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/CefSignedSystemModuleBaselineTests.cs', 'utf8');
+    const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
+    assert.match(signed, /ReadInstalledDiagnosticInputs\(\)\s*\{[\s\S]*?SpecialFolder.ProgramFiles[\s\S]*?"VEIL", "Broker"[\s\S]*?Environment.ProcessPath[\s\S]*?"Veil.VolumeBroker.exe"[\s\S]*?"cef-system-baseline.json"[\s\S]*?"cef-system-baseline.sig"[\s\S]*?using var payload = OpenPinnedInput\(payloadPath\);\s*using var signature = OpenPinnedInput\(signaturePath\);[\s\S]*?ReadBoundedInput\(payload, 1, MaxPayloadBytes\)[\s\S]*?ReadBoundedInput\(signature, 384, 512\)[\s\S]*?detached.Length is not \(384 or 512\)[\s\S]*?RequireInputPin\(payload, payloadPath\);\s*RequireInputPin\(signature, signaturePath\);/);
+    assert.match(signed, /OpenPinnedInput\(string path\)\s*\{\s*AdminOnlyFile.RequireProtectedExecutable\(path\);\s*var file = new FileStream\(path, FileMode.Open, FileAccess.Read, FileShare.Read\);[\s\S]*?RequireInputPin\(file, path\);[\s\S]*?catch \{ file.Dispose\(\); throw; \}/);
+    assert.match(signed, /RequireInputPin\(FileStream file, string path\)\s*\{\s*AdminOnlyFile.RequireProtectedExecutable\(path\);\s*Native.RequireCanonicalSingleLinkImage\(file.SafeFileHandle, path\);/);
+    assert.match(signed, /long length = input.Length;\s*if \(length < minimum \|\| length > maximum\)[\s\S]*?input.Position = 0;\s*byte\[\] bytes = new byte\[checked\(\(int\)length\)\];\s*input.ReadExactly\(bytes\);\s*if \(input.Length != length \|\| input.ReadByte\(\) != -1\)/);
+    assert.match(broker, /private void RunDiagnosticCreationProbe\(object expectedGeneration\)[\s\S]*?try\s*\{\s*var \(baselinePayload, baselineSignature\) = CefSignedSystemModuleBaseline.ReadInstalledDiagnosticInputs\(\);\s*preparation = PrepareDiagnosticLaunch\(expectedGeneration, baselinePayload, baselineSignature\);/);
+    assert.match(prep, /VerifyInstalledTrust\(baselinePayload, baselineSignature\);\s*verifier.RequireBoundTrust\(\);/);
+    assert.match(fixture, /ReadBoundedInput\(input, 1, 1024 \* 1024\)[\s\S]*?Verify\(snapshot, signature, publicKey, host, 7\)[\s\S]*?new\[\] \{ 0, 1024 \* 1024 \+ 1 \}[\s\S]*?new\[\] \{ 383, 513 \}/);
+    assert.doesNotMatch(protocol, /ReadInstalledDiagnosticInputs|RunDiagnosticCreationProbe|baselinePayload|baselineSignature/);
+});
