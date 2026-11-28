@@ -266,3 +266,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #279 Windows/native PASS, #280 exact head Windows 46168780848 PASS, Native 46168780842 실행 중 확인. 독립 리뷰 없음.
 - TabbedDevelopmentHost에 fixture 전용 검색 버튼/검색창/결과 안내, WPF routed Ctrl+F/Esc/Enter/Shift+Enter 연결. 검색 요청 객체와 tab/native ID/navigation ID/source/query를 모두 대조하고 선택/탐색/주소 변경/오류/종료/검색어 변경에서 결과를 폐기한다. 한 번에 한 요청만 dispatch. 실제 두 tab의 match/no match와 이전 요청을 통한 합성 stale publication 거부 검사를 추가했다. 검색창은 native HWND 키 포커스 통합, 지속 강조, 항목 순환 및 제품 검색 기능을 주장하지 않는다. 새 CI, 실제 WPF runtime, 보호 VM, 독립 리뷰 NOT RUN. 기존 WebView2 및 startupEnabled=false 유지.
+
+### P3-02 개발용 확대/축소 및 배율 표시 (미완료)
+
+- #280 exact Windows/native PASS. #281 최초 Windows 46169261111 FAIL: ProcessFailed 소스 계약이 검색 UI 폐기 추가 이전 순서를 검사했다. 수정 head `e35778eee85145ca3b26c8b697d3ed06a0d69cb5`, CI 대기.
+- TabbedDevelopmentHost에 25%p 확대/축소, 100% 초기화 버튼 및 WPF routed Ctrl+Plus/Minus/0, 현재 선택된 live view의 실제 native readback 표시를 추가한다. managed/native 50~300% 유한값 제한, native closing/UI thread 검사. 서로 다른 loopback origin의 두 view에서 125%/100% readback 및 선택/초기화 회귀를 작성했다. Chromium origin별 zoom 공유 가능성을 유지하므로 동일 origin tab 독립성이나 저장/복원 보증은 하지 않는다. native HWND 단축키 전달, 실제 WPF runtime, 새 CI, 보호 VM 및 독립 리뷰 미검증. WebView2/startupEnabled=false 유지.

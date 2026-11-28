@@ -824,3 +824,14 @@ test('CEF fixture find UI scopes result publication to exact tab, query, navigat
     assert.match(cefTabbed, /findOpen.Visibility = fixture is null \? Visibility.Collapsed : Visibility.Visible;/);
     assert.match(cefTabbed, /Find UI showed per-tab match results and discarded stale publication on switch, edit and close/);
 });
+
+
+test('CEF development zoom controls clamp requests and show actual selected-view readback', () => {
+    assert.match(cefView, /!double.IsFinite\(value\) \|\| value < 0.5 \|\| value > 3.0/);
+    assert.match(cefNative, /!std::isfinite\(level\) \|\| level < std::log\(0.5\) \/ std::log\(1.2\) - 1e-9/);
+    assert.match(cefNative, /const auto state = LookupView\(id\);\s*if \(!CefCurrentlyOn\(TID_UI\) \|\| !browser \|\| !state \|\| state->closing/);
+    assert.match(cefTabbed, /tab.View.ZoomFactor = reset \? 1.0 : Math.Clamp\(factor \+ delta, 0.5, 3.0\);/);
+    assert.match(cefTabbed, /double zoom = live && !shuttingDown \? active!.View.ZoomFactor : double.NaN;/);
+    assert.match(cefTabbed, /zoomLabel.Text = zoomKnown \? \$"\{Math.Round\(zoom \* 100\)\}%" : "";/);
+    assert.match(cefTabbed, /Zoom readback followed selected distinct-origin view and reset to 100 percent/);
+});
