@@ -480,8 +480,14 @@ test('disabled preflight polls live authority and never confirms forced terminat
     assert.match(runner, /while \(!child.WaitForExit\(0\)\)[\s\S]*?if \(!Current\(\)\)[\s\S]*?!child.ImageLoadMitigationsActive[\s\S]*?child.WaitForExit\(Math.Min\(250, remaining\)\)/);
     assert.match(process, /ForcedTerminationExit = 35/);
     assert.match(process, /TerminateJobObject\(job, ForcedTerminationExit\)/);
-    const natural = process.slice(process.indexOf('internal bool WaitForNaturalJobExit'), process.indexOf('internal void TerminateAndDrain'));
-    assert.doesNotMatch(natural, /TerminateJobObject|TerminateProcess/);
+    // Stop at the separate rejected-creation recovery method. A natural
+    // exit proof must not invoke any of the forced-cleanup helpers.
+    const start = process.indexOf('internal bool WaitForNaturalJobExit');
+    const end = process.indexOf('private bool TryDrainRejectedCreation', start);
+    assert.ok(start >= 0 && end > start);
+    const natural = process.slice(start, end);
+    assert.match(natural, /while \(ActiveProcesses\(\) != 0\)[\s\S]*?return WaitForExit\(remaining\);/);
+    assert.doesNotMatch(natural, /\b(?:TerminateJobObject|TerminateProcess|TryDrainRejectedCreation|TerminateAndDrain|Dispose)\s*\(/);
     assert.match(runner, /!child.WaitForNaturalJobExit\(250\) \|\| !Current\(\)[\s\S]*?confirm\(\);/);
 });
 
