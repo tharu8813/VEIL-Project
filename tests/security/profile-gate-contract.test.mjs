@@ -1501,3 +1501,26 @@ test('legacy replacement experiment distinguishes retained target refusal from i
     assert.doesNotMatch(probe, /\bFile\.(?:Move|Replace|Delete)\(/);
 });
 
+
+
+test('immutable generation policy rejects ambiguous names and native fixture never overwrites a generation', async () => {
+    const catalog = await readFile('apps/broker/Veil.VolumeBroker/CefLibraryGenerationCatalog.cs', 'utf8');
+    const pin = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedDirectoryLease.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    const start = pin.indexOf('internal static bool ProbeLibraryGenerationFixture');
+    const end = pin.indexOf('// Disposable fixture only: compare legacy replacement', start);
+    assert.ok(start > pin.indexOf('#if VEIL_CEF_PROFILE_ACCESS_TEST') && end > start && end < pin.indexOf('#endif'));
+    const probe = pin.slice(start, end);
+    assert.match(catalog, /MaximumGenerations = 1024;[\s\S]*?ToString\("D19", CultureInfo.InvariantCulture\)/);
+    assert.match(catalog, /!string.Equals\(name, Name\(generation, staged\), StringComparison.Ordinal\)/);
+    assert.match(catalog, /for \(int i = 1; i <= last; i\+\+\)\s*if \(!committed.Contains\(i\)\)[\s\S]*?last < minimumCommitted \|\| \(last == 0 && !allowEmpty\)/);
+    assert.match(catalog, /pending is not null && \(last == MaximumGenerations \|\| pending != last \+ 1\)[\s\S]*?pending is null && last < MaximumGenerations \? last \+ 1 : null/);
+    assert.match(probe, /CefLibraryGenerationCatalog.Inspect\([\s\S]*?snapshot.Pending is not int generation[\s\S]*?RequireRegularFile\(source, stagedPath, volume\);[\s\S]*?if \(!current\(\)\) return false;\s*RequireRegularFile\(source, stagedPath, volume\);/);
+    assert.match(probe, /byte\[\] buffer = new byte\[24 \+ name.Length\];[\s\S]*?NtSetInformationFile\(source, out _, buffer, \(uint\)buffer.Length, 10\);[\s\S]*?0xC0000035u\) return false/);
+    assert.doesNotMatch(probe, /buffer\[0\]\s*=|\bFile\.(?:Move|Replace|Delete)\(/);
+    assert.doesNotMatch(catalog, /\b(?:File|Directory|Path|Native|Protocol)\./);
+    assert.doesNotMatch(broker, /CefLibraryGenerationCatalog|ProbeLibraryGenerationFixture/);
+    assert.match(fixture, /Pinned previous generation blocked append[\s\S]*?Revoked generation was published[\s\S]*?Generation collision overwrote an existing file/);
+});
+
