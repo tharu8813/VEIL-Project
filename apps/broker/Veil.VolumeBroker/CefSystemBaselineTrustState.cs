@@ -78,9 +78,12 @@ internal sealed class CefSystemBaselineTrustState
             throw new UnauthorizedAccessException("Baseline does not match installed trust digest.");
     }
 
+    internal bool Matches(CefSystemBaselineTrustState? current) =>
+        current is not null && CryptographicOperations.FixedTimeEquals(record, current.record);
+
     internal void RequireSame(CefSystemBaselineTrustState current)
     {
-        if (current is null || !CryptographicOperations.FixedTimeEquals(record, current.record))
+        if (!Matches(current))
             throw new UnauthorizedAccessException("System baseline trust state changed.");
     }
 }
@@ -175,12 +178,7 @@ internal static class CefSystemBaselineTrustRegistry
     internal static void Publish(CefSystemBaselineTrustUpdate update)
     {
         ArgumentNullException.ThrowIfNull(update);
-        if (!OperatingSystem.IsWindows() || RuntimeInformation.OSArchitecture != Architecture.X64 ||
-            RuntimeInformation.ProcessArchitecture != Architecture.X64)
-            throw new PlatformNotSupportedException("Expected native Windows x64.");
-        using var identity = WindowsIdentity.GetCurrent();
-        if (!identity.IsSystem && !new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
-            throw new UnauthorizedAccessException("Elevated administrator required.");
+        RequireMaintenanceAuthority();
         using var mutex = CefSystemBaselineWriterLock.Acquire();
         using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
         using var software = Open(machine, "SOFTWARE", Read64 | 4);
@@ -211,6 +209,68 @@ internal static class CefSystemBaselineTrustRegistry
         update.RequirePublished(ReadStable(), CefSystemBaselineHostObserver.Observe());
         // Never undo a write on an uncertain result: rollback could lower the
         // floor. Operators must inspect the installed state before retry.
+    }
+
+    private static void RequireMaintenanceAuthority()
+    {
+        if (!OperatingSystem.IsWindows() || RuntimeInformation.OSArchitecture != Architecture.X64 ||
+            RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            throw new PlatformNotSupportedException("Expected native Windows x64.");
+        using var identity = WindowsIdentity.GetCurrent();
+        if (!identity.IsSystem && !new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
+            throw new UnauthorizedAccessException("Elevated administrator required.");
+    }
+
+    // Read-only diagnosis against the exact independently retained prepared
+    // transition. Missing, partial or foreign records are never fixed here.
+    // Invalid ACLs/layouts and IO errors propagate rather than become absence.
+    internal static CefBaselinePublicationStatus InspectInterruptedPublication(CefSystemBaselineTrustUpdate update)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        RequireMaintenanceAuthority();
+        using var mutex = CefSystemBaselineWriterLock.Acquire();
+        var host = CefSystemBaselineHostObserver.Observe();
+        var first = ObservePublication(update, host);
+        var second = ObservePublication(update, CefSystemBaselineHostObserver.Observe());
+        if (first != second)
+            throw new UnauthorizedAccessException("Baseline publication changed during inspection.");
+        return first;
+    }
+
+    private static CefBaselinePublicationStatus ObservePublication(CefSystemBaselineTrustUpdate update,
+        CefSystemBaselineHost host)
+    {
+        using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+        using var software = Open(machine, "SOFTWARE");
+        RequireOrdinary(software);
+        using var leaf = TryOpen(software, Leaf, Read64);
+        if (leaf is null) return update.ClassifyPublication(false, null, host);
+        RequireProtected(leaf);
+        if (leaf.ValueCount == 0 && leaf.SubKeyCount == 0)
+        {
+            RequireProtected(leaf);
+            return update.ClassifyPublication(true, null, host);
+        }
+        return update.ClassifyPublication(true, ReadRecord(leaf), host);
+    }
+
+    // Explicit confirmation only when the exact intended record is already
+    // present. Flush and re-read; no SetValue, creation, deletion or rollback.
+    // This does not prove power-loss durability or resolve a partial key.
+    internal static void ConfirmInterruptedPublication(CefSystemBaselineTrustUpdate update)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        RequireMaintenanceAuthority();
+        using var mutex = CefSystemBaselineWriterLock.Acquire();
+        using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+        using var software = Open(machine, "SOFTWARE");
+        RequireOrdinary(software);
+        using var leaf = Open(software, Leaf);
+        update.RequirePublished(ReadRecord(leaf), CefSystemBaselineHostObserver.Observe());
+        int flush = RegFlushKey(leaf.Handle);
+        if (flush != 0) throw new Win32Exception(flush);
+        update.RequirePublished(ReadRecord(leaf), CefSystemBaselineHostObserver.Observe());
+        update.RequirePublished(ReadStable(), CefSystemBaselineHostObserver.Observe());
     }
 
     private static RegistryKey CreateNew(RegistryKey parent)

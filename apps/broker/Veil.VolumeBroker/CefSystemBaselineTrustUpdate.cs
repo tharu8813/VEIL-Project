@@ -6,6 +6,15 @@ namespace Veil.VolumeBroker;
 // Prepared update only: callers must supply independently authorized
 // enrollment inputs or a protected installed snapshot. No registry writes,
 // automatic enrollment, key rotation or product admission.
+internal enum CefBaselinePublicationStatus
+{
+    NotStartedEnrollment,
+    PartialEnrollmentRequiresReview,
+    PreviousRecordPresent,
+    IntendedRecordPresentUnconfirmed,
+    UnexpectedStateRequiresReview
+}
+
 internal sealed class CefSystemBaselineTrustUpdate
 {
     private readonly CefSystemBaselineTrustState? previous;
@@ -76,6 +85,26 @@ internal sealed class CefSystemBaselineTrustUpdate
             previous.RequireSame(current);
         }
         return next.CopyRecord();
+    }
+
+    internal CefBaselinePublicationStatus ClassifyPublication(bool keyExists,
+        CefSystemBaselineTrustState? observed, CefSystemBaselineHost currentHost)
+    {
+        CefSystemBaselineHostObserver.RequireCurrent(host, currentHost);
+        if (!keyExists && observed is not null)
+            throw new UnauthorizedAccessException("Inconsistent baseline observation.");
+        if (observed is null)
+        {
+            if (previous is not null)
+                return CefBaselinePublicationStatus.UnexpectedStateRequiresReview;
+            return keyExists ? CefBaselinePublicationStatus.PartialEnrollmentRequiresReview
+                : CefBaselinePublicationStatus.NotStartedEnrollment;
+        }
+        if (next.Matches(observed))
+            return CefBaselinePublicationStatus.IntendedRecordPresentUnconfirmed;
+        if (previous?.Matches(observed) == true)
+            return CefBaselinePublicationStatus.PreviousRecordPresent;
+        return CefBaselinePublicationStatus.UnexpectedStateRequiresReview;
     }
 
     internal void RequirePublished(CefSystemBaselineTrustState published,

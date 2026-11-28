@@ -128,6 +128,30 @@ internal static class CefSignedSystemModuleBaselineTests
         Reject(() => update.RequireExpectedAndCopyRecord(nextState, host));
         Reject(() => update.RequirePublished(enrolled, host));
         update.RequirePublished(nextState, host);
+        void Expect(CefSystemBaselineTrustUpdate transition, bool exists,
+            CefSystemBaselineTrustState? observedState, CefBaselinePublicationStatus expected)
+        {
+            if (transition.ClassifyPublication(exists, observedState, host) != expected)
+                throw new InvalidOperationException("Interrupted publication classification regression.");
+        }
+        Expect(enrollment, false, null, CefBaselinePublicationStatus.NotStartedEnrollment);
+        Expect(enrollment, true, null, CefBaselinePublicationStatus.PartialEnrollmentRequiresReview);
+        Expect(enrollment, true, enrolled, CefBaselinePublicationStatus.IntendedRecordPresentUnconfirmed);
+        Expect(enrollment, true, nextState, CefBaselinePublicationStatus.UnexpectedStateRequiresReview);
+        Expect(update, false, null, CefBaselinePublicationStatus.UnexpectedStateRequiresReview);
+        Expect(update, true, null, CefBaselinePublicationStatus.UnexpectedStateRequiresReview);
+        Expect(update, true, enrolled, CefBaselinePublicationStatus.PreviousRecordPresent);
+        Expect(update, true, nextState, CefBaselinePublicationStatus.IntendedRecordPresentUnconfirmed);
+        var foreign = CefSystemBaselineTrustState.CreateVerifiedRecord(nextPayload,
+            wrongKey.ExportSubjectPublicKeyInfo(), 9);
+        Expect(update, true, foreign, CefBaselinePublicationStatus.UnexpectedStateRequiresReview);
+        var sameVersionDifferentDigest = CefSystemBaselineTrustState.CreateVerifiedRecord(good, publicKey, 9);
+        Expect(update, true, sameVersionDifferentDigest, CefBaselinePublicationStatus.UnexpectedStateRequiresReview);
+        Reject(() => update.ClassifyPublication(false, nextState, host));
+        Reject(() => update.ClassifyPublication(true, nextState, host with { UpdateRevision = 1235 }));
+        Reject(() => update.RequirePublished(foreign, host));
+        Reject(() => update.RequirePublished(sameVersionDifferentDigest, host));
+        Console.WriteLine("PASS: interrupted baseline publication classification and exact confirmation refusal");
         var mismatched = CefSystemBaselineTrustState.CreateVerifiedRecord(actualPayload, publicKey, 6);
         Reject(() => CefSignedSystemModuleBaseline.VerifyTrustedSnapshot(actualPayload, Sign(actualPayload),
             mismatched, () => mismatched));
