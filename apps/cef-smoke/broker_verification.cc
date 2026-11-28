@@ -82,11 +82,7 @@ bool Transfer(HANDLE pipe, bool write, void* bytes, DWORD size,
   return GetOverlappedResult(pipe, &operation, &count, FALSE) != FALSE &&
       Remaining(started) != 0;
 }
-}  // namespace
-
-bool RequestChildVerification(std::string_view registered_volume) {
-  std::string request;
-  if (!BuildRedemptionRequest(registered_volume, request)) return false;
+bool RequestFixedSnapshot(std::string request, bool (*is_reply)(std::string_view)) {
   const ULONGLONG started = GetTickCount64();
   const DWORD pid = ServicePid();
   if (!pid) return false;
@@ -110,7 +106,20 @@ bool RequestChildVerification(std::string_view registered_volume) {
   }
   // The protocol is one bounded LF-delimited response. Never consume a
   // second response or treat arbitrary JSON as an authentication result.
-  return IsVerifiedReply(reply) && SameServer(pipe.get(), process.get(), pid) &&
+  return is_reply(reply) && SameServer(pipe.get(), process.get(), pid) &&
       Remaining(started) != 0;
+}
+}  // namespace
+
+bool RequestChildVerification(std::string_view registered_volume) {
+  std::string request;
+  return BuildRedemptionRequest(registered_volume, request) &&
+      RequestFixedSnapshot(request, IsVerifiedReply);
+}
+
+bool RequestRuntimeAuthority(std::string_view registered_volume) {
+  std::string request;
+  return BuildRuntimeAuthorityRequest(registered_volume, request) &&
+      RequestFixedSnapshot(request, IsRuntimeAuthorityReply);
 }
 }  // namespace veil_cef

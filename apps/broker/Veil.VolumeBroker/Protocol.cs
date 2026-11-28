@@ -7,7 +7,7 @@ internal enum BrokerCommand
 {
     Status, Attach, Unlock, Lock, Detach, AuthenticatedOwner, CheckCefChild, StageCefChild, RedeemCefChild, ConfirmCefPreflight,
 #if VEIL_CEF_DIAGNOSTIC_IPC
-    ProbeCefSuspended,
+    ProbeCefSuspended, CheckCefRuntimeAuthority,
 #endif
 }
 
@@ -101,6 +101,11 @@ internal static class Protocol
         JsonSerializer.SerializeToUtf8Bytes(new { ok = true, cefChildVerified = true });
 
 #if VEIL_CEF_DIAGNOSTIC_IPC
+    // Snapshot only. No activation, transferable token or permission to
+    // launch descendants. Distinct from the consumed legacy receipt.
+    internal static byte[] CefRuntimeAuthorityCurrent() =>
+        JsonSerializer.SerializeToUtf8Bytes(new { ok = true, cefRuntimeAuthorityCurrent = true });
+
     internal static byte[] CefSuspendedProbeVerified(BackendStatus status)
     {
         if (!status.Attached || status.Unlocked || !status.ReadyToUnlock)

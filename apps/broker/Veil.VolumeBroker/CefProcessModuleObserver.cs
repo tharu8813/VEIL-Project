@@ -191,6 +191,24 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
         activated = true;
     }
 
+    // Root-only transport boundary. No PID nominations, no preflight
+    // receipt reuse, and no acceptance of the old direct launch lifetime.
+    internal bool MatchesRuntimeRoot(ClientIdentity client, SafeProcessHandle pipeClient)
+    {
+        if (borrowedCreation is null || !activated) return false;
+        try { return Native.ObserveProcess(retainedRoot) == client && Native.SameLiveProcess(retainedRoot, pipeClient); }
+        catch (Exception error) when (error is not OutOfMemoryException) { return false; }
+    }
+
+    internal void RequireRuntimeAuthority(ClientIdentity client, SafeProcessHandle pipeClient)
+    {
+        if (!MatchesRuntimeRoot(client, pipeClient))
+            throw new UnauthorizedAccessException("CEF runtime root unavailable.");
+        _ = Observe(); // Retained nested Jobs, image, role and system module snapshot.
+        if (!MatchesRuntimeRoot(client, pipeClient))
+            throw new UnauthorizedAccessException("CEF runtime root changed.");
+    }
+
     internal CefRetainedProcessDiagnostic[] Observe()
     {
         if (!activated)

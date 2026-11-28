@@ -27,6 +27,21 @@ inline bool IsVerifiedReply(std::string_view reply) {
   return reply == kVerifiedReply;
 }
 
+inline constexpr std::string_view kRuntimeAuthorityReply = "{\"ok\":true,\"cefRuntimeAuthorityCurrent\":true}\n";
+inline bool BuildRuntimeAuthorityRequest(std::string_view volume, std::string& request) {
+  if (!BuildRedemptionRequest(volume, request)) return false;
+  request.replace(request.find("RedeemCefChild"), std::string_view("RedeemCefChild").size(),
+                  "CheckCefRuntimeAuthority");
+  return true;
+}
+inline bool IsRuntimeAuthorityReply(std::string_view reply) {
+  return reply == kRuntimeAuthorityReply;
+}
+
+// Disconnected root-only snapshot transport. No receipt from a disabled
+// preflight may be used here. No retry, startup or descendant admission.
+bool RequestRuntimeAuthority(std::string_view registered_volume);
+
 // Not called by smoke hosts. The caller must supply a trusted registered ID.
 // A true return is a verification receipt, NOT permission to initialize CEF.
 bool RequestChildVerification(std::string_view registered_volume);
