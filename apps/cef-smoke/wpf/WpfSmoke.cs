@@ -39,6 +39,7 @@ public static class WpfSmoke
         bool secondaryNavigationSucceeded = false;
         int secondaryStarts = 0;
         ulong firstSecondaryHandle = 0;
+        Action<EngineNavigationCompletedEventArgs>? secondaryCompletion = null, retiredSecondaryCompletion = null;
         void CloseSecondary()
         {
             if (secondaryWindow is not null && !secondaryWindowClosed && !secondaryClosing)
@@ -140,52 +141,82 @@ public static class WpfSmoke
         };
         bool OpenSecondary(string route)
         {
+            // A window reservation cannot replace a still-draining native view.
+            if (closing || (secondary is not null &&
+                (!secondaryWindowClosed || CefNative.VeilCefClosed(secondaryHandle) == 0)))
+                return false;
+            retiredSecondaryCompletion = secondaryCompletion;
             secondaryClosing = secondaryWindowClosed = secondaryLoaded = secondaryNavigationSucceeded = false;
             secondaryStarts = 0;
             secondaryHandle = 0;
-        var second = (CefDevelopmentView)engine.CreateView();
-        secondary = second;
-        var secondWindow = new Window { Title = "VEIL CEF secondary", Width = 480, Height = 320,
-            Left = -32000, Top = -32000, ShowActivated = false, ShowInTaskbar = false,
-            Content = second.Element };
-        secondaryWindow = secondWindow;
-        var secondaryUrl = new Uri(new Uri(fixture!), route).AbsoluteUri;
-        second.NavigationStarting += (_, request) =>
-        {
-            secondaryStarts++;
-            request.Cancel = request.Uri != secondaryUrl;
-        };
-        second.NavigationCompleted += (_, completed) =>
-            secondaryNavigationSucceeded = completed.IsSuccess && completed.NativeResult.Domain == EngineErrorDomain.Cef;
-        second.ProcessFailed += (_, _) => unexpectedProcessFailures++;
-        secondWindow.Closing += (_, e) =>
-        {
-            if (!secondaryClosing)
+            var second = (CefDevelopmentView)engine.CreateView();
+            secondary = second;
+            var secondWindow = new Window { Title = "VEIL CEF secondary", Width = 480, Height = 320,
+                Left = -32000, Top = -32000, ShowActivated = false, ShowInTaskbar = false,
+                Content = second.Element };
+            secondaryWindow = secondWindow;
+            var secondaryUrl = new Uri(new Uri(fixture!), route).AbsoluteUri;
+            ulong pendingId = 0, lastId = 0;
+            bool OwnsSecondary() => ReferenceEquals(secondary, second) &&
+                ReferenceEquals(secondaryWindow, secondWindow);
+            bool AcceptSecondaryEvent() => OwnsSecondary() && !closing &&
+                !secondaryClosing && !secondaryWindowClosed && secondaryLoaded &&
+                secondaryHandle != 0 && second.NativeHandle == secondaryHandle &&
+                CefNative.VeilCefClosed(secondaryHandle) == 0;
+            second.NavigationStarting += (_, request) =>
             {
-                secondaryClosing = true;
-                secondaryHandle = second.NativeHandle;
-                CefNative.VeilCefCancelOwnedAttachment(secondaryHandle);
+                request.Cancel = !AcceptSecondaryEvent() || request.Uri != secondaryUrl ||
+                    request.IsRedirected || request.NavigationId == 0 || request.NavigationId <= lastId;
+                if (request.Cancel) return;
+                pendingId = lastId = request.NavigationId;
+                secondaryStarts++;
+            };
+            void CompleteSecondary(EngineNavigationCompletedEventArgs completed)
+            {
+                if (!AcceptSecondaryEvent() || pendingId == 0 || pendingId != completed.NavigationId) return;
+                pendingId = 0;
+                secondaryNavigationSucceeded = completed.IsSuccess &&
+                    completed.NativeResult.Domain == EngineErrorDomain.Cef;
             }
-            e.Cancel = CefNative.VeilCefTryClose(secondaryHandle) == 0;
-        };
-        secondWindow.Closed += (_, _) =>
-        {
-            second.Dispose();
-            secondaryWindowClosed = true;
-        };
-        secondWindow.Loaded += async (_, _) =>
-        {
-            await second.InitializeAsync();
-            secondaryHandle = second.NativeHandle;
-            secondaryLoaded = true;
-            second.Navigate(secondaryUrl);
-        };
-        secondWindow.Show();
-        if (!Rejects(() => engine.CreateView()))
-        {
-            Trace("Development fixture accepted a third view");
-            return false;
-        }
+            secondaryCompletion = CompleteSecondary;
+            second.NavigationCompleted += (_, completed) => CompleteSecondary(completed);
+            second.ProcessFailed += (_, _) =>
+            {
+                if (AcceptSecondaryEvent()) unexpectedProcessFailures++;
+            };
+            secondWindow.Closing += (_, e) =>
+            {
+                if (!OwnsSecondary()) return;
+                if (!secondaryClosing)
+                {
+                    secondaryClosing = true;
+                    pendingId = 0;
+                    second.InvalidateFixtureLoginContext();
+                    secondaryHandle = second.NativeHandle;
+                    CefNative.VeilCefCancelOwnedAttachment(secondaryHandle);
+                }
+                e.Cancel = CefNative.VeilCefTryClose(secondaryHandle) == 0;
+            };
+            secondWindow.Closed += (_, _) =>
+            {
+                second.Dispose();
+                if (OwnsSecondary()) secondaryWindowClosed = true;
+            };
+            secondWindow.Loaded += async (_, _) =>
+            {
+                if (!OwnsSecondary() || closing || secondaryClosing || secondaryLoaded) return;
+                await second.InitializeAsync();
+                if (!OwnsSecondary() || closing || secondaryClosing || secondaryWindowClosed) return;
+                secondaryHandle = second.NativeHandle;
+                secondaryLoaded = true;
+                second.Navigate(secondaryUrl);
+            };
+            secondWindow.Show();
+            if (!Rejects(() => engine.CreateView()))
+            {
+                Trace("Development fixture accepted a third view");
+                return false;
+            }
             return true;
         }
         if (fixture is not null)
@@ -400,6 +431,23 @@ public static class WpfSmoke
                     window.Close();
                     return;
                 }
+                // Invoke the retired managed completion path with a synthetic
+                // failure; no native event or real renderer crash is simulated.
+                if (retiredSecondaryCompletion is null)
+                {
+                    window.Close();
+                    return;
+                }
+                retiredSecondaryCompletion(new EngineNavigationCompletedEventArgs(1, false, false,
+                    new EngineNavigationError(EngineErrorDomain.Cef, -2, "Synthetic retired completion")));
+                if (!secondaryNavigationSucceeded || secondaryStarts != 1 ||
+                    secondaryHandle != reopened.NativeHandle)
+                {
+                    Trace("Retired secondary completion changed current window state");
+                    window.Close();
+                    return;
+                }
+                Trace("Retired secondary completion ignored after window replacement");
                 Trace("CEF view slot reused with a fresh identity and clean state");
                 if (fixtureVault is null)
                 {
