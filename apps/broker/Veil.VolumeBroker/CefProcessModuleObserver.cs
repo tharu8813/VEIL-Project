@@ -149,8 +149,15 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
                 Native.IsRunning(ownerHandle), current.VolumeProtected);
         };
         requirePreparedRoot = () => brokerJob.RequirePreparedPrivateRoot(peerJob, owner, ownerHandle, root, rootHandle);
+        // Both the periodic monitor and IPC must enforce the same role
+        // boundary while independently collected member handles are retained.
+        // A diagnostics-only observation cannot authorize a runtime sample.
+        void RequireMemberRole(ClientIdentity identity, CefRetainedProcessDiagnostic diagnostic) =>
+            CefRuntimeRolePolicy.RequireProvisionalRole(identity == root,
+                diagnostic.Role, diagnostic.TokenDecision);
         observe = () => CefNestedProcessDiagnostics.Observe(brokerJob, peerJob, root, rootHandle,
-            registration, systemVerifier);
+            registration, systemVerifier, (identity, _, diagnostic) =>
+                RequireMemberRole(identity, diagnostic));
         matchesMember = (identity, pipeClient) =>
             identity.SessionId == root.SessionId &&
             string.Equals(identity.UserSid, root.UserSid, StringComparison.OrdinalIgnoreCase) &&
@@ -167,9 +174,7 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
                 {
                     // Provisional role checks are deliberately conservative.
                     // No known-but-unverified GPU/utility/network role passes.
-                    if (!CefRuntimeRolePolicy.MatchesProvisionalRole(identity == root,
-                        diagnostic.Role, diagnostic.TokenDecision))
-                        throw new UnauthorizedAccessException("CEF runtime role policy unavailable.");
+                    RequireMemberRole(identity, diagnostic);
                     if (identity != client) return;
                     if (!Native.SameLiveProcess(handle, pipeClient) || ++matches != 1)
                         throw new UnauthorizedAccessException("CEF runtime member object mismatch.");
