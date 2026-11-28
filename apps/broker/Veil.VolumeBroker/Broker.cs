@@ -588,6 +588,14 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private void RunDiagnosticCreationProbe(object expectedGeneration,
         ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature)
     {
+        // Refuse stale or busy requests before acquiring any cleanup
+        // obligation. Only an idle, currently authenticated generation
+        // may enter this terminal probe; no IPC caller exists yet.
+        if (config.Development || diagnosticRelock.Pending || diagnosticSession.Occupied ||
+            pendingCefChild is not null || completedPreflight is not null ||
+            unresolvedCefStops.Count != 0 || authenticatedGeneration is null ||
+            !ReferenceEquals(unlockOwner, expectedGeneration))
+            throw new UnauthorizedAccessException("CEF creation probe generation unavailable.");
         CefBrokerLaunchPreparation? preparation = null;
         CefBrokerOwnedJob? outer = null, inner = null;
         bool accepted = false;
@@ -616,23 +624,31 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         }
         finally
         {
-            if (accepted)
+            // Both pre-creation refusal and accepted creation are
+            // terminal for this exact generation. A stale generation
+            // must never retire or relock a newer owner's session.
+            try
             {
-                // Even a successful probe is terminal: revoke, prove exit,
-                // release and request non-forced relock. Reentrant revocation
-                // during creation cannot release an activating slot.
-                diagnosticRelock.Request(expectedGeneration);
-                try { ClearAuthenticatedOwner(); }
-                finally { EnsureCefStopRetry(); }
-            }
-            else
-            {
-                // No native creation could have run before acceptance.
-                try { inner?.Dispose(); }
-                finally
+                if (!accepted)
                 {
-                    try { outer?.Dispose(); }
-                    finally { preparation?.Dispose(); }
+                    // No native creation could have run before acceptance.
+                    try { inner?.Dispose(); }
+                    finally
+                    {
+                        try { outer?.Dispose(); }
+                        finally { preparation?.Dispose(); }
+                    }
+                }
+            }
+            finally
+            {
+                // Accepted resources remain in the slot until drain proof.
+                // On pre-creation refusal, attempt relock even if disposal
+                // throws; the backend must still verify non-forced lock.
+                if (diagnosticRelock.RequestIfCurrent(expectedGeneration, unlockOwner))
+                {
+                    try { ClearAuthenticatedOwner(); }
+                    finally { EnsureCefStopRetry(); }
                 }
             }
         }
