@@ -875,9 +875,11 @@ test('CEF fixture history records only matching successful navigation and keeps 
 
 
 const libraryMutation = await readFile('apps/desktop/LibraryMutation.cs', 'utf8');
+const collectionMutation = await readFile('apps/desktop/CollectionMutation.cs', 'utf8');
 test('engine-neutral library edit rechecks authorization and restores on failed commit', () => {
-    assert.match(libraryMutation, /if \(!authorized\(\)\) return false;[\s\S]*?var previous = entries.ToArray\(\);[\s\S]*?change\(\);[\s\S]*?BookmarkPolicy.Valid\(folders, entries\)\) &&\s*authorized\(\) && save\(\);/);
-    assert.match(libraryMutation, /finally\s*\{\s*if \(!committed\)[\s\S]*?entries.AddRange\(previous\);[\s\S]*?folders.AddRange\(previousFolders\);/);
+    assert.match(libraryMutation, /CollectionMutation.TryCommit\(entries, folders, authorized, change,\s*\(\) => folders is null \|\| BookmarkPolicy.Valid\(folders, entries\), save\);/);
+    assert.match(collectionMutation, /if \(!authorized\(\)\) return false;[\s\S]*?var previous = entries.ToArray\(\);[\s\S]*?change\(\);[\s\S]*?committed = valid\(\) && authorized\(\) && save\(\);/);
+    assert.match(collectionMutation, /finally\s*\{\s*if \(!committed\)[\s\S]*?entries.AddRange\(previous\);[\s\S]*?auxiliary.AddRange\(previousAuxiliary\);/);
     assert.match(session, /internal bool TrySaveLibrary\(Func<bool> authorized, bool captureTabs = false\)\s*\{\s*libraryDispatcher.VerifyAccess\(\);[\s\S]*?IsPrivate \|\| IsEnding \|\| EngineLost \|\| !EngineHost.IsReady \|\| persistentStatePath is null \|\|\s*!authorized\(\)\) return false;[\s\S]*?Data.Save\(persistentStatePath\);/);
     assert.match(browser, /bool SaveLibrary\(\) => session.TrySaveLibrary\(CanEditLibrary\);/);
     assert.match(browser, /LibraryMutation.TryCommit\(data.Bookmarks, data.BookmarkFolders, Authorized,[\s\S]*?session.TrySaveLibrary\(Authorized\)/);
@@ -929,5 +931,15 @@ test('site permission edits commit a validated detached rule set through the sha
     assert.match(session, /internal bool TryCommitSitePermissions\([^)]*\)\s*\{\s*libraryDispatcher.VerifyAccess\(\);\s*bool Authorized\(\) => !IsPrivate && !IsEnding && !EngineLost && EngineHost.IsReady &&\s*persistentStatePath is not null && authorized\(\);\s*return Data.TryCommitSitePermissions\(rules, Authorized,\s*\(\) => TrySaveLibrary\(Authorized\)\);/);
     assert.match(permissions, /bool Authorized\(\) => SettingsReady\(\) && IsActive && session.PermissionUiOpen;\s*if \(!session.TryCommitSitePermissions\(dialog.Result, Authorized\)\)[\s\S]*?return;\s*\}\s*Status.Text = "사이트 권한을 저장했습니다/);
     assert.doesNotMatch(permissions, /\bdata\.Save\(|\bdata\.SitePermissions\s*=(?!=)/);
+});
+
+
+
+test('CEF fixture shares the library transaction but never obtains a persistent writer', () => {
+    assert.match(cefTabbed, /CollectionMutation.TryCommit\(entries, \(\) => fixture is not null && !shuttingDown && authorized\(\),\s*change, valid, static \(\) => true\);/);
+    assert.match(cefTabbed, /if \(!CommitFixtureEdit\(bookmarks,[\s\S]*?\) return;\s*bookmarkList.Items.Add\(entry\);/);
+    assert.match(cefTabbed, /if \(!CommitFixtureEdit\(visits, Authorized,[\s\S]*?\) return;\s*visitList.Items.Insert\(0, visit\);/);
+    assert.match(cefTabbed, /if \(shuttingDown\) visits.Clear\(\);\s*else if \(!CommitFixtureEdit\(visits,/);
+    assert.doesNotMatch(collectionMutation, /\b(?:File|Directory|Path|BrowserSession|ProtectedProfileSession)\./);
 });
 

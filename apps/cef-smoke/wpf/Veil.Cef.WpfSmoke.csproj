@@ -12,5 +12,7 @@
     <Compile Include="../../desktop/Engine/IEngineLoginForms.cs" Link="Contracts/IEngineLoginForms.cs" />
     <Compile Include="../../desktop/NetworkPolicy.cs" Link="Contracts/NetworkPolicy.cs" />
     <Compile Include="../../desktop/SiteDataPolicy.cs" Link="Contracts/SiteDataPolicy.cs" />
+    <Compile Include="../../desktop/CollectionMutation.cs" Link="Contracts/CollectionMutation.cs" />
+    <Compile Include="../../desktop/RecoverableFailure.cs" Link="Contracts/RecoverableFailure.cs" />
   </ItemGroup>
 </Project>

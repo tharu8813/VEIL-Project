@@ -544,6 +544,12 @@ internal sealed class TabbedDevelopmentHost
             bookmarkList.SelectedItem is FixtureBookmark selected && bookmarks.Contains(selected);
     }
 
+    // Explicitly memory-only: never substitute a file writer here. A protected
+    // product adapter must be bound to a verified runtime/session lease separately.
+    private bool CommitFixtureEdit<T>(List<T> entries, Func<bool> authorized, Action change, Func<bool> valid) =>
+        CollectionMutation.TryCommit(entries, () => fixture is not null && !shuttingDown && authorized(),
+            change, valid, static () => true);
+
     private void AddActiveBookmark()
     {
         if (active is not { } tab || !CanBookmark(tab) || bookmarks.Count >= FixtureBookmarkLimit) return;
@@ -551,7 +557,10 @@ internal sealed class TabbedDevelopmentHost
         if (bookmarks.Any(entry => entry.Url == source)) return;
         string title = new string(tab.View.DocumentTitle.Where(c => !char.IsControl(c)).Take(120).ToArray());
         var entry = new FixtureBookmark(title.Length == 0 ? source : title, source);
-        bookmarks.Add(entry);
+        if (!CommitFixtureEdit(bookmarks, () => CanBookmark(tab) && tab.View.Source == source,
+            () => bookmarks.Add(entry), () => bookmarks.Count <= FixtureBookmarkLimit &&
+                bookmarks.Select(item => item.Url).Distinct(StringComparer.Ordinal).Count() == bookmarks.Count &&
+                bookmarks.All(item => IsFixtureBookmarkUrl(item.Url)))) return;
         bookmarkList.Items.Add(entry);
         bookmarkList.SelectedItem = entry;
         RefreshBookmarkControls();
@@ -568,7 +577,9 @@ internal sealed class TabbedDevelopmentHost
     private void RemoveSelectedBookmark()
     {
         if (fixture is null || shuttingDown || bookmarkList.SelectedItem is not FixtureBookmark entry ||
-            !bookmarks.Remove(entry)) return;
+            !bookmarks.Contains(entry)) return;
+        if (!CommitFixtureEdit(bookmarks, () => ReferenceEquals(bookmarkList.SelectedItem, entry),
+            () => bookmarks.Remove(entry), () => !bookmarks.Contains(entry))) return;
         bookmarkList.Items.Remove(entry);
         RefreshBookmarkControls();
     }
@@ -587,13 +598,17 @@ internal sealed class TabbedDevelopmentHost
         if (visits.Any(entry => entry.ViewId == id && entry.NavigationId == completed.NavigationId)) return;
         // URL only: title callbacks have no navigation identity and may lag.
         var visit = new FixtureVisit(id, completed.NavigationId, expectedUrl, DateTimeOffset.Now);
-        visits.Insert(0, visit);
-        visitList.Items.Insert(0, visit);
-        if (visits.Count > FixtureHistoryLimit)
+        bool Authorized() => AcceptTabEvent(tab) && tab.View.NativeHandle == id &&
+            CefNative.VeilCefClosed(id) == 0 && tab.LastNavigationId == completed.NavigationId &&
+            tab.PendingNavigationId == 0 && tab.View.Source == expectedUrl && IsFixtureBookmarkUrl(expectedUrl);
+        if (!CommitFixtureEdit(visits, Authorized, () =>
         {
-            visits.RemoveAt(visits.Count - 1);
+            visits.Insert(0, visit);
+            if (visits.Count > FixtureHistoryLimit) visits.RemoveAt(visits.Count - 1);
+        }, () => visits.Count <= FixtureHistoryLimit)) return;
+        visitList.Items.Insert(0, visit);
+        if (visitList.Items.Count > FixtureHistoryLimit)
             visitList.Items.RemoveAt(visitList.Items.Count - 1);
-        }
         RefreshHistoryControls();
     }
 
@@ -618,14 +633,18 @@ internal sealed class TabbedDevelopmentHost
     private void RemoveSelectedVisit()
     {
         if (fixture is null || shuttingDown || visitList.SelectedItem is not FixtureVisit entry ||
-            !visits.Remove(entry)) return;
+            !visits.Contains(entry)) return;
+        if (!CommitFixtureEdit(visits, () => ReferenceEquals(visitList.SelectedItem, entry),
+            () => visits.Remove(entry), () => !visits.Contains(entry))) return;
         visitList.Items.Remove(entry);
         RefreshHistoryControls();
     }
 
     private void ClearFixtureHistory()
     {
-        visits.Clear();
+        // Shutdown disposal is unconditional and never a persistence operation.
+        if (shuttingDown) visits.Clear();
+        else if (!CommitFixtureEdit(visits, () => true, visits.Clear, () => visits.Count == 0)) return;
         visitList.Items.Clear();
         RefreshHistoryControls();
     }
@@ -891,6 +910,15 @@ internal sealed class TabbedDevelopmentHost
                 IsFixtureBookmarkUrl("https://example.invalid/") ||
                 IsFixtureBookmarkUrl("http://user@localhost:" + new Uri(fixture!).Port + "/"))
             { Fail(); return; }
+            // Synthetic refusal exercises the same transaction used by both engines.
+            var priorBookmark = bookmarks[0];
+            int authorityChecks = 0;
+            if (CommitFixtureEdit(bookmarks, () => ++authorityChecks == 1, bookmarks.Clear, () => true) ||
+                authorityChecks != 2 || bookmarks.Count != 1 || !ReferenceEquals(bookmarks[0], priorBookmark) ||
+                bookmarkList.Items.Count != 1) { Fail(); return; }
+            if (CollectionMutation.TryCommit(bookmarks, () => true, bookmarks.Clear, () => true, () => false) ||
+                bookmarks.Count != 1 || !ReferenceEquals(bookmarks[0], priorBookmark) ||
+                bookmarkList.Items.Count != 1) { Fail(); return; }
             Select(second);
             AddActiveBookmark();
             if (bookmarks.Count != 2 || bookmarks[1].Url != Url("/tabs-second")) { Fail(); return; }
