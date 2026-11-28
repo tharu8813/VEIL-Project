@@ -19,6 +19,7 @@ internal sealed class CefContainedProcess : IDisposable
     private readonly SafeFileHandle thread;
     private bool resumed;
     private bool retainedResumeAttempted;
+    private bool creationVerified;
     private bool disposed;
 
     private CefContainedProcess(SafeFileHandle job, SafeProcessHandle process, SafeFileHandle thread)
@@ -60,12 +61,87 @@ internal sealed class CefContainedProcess : IDisposable
             throw new UnauthorizedAccessException("Invalid synthetic user launch.");
         return CreateSuspendedCore(image, environment, [outer, inner], token);
     }
+
+    internal static void CreateRetainedFixture(string image,
+        IReadOnlyDictionary<string, string?> environment, SafeFileHandle outer, SafeFileHandle inner,
+        CreationCustody custody, bool injectFailure)
+    {
+        ArgumentNullException.ThrowIfNull(custody);
+        if (!string.Equals(image, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Invalid retained fixture image.");
+        _ = CreateSuspendedCore(image, environment, [outer, inner], custody: custody,
+            injectFailure: injectFailure);
+    }
 #endif
+
+#if VEIL_CEF_BROKER
+    // Disconnected broker-only primitive. The higher-level caller must pin
+    // the installed image, validate the token and own both private Jobs.
+    // Never return a partially verified root or fall back to the service token.
+    internal static void CreateRetainedUserRoot(string image,
+        IReadOnlyDictionary<string, string?> environment, SafeFileHandle outer, SafeFileHandle inner,
+        SafeAccessTokenHandle token, CreationCustody custody)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+        ArgumentNullException.ThrowIfNull(custody);
+        if (token.IsInvalid || token.IsClosed)
+            throw new UnauthorizedAccessException("Invalid broker launch token.");
+        _ = CreateSuspendedCore(image, environment, [outer, inner], token, custody);
+    }
+#endif
+
+    // One-shot serialized ownership escrow. The caller retains this object
+    // from BEFORE creation until either verified transfer or confirmed
+    // exit. No IDisposable shortcut or raw handle export on refusal.
+    // The two external Jobs remain owned by the caller and require their
+    // own independent drain proof before relock.
+    internal sealed class CreationCustody
+    {
+        private bool attempted;
+        private bool rejected;
+        private bool transferred;
+        private CefContainedProcess? retained;
+
+        internal bool HasRetainedProcess => retained is not null;
+
+        internal void Begin()
+        {
+            if (attempted || rejected || transferred)
+                throw new InvalidOperationException("CEF creation custody cannot be reused.");
+            attempted = true;
+        }
+
+        internal void Capture(CefContainedProcess child) => retained = child;
+        internal void Reject() => rejected = true;
+
+        internal CefContainedProcess TakeVerified()
+        {
+            if (rejected || transferred || retained is not { creationVerified: true } child)
+                throw new InvalidOperationException("Verified CEF creation unavailable.");
+            transferred = true;
+            retained = null;
+            return child;
+        }
+
+        internal bool TryDrainAndRelease(int milliseconds)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+            if (transferred) return false; // The recipient now owes the proof.
+            rejected = true; // Never allow a later take or another attempt.
+            if (retained is not { } child) return true;
+            if (!child.TryDrainRejectedCreation(milliseconds)) return false;
+            child.Dispose();
+            retained = null;
+            return true;
+        }
+    }
 
     private static CefContainedProcess CreateSuspendedCore(string image,
         IReadOnlyDictionary<string, string?> environment, SafeFileHandle[]? additionalJobs,
-        SafeAccessTokenHandle? userToken = null)
+        SafeAccessTokenHandle? userToken = null, CreationCustody? custody = null,
+        bool injectFailure = false)
     {
+        custody?.Begin();
         if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess)
             throw new PlatformNotSupportedException("CEF containment requires Windows x64.");
         if (!Path.IsPathFullyQualified(image) || image.StartsWith(@"\\", StringComparison.Ordinal) ||
@@ -78,6 +154,7 @@ internal sealed class CefContainedProcess : IDisposable
         if (job.IsInvalid) { job.Dispose(); throw Failure("CreateJobObject"); }
         SafeProcessHandle? process = null;
         SafeFileHandle? thread = null;
+        CefContainedProcess? captured = null;
         try
         {
             var limits = new ExtendedLimitInformation();
@@ -100,7 +177,7 @@ internal sealed class CefContainedProcess : IDisposable
             ProcessInformation info;
             try
             {
-#if VEIL_CEF_CONTAINMENT_TEST
+#if VEIL_CEF_CONTAINMENT_TEST || VEIL_CEF_BROKER
                 if (userToken is not null)
                 {
                     if (!CreateProcessAsUserW(userToken, image, command, IntPtr.Zero, IntPtr.Zero, false, flags,
@@ -116,6 +193,12 @@ internal sealed class CefContainedProcess : IDisposable
             finally { Marshal.FreeHGlobal(env); }
             process = new SafeProcessHandle(info.Process, ownsHandle: true);
             thread = new SafeFileHandle(info.Thread, ownsHandle: true);
+            captured = new CefContainedProcess(job, process, thread);
+            custody?.Capture(captured);
+#if VEIL_CEF_CONTAINMENT_TEST
+            if (injectFailure)
+                throw new InvalidOperationException("Synthetic post-create verification failure.");
+#endif
             if (!IsProcessInJob(process, job, out bool contained) || !contained)
                 throw new InvalidOperationException("CEF child containment could not be confirmed.");
             if (additionalJobs is not null)
@@ -124,10 +207,18 @@ internal sealed class CefContainedProcess : IDisposable
                         throw new InvalidOperationException("CEF atomic nested containment could not be confirmed.");
             if (!HasImageLoadMitigations(process))
                 throw new InvalidOperationException("CEF image loading policy could not be confirmed.");
-            return new CefContainedProcess(job, process, thread);
+            captured.creationVerified = true;
+            return captured;
         }
         catch
         {
+            if (custody is not null)
+            {
+                custody.Reject();
+                // The escrow retains the actual process/thread/local Job.
+                // Do not lose the only exit observation after native success.
+                if (captured is not null) throw;
+            }
             // The primary thread has never been resumed. Explicit termination
             // is defensive if post-create membership verification failed.
             if (process is { IsInvalid: false, IsClosed: false })
@@ -165,7 +256,8 @@ internal sealed class CefContainedProcess : IDisposable
         get
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            if (resumed || !IsAlive) throw new InvalidOperationException("Child is not suspended and live.");
+            if (!creationVerified || resumed || retainedResumeAttempted || !IsAlive)
+                throw new InvalidOperationException("Child is not suspended and live.");
             return process.DangerousGetHandle().ToInt64();
         }
     }
@@ -186,7 +278,8 @@ internal sealed class CefContainedProcess : IDisposable
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(verified);
-        if (resumed || retainedResumeAttempted || !IsAlive) throw new InvalidOperationException("Child cannot be resumed.");
+        if (!creationVerified || resumed || retainedResumeAttempted || !IsAlive)
+            throw new InvalidOperationException("Child cannot be resumed.");
         try
         {
             if (!verified() || !IsProcessInJob(process, job, out bool contained) || !contained ||
@@ -209,7 +302,7 @@ internal sealed class CefContainedProcess : IDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(expectedRoot);
         uint pid = GetProcessId(process);
-        if (resumed || retainedResumeAttempted || !IsAlive ||
+        if (!creationVerified || resumed || retainedResumeAttempted || !IsAlive ||
             expectedRoot.IsClosed || expectedRoot.IsInvalid ||
             !CompareRootHandles(process, expectedRoot) ||
             WaitForSingleObject(expectedRoot, 0) != 0x102 ||
@@ -281,6 +374,19 @@ internal sealed class CefContainedProcess : IDisposable
         }
         int remaining = Math.Max(0, milliseconds - (int)Math.Min(milliseconds, started.ElapsedMilliseconds));
         return WaitForExit(remaining);
+    }
+
+    // A failed membership check may mean the root is outside the local
+    // Job. Terminate the exact original process as well as the private Job,
+    // then require both accounting and root signal before releasing either.
+    private bool TryDrainRejectedCreation(int milliseconds)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (ActiveProcesses() != 0 && !TerminateJobObject(job, ForcedTerminationExit))
+            return false;
+        if (!WaitForExit(0) && !TerminateProcess(process, ForcedTerminationExit) && !WaitForExit(0))
+            return false;
+        return WaitForNaturalJobExit(milliseconds);
     }
 
     // Forced cleanup is explicitly different from natural exit verification.
@@ -437,7 +543,7 @@ internal sealed class CefContainedProcess : IDisposable
     private static extern bool CreateProcessW(string image, StringBuilder command, IntPtr processAttributes,
         IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint flags,
         IntPtr environment, string currentDirectory, ref StartupInfoEx startup, out ProcessInformation info);
-#if VEIL_CEF_CONTAINMENT_TEST
+#if VEIL_CEF_CONTAINMENT_TEST || VEIL_CEF_BROKER
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CreateProcessAsUserW(SafeAccessTokenHandle token,

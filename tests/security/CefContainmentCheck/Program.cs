@@ -101,6 +101,50 @@ try
         Check(observer.WaitForExit(10000), "Child survived job close.");
     }
     File.Delete(markerPath);
+    // Inject a failure AFTER native creation but BEFORE verification.
+    // The escrow, not a guessed PID, retains the original process handles.
+    foreach (bool injectFailure in new[] { true, false })
+    {
+        using var outer = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var inner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        var custody = new CefContainedProcess.CreationCustody();
+        bool refused = false;
+        try
+        {
+            outer.CreateAtomicRetainedPairFixture(inner, image, environment, custody, injectFailure);
+        }
+        catch (InvalidOperationException error) when (error.Message == "Synthetic post-create verification failure.")
+        { refused = true; }
+        Check(refused == injectFailure && custody.HasRetainedProcess && !File.Exists(markerPath),
+            "Creation custody did not retain the original suspended child.");
+        if (injectFailure)
+        {
+            Check(!outer.HasNoActiveProcesses() && !inner.HasNoActiveProcesses(),
+                "Injected refusal did not retain both live Job members.");
+            Reject(() => custody.TakeVerified());
+            Check(custody.TryDrainAndRelease(5000) && !custody.HasRetainedProcess &&
+                outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses() && !File.Exists(markerPath),
+                "Rejected creation did not drain all three Jobs.");
+            Check(custody.TryDrainAndRelease(0), "Repeated cleanup refused.");
+            Reject(() => custody.TakeVerified());
+        }
+        else
+        {
+            using var created = custody.TakeVerified();
+            Check(created.IsAlive && !custody.HasRetainedProcess && !custody.TryDrainAndRelease(0),
+                "Custody retained cleanup authority after verified transfer.");
+            Reject(() => custody.TakeVerified());
+            created.TerminateAndDrain(5000);
+            Check(created.WaitForExit(0) && outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses(),
+                "Transferred child did not drain.");
+        }
+        using var freshOuter = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var freshInner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        Reject(() => freshOuter.CreateAtomicRetainedPairFixture(freshInner, image, environment, custody, false));
+        Check(freshOuter.HasNoActiveProcesses() && freshInner.HasNoActiveProcesses() && !File.Exists(markerPath),
+            "Reused custody created a process.");
+    }
+    Console.WriteLine("PASS: post-create failure retains handles until verified exit; successful transfer is one-shot");
     // Same-user synthetic atomic Job pair: handoff before resume, including
     // a failure after resume actually ran. No product or BitLocker access.
     using (var owner = Process.GetCurrentProcess())

@@ -803,7 +803,7 @@ test('user-token atomic creation remains containment fixture only with no fallba
     const token = await readFile('apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs', 'utf8');
     const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
     const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
-    assert.match(launch, /#if VEIL_CEF_CONTAINMENT_TEST\s*if \(userToken is not null\)[\s\S]*?CreateProcessAsUserW\(userToken, image, command, IntPtr.Zero, IntPtr.Zero, false, flags,[\s\S]*?throw Failure\("CreateProcessAsUser"\);\s*\}\s*else\s*#endif\s*if \(!CreateProcessW/);
+    assert.match(launch, /#if VEIL_CEF_CONTAINMENT_TEST \|\| VEIL_CEF_BROKER\s*if \(userToken is not null\)[\s\S]*?CreateProcessAsUserW\(userToken, image, command, IntPtr.Zero, IntPtr.Zero, false, flags,[\s\S]*?throw Failure\("CreateProcessAsUser"\);\s*\}\s*else\s*#endif\s*if \(!CreateProcessW/);
     assert.match(token, /#if VEIL_CEF_CONTAINMENT_TEST[\s\S]*?RequireCurrent\(\);\s*var child = Veil\.Desktop\.CefContainedProcess\.CreateSuspendedWithUserFixtureJobs[\s\S]*?RequireFixtureRoot\(borrowed, Native\.ObserveProcess\(borrowed\)\);[\s\S]*?catch \{ child\.Dispose\(\); throw; \}/);
     assert.match(job, /lease\.RequireCurrent\(\);\s*assignmentIssued = peer\.assignmentIssued = true;\s*return lease\.CreateUserFixture/);
     assert.match(fixture, /VEIL_TEST_STANDARD_USER_CREATION[\s\S]*?CreateAtomicUserPairFixture[\s\S]*?RequirePrivateNestedBinding[\s\S]*?ResumeAfterVerification[\s\S]*?lease\.RequireFixtureRoot[\s\S]*?TerminateAndVerifyPrivateDrain/);
@@ -868,4 +868,21 @@ test('broker pre-creation preparation independently pins executable, runtime, tr
     assert.equal((broker.match(/PrepareDiagnosticLaunch\(/g) ?? []).length, 1);
     assert.doesNotMatch(protocol, /PrepareDiagnosticLaunch|CefBrokerLaunchPreparation/);
     assert.doesNotMatch(prep, /CreateProcessAsUser|CreateSuspended|ResumeThread|ResumeRetainedRoot/);
+});
+
+
+test('retained creation captures original handles before verification and never drops them on refusal', async () => {
+    const launch = await readFile('apps/desktop/Engine/CefContainedProcess.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const project = await readFile('apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj', 'utf8');
+    const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    assert.match(project, /<DefineConstants>\$\(DefineConstants\);VEIL_CEF_BROKER<\/DefineConstants>/);
+    assert.match(launch, /#if VEIL_CEF_BROKER[\s\S]*?CreateRetainedUserRoot[\s\S]*?token\.IsInvalid \|\| token\.IsClosed[\s\S]*?CreateSuspendedCore\(image, environment, \[outer, inner\], token, custody\);[\s\S]*?#endif/);
+    assert.match(launch, /captured = new CefContainedProcess\(job, process, thread\);\s*custody\?\.Capture\(captured\);[\s\S]*?IsProcessInJob\(process, job[\s\S]*?captured\.creationVerified = true;/);
+    assert.match(launch, /custody\.Reject\(\);[\s\S]*?if \(captured is not null\) throw;[\s\S]*?TerminateProcess\(process, ForcedTerminationExit\)/);
+    assert.match(launch, /if \(rejected \|\| transferred \|\| retained is not \{ creationVerified: true \} child\)/);
+    assert.match(launch, /if \(transferred\) return false;[\s\S]*?rejected = true;[\s\S]*?if \(!child\.TryDrainRejectedCreation\(milliseconds\)\) return false;\s*child\.Dispose\(\);\s*retained = null;/);
+    assert.match(launch, /if \(!WaitForExit\(0\) && !TerminateProcess\(process, ForcedTerminationExit\) && !WaitForExit\(0\)\)\s*return false;\s*return WaitForNaturalJobExit\(milliseconds\);/);
+    assert.match(fixture, /CreateAtomicRetainedPairFixture[\s\S]*?custody\.HasRetainedProcess[\s\S]*?custody\.TryDrainAndRelease\(5000\)[\s\S]*?outer\.HasNoActiveProcesses\(\) && inner\.HasNoActiveProcesses\(\)/);
+    assert.doesNotMatch(broker, /CreateRetainedUserRoot|CreateRetainedFixture/);
 });
