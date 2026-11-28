@@ -156,9 +156,49 @@ internal static class CefSessionObservationTests
         var next = new CefAuthenticatedGeneration(owner, nextGeneration);
         Check(next.Observe(owner, nextGeneration, true, true));
         Check(!authority.Observe(owner, nextGeneration, true, true));
+        var runtimePin = new TrackedResource();
+        var jobPin = new TrackedResource { FailNextRelease = true };
+        var rootPin = new TrackedResource();
+        var lifetime = new CefRetainedLifetime(runtimePin, null, jobPin, rootPin);
+        int verificationCalls = 0;
+        Check(!lifetime.TryRelease(() => { verificationCalls++; return false; }));
+        Check(runtimePin.Releases == 0 && jobPin.Releases == 0 && rootPin.Releases == 0);
+        RefuseGuard(() => lifetime.TryRelease(() =>
+        {
+            verificationCalls++;
+            throw new UnauthorizedAccessException();
+        }));
+        Check(runtimePin.Releases == 0 && jobPin.Releases == 0 && rootPin.Releases == 0);
+        RefuseGuard(() => lifetime.TryRelease(() =>
+        {
+            verificationCalls++;
+            Check(!lifetime.TryRelease(() => throw new InvalidOperationException("Reentrant verification.")));
+            return true;
+        }));
+        Check(verificationCalls == 3 && runtimePin.Releases == 1 && jobPin.Releases == 1 && rootPin.Releases == 0);
+        Check(lifetime.TryRelease(() => throw new InvalidOperationException("Rechecked already released handles.")));
+        Check(runtimePin.Releases == 1 && jobPin.Releases == 2 && rootPin.Releases == 1);
+        Check(lifetime.TryRelease(() => throw new InvalidOperationException("Repeated verification.")));
+        Check(runtimePin.Releases == 1 && jobPin.Releases == 2 && rootPin.Releases == 1);
+        Console.WriteLine("PASS: retained resource cleanup waits for verified exit and resumes failed release");
         Console.WriteLine("PASS: broker unlock generation cannot resurrect after owner or protection failure");
         Console.WriteLine("PASS: Windows lock/logoff notification filtering and authenticated owner isolation");
         Console.WriteLine("PASS: diagnostic session pre/post checks, irreversible retirement and retryable drain");
         Console.WriteLine("PASS: pure CEF multi-process observation, generation/lease binding and irreversible revocation");
+    }
+
+    private sealed class TrackedResource : IDisposable
+    {
+        internal int Releases { get; private set; }
+        internal bool FailNextRelease { get; set; }
+        public void Dispose()
+        {
+            Releases++;
+            if (FailNextRelease)
+            {
+                FailNextRelease = false;
+                throw new UnauthorizedAccessException("Synthetic release failure.");
+            }
+        }
     }
 }
