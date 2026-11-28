@@ -303,6 +303,32 @@ try
     }
     File.Delete(libraryPath);
     Console.WriteLine("PASS: fixed CEF library file inspection, replacement refusal and terminal revocation");
+    // Native handle-based first publication. Never invoked by installed broker.
+    File.WriteAllText(libraryStage, "first-publication-synthetic");
+    File.WriteAllText(libraryPath, "existing-synthetic");
+    Check(!CefProtectedDirectoryLease.TryPublishNewLibraryFixture(profileLayout.EngineRoot, fixtureVolume,
+        () => fixtureStatus, () => authority) && File.ReadAllText(libraryPath) == "existing-synthetic" &&
+        File.ReadAllText(libraryStage) == "first-publication-synthetic", "Native rename overwrote existing destination.");
+    File.Delete(libraryPath);
+    int publicationChecks = 0;
+    Check(!CefProtectedDirectoryLease.TryPublishNewLibraryFixture(profileLayout.EngineRoot, fixtureVolume,
+        () => fixtureStatus, () => ++publicationChecks == 1) &&
+        !File.Exists(libraryPath) && File.Exists(libraryStage), "Revocation did not stop native rename.");
+    Check(CreateHardLinkW(libraryAlias, libraryStage, IntPtr.Zero), "Cannot create publication hard link.");
+    Reject(() => CefProtectedDirectoryLease.TryPublishNewLibraryFixture(profileLayout.EngineRoot, fixtureVolume,
+        () => fixtureStatus, () => authority));
+    File.Delete(libraryAlias);
+    Check(!File.Exists(libraryPath) && File.ReadAllText(libraryStage) == "first-publication-synthetic",
+        "Linked staging file was published.");
+    using (var busyStage = new FileStream(libraryStage, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+        Reject(() => CefProtectedDirectoryLease.TryPublishNewLibraryFixture(profileLayout.EngineRoot, fixtureVolume,
+            () => fixtureStatus, () => authority));
+    Check(!File.Exists(libraryPath) && File.Exists(libraryStage), "Busy staging file was published.");
+    Check(CefProtectedDirectoryLease.TryPublishNewLibraryFixture(profileLayout.EngineRoot, fixtureVolume,
+        () => fixtureStatus, () => authority) && !File.Exists(libraryStage) &&
+        File.ReadAllText(libraryPath) == "first-publication-synthetic", "Native handle first publication failed.");
+    File.Delete(libraryPath);
+    Console.WriteLine("PASS: test-only native CEF first publication, collision and source refusal");
     using (var desktopLock = new FileStream(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
     using (var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
         fixtureWindows, () => fixtureStatus, () => authority))
