@@ -18,6 +18,28 @@ internal static class CefCommandRoleTests
         Expect(CefObservedRole.Network, false, "--type=utility",
             "--utility-sub-type=network.mojom.NetworkService", "--service-sandbox-type=network");
         Expect(CefObservedRole.Utility, false, "--type=utility", "--utility-sub-type=audio.mojom.AudioService");
+        Expect(unknown, false, "--type=utility", "--utility-sub-type=network.mojom.NetworkService");
+        Expect(unknown, false, "--type=utility", "--utility-sub-type=network.mojom.NetworkService", "--service-sandbox-type=audio");
+        Expect(unknown, false, "--type=utility", "--utility-sub-type=network.mojom.NetworkService", "--service-sandbox-type=NETWORK");
+        Expect(unknown, false, "--type=utility", "--utility-sub-type=audio.mojom.AudioService", "--service-sandbox-type=network");
+        Expect(unknown, false, "--type=utility", "--utility-sub-type=audio.mojom.AudioService", "--service-sandbox-type=other");
+        Expect(unknown, false, "--type=utility", "--utility-sub-type=unknown.Service", "--service-sandbox-type=network");
+        Expect(unknown, false, "--type=utility", "--utility-sub-type=unknown.Service", "--service-sandbox-type=audio");
+        Expect(unknown, false, "--type=gpu-process", "--service-sandbox-type=network");
+        void ExpectDetails(CefRoleDetails expected, params string[] switches)
+        {
+            if (CefCommandRoleObserver.ClassifyDetailed(["cef.exe", .. switches], false) != expected)
+                throw new InvalidOperationException("Unexpected CEF role claim details.");
+        }
+        ExpectDetails(new(CefObservedRole.Gpu, CefUtilityService.None, CefSandboxClaim.Missing), "--type=gpu-process");
+        ExpectDetails(new(CefObservedRole.Network, CefUtilityService.Network, CefSandboxClaim.Network),
+            "--type=utility", "--utility-sub-type=network.mojom.NetworkService", "--service-sandbox-type=network");
+        ExpectDetails(new(CefObservedRole.Utility, CefUtilityService.Audio, CefSandboxClaim.Audio),
+            "--type=utility", "--utility-sub-type=audio.mojom.AudioService", "--service-sandbox-type=audio");
+        ExpectDetails(new(CefObservedRole.Utility, CefUtilityService.Audio, CefSandboxClaim.Missing),
+            "--type=utility", "--utility-sub-type=audio.mojom.AudioService");
+        ExpectDetails(new(CefObservedRole.Utility, CefUtilityService.Other, CefSandboxClaim.Other),
+            "--type=utility", "--utility-sub-type=unknown.Service", "--service-sandbox-type=unknown");
         Expect(unknown, false);
         Expect(unknown, true, "--type=renderer");
         Expect(unknown, false, "--type=unknown");
