@@ -564,6 +564,20 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     // and must retain/stop them if registration refuses or throws.
     // Called only under serial by a future reviewed launch coordinator.
     // This preparation does not create a process or authorize IPC/startup.
+    // Read-only installed profile authority, deliberately disconnected from
+    // native creation until user-access and protected profile lock binding
+    // are reviewed. Only the serialized broker supplies the generation.
+    private CefRegisteredProfileLease PrepareRegisteredProfile(object expectedGeneration)
+    {
+        bool AuthorityCurrent() => !config.Development && !diagnosticRelock.Pending &&
+            pendingCefChild is null && completedPreflight is null && unresolvedCefStops.Count == 0 &&
+            CandidateAuthorityCurrent(expectedGeneration);
+        if (diagnosticSession.Occupied || !AuthorityCurrent())
+            throw new UnauthorizedAccessException("CEF registered profile unavailable.");
+        return CefRegisteredProfileLease.OpenInstalled(config.VolumeId, config.VolumeGuid,
+            config.PipeName, backend.Status, AuthorityCurrent);
+    }
+
     private CefBrokerLaunchPreparation PrepareDiagnosticLaunch(object expectedGeneration,
         ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature)
     {

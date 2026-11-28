@@ -132,6 +132,45 @@ try
 finally { Directory.Delete(profileFixture, recursive: true); }
 Console.WriteLine("PASS: retained profile directory chain, explicit environment and irreversible refusal (synthetic protection)");
 
+// Pure installed-registration schema and broker identity matching. No
+// machine registration is published or changed by this fixture.
+string registrationBroker = Path.Combine(driveRoot, "veil-fixture", "Broker", "Veil.VolumeBroker.exe");
+var registrationFields = new Dictionary<string, object>
+{
+    ["volumeId"] = "synthetic",
+    ["pipeName"] = "VEIL.VolumeBroker",
+    ["brokerImage"] = registrationBroker,
+    ["profilePath"] = profileFixture,
+    ["requireWindowsService"] = true,
+    ["development"] = false,
+};
+string ParseRegistration(byte[] bytes) => CefRegisteredProfileLease.Parse(bytes, "synthetic",
+    "VEIL.VolumeBroker", registrationBroker, fixtureWindows);
+byte[] validRegistration = JsonSerializer.SerializeToUtf8Bytes(registrationFields);
+Check(ParseRegistration(validRegistration) == profileFixture, "Valid registered profile rejected.");
+void RejectRegistration(byte[] bytes)
+{
+    bool rejected = false;
+    try { _ = ParseRegistration(bytes); }
+    catch (Exception error) when (error is InvalidDataException or ArgumentException or JsonException)
+    { rejected = true; }
+    Check(rejected, "Invalid installed client registration accepted.");
+}
+foreach (var change in new (string Key, object Value)[] {
+    ("volumeId", "other"), ("pipeName", "other"), ("brokerImage", profileFixture),
+    ("profilePath", "relative"), ("profilePath", fixtureWindows), ("development", true),
+    ("requireWindowsService", false), ("requireWindowsService", "true"), ("unknown", 1) })
+{
+    var changed = new Dictionary<string, object>(registrationFields) { [change.Key] = change.Value };
+    RejectRegistration(JsonSerializer.SerializeToUtf8Bytes(changed));
+}
+var missingRegistration = new Dictionary<string, object>(registrationFields);
+missingRegistration.Remove("profilePath");
+RejectRegistration(JsonSerializer.SerializeToUtf8Bytes(missingRegistration));
+string duplicateRegistration = System.Text.Encoding.UTF8.GetString(validRegistration);
+RejectRegistration(System.Text.Encoding.UTF8.GetBytes(duplicateRegistration[..^1] + ",\"volumeId\":\"synthetic\"}"));
+Console.WriteLine("PASS: installed client registration schema and independent broker binding (pure parser)");
+
 // Exercise the actual production parser with no broker or volume access.
 using (var parsed = Protocol.Parse("""{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"123"}"""u8))
 {

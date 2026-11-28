@@ -1045,3 +1045,20 @@ test('existing CEF log is pinned and descendant snapshot rejects redirected or m
     assert.match(fixture, /CreateHardLinkW\(alias, payload, IntPtr.Zero\)[\s\S]*?Reject\(\(\) => profile.RequireCurrent\(\)\);[\s\S]*?CreateHardLinkW\(alias, profileLayout.LogFile, IntPtr.Zero\)/);
     assert.doesNotMatch(profile, /File\.Write|Directory\.CreateDirectory|Process\.Start/);
 });
+
+
+test('broker profile authority reads fixed installed client registration and pins it through verification', async () => {
+    const registered = await readFile('apps/broker/Veil.VolumeBroker/CefRegisteredProfileLease.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
+    assert.match(registered, /Environment.SpecialFolder.ProgramFiles[\s\S]*?"VEIL", "Broker", "Veil.VolumeBroker.exe"[\s\S]*?Environment.ProcessPath, expectedBroker/);
+    assert.match(registered, /Environment.SpecialFolder.CommonApplicationData[\s\S]*?"VEIL", "client.json"[\s\S]*?AdminOnlyFile.RequireProtectedExecutable\(path\);\s*var registration = new FileStream\(path, FileMode.Open, FileAccess.Read, FileShare.Read\)/);
+    assert.match(registered, /byte\[\] original = ReadPinned\(registration, path\);\s*string root = Parse\(original, volumeId, pipeName, expectedBroker, windows\);[\s\S]*?profile = CefProtectedProfileLease.Open\(root, volumeGuid, windows, readStatus, authorityCurrent\)/);
+    assert.match(registered, /!remaining.Remove\(property.Name\)[\s\S]*?TextEquals\(root.GetProperty\("volumeId"\), volumeId, StringComparison.Ordinal\)[\s\S]*?TextEquals\(root.GetProperty\("pipeName"\), pipeName, StringComparison.Ordinal\)[\s\S]*?TextEquals\(root.GetProperty\("brokerImage"\), expectedBroker, StringComparison.OrdinalIgnoreCase\)[\s\S]*?JsonValueKind.True[\s\S]*?JsonValueKind.False/);
+    assert.match(registered, /AdminOnlyFile.RequireProtectedExecutable\(path\);\s*Native.RequireCanonicalSingleLinkImage\(file.SafeFileHandle, path\);[\s\S]*?file.ReadExactly\(bytes\);[\s\S]*?AdminOnlyFile.RequireProtectedExecutable\(path\);\s*Native.RequireCanonicalSingleLinkImage\(file.SafeFileHandle, path\);/);
+    assert.match(registered, /ReadPinned\(registration, registrationPath\).AsSpan\(\).SequenceEqual\(original\)[\s\S]*?profile.RequireCurrent\(\);[\s\S]*?ReadPinned\(registration, registrationPath\).AsSpan\(\).SequenceEqual\(original\)[\s\S]*?retired = true;/);
+    assert.match(broker, /private CefRegisteredProfileLease PrepareRegisteredProfile\(object expectedGeneration\)[\s\S]*?CandidateAuthorityCurrent\(expectedGeneration\)[\s\S]*?CefRegisteredProfileLease.OpenInstalled\(config.VolumeId, config.VolumeGuid,\s*config.PipeName, backend.Status, AuthorityCurrent\)/);
+    assert.equal((broker.match(/PrepareRegisteredProfile\(/g) ?? []).length, 1);
+    assert.doesNotMatch(protocol, /PrepareRegisteredProfile|CefRegisteredProfileLease/);
+    assert.doesNotMatch(registered, /GetEnvironmentVariable|Process\.Start|CreateSuspended|ResumeRetainedRoot/);
+});
