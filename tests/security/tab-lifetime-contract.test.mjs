@@ -858,3 +858,15 @@ test('CEF fixture bookmark library is bounded, local and restricted to live comm
     assert.match(cefTabbed, /shuttingDown = true;\s*bookmarks.Clear\(\);\s*bookmarkList.Items.Clear\(\);/);
     assert.match(cefTabbed, /Fixture bookmarks used live committed sources, deduplicated and removed exact entries/);
 });
+
+
+test('CEF fixture history records only matching successful navigation and keeps bounded memory', () => {
+    assert.match(cefTabbed, /private const int FixtureHistoryLimit = 128;/);
+    assert.match(cefTabbed, /tab.PendingNavigationUrl = request.Uri;/);
+    assert.match(cefTabbed, /string expectedUrl = tab.PendingNavigationUrl;\s*tab.PendingNavigationUrl = "";\s*RecordFixtureVisit\(tab, completed, expectedUrl\);/);
+    assert.match(cefTabbed, /if \(!AcceptTabEvent\(tab\) \|\| !completed.IsSuccess \|\| completed.IsCanceled \|\|[\s\S]*?completed.NavigationId != tab.LastNavigationId[\s\S]*?tab.View.Source != expectedUrl \|\| !IsFixtureBookmarkUrl\(expectedUrl\)\) return;/);
+    assert.match(cefTabbed, /visits.Any\(entry => entry.ViewId == id && entry.NavigationId == completed.NavigationId\)/);
+    assert.match(cefTabbed, /if \(visits.Count > FixtureHistoryLimit\)[\s\S]*?visits.RemoveAt\(visits.Count - 1\)/);
+    assert.match(cefTabbed, /bookmarkList.Items.Clear\(\);\s*ClearFixtureHistory\(\);/);
+    assert.match(cefTabbed, /Failed HTTP navigation did not create a fixture visit/);
+});
