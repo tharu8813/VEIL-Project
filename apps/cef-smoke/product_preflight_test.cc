@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "product_preflight.h"
 #include "protected_initialization_plan.h"
+#include "protected_lifecycle_test.h"
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -104,6 +105,7 @@ int main() {
   if (PrepareProtectedInitializationPlan(invalid_registration, read, inspect)) return 12;
   if (std::string(kProtectedSyntheticPage).find("data:text/html,") != 0) return 13;
   std::cout << "PASS: protected initialization settings plan, no fallback and repeat inspection (synthetic)\n";
+  if (const int lifecycle = TestProtectedLifecycle(); lifecycle != 0) return 20 + lifecycle;
   std::cout << "PASS: synthetic product preflight order, refusal and disabled startup\n";
   return 0;
 }
