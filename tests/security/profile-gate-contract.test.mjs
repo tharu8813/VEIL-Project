@@ -492,10 +492,10 @@ test('unconfirmed CEF exit retains the same process handle and blocks new admiss
     const pending = await readFile('apps/broker/Veil.VolumeBroker/CefPendingChild.cs', 'utf8');
     assert.match(pending, /DetachRevokedProcess\(\)[\s\S]*?admission.Revoke\(\);[\s\S]*?process = null;/);
     assert.match(broker, /StopPendingChild\(CefPendingChild pending\)[\s\S]*?pending.DetachRevokedProcess\(\)/);
-    assert.match(broker, /StopOrRetain\(CandidateStop candidate\)[\s\S]*?unresolvedCefStops.Add\(candidate\)/);
-    assert.match(broker, /RetryUnresolvedCefStops\(\)[\s\S]*?TryStopVerifiedChild\(candidate\)[\s\S]*?unresolvedCefStops.RemoveAt\(i\);\s*DisposeStoppedCandidate\(candidate\)/);
+    assert.match(broker, /StopOrRetain\(CandidateStop candidate\)[\s\S]*?if \(ReleaseCandidate\(candidate\)\) return;\s*RetainForRetry\(candidate\);[\s\S]*?unresolvedCefStops.Add\(candidate\)/);
+    assert.match(broker, /private void RetryUnresolvedCefStops\(\)[\s\S]*?if \(!ReleaseCandidate\(candidate\)\) continue;\s*unresolvedCefStops.RemoveAt\(i\)/);
     assert.match(broker, /request.Command is BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild\)\s*return Protocol.Error\("CefExitUnconfirmed"\)/);
-    assert.match(broker, /var resources = new CandidateStop\(receipt.Child, receipt.Job, receipt.Image, receipt.Runtime\);\s*if \(confirmed\) DisposeStoppedCandidate\(resources\);\s*else StopOrRetain\(resources\)/);
+    assert.match(broker, /var resources = new CandidateStop\(receipt.Child, receipt.Job, receipt.Image, receipt.Runtime\);\s*if \(confirmed\)[\s\S]*?!ReleaseCandidate\(resources, exitAlreadyConfirmed: true\)[\s\S]*?RetainForRetry\(resources\);\s*code = "CefExitUnconfirmed";[\s\S]*?else StopOrRetain\(resources\)/);
 });
 
 
@@ -593,8 +593,13 @@ test('broker retains executable and runtime pins until confirmed candidate exit'
     assert.match(preflight, /stopRejected\(rejected, rejectedJob, rejectedImage, rejectedRuntime\)/);
     assert.match(broker, /var pins = pending.DetachFilePins\(\);\s*var receipt = new CompletedPreflight\(generation, retained, job, pins.Image, pins.Runtime,/);
     assert.match(broker, /StopPendingChild\(CefPendingChild pending\)[\s\S]*?pending.DetachFilePins\(\)[\s\S]*?StopOrRetain\(new CandidateStop\(child, job as CefBrokerOwnedJob, pins.Image, pins.Runtime\)\)/);
-    assert.match(broker, /if \(TryStopVerifiedChild\(candidate\)\)\s*\{\s*DisposeStoppedCandidate\(candidate\);[\s\S]*?unresolvedCefStops.Add\(candidate\)/);
-    assert.match(broker, /DisposeStoppedCandidate\(CandidateStop candidate\)[\s\S]*?candidate.Runtime\?\.Dispose\(\)[\s\S]*?candidate.Image\?\.Dispose\(\)[\s\S]*?candidate.Job\?\.Dispose\(\)[\s\S]*?candidate.Child.Dispose\(\)/);
+    const policy = await readFile('apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs', 'utf8');
+    const nested = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    assert.match(broker, /CefRetainedLifetime Lifetime \{ get; \} = new\(Runtime, Image, Job, Child\)/);
+    assert.match(broker, /candidate\.Lifetime\.TryRelease\(\(\) => exitAlreadyConfirmed \|\| TryStopVerifiedChild\(candidate\)\)/);
+    assert.match(policy, /if \(!exitConfirmed\)\s*\{\s*if \(!verifyExit\(\)\) return false;\s*exitConfirmed = true;\s*\}[\s\S]*?retained\[next\]\?\.Dispose\(\);\s*retained\[next\+\+\] = null;/);
+    assert.match(nested, /lifetime = new CefRetainedLifetime\(registration, desktopJob, brokerJob, rootHandle\)/);
+    assert.match(nested, /guard\.Revoke\(\);\s*return lifetime\.TryRelease\(\(\) => guard\.RevokeAndCheckDrain\(\(\) => drain\(milliseconds\)\)\)/);
 });
 
 test('isolated CEF preflight entry is compile-time exclusive and never falls back to browsing', async () => {
