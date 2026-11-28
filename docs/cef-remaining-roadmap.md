@@ -152,3 +152,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - P2-04 코드 경로: 서명된 진단 패키지, 별도 스테이징/등록/게시, Disabled SCM 등록, 독립 기준 신뢰 등록, 표준 사용자 코드 30 준비 및 코드 31 정지 프로세스 시험 실행 도구를 연결했다. 코드 31은 동일 등록의 검증된 코드 30 정리 기록을 요구한다.
 - 위 기록은 코드/합성 시험 증거이며 실제 Windows VM, BitLocker, 독립 키, SCM/HKLM/ACL/OS 추적 및 CEF 초기화 증거가 아니다. P1 및 P2-03~05 완료 체크는 유지하지 않고 미완료로 둔다. 기존 WebView2 및 startupEnabled=false 유지.
+
+### P2-05 초기화 설정 준비 (미완료)
+
+- 보호 경로용 네이티브 설정 계획 및 CEF 설정 어댑터를 컴파일 후보에 추가했다. 독립 등록과 고정 CEF 하위 경로를 요구하고 환경/경로를 두 차례 검증하며 임시 프로필 fallback을 허용하지 않는다. 고정 data 시험 페이지는 실행하지 않는다.
+- 이 단계는 설정 준비뿐이며 기존 `RunWinMain`은 변경하지 않았다. 브로커의 borrowed creation resume 차단, 일회성 기존 redemption, 실제 지속 권한 및 하위 프로세스 admission 문제는 미해결이다. 다음 단계에서 별도 런타임 권한 및 종료 프로토콜이 필요하다. 실제 CefInitialize/CefExecuteProcess/CefShutdown, BitLocker/VM 및 네트워크 격리 NOT RUN. P2-03~05 및 Gate A~E 미완료 유지.

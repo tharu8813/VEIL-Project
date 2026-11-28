@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "product_preflight.h"
+#include "protected_initialization_plan.h"
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -54,6 +55,55 @@ int main() {
   if (RunProductPreflight(true, load, [&](const RegisteredBootstrap&) -> BootstrapCheck {
         calls.push_back(2); throw std::runtime_error("synthetic");
       }) != Exit::kUnexpectedFailure || calls != std::vector<int>{1, 2}) return 6;
+  // Configuration preparation is not a successful product preflight and
+  // does not run CEF. The path observer here is synthetic.
+  const auto root = expected.product_root / L"cef";
+  const BootstrapEnvironment environment{
+      {root, root / L"cache", root / L"temp", root / L"logs" / L"cef.log"},
+      root / L"temp", root / L"temp"};
+  int reads = 0, inspections = 0;
+  const auto read = [&](BootstrapEnvironment& out) {
+    ++reads; out = environment; return true;
+  };
+  const auto inspect = [&](const RegisteredBootstrap& registration, const Paths&) {
+    ++inspections; return registration.volume_id == expected.volume_id;
+  };
+  auto plan = PrepareProtectedInitializationPlan(expected, read, inspect);
+  if (!plan || plan->root_cache != root || plan->cache != root / L"cache" ||
+      plan->scratch != root / L"temp" || plan->log != root / L"logs" / L"cef.log" ||
+      reads != 2 || inspections != 2) return 7;
+  for (int field = 0; field < 6; ++field) {
+    reads = inspections = 0;
+    auto invalid = [&](BootstrapEnvironment& out) {
+      read(out);
+      if (field == 0) out.paths.root = L"C:\\fallback";
+      if (field == 1) out.paths.cache = root / L"..";
+      if (field == 2) out.paths.scratch = L"C:\\temp";
+      if (field == 3) out.paths.log = L"C:\\cef.log";
+      if (field == 4) out.temp = L"C:\\temp";
+      if (field == 5) out.tmp.clear();
+      return true;
+    };
+    if (PrepareProtectedInitializationPlan(expected, invalid, inspect) ||
+        inspections != 0) return 8;
+  }
+  reads = inspections = 0;
+  if (PrepareProtectedInitializationPlan(expected, [&](BootstrapEnvironment& out) {
+        read(out); if (reads == 2) out.paths.log = L"C:\\cef.log"; return true;
+      }, inspect) || inspections != 1) return 9;
+  reads = inspections = 0;
+  if (PrepareProtectedInitializationPlan(expected, read,
+        [&](const RegisteredBootstrap&, const Paths&) { return ++inspections == 1; }) ||
+      reads != 2 || inspections != 2) return 10;
+  if (PrepareProtectedInitializationPlan(expected, read,
+        [](const RegisteredBootstrap&, const Paths&) -> bool {
+          throw std::runtime_error("synthetic");
+        })) return 11;
+  auto invalid_registration = expected;
+  invalid_registration.volume_id.clear();
+  if (PrepareProtectedInitializationPlan(invalid_registration, read, inspect)) return 12;
+  if (std::string(kProtectedSyntheticPage).find("data:text/html,") != 0) return 13;
+  std::cout << "PASS: protected initialization settings plan, no fallback and repeat inspection (synthetic)\n";
   std::cout << "PASS: synthetic product preflight order, refusal and disabled startup\n";
   return 0;
 }
