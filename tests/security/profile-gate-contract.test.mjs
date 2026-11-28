@@ -1524,3 +1524,20 @@ test('immutable generation policy rejects ambiguous names and native fixture nev
     assert.match(fixture, /Pinned previous generation blocked append[\s\S]*?Revoked generation was published[\s\S]*?Generation collision overwrote an existing file/);
 });
 
+
+
+test('immutable library content authentication binds store, generation, previous tag and independent anchor without replay', async () => {
+    const chain = await readFile('apps/broker/Veil.VolumeBroker/CefLibraryGenerationChain.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const fixture = await readFile('tests/security/NetworkPolicyCheck/Program.cs', 'utf8');
+    assert.match(chain, /MaximumPayloadBytes = 4 \* 1024 \* 1024;[\s\S]*?MaximumChainBytes = 64L \* 1024 \* 1024;[\s\S]*?VEIL-CEF-LIBRARY-GENERATION-v1/);
+    assert.match(chain, /storeId.TryWriteBytes[\s\S]*?WriteInt32LittleEndian\(transcript.AsSpan\(offset, 4\), generation\);[\s\S]*?previousTag.CopyTo[\s\S]*?WriteInt32LittleEndian\(transcript.AsSpan\(offset, 4\), payload.Length\);[\s\S]*?payload.CopyTo[\s\S]*?HMACSHA256.HashData\(key, transcript\)/);
+    assert.match(chain, /anchor.Generation < 0 \|\| anchor.Generation > last[\s\S]*?anchor.Generation == 0 && !CryptographicOperations.FixedTimeEquals\(previous, expectedAnchor\)/);
+    assert.match(chain, /total > MaximumChainBytes[\s\S]*?FixedTimeEquals\(prior, previous\)[\s\S]*?FixedTimeEquals\(tag, Authenticate\(storeId, key, generation, prior, payload\)\)[\s\S]*?generation == anchor.Generation[\s\S]*?FixedTimeEquals\(tag, expectedAnchor\)/);
+    assert.match(chain, /return new\(last, anchor.Generation, catalog.RecoveryRequired \|\| last != anchor.Generation\);/);
+    assert.match(chain, /finally \{ CryptographicOperations.ZeroMemory\(transcript\); \}[\s\S]*?finally \{ CryptographicOperations.ZeroMemory\(payload\); \}/);
+    assert.match(fixture, /unanchored suffix requires recovery[\s\S]*?pending stage cannot be replayed[\s\S]*?Payload = "altered"u8.ToArray\(\)[\s\S]*?PreviousTag = zero[\s\S]*?Tag = zero[\s\S]*?var fork = /);
+    assert.doesNotMatch(chain, /\b(?:File|Directory|Path|Native|Protocol)\./);
+    assert.doesNotMatch(broker, /CefLibraryGenerationChain|CefLibraryGenerationAnchor/);
+});
+
