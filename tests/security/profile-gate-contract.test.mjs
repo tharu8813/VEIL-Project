@@ -926,7 +926,7 @@ test('disconnected creation probe owns the slot before native creation and alway
     const probe = broker.slice(broker.indexOf('private void RunDiagnosticCreationProbe('), broker.indexOf('private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession('));
     assert.match(broker, /CefDiagnosticSessionSlot<ICefDiagnosticLifetime> diagnosticSession/);
     assert.match(probe, /preparation = PrepareDiagnosticLaunch[\s\S]*?outer = CefBrokerOwnedJob\.CreateDisabledCandidate\(\);\s*inner = CefBrokerOwnedJob\.CreateDisabledCandidate\(\);[\s\S]*?new CefPreparedCreationLifetime[\s\S]*?diagnosticSession\.RegisterAndActivate\(expectedGeneration, probe, \(\) =>\s*\{\s*accepted = true;[^\n]*\s*probe\.Create\(\);/);
-    assert.match(probe, /finally\s*\{\s*if \(accepted\)[\s\S]*?diagnosticRelock\.Request\(expectedGeneration\);\s*try \{ ClearAuthenticatedOwner\(\); \}\s*finally \{ EnsureCefStopRetry\(\); \}/);
+    assert.match(probe, /finally\s*\{[\s\S]*?try\s*\{\s*if \(!accepted\)[\s\S]*?try \{ inner\?\.Dispose\(\); \}[\s\S]*?try \{ outer\?\.Dispose\(\); \}\s*finally \{ preparation\?\.Dispose\(\); \}[\s\S]*?finally\s*\{[\s\S]*?if \(diagnosticRelock\.RequestIfCurrent\(expectedGeneration, unlockOwner\)\)\s*\{\s*try \{ ClearAuthenticatedOwner\(\); \}\s*finally \{ EnsureCefStopRetry\(\); \}/);
     assert.match(life, /return lifetime\.TryRelease\(\(\) => TryDrainAll\(milliseconds,\s*custody\.TryDrainAndRelease, outer\.TerminateAndDrain, inner\.TerminateAndDrain,\s*\(\) => outer\.HasNoActiveProcesses\(\) && inner\.HasNoActiveProcesses\(\)\)\);/);
     assert.match(life, /lifetime = new CefRetainedLifetime\(prerequisites, inner, outer\)/);
     assert.doesNotMatch(life, /ResumeRetainedRoot|ResumeAfterVerification|TakeVerified/);
@@ -1208,4 +1208,16 @@ test('broker verifies fresh user profile access before accepting a creation slot
     assert.match(open, /catch\s*\{[\s\S]*?try \{ profile\?\.Dispose\(\); \}[\s\S]*?try \{ token\?\.Dispose\(\); \}[\s\S]*?try \{ image\?\.Dispose\(\); \}[\s\S]*?finally \{ registration\?\.Dispose\(\); \}/);
     assert.match(broker, /preparation = PrepareDiagnosticLaunch\(expectedGeneration, baselinePayload, baselineSignature\);\s*outer = CefBrokerOwnedJob.CreateDisabledCandidate\(\);\s*inner = CefBrokerOwnedJob.CreateDisabledCandidate\(\);[\s\S]*?diagnosticSession.RegisterAndActivate/);
     assert.match(fixture, /using \(var retiredProfile = CefProtectedProfileLease.OpenExclusive[\s\S]*?authority = false;\s*Reject\(\(\) => retiredProfile.VerifiedExclusiveEnvironment\(\)\);\s*authority = true;\s*Reject\(\(\) => retiredProfile.VerifiedExclusiveEnvironment\(\)\);[\s\S]*?using var refused = CefProtectedProfileLease.OpenExclusive[\s\S]*?using \(var freshProfile = CefProtectedProfileLease.OpenExclusive[\s\S]*?freshProfile.VerifiedExclusiveEnvironment\(\).Count == 7/);
+});
+
+
+test('terminal broker probe latches relock after pre-creation refusal without touching stale owners', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const policy = await readFile('apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    const probe = broker.slice(broker.indexOf('private void RunDiagnosticCreationProbe('), broker.indexOf('private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession('));
+    assert.match(probe, /if \(config.Development \|\| diagnosticRelock\.Pending \|\| diagnosticSession\.Occupied \|\|[\s\S]*?authenticatedGeneration is null \|\|\s*!ReferenceEquals\(unlockOwner, expectedGeneration\)\)\s*throw new UnauthorizedAccessException[\s\S]*?preparation = PrepareDiagnosticLaunch/);
+    assert.match(probe, /if \(!accepted\)[\s\S]*?finally \{ preparation\?\.Dispose\(\); \}[\s\S]*?finally\s*\{[\s\S]*?if \(diagnosticRelock\.RequestIfCurrent\(expectedGeneration, unlockOwner\)\)\s*\{\s*try \{ ClearAuthenticatedOwner\(\); \}\s*finally \{ EnsureCefStopRetry\(\); \}/);
+    assert.match(policy, /internal bool RequestIfCurrent\(object expectedGeneration, object\? currentGeneration\)\s*\{[\s\S]*?if \(!ReferenceEquals\(expectedGeneration, currentGeneration\)\) return false;\s*Request\(expectedGeneration\);\s*return ReferenceEquals\(generation, expectedGeneration\);/);
+    assert.match(fixture, /!terminalRelock\.RequestIfCurrent\(staleGeneration, currentGeneration\)[\s\S]*?terminalRelock\.RequestIfCurrent\(currentGeneration, currentGeneration\)[\s\S]*?!terminalRelock\.RequestIfCurrent\(staleGeneration, staleGeneration\)[\s\S]*?lockAttempts == 0[\s\S]*?terminalRelock.Pending && lockAttempts == 1[\s\S]*?!terminalRelock.Pending && lockAttempts == 2/);
 });
