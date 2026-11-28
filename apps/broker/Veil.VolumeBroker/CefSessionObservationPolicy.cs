@@ -424,3 +424,34 @@ internal static class CefStopRetryPolicy
         return attempt < maximumAttempts - 1 && (pending || failure is not null);
     }
 }
+
+// Once the caller has revoked authentication and latched any relock
+// obligation, no recoverable cleanup failure may skip a later phase.
+// Preserve the first failure for the request/monitor; do not claim that
+// a failed phase released its resources. All callbacks run under serial.
+internal static class CefOwnerRevocationCleanup
+{
+    internal static void Run(Action retire, Action revokePending, Action retry, Action schedule)
+    {
+        ArgumentNullException.ThrowIfNull(retire);
+        ArgumentNullException.ThrowIfNull(revokePending);
+        ArgumentNullException.ThrowIfNull(retry);
+        ArgumentNullException.ThrowIfNull(schedule);
+        Exception? failure = null;
+        void Attempt(Action action)
+        {
+            try { action(); }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                failure ??= error;
+            }
+        }
+
+        Attempt(retire);
+        Attempt(revokePending);
+        Attempt(retry);
+        Attempt(schedule);
+        if (failure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+}
