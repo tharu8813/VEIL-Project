@@ -35,7 +35,7 @@ internal static class CefSignedSystemModuleBaseline
         void RequireTrust() => installed.RequireSame(readCurrent());
         RequireTrust();
         return VerifyCurrentHost(document, signature, installed.CopyPublicKey(),
-            installed.MinimumSequence, RequireTrust);
+            installed.MinimumSequence, RequireTrust, requireExactSequence: true);
     }
 
     // Use this path for real-host diagnostics, with independently trusted
@@ -43,7 +43,8 @@ internal static class CefSignedSystemModuleBaseline
     // and every subsequent module inventory check.
     internal static CefSystemModuleVerifier VerifyCurrentHost(
         ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature,
-        ReadOnlySpan<byte> trustedPublicKey, long minimumSequence, Action? requireTrustCurrent = null)
+        ReadOnlySpan<byte> trustedPublicKey, long minimumSequence, Action? requireTrustCurrent = null,
+        bool requireExactSequence = false)
     {
         var host = CefSystemBaselineHostObserver.Observe();
         void RequireHost()
@@ -51,15 +52,24 @@ internal static class CefSignedSystemModuleBaseline
             requireTrustCurrent?.Invoke();
             CefSystemBaselineHostObserver.RequireCurrent(host, CefSystemBaselineHostObserver.Observe());
         }
-        var verifier = Verify(payload, signature, trustedPublicKey, host, minimumSequence, RequireHost);
+        var verifier = VerifyWithSequence(payload, signature, trustedPublicKey, host, minimumSequence, RequireHost);
+        if (requireExactSequence && verifier.Sequence != minimumSequence)
+            throw new UnauthorizedAccessException("Installed baseline sequence mismatch.");
         RequireHost();
-        return verifier;
+        return verifier.Verifier;
     }
 
     // Detached RSA-PSS/SHA-256 signature of the exact UTF-8 JSON bytes.
     // The public SPKI, host identity and minimum sequence are supplied
     // independently; the payload cannot replace any of them.
     internal static CefSystemModuleVerifier Verify(
+        ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature,
+        ReadOnlySpan<byte> trustedPublicKey, CefSystemBaselineHost expectedHost,
+        long minimumSequence, Action? requireHostCurrent = null) =>
+        VerifyWithSequence(payload, signature, trustedPublicKey, expectedHost,
+            minimumSequence, requireHostCurrent).Verifier;
+
+    internal static (CefSystemModuleVerifier Verifier, long Sequence) VerifyWithSequence(
         ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature,
         ReadOnlySpan<byte> trustedPublicKey, CefSystemBaselineHost expectedHost,
         long minimumSequence, Action? requireHostCurrent = null)
@@ -93,11 +103,12 @@ internal static class CefSignedSystemModuleBaseline
             using var parsed = JsonDocument.Parse(document, new JsonDocumentOptions { MaxDepth = 5 });
             var root = parsed.RootElement;
             RequireFields(root, "schema", "architecture", "build", "updateRevision", "sequence", "modules");
+            long sequence = root.GetProperty("sequence").GetInt64();
             if (root.GetProperty("schema").GetString() != "veil-cef-system-modules-v1" ||
                 root.GetProperty("architecture").GetString() != expectedHost.Architecture ||
                 root.GetProperty("build").GetInt32() != expectedHost.Build ||
                 root.GetProperty("updateRevision").GetInt32() != expectedHost.UpdateRevision ||
-                root.GetProperty("sequence").GetInt64() < minimumSequence)
+                sequence < minimumSequence)
                 throw new UnauthorizedAccessException("System baseline host or sequence mismatch.");
 
             var modules = root.GetProperty("modules");
@@ -115,7 +126,7 @@ internal static class CefSignedSystemModuleBaseline
             }
             // Existing verifier independently validates every name, length,
             // digest, signer pin and case-insensitive uniqueness.
-            return new CefSystemModuleVerifier(pins, requireHostCurrent);
+            return (new CefSystemModuleVerifier(pins, requireHostCurrent), sequence);
         }
         catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException or ArgumentException)
         {

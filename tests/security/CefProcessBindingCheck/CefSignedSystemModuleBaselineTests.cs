@@ -100,6 +100,38 @@ internal static class CefSignedSystemModuleBaselineTests
         // Empty inventory exercises host binding only, not DLL trust.
         realHostVerifier.RequireModules([]);
         CefSystemBaselineTrustStateTests.Run(publicKey, actualPayload, Sign(actualPayload));
+        var anchor = SHA256.HashData(publicKey);
+        var enrollment = CefSystemBaselineTrustUpdate.PrepareEnrollment(good, signature, publicKey, anchor, 7, host);
+        var enrolled = CefSystemBaselineTrustState.Parse(enrollment.RequireExpectedAndCopyRecord(null, host));
+        enrollment.RequirePublished(enrolled, host);
+        enrolled.RequirePayload(good);
+        Reject(() => enrollment.RequireExpectedAndCopyRecord(enrolled, host));
+        Reject(() => enrollment.RequireExpectedAndCopyRecord(null, host with { UpdateRevision = 1235 }));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareEnrollment(good, signature, publicKey, new byte[32], 7, host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareEnrollment(good, signature, publicKey, anchor, 8, host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareReplacement(enrolled, good, signature, host));
+        byte[] sameSequence = Payload(modules: new[] { new { name = "other.dll", bytes = 123L,
+            sha256 = module.sha256, signerSha256 = module.signerSha256 } });
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareReplacement(enrolled, sameSequence, Sign(sameSequence), host));
+        byte[] older = Payload(sequence: 6);
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareReplacement(enrolled, older, Sign(older), host));
+        byte[] nextPayload = Payload(sequence: 9);
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareReplacement(enrolled, nextPayload,
+            wrongKey.SignData(nextPayload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss), host));
+        var update = CefSystemBaselineTrustUpdate.PrepareReplacement(enrolled, nextPayload, Sign(nextPayload), host);
+        var nextState = CefSystemBaselineTrustState.Parse(update.RequireExpectedAndCopyRecord(enrolled, host));
+        if (nextState.MinimumSequence != 9 || !nextState.CopyPublicKey().SequenceEqual(publicKey))
+            throw new InvalidOperationException("Baseline update sequence/key regression.");
+        nextState.RequirePayload(nextPayload);
+        Reject(() => nextState.RequirePayload(good));
+        Reject(() => update.RequireExpectedAndCopyRecord(null, host));
+        Reject(() => update.RequireExpectedAndCopyRecord(nextState, host));
+        Reject(() => update.RequirePublished(enrolled, host));
+        update.RequirePublished(nextState, host);
+        var mismatched = CefSystemBaselineTrustState.CreateVerifiedRecord(actualPayload, publicKey, 6);
+        Reject(() => CefSignedSystemModuleBaseline.VerifyTrustedSnapshot(actualPayload, Sign(actualPayload),
+            mismatched, () => mismatched));
+        Console.WriteLine("PASS: independently anchored enrollment, strictly increasing signed update and stale-state refusal");
         var wrongHost = Payload(build: actual.Build, revision: actual.UpdateRevision == 0 ? 1 : 0);
         Reject(() => CefSignedSystemModuleBaseline.VerifyCurrentHost(wrongHost, Sign(wrongHost), publicKey, 7));
         Console.WriteLine("PASS: native Windows build and HKLM revision binding, host-change refusal");

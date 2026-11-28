@@ -14,6 +14,7 @@
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSignedSystemModuleBaseline.cs" Link="CefSignedSystemModuleBaseline.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSystemBaselineHostObserver.cs" Link="CefSystemBaselineHostObserver.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSystemBaselineTrustState.cs" Link="CefSystemBaselineTrustState.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSystemBaselineTrustUpdate.cs" Link="CefSystemBaselineTrustUpdate.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs" Link="CefProcessTokenObserver.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs" Link="CefSessionObservationPolicy.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefRoleTokenPolicy.cs" Link="CefRoleTokenPolicy.cs" />

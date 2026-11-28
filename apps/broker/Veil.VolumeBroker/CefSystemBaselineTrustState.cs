@@ -26,6 +26,21 @@ internal sealed class CefSystemBaselineTrustState
     }
 
     internal byte[] CopyPublicKey() => (byte[])publicKey.Clone();
+    internal byte[] CopyRecord() => (byte[])record.Clone();
+
+    internal static CefSystemBaselineTrustState CreateVerifiedRecord(
+        ReadOnlySpan<byte> payload, ReadOnlySpan<byte> publicKey, long sequence)
+    {
+        if (payload.Length is 0 or > 1048576 || publicKey.Length is 0 or > 4096 || sequence <= 0)
+            throw new UnauthorizedAccessException("Invalid baseline trust record inputs.");
+        byte[] data = new byte[52 + publicKey.Length];
+        "VEILBST1"u8.CopyTo(data);
+        BinaryPrimitives.WriteInt64LittleEndian(data.AsSpan(8), sequence);
+        SHA256.HashData(payload).CopyTo(data, 16);
+        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(48), publicKey.Length);
+        publicKey.CopyTo(data.AsSpan(52));
+        return Parse(data);
+    }
 
     internal static CefSystemBaselineTrustState Parse(ReadOnlySpan<byte> bytes)
     {
