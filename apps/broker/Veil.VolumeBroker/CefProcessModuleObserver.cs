@@ -40,7 +40,7 @@ internal sealed record CefRetainedProcessDiagnostic(ClientIdentity Identity,
 internal static class CefNestedProcessDiagnostics
 {
     internal static CefRetainedProcessDiagnostic[] Observe(CefBrokerOwnedJob brokerJob,
-        SafeFileHandle desktopJob,
+        CefBrokerOwnedJob peerJob,
         ClientIdentity root, SafeProcessHandle rootHandle,
         CefRuntimeRegistrationLease registration,
         CefSystemModuleVerifier? systemVerifier = null)
@@ -52,7 +52,7 @@ internal static class CefNestedProcessDiagnostics
         // Only the independently retained root and trusted jobs are inputs.
         // The broker collects member handles itself, never from IPC.
         registration.RequireCurrent();
-        var result = brokerJob.ObserveCollectedNestedDiagnostics(desktopJob, root, rootHandle,
+        var result = brokerJob.ObservePrivateNestedDiagnostics(peerJob, root, rootHandle,
             (identity, handle) =>
             {
                 var role = CefCommandRoleObserver.Observe(handle, identity, root);
@@ -74,7 +74,8 @@ internal static class CefNestedProcessDiagnostics
 // Prepared broker-internal binding, not an IPC endpoint or launch permit.
 // On successful construction, the serialized caller transfers root, both
 // Jobs and registration ownership; the authenticated owner handle is borrowed.
-// No production caller may construct this until the trusted Job handoff exists.
+// Both Jobs must be privately broker-created and never exported. The actual
+// desktop containment is separate; no production admission is enabled here.
 internal sealed class CefBoundDiagnosticSession
 {
     private readonly CefDiagnosticSessionGuard guard;
@@ -85,7 +86,7 @@ internal sealed class CefBoundDiagnosticSession
 
     internal CefBoundDiagnosticSession(ClientIdentity owner, SafeProcessHandle ownerHandle,
         object generation, CefRuntimeRegistrationLease registration,
-        CefBrokerOwnedJob brokerJob, SafeFileHandle desktopJob,
+        CefBrokerOwnedJob brokerJob, CefBrokerOwnedJob peerJob,
         ClientIdentity root, SafeProcessHandle rootHandle,
         Func<(object Generation, CefRuntimeRegistrationLease RuntimeLease, bool VolumeProtected)> readCurrent,
         CefSystemModuleVerifier? systemVerifier = null)
@@ -93,7 +94,7 @@ internal sealed class CefBoundDiagnosticSession
         ArgumentNullException.ThrowIfNull(readCurrent);
         ArgumentNullException.ThrowIfNull(registration);
         ArgumentNullException.ThrowIfNull(brokerJob);
-        ArgumentNullException.ThrowIfNull(desktopJob);
+        ArgumentNullException.ThrowIfNull(peerJob);
         if (Native.ObserveProcess(ownerHandle) != owner ||
             Native.ObserveProcess(rootHandle) != root ||
             owner.ProcessId == root.ProcessId || owner.SessionId != root.SessionId ||
@@ -101,10 +102,10 @@ internal sealed class CefBoundDiagnosticSession
             root.CreatedFileTime < owner.CreatedFileTime ||
             !string.Equals(root.ImagePath, registration.ImagePath, StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException("CEF diagnostic session identity mismatch.");
-        // The trusted caller supplies an independently acquired desktop Job.
-        // Before accepting ownership, verify initial root-only containment.
+        // Before accepting ownership, require two private broker-created Jobs.
+        // Failure leaves ownership with the caller for stop recovery.
         registration.RequireCurrent();
-        brokerJob.RequireInitialNestedBinding(desktopJob, owner, ownerHandle, root, rootHandle);
+        brokerJob.RequirePrivateNestedBinding(peerJob, owner, ownerHandle, root, rootHandle);
         registration.RequireCurrent();
         guard = new(owner, generation, registration);
         readContext = () =>
@@ -113,10 +114,10 @@ internal sealed class CefBoundDiagnosticSession
             return new(Native.ObserveProcess(ownerHandle), current.Generation, current.RuntimeLease,
                 Native.IsRunning(ownerHandle), current.VolumeProtected);
         };
-        observe = () => CefNestedProcessDiagnostics.Observe(brokerJob, desktopJob, root, rootHandle,
+        observe = () => CefNestedProcessDiagnostics.Observe(brokerJob, peerJob, root, rootHandle,
             registration, systemVerifier);
-        drain = milliseconds => brokerJob.TerminateAndVerifyNestedDrain(desktopJob, rootHandle, milliseconds);
-        lifetime = new CefRetainedLifetime(registration, desktopJob, brokerJob, rootHandle);
+        drain = milliseconds => brokerJob.TerminateAndVerifyPrivateDrain(peerJob, rootHandle, milliseconds);
+        lifetime = new CefRetainedLifetime(registration, peerJob, brokerJob, rootHandle);
     }
 
     internal CefRetainedProcessDiagnostic[] Observe() => guard.Observe(readContext, observe);
