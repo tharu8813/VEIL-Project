@@ -121,7 +121,9 @@ const server = http.createServer((request, response) => {
     script = '(async()=>{localStorage.setItem("veil-fixture-marker",' + marker + ');' +
       'const cache=await caches.open("veil-fixture-usage");' +
       'await cache.put("/fixture-cache-entry",new Response(new Uint8Array(' + size + ')));' +
-      'if(localStorage.getItem("veil-fixture-marker")===' + marker + '){' + script + '}})();';
+      'if(localStorage.getItem("veil-fixture-marker")===' + marker + '){' +
+      (route === '/tabs-first' ? 'window.open("/tabs-popup-denied-target","_blank");' : '') +
+      script + '}})();';
   } else if (['/tabs-reseed', '/tabs-cleared-first', '/tabs-cleared-second'].includes(route)) {
     const marker = JSON.stringify(route === '/tabs-cleared-second' ? 'second' : 'first');
     script = 'if(localStorage.getItem("veil-fixture-marker")===' + marker + '){' + script + '}';
@@ -237,6 +239,8 @@ try {
   assert.equal(code, 0, evidence);
   for (const route of titles.keys()) assert.equal(requests.filter(x => x === route).length, 1, route);
   assert.ok(!requests.includes('/tabs-stale'));
+  assert.ok(!requests.includes('/tabs-popup-denied-target'), 'Denied popup must not reach HTTP');
+  assert.match(evidence, /Blocked popup count visible only for the owning tab; no extra native view/);
   assert.equal(cookieChecks.get('/tabs-after-close'), '', 'Deleted domain must not send its cookie');
   assert.equal(cookieChecks.get('/tabs-preserved'), 'fixture_second=synthetic-two', 'Other domain must retain its synthetic cookie');
   assert.equal(cookieChecks.get('/tabs-cleared-first'), '', 'Profile cookie clear must remove first domain cookie');
