@@ -396,6 +396,31 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         return true;
     }
 
+    // Disconnected drain primitive. Both Job handles must already be
+    // authenticated, distinct and retained for the same session. No client
+    // supplied handles and no volume unlock/relock authority here.
+    internal bool TerminateAndVerifyNestedDrain(SafeFileHandle desktopJob,
+        SafeProcessHandle rootHandle, int milliseconds)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(desktopJob);
+        ArgumentNullException.ThrowIfNull(rootHandle);
+        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        if (!bound || desktopJob.IsInvalid || desktopJob.IsClosed ||
+            rootHandle.IsInvalid || rootHandle.IsClosed || CompareJobObjects(job, desktopJob))
+            return false;
+        // Terminate only the broker-owned Job. A live member outside it
+        // must not be killed by trusting an arbitrary desktop Job handle.
+        if (!TerminateAndDrain(milliseconds)) return false;
+        // WAIT_OBJECT_0 is required; WAIT_FAILED is not evidence of exit.
+        if (WaitForObservedRoot(rootHandle, 0) != 0) return false;
+        return Accounting(desktopJob).ActiveProcesses == 0 &&
+            Accounting().ActiveProcesses == 0 && WaitForObservedRoot(rootHandle, 0) == 0;
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "WaitForSingleObject", SetLastError = true)]
+    private static extern uint WaitForObservedRoot(SafeProcessHandle handle, uint milliseconds);
+
     private AccountingInfo Accounting() => Accounting(job);
 
     private static AccountingInfo Accounting(SafeFileHandle observedJob)
