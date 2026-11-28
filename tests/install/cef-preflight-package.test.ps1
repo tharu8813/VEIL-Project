@@ -171,6 +171,31 @@ try {
     $image = 'C:\Program Files\VEIL-test-volume\profile.vhdx'
     $profile = 'V:\VEIL\profile'
     Reject { New-VeilPreflightRegistrationDraft $diagnosticPlan $bin $image $profile $volumeGuid $primary $recovery $sid 'synthetic' }
+    Reject { New-VeilPreflightRegistrationDraft $plan $bin $image $profile $volumeGuid $primary $recovery $sid 'synthetic' -Diagnostic }
+    $diagDraft = New-VeilPreflightRegistrationDraft $diagnosticPlan $bin $image $profile $volumeGuid $primary $recovery $sid 'synthetic' -Diagnostic
+    $diagDestination = Join-Path $work 'diagnostic-registration'
+    Reject { Write-VeilPreflightRegistrationDraft $diagDestination $diagDraft $diagnosticPlan }
+    if (Test-Path -LiteralPath $diagDestination) { throw 'Wrong mode created registration output.' }
+    $diagJournal = Write-VeilPreflightRegistrationDraft $diagDestination $diagDraft $diagnosticPlan -Diagnostic
+    if ($diagJournal.kind -cne 'cef-diagnostic-registration-journal' -or $diagJournal.state -cne 'prepared-only' -or
+        $diagJournal.installable -or $diagJournal.startupEnabled -or
+        $diagJournal.baselinePayloadSha256 -cne $diagnosticPlan.baselinePayloadSha256 -or
+        $diagJournal.baselineSignatureSha256 -cne $diagnosticPlan.baselineSignatureSha256) {
+        throw 'Unexpected diagnostic registration journal.'
+    }
+    [void](Read-VeilPreflightRegistrationDraft $diagDestination $diagnosticPlan $bin $image $profile $volumeGuid $primary $recovery $sid -Diagnostic)
+    Reject { Read-VeilPreflightRegistrationDraft $diagDestination $diagnosticPlan $bin $image $profile $volumeGuid $primary $recovery $sid }
+    Reject { Read-VeilPreflightRegistrationDraft $diagDestination $plan $bin $image $profile $volumeGuid $primary $recovery $sid }
+    Reject { Write-VeilPreflightRegistrationDraft $diagDestination $diagDraft $diagnosticPlan -Diagnostic }
+    $savedBaselineDigest = $diagnosticPlan.baselinePayloadSha256
+    $diagnosticPlan.baselinePayloadSha256 = '0'*64
+    Reject { Read-VeilPreflightRegistrationDraft $diagDestination $diagnosticPlan $bin $image $profile $volumeGuid $primary $recovery $sid -Diagnostic }
+    $diagnosticPlan.baselinePayloadSha256 = 'bad'
+    Reject { New-VeilPreflightRegistrationDraft $diagnosticPlan $bin $image $profile $volumeGuid $primary $recovery $sid 'synthetic' -Diagnostic }
+    $diagnosticPlan.baselinePayloadSha256 = $savedBaselineDigest
+    Reject { Read-VeilPreflightRegistrationDraft $diagDestination $diagnosticPlan $bin $image 'V:\Other\profile' $volumeGuid $primary $recovery $sid -Diagnostic }
+    [void](Read-VeilPreflightRegistrationDraft $diagDestination $diagnosticPlan $bin $image $profile $volumeGuid $primary $recovery $sid -Diagnostic)
+    Write-Host 'PASS: diagnostic registration mode, baseline binding and exact independent reconstruction'
     $draft = New-VeilPreflightRegistrationDraft $plan $bin $image $profile $volumeGuid $primary $recovery $sid 'synthetic'
     if ($draft['broker.json'].clientSha256 -cne $plan.desktopSha256 -or
         $draft['broker.json'].cefChildSha256 -cne $plan.cefChildSha256 -or
