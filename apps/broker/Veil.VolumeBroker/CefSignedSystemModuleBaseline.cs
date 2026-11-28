@@ -32,7 +32,12 @@ internal static class CefSignedSystemModuleBaseline
             throw new UnauthorizedAccessException("Invalid system baseline payload size.");
         byte[] document = payload.ToArray();
         installed.RequirePayload(document);
-        void RequireTrust() => installed.RequireSame(readCurrent());
+        void RequireTrust()
+        {
+            var current = readCurrent();
+            installed.RequireSame(current);
+            current.RequireActive();
+        }
         RequireTrust();
         return VerifyCurrentHost(document, signature, installed.CopyPublicKey(),
             installed.MinimumSequence, RequireTrust, requireExactSequence: true);

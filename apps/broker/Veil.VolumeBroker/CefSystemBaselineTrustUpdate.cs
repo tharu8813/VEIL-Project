@@ -48,12 +48,35 @@ internal sealed class CefSystemBaselineTrustUpdate
         ReadOnlySpan<byte> signature, CefSystemBaselineHost host)
     {
         ArgumentNullException.ThrowIfNull(installed);
+        installed.RequireActive();
         if (installed.MinimumSequence == long.MaxValue)
             throw new UnauthorizedAccessException("Baseline sequence exhausted.");
         // Use only the existing installed key. Key rotation is a separate
         // independently authorized operation, never an ordinary update.
         return Prepare(installed, payload, signature, installed.CopyPublicKey(),
             installed.MinimumSequence + 1, host);
+    }
+
+    // Emergency stop does not depend on a signature from the compromised key.
+    // The independently authenticated authority approves the exact installed
+    // record. This digest is a binding, not an authenticated channel.
+    internal static CefSystemBaselineTrustUpdate PrepareRevocation(
+        CefSystemBaselineTrustState installed,
+        ReadOnlySpan<byte> independentlyApprovedRevocationSha256,
+        CefSystemBaselineHost host)
+    {
+        ArgumentNullException.ThrowIfNull(installed);
+        CefSystemBaselineHostObserver.RequireCurrent(host, host);
+        if (independentlyApprovedRevocationSha256.Length != 32)
+            throw new UnauthorizedAccessException("Missing baseline revocation authorization.");
+        var revoked = installed.CreateRevokedRecord();
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData("VEIL-CEF-BASELINE-KEY-REVOCATION-V1"u8);
+        hash.AppendData(SHA256.HashData(installed.CopyRecord()));
+        if (!CryptographicOperations.FixedTimeEquals(hash.GetHashAndReset(),
+            independentlyApprovedRevocationSha256))
+            throw new UnauthorizedAccessException("Baseline revocation is not independently approved.");
+        return new(installed, revoked, host);
     }
 
     // Separate emergency/planned rotation: the old signing key may be

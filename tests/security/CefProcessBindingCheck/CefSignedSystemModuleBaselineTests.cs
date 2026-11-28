@@ -194,6 +194,39 @@ internal static class CefSignedSystemModuleBaselineTests
             rotatedKey.SignData(otherRotationPayload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss), host);
         if (CefSystemBaselineTrustState.Parse(afterRotation.RequireExpectedAndCopyRecord(rotated, host)).MinimumSequence != 11)
             throw new InvalidOperationException("New signing key update regression.");
+        byte[] revocationApproval = SHA256.HashData([.. "VEIL-CEF-BASELINE-KEY-REVOCATION-V1"u8,
+            .. SHA256.HashData(nextState.CopyRecord())]);
+        var revoke = CefSystemBaselineTrustUpdate.PrepareRevocation(nextState, revocationApproval, host);
+        var revoked = CefSystemBaselineTrustState.Parse(revoke.RequireExpectedAndCopyRecord(nextState, host));
+        if (!revoked.Revoked || revoked.MinimumSequence != nextState.MinimumSequence ||
+            !revoked.CopyPublicKey().SequenceEqual(publicKey))
+            throw new InvalidOperationException("Revocation record regression.");
+        revoke.RequirePublished(revoked, host);
+        Reject(() => revoked.RequirePayload(nextPayload));
+        Reject(() => revoke.RequireExpectedAndCopyRecord(revoked, host));
+        Reject(() => revoke.RequirePublished(nextState, host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareRevocation(enrolled, revocationApproval, host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareRevocation(nextState, new byte[32], host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareRevocation(revoked, revocationApproval, host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareReplacement(revoked, rotationPayload, Sign(rotationPayload), host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(revoked, rotationPayload,
+            rotationSignature, rotatedPublicKey, approval, host));
+        var resume = CefSystemBaselineTrustUpdate.PrepareKeyRotation(revoked, rotationPayload,
+            rotationSignature, rotatedPublicKey, Approval(revoked, proposed), host);
+        var resumed = CefSystemBaselineTrustState.Parse(resume.RequireExpectedAndCopyRecord(revoked, host));
+        if (resumed.Revoked) throw new InvalidOperationException("Approved rotation did not restore active trust.");
+        proposed.RequireSame(resumed);
+        // Use actual host metadata for the disconnected live snapshot test.
+        var actualInstalled = CefSystemBaselineTrustState.CreateVerifiedRecord(actualPayload, publicKey, 7);
+        var liveState = actualInstalled;
+        var liveVerifier = CefSignedSystemModuleBaseline.VerifyTrustedSnapshot(actualPayload, Sign(actualPayload),
+            actualInstalled, () => liveState);
+        liveVerifier.RequireModules([]);
+        liveState = actualInstalled.CreateRevokedRecord();
+        Reject(() => liveVerifier.RequireModules([]));
+        Reject(() => CefSignedSystemModuleBaseline.VerifyTrustedSnapshot(actualPayload, Sign(actualPayload),
+            liveState, () => liveState));
+        Console.WriteLine("PASS: explicit signing-key revocation, active snapshot refusal and independently approved recovery");
         Console.WriteLine("PASS: independently approved exact-record key rotation, stale and old-key refusal");
         var mismatched = CefSystemBaselineTrustState.CreateVerifiedRecord(actualPayload, publicKey, 6);
         Reject(() => CefSignedSystemModuleBaseline.VerifyTrustedSnapshot(actualPayload, Sign(actualPayload),

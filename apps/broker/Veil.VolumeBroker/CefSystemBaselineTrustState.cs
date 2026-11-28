@@ -18,12 +18,14 @@ internal sealed class CefSystemBaselineTrustState
     private readonly byte[] digest;
     private readonly byte[] publicKey;
     internal long MinimumSequence { get; }
-    private CefSystemBaselineTrustState(byte[] record, byte[] digest, byte[] publicKey, long floor)
+    internal bool Revoked { get; }
+    private CefSystemBaselineTrustState(byte[] record, byte[] digest, byte[] publicKey, long floor, bool revoked)
     {
         this.record = record;
         this.digest = digest;
         this.publicKey = publicKey;
         MinimumSequence = floor;
+        Revoked = revoked;
     }
 
     internal byte[] CopyPublicKey() => (byte[])publicKey.Clone();
@@ -50,7 +52,8 @@ internal sealed class CefSystemBaselineTrustState
             throw new UnauthorizedAccessException("Invalid baseline trust record size.");
         byte[] copy = bytes.ToArray();
         var data = copy.AsSpan();
-        if (!data[..8].SequenceEqual("VEILBST1"u8))
+        bool revoked = data[..8].SequenceEqual("VEILBSR1"u8);
+        if (!revoked && !data[..8].SequenceEqual("VEILBST1"u8))
             throw new UnauthorizedAccessException("Invalid baseline trust record schema.");
         long floor = BinaryPrimitives.ReadInt64LittleEndian(data[8..16]);
         int keyLength = BinaryPrimitives.ReadInt32LittleEndian(data[48..52]);
@@ -68,11 +71,28 @@ internal sealed class CefSystemBaselineTrustState
         {
             throw new UnauthorizedAccessException("Invalid baseline trust key.", e);
         }
-        return new(copy, data[16..48].ToArray(), key, floor);
+        return new(copy, data[16..48].ToArray(), key, floor, revoked);
+    }
+
+    internal void RequireActive()
+    {
+        if (Revoked)
+            throw new UnauthorizedAccessException("System baseline signing key revoked.");
+    }
+
+    // Preserve the exact last sequence, payload digest and key. Never delete
+    // trust or reset enrollment on revocation.
+    internal CefSystemBaselineTrustState CreateRevokedRecord()
+    {
+        RequireActive();
+        byte[] copy = CopyRecord();
+        "VEILBSR1"u8.CopyTo(copy);
+        return Parse(copy);
     }
 
     internal void RequirePayload(ReadOnlySpan<byte> payload)
     {
+        RequireActive();
         if (payload.Length is 0 or > 1048576 ||
             !CryptographicOperations.FixedTimeEquals(digest, SHA256.HashData(payload)))
             throw new UnauthorizedAccessException("Baseline does not match installed trust digest.");
