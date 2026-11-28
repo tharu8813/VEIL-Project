@@ -195,3 +195,40 @@ internal sealed class CefAuthenticatedGeneration(ClientIdentity owner, object ge
 
     internal void Revoke() => retired = true;
 }
+
+// Serialized resource ownership for both the disabled candidate and the
+// future nested session. No finalizer or Dispose shortcut: callers must
+// retain this object until verified exit AND successful resource release.
+internal sealed class CefRetainedLifetime(params IDisposable?[] resources)
+{
+    private readonly IDisposable?[] retained = resources.ToArray();
+    private bool exitConfirmed;
+    private bool releasing;
+    private int next;
+
+    // If verification fails or throws, no resource is released. After proof,
+    // resume a failed release at the same resource without rechecking closed
+    // handles. Only a private broker-owned, permanently retired job may use
+    // this helper; no new process assignment after the exit proof.
+    internal bool TryRelease(Func<bool> verifyExit)
+    {
+        ArgumentNullException.ThrowIfNull(verifyExit);
+        if (releasing) return false;
+        releasing = true;
+        try
+        {
+            if (!exitConfirmed)
+            {
+                if (!verifyExit()) return false;
+                exitConfirmed = true;
+            }
+            while (next < retained.Length)
+            {
+                retained[next]?.Dispose();
+                retained[next++] = null;
+            }
+            return true;
+        }
+        finally { releasing = false; }
+    }
+}
