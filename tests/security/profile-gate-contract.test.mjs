@@ -1579,3 +1579,23 @@ test('library key lease derives a dedicated key and refuses revoked or reentrant
     assert.doesNotMatch(broker, /CefLibraryKeyLease/);
 });
 
+
+
+test('Windows DPAPI root experiment is account-scoped, bounded and fixture-only with no plaintext fallback', async () => {
+    const root = await readFile('tests/security/CefProcessBindingCheck/CefLibraryRootProtectionFixture.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    const project = await readFile('apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    assert.match(root, /private const int UiForbidden = 1;/);
+    assert.match(root, /WindowsIdentity.GetCurrent\(true\);[\s\S]*?before is not null \|\| !current\(\)[\s\S]*?WindowsIdentity.GetCurrent\(true\);[\s\S]*?after is not null/);
+    assert.match(root, /storeId.TryWriteBytes[\s\S]*?"VEIL-CEF-ROOT-DPAPI-v1"u8.CopyTo/);
+    assert.match(root, /RandomNumberGenerator.GetBytes\(CefLibraryGenerationChain.TagSize\)[\s\S]*?Transform\(root, entropy, protect: true\);[\s\S]*?finally \{ CryptographicOperations.ZeroMemory\(root\); \}/);
+    assert.match(root, /protectedRoot.Length == 0 \|\| protectedRoot.Length > MaximumBlobBytes[\s\S]*?Transform\(protectedRoot.ToArray\(\), entropy, protect: false\);[\s\S]*?CefLibraryKeyLease.Open\(storeId, root,[\s\S]*?finally \{ CryptographicOperations.ZeroMemory\(root\); \}/);
+    assert.match(root, /CryptProtectData\(ref data, null, ref optional, IntPtr.Zero, IntPtr.Zero, UiForbidden, out output\)[\s\S]*?CryptUnprotectData\(ref data, IntPtr.Zero, ref optional, IntPtr.Zero, IntPtr.Zero, UiForbidden, out output\)/);
+    assert.match(root, /if \(!ok\)[\s\S]*?output.Size > MaximumBlobBytes[\s\S]*?!protect && output.Size != CefLibraryGenerationChain.TagSize/);
+    assert.match(root, /Marshal.WriteByte\(output.Data, i, 0\);[\s\S]*?LocalFree\(output.Data\);[\s\S]*?pinnedEntropy.Free\(\);[\s\S]*?pinnedInput.Free\(\);/);
+    assert.match(fixture, /FileMode.CreateNew, FileAccess.Write, FileShare.None[\s\S]*?writer.Flush\(flushToDisk: true\);[\s\S]*?Persisted fixture root did not reopen[\s\S]*?Failed fixture root open modified the persisted blob/);
+    assert.doesNotMatch(project + broker, /CefLibraryRootProtectionFixture/);
+    assert.doesNotMatch(root, /\b(?:File|Directory|Path|Protocol)\./);
+});
+
