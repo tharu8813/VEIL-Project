@@ -1367,5 +1367,16 @@ test('CEF role diagnostics retain closed utility claim categories without admiss
     assert.match(role, /record struct CefRoleDetails\(CefObservedRole Role,\s*CefUtilityService UtilityService, CefSandboxClaim SandboxClaim\)/);
     assert.match(role, /if \(service == CefUtilityService.Network\)\s*return claim == CefSandboxClaim.Network\s*\? new\(CefObservedRole.Network, service, claim\) : default;/);
     assert.match(role, /return new\(expected, details\);/);
-    assert.match(nested, /if \(role != CefCommandRoleObserver.Observe\(handle, identity, root\)\)[\s\S]*?modules, role.Details\);/);
+    assert.match(nested, /if \(role != CefCommandRoleObserver.Observe\(handle, identity, root\)\)[\s\S]*?modules, role.Details, mitigations\);/);
+});
+
+
+test('CEF mitigation observations use read-only exact process binding and repeat checks', async () => {
+    const mitigation = await readFile('apps/broker/Veil.VolumeBroker/CefProcessMitigationObserver.cs', 'utf8');
+    const nested = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    assert.match(mitigation, /const uint queryAccess = 0x0400 \| 0x1000 \| 0x00100000;/);
+    assert.match(mitigation, /Native.SameLiveProcess\(retained, query\)/);
+    assert.match(mitigation, /if \(!GetProcessMitigationPolicy\(query, policy, out uint flags, \(UIntPtr\)sizeof\(uint\)\)\)\s*throw new Win32Exception\(\);/);
+    assert.match(mitigation, /var before = CefMitigationSnapshot.Read\(Read\);\s*RequireIdentity\(\);\s*CefMitigationSnapshot.RequireSame\(before, CefMitigationSnapshot.Read\(Read\)\);\s*RequireIdentity\(\);/);
+    assert.match(nested, /var mitigations = CefProcessMitigationObserver.Observe\(handle, identity\);\s*var modules = CefProcessModuleObserver.Observe[\s\S]*?CefMitigationSnapshot.RequireSame\(mitigations,\s*CefProcessMitigationObserver.Observe\(handle, identity\)\);/);
 });
