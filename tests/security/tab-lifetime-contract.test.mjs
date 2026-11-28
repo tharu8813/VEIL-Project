@@ -888,6 +888,15 @@ test('automatic history commits once through the shared session boundary', () =>
     assert.match(browser, /bool Authorized\(\) => !session.IsPrivate && AcceptTabEvents\(tab\) &&\s*Tabs.Items.Contains\(tab.Item\)[\s\S]*?tab.NavigationEpoch == completedEpoch &&\s*tab.Url == completedUrl && tab.EngineView.Source == completedUrl;/);
     assert.match(browser, /historySaved = LibraryMutation.TryCommit\(data.History, null, Authorized,[\s\S]*?session.TrySaveLibrary\(Authorized, captureTabs: true\)\);\s*if \(historySaved\) RefreshHistoryLibraries\(\);/);
     assert.match(browser, /if \(!historyEligible\) SaveTabs\(\);/);
-    assert.match(session, /if \(captureTabs\) CaptureOpenTabs\(\);\s*if \(!authorized\(\) \|\| IsPrivate \|\| IsEnding \|\| EngineLost \|\| !EngineHost.IsReady\) return false;\s*Data.Save\(persistentStatePath\);/);
+    assert.match(session, /if \(captureTabs\) CaptureOpenTabs\(\);\s*if \(!authorized\(\) \|\| IsPrivate \|\| IsEnding \|\| EngineLost \|\| !EngineHost.IsReady \|\|\s*persistentStatePath is null\) return false;\s*Data.Save\(persistentStatePath\);/);
     assert.match(session, /private bool CaptureOpenTabs\(\)\s*\{\s*if \(IsPrivate \|\| TabTransferDepth != 0\) return false;[\s\S]*?if \(open.Count == 0 \|\| open.Any\(window => window.IsRestoring\)\) return false;/);
 });
+
+
+const layoutData = await readFile('apps/desktop/BrowserData.cs', 'utf8');
+test('combined history and tab layout commit restores prior layout on refusal or exception', () => {
+    assert.match(session, /return captureTabs \? Data\.TryCommitTabLayout\(Commit\) : Commit\(\);/);
+    assert.match(layoutData, /var previous = \(Tabs, Selected, PinnedCount, Windows\);[\s\S]*?committed = commit\(\);[\s\S]*?finally\s*\{\s*if \(!committed\)\s*\(Tabs, Selected, PinnedCount, Windows\) = previous;/);
+    assert.match(session, /var additional = open.Count == 1 \? null :[\s\S]*?\.ToList\(\);[\s\S]*?\(Data.Tabs, Data.Selected, Data.PinnedCount, Data.Windows\) =\s*\(tabs, selected, pinned, additional\);/);
+});
+
