@@ -220,7 +220,7 @@ try {
     assert.equal(requests.filter(request => request === route).length, 1, 'Parallel request must not replay');
   assert.ok(parallelCancelClosed && parallelKeepFinished, 'Cancel must close only the canceled HTTP response');
   assert.match(evidence, /Observed both CEF vault streams receiving data concurrently[\s\S]*Canceled parallel vault published no object; surviving vault restored all 786432 bytes/);
-  assert.match(evidence, /CEF view slot reused with a fresh identity and clean state[\s\S]*Repeated secondary view close preserved primary view/);
+  assert.match(evidence, /Retired secondary completion ignored after window replacement[\s\S]*CEF view slot reused with a fresh identity and clean state[\s\S]*Repeated secondary view close preserved primary view/);
   assert.match(evidence, /Observed two independent CEF views with distinct source, title, history and mute state[\s\S]*Secondary CEF view closed; stale handle rejected; primary remains live[\s\S]*Observed matched redirect, completion, and back and forward navigation/);
   assert.ok(requests.includes('/wpf-error'), 'The failed address did not navigate');
   assert.ok(requests.includes('/wpf-policy'), 'The permission fixture did not navigate');

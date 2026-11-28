@@ -251,3 +251,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #276 exact head Windows 46166617260 / Native 46166617290 PASS, #277 exact head Windows 46167133738 / Native 46167133734 PASS. 승인 리뷰 없음.
 - 개발용 탭 toolbar에 선택된 live view의 native popup denial count만 읽는 별도 안내를 추가한다. 닫힌/종료 중 view와 0건에서는 숨기고 기존 탐색 상태 메시지를 덮어쓰지 않는다. 팝업 URL을 전달하거나 재실행하지 않고 기존 OnBeforePopup 무조건 거부 및 NewWindowRequested 미지원 유지. 합성 loopback 페이지에서 한 번 window.open 요청을 발생시켜 첫 탭 1건, 두 번째 0건, 전환 UI 및 native view count=2, 대상 HTTP 요청 부재를 요구하는 runtime/source 회귀 추가. 실제 WPF 실행 및 새 CI NOT RUN, 이 구현은 다중 창 adoption 지원이나 제품 popup 허용이 아니다. WebView2 및 startupEnabled=false 유지.
+
+### P3-02 다중 창 개발 fixture의 소유권/종료 수명 (미완료)
+
+- #277 Windows/native PASS, #278 exact head Windows 46167628799 PASS, Native 46167628733 실행 중 확인. 독립 승인 리뷰 없음.
+- 기존 WpfSmoke 두 창의 secondary reservation은 이전 창 및 native view drain 이후에만 교체한다. 각 closure의 managed view/window와 current native ID, closing/loaded 상태를 대조하고 일치하는 pending navigation만 완료 처리한다. 종료 시 login 세대 및 pending ID 폐기, 비동기 Loaded 후 소유권 재검사. 기존 창 재사용 회귀에서 이전 completion delegate의 합성 실패 이벤트를 직접 호출해 새 창 상태가 유지되는지 검사한다. 실제 stale native callback/renderer crash 실측 아님. 새 CI/WPF runtime/보호 VM NOT RUN. 일반 사용자 제품의 새 창/popup adoption 기능은 여전히 미지원이며 WebView2/startupEnabled=false 유지.

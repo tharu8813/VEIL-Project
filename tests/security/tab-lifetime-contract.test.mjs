@@ -787,3 +787,14 @@ test('CEF popup denial feedback reads only selected live view and never adopts o
     assert.match(cefTabbed, /Blocked popup count visible only for the owning tab; no extra native view/);
     assert.match(cefNative, /bool OnBeforePopup\([\s\S]*?\+\+state_->popups_blocked;\s*return true;/);
 });
+
+
+test('CEF secondary window events retain exact managed and native owner across replacement', () => {
+    assert.match(cefSmoke, /if \(closing \|\| \(secondary is not null &&\s*\(!secondaryWindowClosed \|\| CefNative.VeilCefClosed\(secondaryHandle\) == 0\)\)\)/);
+    assert.match(cefSmoke, /bool OwnsSecondary\(\) => ReferenceEquals\(secondary, second\) &&\s*ReferenceEquals\(secondaryWindow, secondWindow\);/);
+    assert.match(cefSmoke, /bool AcceptSecondaryEvent\(\) => OwnsSecondary\(\) && !closing &&\s*!secondaryClosing && !secondaryWindowClosed && secondaryLoaded &&\s*secondaryHandle != 0 && second.NativeHandle == secondaryHandle &&\s*CefNative.VeilCefClosed\(secondaryHandle\) == 0;/);
+    assert.match(cefSmoke, /if \(!AcceptSecondaryEvent\(\) \|\| pendingId == 0 \|\| pendingId != completed.NavigationId\) return;\s*pendingId = 0;/);
+    assert.match(cefSmoke, /if \(!OwnsSecondary\(\)\) return;[\s\S]*?secondaryClosing = true;\s*pendingId = 0;\s*second.InvalidateFixtureLoginContext\(\);/);
+    assert.match(cefSmoke, /second.Dispose\(\);\s*if \(OwnsSecondary\(\)\) secondaryWindowClosed = true;/);
+    assert.match(cefSmoke, /retiredSecondaryCompletion\(new EngineNavigationCompletedEventArgs\(1, false, false,[\s\S]*?Retired secondary completion ignored after window replacement/);
+});
