@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Threading.Channels;
 
 namespace Veil.VolumeBroker;
 
@@ -10,10 +11,16 @@ internal sealed class BrokerService
     private const string ServiceName = "Veil.VolumeBroker";
     private const uint Stopped = 1, StartPending = 2, StopPending = 3, Running = 4;
     private const uint Stop = 1, Shutdown = 5, Interrogate = 4;
-    private const uint AcceptStopAndShutdown = 1 | 4;
+    private const uint SessionChange = 14;
+    private const uint AcceptStopShutdownAndSessionChange = 1 | 4 | 0x80;
+    private const uint SessionLogoff = 6, SessionLock = 7;
     private const uint ErrorGeneralFailure = 31, ErrorNotImplemented = 120;
     private readonly CancellationTokenSource stop = new();
     private readonly ControlHandler handler;
+    // The SCM callback copies only the session ID. A single worker serializes
+    // revocation with broker operations; never block SCM on a process drain.
+    private readonly Channel<uint> sessionNotifications = Channel.CreateUnbounded<uint>(
+        new UnboundedChannelOptions { SingleReader = true, AllowSynchronousContinuations = false });
     private IntPtr statusHandle;
     private uint serviceError;
 
@@ -49,6 +56,7 @@ internal sealed class BrokerService
             var config = BrokerConfig.Load(BrokerConfig.DefaultPath, development: false);
             var broker = new Broker(config, new WindowsBitLockerBackend(config), new BrokerLog(null, console: false));
             bool ownsVolume = false;
+            var sessionWorker = RevokeSessionsAsync(broker);
             try
             {
                 broker.RunAsync(stop.Token, () =>
@@ -61,7 +69,9 @@ internal sealed class BrokerService
             }
             finally
             {
-                if (ownsVolume) broker.SecureVolumeAsync().GetAwaiter().GetResult();
+                sessionNotifications.Writer.TryComplete();
+                try { sessionWorker.GetAwaiter().GetResult(); }
+                finally { if (ownsVolume) broker.SecureVolumeAsync().GetAwaiter().GetResult(); }
             }
         }
         catch (Exception)
@@ -72,9 +82,28 @@ internal sealed class BrokerService
         finally { Report(Stopped); }
     }
 
+    private async Task RevokeSessionsAsync(Broker broker)
+    {
+        await foreach (uint sessionId in sessionNotifications.Reader.ReadAllAsync())
+            await broker.RevokeWindowsSessionAsync(sessionId);
+    }
+
     private uint Control(uint control, uint eventType, IntPtr eventData, IntPtr context)
     {
         if (control == Interrogate) return 0;
+        if (control == SessionChange)
+        {
+            // WTSSESSION_NOTIFICATION has two DWORDs. The event pointer is
+            // valid only during this callback; do not retain it or accept IPC data.
+            if (eventType is SessionLogoff or SessionLock && eventData != IntPtr.Zero &&
+                Marshal.ReadInt32(eventData) == 8)
+            {
+                uint sessionId = unchecked((uint)Marshal.ReadInt32(eventData, 4));
+                if (sessionId != 0 && sessionId <= int.MaxValue)
+                    sessionNotifications.Writer.TryWrite(sessionId);
+            }
+            return 0;
+        }
         if (control is not (Stop or Shutdown)) return ErrorNotImplemented;
         Report(StopPending);
         _ = stop.CancelAsync();
@@ -88,7 +117,7 @@ internal sealed class BrokerService
         {
             Type = 0x10, // SERVICE_WIN32_OWN_PROCESS
             State = state,
-            Accepted = state == Running ? AcceptStopAndShutdown : 0,
+            Accepted = state == Running ? AcceptStopShutdownAndSessionChange : 0,
             Win32ExitCode = serviceError,
             CheckPoint = pending ? 1u : 0,
             WaitHint = pending ? 240_000u : 0,
