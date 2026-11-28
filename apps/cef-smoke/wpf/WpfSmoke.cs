@@ -80,6 +80,7 @@ public static class WpfSmoke
         var closing = false;
         var windowClosed = false;
         var phase = -1;
+        Task<bool?>? primaryFind = null, secondaryFind = null, absentFind = null;
         var pendingRequests = new Dictionary<ulong, string>();
         var completedRequests = new HashSet<string>();
         var canceledByPolicy = false;
@@ -394,6 +395,31 @@ public static class WpfSmoke
                     return;
                 }
                 Trace("Observed two independent CEF views with distinct source, title, history and mute state");
+                primaryFind = browser.FindTextAsync("VEIL-FIND-PRIMARY-MARKER", false);
+                secondaryFind = second.FindTextAsync("VEIL-FIND-PRIMARY-MARKER", false);
+                phase = 20;
+            }
+            else if (phase == 20 && primaryFind is { IsCompleted: true } && secondaryFind is { IsCompleted: true })
+            {
+                if (!primaryFind.IsCompletedSuccessfully || primaryFind.Result != true ||
+                    !secondaryFind.IsCompletedSuccessfully || secondaryFind.Result != false)
+                {
+                    Trace("Native page find result or view isolation failed");
+                    window.Close();
+                    return;
+                }
+                absentFind = browser.FindTextAsync("VEIL-FIND-ABSENT-MARKER", true);
+                phase = 21;
+            }
+            else if (phase == 21 && absentFind is { IsCompleted: true })
+            {
+                if (!absentFind.IsCompletedSuccessfully || absentFind.Result != false)
+                {
+                    Trace("Fresh backward page find failed");
+                    window.Close();
+                    return;
+                }
+                Trace("Native page find observed match, no match and independent view results");
                 phase = 10;
                 CloseSecondary();
             }
