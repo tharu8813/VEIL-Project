@@ -11,13 +11,16 @@ internal static class CefProtectedPreflightEntry
 {
     // Distinct exit status: layout provisioning is not a verified candidate.
     internal const uint ProfilePreparedOnly = 30;
+    internal const uint SuspendedProbeVerified = 31;
 
     internal static int Run(string[] args)
     {
         bool prepareOnly = args is ["--cef-prepare-profile"];
-        if ((!prepareOnly && args is not ["--cef-protected-preflight"]) || !ExternalAddress.Installed)
+        bool brokerProbe = args is ["--cef-broker-suspended-probe"];
+        if ((!prepareOnly && !brokerProbe && args is not ["--cef-protected-preflight"]) || !ExternalAddress.Installed)
             return 2;
-        uint expected = prepareOnly ? ProfilePreparedOnly : CefDisabledPreflight.VerifiedButDisabled;
+        uint expected = brokerProbe ? SuspendedProbeVerified :
+            prepareOnly ? ProfilePreparedOnly : CefDisabledPreflight.VerifiedButDisabled;
         try
         {
             ProfileGate.RejectElevated();
@@ -39,7 +42,12 @@ internal static class CefProtectedPreflightEntry
                 ProtectedProfileSession.ClearPassword(password);
                 password = null;
                 if (session is null || notifications.LockRequested) return 1;
-                if (prepareOnly)
+                if (brokerProbe)
+                {
+                    session.RunBrokerSuspendedProbe();
+                    result = SuspendedProbeVerified;
+                }
+                else if (prepareOnly)
                 {
                     // Release the desktop lock before non-forced relock.
                     // The next broker-first attempt requires a NEW unlock,
@@ -53,7 +61,7 @@ internal static class CefProtectedPreflightEntry
                     result = CefDisabledLaunchCoordinator.RunPreflight(session);
                 }
                 if (result != expected || notifications.LockRequested) return 1;
-                session.CompleteCefPreflightCleanup();
+                if (!brokerProbe) session.CompleteCefPreflightCleanup();
             }
             finally
             {
