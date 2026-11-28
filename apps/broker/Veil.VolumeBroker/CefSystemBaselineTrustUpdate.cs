@@ -5,7 +5,8 @@ namespace Veil.VolumeBroker;
 
 // Prepared update only: callers must supply independently authorized
 // enrollment inputs or a protected installed snapshot. No registry writes,
-// automatic enrollment, key rotation or product admission.
+// automatic enrollment or product admission. Rotation requires independent
+// authorization of the exact old/new record pair.
 internal enum CefBaselinePublicationStatus
 {
     NotStartedEnrollment,
@@ -53,6 +54,55 @@ internal sealed class CefSystemBaselineTrustUpdate
         // independently authorized operation, never an ordinary update.
         return Prepare(installed, payload, signature, installed.CopyPublicKey(),
             installed.MinimumSequence + 1, host);
+    }
+
+    // Separate emergency/planned rotation: the old signing key may be
+    // compromised, so its signature is not sufficient (or required).
+    // Authorization must be obtained independently from the release authority,
+    // never computed from candidate input by the maintenance caller itself.
+    internal static CefSystemBaselineTrustUpdate PrepareKeyRotation(
+        CefSystemBaselineTrustState installed, ReadOnlySpan<byte> payload,
+        ReadOnlySpan<byte> signature, ReadOnlySpan<byte> newPublicKey,
+        ReadOnlySpan<byte> independentlyApprovedTransitionSha256,
+        CefSystemBaselineHost host)
+    {
+        ArgumentNullException.ThrowIfNull(installed);
+        if (installed.MinimumSequence == long.MaxValue ||
+            newPublicKey.Length is 0 or > 4096 ||
+            independentlyApprovedTransitionSha256.Length != 32)
+            throw new UnauthorizedAccessException("Invalid key rotation authorization.");
+        byte[] key = newPublicKey.ToArray();
+        // Compare mathematical RSA identity, not just the SPKI serialization.
+        using var oldRsa = RSA.Create();
+        using var newRsa = RSA.Create();
+        try
+        {
+            oldRsa.ImportSubjectPublicKeyInfo(installed.CopyPublicKey(), out _);
+            newRsa.ImportSubjectPublicKeyInfo(key, out int consumed);
+            if (consumed != key.Length || newRsa.KeySize is not (3072 or 4096))
+                throw new UnauthorizedAccessException("Invalid rotation public key.");
+            var oldParameters = oldRsa.ExportParameters(false);
+            var newParameters = newRsa.ExportParameters(false);
+            if (CryptographicOperations.FixedTimeEquals(oldParameters.Modulus!, newParameters.Modulus!))
+                throw new UnauthorizedAccessException("Rotation must use a different RSA modulus.");
+        }
+        catch (CryptographicException e)
+        {
+            throw new UnauthorizedAccessException("Invalid rotation public key.", e);
+        }
+        var prepared = Prepare(installed, payload, signature, key,
+            installed.MinimumSequence + 1, host);
+        // Domain-separated, fixed-length encoding: SHA256(domain ||
+        // SHA256(old complete record) || SHA256(new complete record)).
+        // The new record binds the new key, signed sequence and exact payload.
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData("VEIL-CEF-BASELINE-KEY-ROTATION-V1"u8);
+        hash.AppendData(SHA256.HashData(installed.CopyRecord()));
+        hash.AppendData(SHA256.HashData(prepared.next.CopyRecord()));
+        if (!CryptographicOperations.FixedTimeEquals(hash.GetHashAndReset(),
+            independentlyApprovedTransitionSha256))
+            throw new UnauthorizedAccessException("Key rotation transition is not independently approved.");
+        return prepared;
     }
 
     private static CefSystemBaselineTrustUpdate Prepare(CefSystemBaselineTrustState? previous,

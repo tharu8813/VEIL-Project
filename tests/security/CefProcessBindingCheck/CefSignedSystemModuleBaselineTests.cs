@@ -152,6 +152,49 @@ internal static class CefSignedSystemModuleBaselineTests
         Reject(() => update.RequirePublished(foreign, host));
         Reject(() => update.RequirePublished(sameVersionDifferentDigest, host));
         Console.WriteLine("PASS: interrupted baseline publication classification and exact confirmation refusal");
+        // Synthetic independent approval fixture. Production must never
+        // manufacture approval from an untrusted request in this manner.
+        using var rotatedKey = RSA.Create(3072);
+        byte[] rotatedPublicKey = rotatedKey.ExportSubjectPublicKeyInfo();
+        byte[] rotationPayload = Payload(sequence: 10);
+        byte[] rotationSignature = rotatedKey.SignData(rotationPayload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+        byte[] Approval(CefSystemBaselineTrustState from, CefSystemBaselineTrustState to) =>
+            SHA256.HashData([.. "VEIL-CEF-BASELINE-KEY-ROTATION-V1"u8,
+                .. SHA256.HashData(from.CopyRecord()), .. SHA256.HashData(to.CopyRecord())]);
+        var proposed = CefSystemBaselineTrustState.CreateVerifiedRecord(rotationPayload, rotatedPublicKey, 10);
+        byte[] approval = Approval(nextState, proposed);
+        var rotation = CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+            rotationSignature, rotatedPublicKey, approval, host);
+        var rotated = CefSystemBaselineTrustState.Parse(rotation.RequireExpectedAndCopyRecord(nextState, host));
+        proposed.RequireSame(rotated);
+        rotation.RequirePublished(rotated, host);
+        Reject(() => rotation.RequireExpectedAndCopyRecord(enrolled, host));
+        Reject(() => rotation.RequireExpectedAndCopyRecord(rotated, host));
+        Reject(() => rotation.RequirePublished(nextState, host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+            rotationSignature, rotatedPublicKey, new byte[32], host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(enrolled, rotationPayload,
+            rotationSignature, rotatedPublicKey, approval, host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+            Sign(rotationPayload), rotatedPublicKey, approval, host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+            Sign(rotationPayload), publicKey, Approval(nextState,
+                CefSystemBaselineTrustState.CreateVerifiedRecord(rotationPayload, publicKey, 10)), host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, nextPayload,
+            rotatedKey.SignData(nextPayload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss),
+            rotatedPublicKey, Approval(nextState,
+                CefSystemBaselineTrustState.CreateVerifiedRecord(nextPayload, rotatedPublicKey, 9)), host));
+        byte[] otherRotationPayload = Payload(sequence: 11);
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, otherRotationPayload,
+            rotatedKey.SignData(otherRotationPayload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss),
+            rotatedPublicKey, approval, host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareReplacement(rotated, otherRotationPayload,
+            Sign(otherRotationPayload), host));
+        var afterRotation = CefSystemBaselineTrustUpdate.PrepareReplacement(rotated, otherRotationPayload,
+            rotatedKey.SignData(otherRotationPayload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss), host);
+        if (CefSystemBaselineTrustState.Parse(afterRotation.RequireExpectedAndCopyRecord(rotated, host)).MinimumSequence != 11)
+            throw new InvalidOperationException("New signing key update regression.");
+        Console.WriteLine("PASS: independently approved exact-record key rotation, stale and old-key refusal");
         var mismatched = CefSystemBaselineTrustState.CreateVerifiedRecord(actualPayload, publicKey, 6);
         Reject(() => CefSignedSystemModuleBaseline.VerifyTrustedSnapshot(actualPayload, Sign(actualPayload),
             mismatched, () => mismatched));
