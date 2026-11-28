@@ -13,7 +13,10 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private CefAuthenticatedGeneration? authenticatedGeneration;
     private SafeProcessHandle? authenticatedOwnerHandle;
     private CefPendingChild? pendingCefChild;
-    private sealed record CandidateStop(SafeProcessHandle Child, CefBrokerOwnedJob? Job, IDisposable? Image, IDisposable? Runtime);
+    private sealed record CandidateStop(SafeProcessHandle Child, CefBrokerOwnedJob? Job, IDisposable? Image, IDisposable? Runtime)
+    {
+        internal CefRetainedLifetime Lifetime { get; } = new(Runtime, Image, Job, Child);
+    }
     private readonly List<CandidateStop> unresolvedCefStops = [];
     private bool cefStopRetryRunning;
     private sealed record CompletedPreflight(object Generation, SafeProcessHandle Child, CefBrokerOwnedJob Job,
@@ -404,7 +407,14 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     finally
                     {
                         var resources = new CandidateStop(receipt.Child, receipt.Job, receipt.Image, receipt.Runtime);
-                        if (confirmed) DisposeStoppedCandidate(resources);
+                        if (confirmed)
+                        {
+                            if (!ReleaseCandidate(resources, exitAlreadyConfirmed: true))
+                            {
+                                RetainForRetry(resources);
+                                code = "CefExitUnconfirmed";
+                            }
+                        }
                         else StopOrRetain(resources);
                     }
                     break;
@@ -603,11 +613,12 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     // a PID, and never treat a failed termination as a successful admission.
     private void StopOrRetain(CandidateStop candidate)
     {
-        if (TryStopVerifiedChild(candidate))
-        {
-            DisposeStoppedCandidate(candidate);
-            return;
-        }
+        if (ReleaseCandidate(candidate)) return;
+        RetainForRetry(candidate);
+    }
+
+    private void RetainForRetry(CandidateStop candidate)
+    {
         unresolvedCefStops.Add(candidate);
         log.Write("cef-child-stop", new { result = "ExitNotConfirmed" });
         if (!cefStopRetryRunning)
@@ -617,19 +628,16 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         }
     }
 
-    private static void DisposeStoppedCandidate(CandidateStop candidate)
+    private bool ReleaseCandidate(CandidateStop candidate, bool exitAlreadyConfirmed = false)
     {
-        // Called only after confirmed process exit and empty job. Keep the
-        // executable and complete runtime inventory pinned until that point.
-        try { candidate.Runtime?.Dispose(); }
-        finally
+        try
         {
-            try { candidate.Image?.Dispose(); }
-            finally
-            {
-                try { candidate.Job?.Dispose(); }
-                finally { candidate.Child.Dispose(); }
-            }
+            return candidate.Lifetime.TryRelease(() => exitAlreadyConfirmed || TryStopVerifiedChild(candidate));
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Write("cef-child-release", new { result = "ReleaseUnconfirmed", type = error.GetType().Name });
+            return false;
         }
     }
 
@@ -638,9 +646,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         for (int i = unresolvedCefStops.Count - 1; i >= 0; --i)
         {
             var candidate = unresolvedCefStops[i];
-            if (!TryStopVerifiedChild(candidate)) continue;
+            if (!ReleaseCandidate(candidate)) continue;
             unresolvedCefStops.RemoveAt(i);
-            DisposeStoppedCandidate(candidate);
             log.Write("cef-child-stop", new { result = "ExitConfirmedAfterRetry" });
         }
     }
