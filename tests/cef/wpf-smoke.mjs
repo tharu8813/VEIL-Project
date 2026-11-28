@@ -224,6 +224,7 @@ try {
   }
   assert.match(evidence, /Development adapter rejected unsupported profile, network and navigation inputs[\s\S]*Navigation request canceled before HTTP[\s\S]*Observed JavaScript title[\s\S]*Observed matched redirect, completion, and back and forward navigation[\s\S]*Observed HTTP failure completion[\s\S]*Observed rejected HTTP and Blob downloads, geolocation and media permissions[\s\S]*WPF window closed[\s\S]*CEF browser closed[\s\S]*WPF dispatcher stopped/);
   assert.match(evidence, /Observed shared mute state round trip; playback and favicon unavailable/);
+  assert.match(evidence, /Unattached and disposed view commands rejected without changing live mute state/);
   assert.match(evidence, /Observed shared engine source, title and history events/);
   assert.match(evidence, /Normal fixture shutdown emitted no unexpected process failure/);
   assert.match(evidence, /CEF view registry drained and vault task settled/);
