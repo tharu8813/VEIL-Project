@@ -71,6 +71,27 @@ public partial class BrowserWindow
                 Check(BookmarkPolicy.RemoveFolder(localData.BookmarkFolders, localData.Bookmarks, parentFolder.Id) &&
                     localData.Bookmarks[0].FolderId is null && localData.Bookmarks.Count == 1,
                     "deleting last folder promotes bookmarks to root");
+                var originalBookmark = localData.Bookmarks[0];
+                var editFolder = new BookmarkFolder(Guid.NewGuid(), "Transaction");
+                int saves = 0, authorizationChecks = 0;
+                Check(!LibraryMutation.TryCommit(localData.Bookmarks, localData.BookmarkFolders,
+                    () => ++authorizationChecks == 1,
+                    () => { localData.BookmarkFolders.Add(editFolder); localData.Bookmarks[0] = originalBookmark with { FolderId = editFolder.Id }; },
+                    () => { saves++; return true; }) &&
+                    saves == 0 && localData.BookmarkFolders.Count == 0 &&
+                    ReferenceEquals(localData.Bookmarks[0], originalBookmark),
+                    "library authorization revoked before save restores exact entry and folders");
+                Check(!LibraryMutation.TryCommit(localData.Bookmarks, localData.BookmarkFolders, () => true,
+                    () => { localData.BookmarkFolders.Add(editFolder); localData.Bookmarks.Clear(); },
+                    () => { saves++; return false; }) &&
+                    saves == 1 && localData.BookmarkFolders.Count == 0 &&
+                    ReferenceEquals(localData.Bookmarks[0], originalBookmark),
+                    "library save failure restores original entries and folders");
+                Check(LibraryMutation.TryCommit(localData.Bookmarks, localData.BookmarkFolders, () => true,
+                    () => localData.BookmarkFolders.Add(editFolder), () => { saves++; return true; }) &&
+                    saves == 2 && localData.BookmarkFolders.Single() == editFolder,
+                    "library authorized save commits once");
+                localData.BookmarkFolders.Clear();
                 const string bookmarksHtml = """
                     <!DOCTYPE NETSCAPE-Bookmark-file-1>
                     <DL><p><DT><H3>Study &amp; Code</H3><DL><p>
