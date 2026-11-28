@@ -49,8 +49,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         await serial.WaitAsync();
         try
         {
-            if (authenticatedOwner is not { } owner || owner.SessionId <= 0 ||
-                (uint)owner.SessionId != sessionId)
+            if (!CefWindowsSessionRevocation.MatchesOwner(authenticatedOwner, sessionId))
                 return;
             ClearAuthenticatedOwner();
             RetryUnresolvedCefStops();
