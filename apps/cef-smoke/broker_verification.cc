@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <winsvc.h>
 #include <array>
+#include <utility>
 
 namespace veil_cef {
 namespace {
@@ -82,17 +83,15 @@ bool Transfer(HANDLE pipe, bool write, void* bytes, DWORD size,
   return GetOverlappedResult(pipe, &operation, &count, FALSE) != FALSE &&
       Remaining(started) != 0;
 }
-bool RequestFixedSnapshot(std::string request, bool (*is_reply)(std::string_view)) {
-  const ULONGLONG started = GetTickCount64();
-  const DWORD pid = ServicePid();
-  if (!pid) return false;
-  Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid));
-  if (!process.valid() || !Remaining(started)) return false;
+bool RequestFixedSnapshot(std::string request, bool (*is_reply)(std::string_view),
+                          HANDLE process, DWORD pid, ULONGLONG started) {
+  if (!process || process == INVALID_HANDLE_VALUE || !pid || !Remaining(started) ||
+      WaitForSingleObject(process, 0) != WAIT_TIMEOUT || ServicePid() != pid) return false;
   // Fixed installed service endpoint. No inherited environment, caller path,
   // alternate pipe name, development endpoint, or retry after a lost reply.
   Handle pipe(CreateFileW(kPipe, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
       OPEN_EXISTING, FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr));
-  if (!pipe.valid() || !SameServer(pipe.get(), process.get(), pid)) return false;
+  if (!pipe.valid() || !SameServer(pipe.get(), process, pid)) return false;
   DWORD count = 0;
   if (!Transfer(pipe.get(), true, request.data(), static_cast<DWORD>(request.size()),
       count, started) || count != request.size()) return false;
@@ -106,20 +105,51 @@ bool RequestFixedSnapshot(std::string request, bool (*is_reply)(std::string_view
   }
   // The protocol is one bounded LF-delimited response. Never consume a
   // second response or treat arbitrary JSON as an authentication result.
-  return is_reply(reply) && SameServer(pipe.get(), process.get(), pid) &&
+  return is_reply(reply) && SameServer(pipe.get(), process, pid) &&
       Remaining(started) != 0;
 }
 }  // namespace
 
 bool RequestChildVerification(std::string_view registered_volume) {
   std::string request;
-  return BuildRedemptionRequest(registered_volume, request) &&
-      RequestFixedSnapshot(request, IsVerifiedReply);
+  if (!BuildRedemptionRequest(registered_volume, request)) return false;
+  const auto started = GetTickCount64();
+  const auto pid = ServicePid();
+  if (!pid) return false;
+  Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid));
+  return process.valid() &&
+      RequestFixedSnapshot(request, IsVerifiedReply, process.get(), pid, started);
 }
 
-bool RequestRuntimeAuthority(std::string_view registered_volume) {
+// The original process handle stays open for the entire invocation.
+// Each check opens a fresh pipe but never a fresh process handle. A
+// signaled original object, even if its PID is reused, cannot pass.
+struct RuntimeAuthoritySession::State {
+  State(std::string request, DWORD pid)
+      : request(std::move(request)), pid(pid),
+        process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid)) {}
+  const std::string request;
+  const DWORD pid;
+  Handle process;
+  RuntimeAuthorityLatch latch;
+};
+
+RuntimeAuthoritySession::RuntimeAuthoritySession(std::string_view registered_volume) {
   std::string request;
-  return BuildRuntimeAuthorityRequest(registered_volume, request) &&
-      RequestFixedSnapshot(request, IsRuntimeAuthorityReply);
+  if (!BuildRuntimeAuthorityRequest(registered_volume, request)) return;
+  const auto pid = ServicePid();
+  if (!pid) return;
+  // State allocates before opening the handle and owns it until destruction.
+  state_ = std::make_unique<State>(std::move(request), pid);
+}
+RuntimeAuthoritySession::~RuntimeAuthoritySession() = default;
+
+bool RuntimeAuthoritySession::Check() {
+  if (!state_) return false;
+  auto& state = *state_;
+  return state.latch.Check([&] {
+    return state.process.valid() && RequestFixedSnapshot(state.request,
+        IsRuntimeAuthorityReply, state.process.get(), state.pid, GetTickCount64());
+  });
 }
 }  // namespace veil_cef
