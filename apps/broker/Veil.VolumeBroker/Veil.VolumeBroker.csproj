@@ -9,6 +9,10 @@
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'CefDiagnostic'">
+    <DefineConstants>$(DefineConstants);VEIL_CEF_DIAGNOSTIC_IPC</DefineConstants>
+    <Product>VEIL CEF Broker Diagnostic Only</Product>
+  </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../shared/AdminOnlyFile.cs" Link="Shared/AdminOnlyFile.cs" />
     <!-- Same strict registration/retained file checks on both sides of the pipe. -->
