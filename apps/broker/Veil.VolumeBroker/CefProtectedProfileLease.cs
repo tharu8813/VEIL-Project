@@ -281,8 +281,16 @@ internal sealed class CefProtectedProfileLease : IDisposable
     {
         if (disposed) return;
         retired = disposed = true;
-        profileLock?.Dispose();
-        log?.Dispose();
-        for (int i = directories.Count - 1; i >= 0; --i) directories[i].Dispose();
+        // Retain the exclusive lock until other profile pins have been
+        // closed. No new owner should acquire it during normal disposal.
+        try { log?.Dispose(); }
+        finally
+        {
+            try
+            {
+                for (int i = directories.Count - 1; i >= 0; --i) directories[i].Dispose();
+            }
+            finally { profileLock?.Dispose(); }
+        }
     }
 }
