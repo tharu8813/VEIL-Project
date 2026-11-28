@@ -16,7 +16,7 @@ CefSystemModuleVerifierTests.Run();
 
 // Refusal before any file open or process creation. The test is independent
 // of signed installed runtime, elevation or machine trust provisioning.
-foreach (string invalidPath in new[] { "", "relative.exe", @"\serversharecef.exe",
+foreach (string invalidPath in new[] { "", "relative.exe", @"\\server\share\cef.exe", @"\rooted-not-qualified.exe",
     Path.Combine(Path.GetTempPath(), "cef.dll") })
 {
     bool refused = false;
