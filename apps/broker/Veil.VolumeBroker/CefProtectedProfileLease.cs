@@ -16,6 +16,7 @@ internal sealed class CefProtectedProfileLease : IDisposable
     private readonly Func<bool> authorityCurrent;
     private readonly List<CefProtectedDirectoryLease> directories;
     private readonly CefProtectedDirectoryLease.RegularFilePin? log;
+    private CefProtectedDirectoryLease.ExclusiveProfileLock? profileLock;
     private bool retired;
     private bool disposed;
 
@@ -144,6 +145,28 @@ internal sealed class CefProtectedProfileLease : IDisposable
         Inspect(layout.EngineRoot, 0);
     }
 
+    // One-shot lock acquisition only after validating all existing profile
+    // directories. Existing desktop ownership is a refusal, not a takeover.
+    // The future caller must arrange an authenticated handoff before this
+    // can succeed. No lock file is created by the broker.
+    internal void AcquireExclusiveLock()
+    {
+        RequireCurrent();
+        if (profileLock is not null)
+            throw new UnauthorizedAccessException("CEF profile lock already acquired.");
+        try
+        {
+            profileLock = CefProtectedDirectoryLease.OpenExclusiveProfileLock(
+                layout.ProductRoot, volume, readStatus);
+            RequireCurrent();
+        }
+        catch
+        {
+            retired = true;
+            throw;
+        }
+    }
+
     internal void RequireCurrent()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -153,9 +176,11 @@ internal sealed class CefProtectedProfileLease : IDisposable
         {
             RequireAuthority(volume, readStatus, authorityCurrent);
             foreach (var directory in directories) directory.RequireCurrent(readStatus);
+            profileLock?.RequireCurrent(readStatus);
             RequireLog();
             InspectExistingTree();
             RequireLog();
+            profileLock?.RequireCurrent(readStatus);
             RequireAuthority(volume, readStatus, authorityCurrent);
         }
         catch
@@ -177,6 +202,7 @@ internal sealed class CefProtectedProfileLease : IDisposable
     {
         if (disposed) return;
         retired = disposed = true;
+        profileLock?.Dispose();
         log?.Dispose();
         for (int i = directories.Count - 1; i >= 0; --i) directories[i].Dispose();
     }

@@ -120,6 +120,44 @@ try
     File.Delete(alias);
     File.Delete(profileLayout.LogFile);
     Directory.Delete(nested, recursive: true);
+    // Broker requires an existing regular single-link lock. It must not
+    // manufacture one or defeat a desktop's existing FileShare.None open.
+    string profileLockPath = Path.Combine(profileFixture, "profile.lock");
+    using (var missingLock = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        Reject(() => missingLock.AcquireExclusiveLock());
+        Check(!File.Exists(profileLockPath), "Broker created a missing profile lock.");
+    }
+    File.WriteAllText(profileLockPath, "original-lock");
+    using (var desktopLock = new FileStream(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+    using (var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        Reject(() => competing.AcquireExclusiveLock());
+        desktopLock.Dispose();
+        Reject(() => competing.AcquireExclusiveLock());
+    }
+    using (var owned = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        owned.AcquireExclusiveLock();
+        owned.RequireCurrent();
+        using var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority);
+        Reject(() => competing.AcquireExclusiveLock());
+        Reject(() => owned.AcquireExclusiveLock());
+        owned.RequireCurrent();
+    }
+    Check(File.ReadAllText(profileLockPath) == "original-lock",
+        "Broker modified the profile lock contents.");
+    Check(CreateHardLinkW(alias, profileLockPath, IntPtr.Zero), "Cannot create fixture lock hard link.");
+    using (var linkedLock = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+        Reject(() => linkedLock.AcquireExclusiveLock());
+    File.Delete(alias);
+    File.Delete(profileLockPath);
+    Console.WriteLine("PASS: existing exclusive profile lock, busy/missing/linked refusal and release");
     Directory.Delete(profileLayout.Cache);
     bool missingRefused = false;
     try { using var missing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,

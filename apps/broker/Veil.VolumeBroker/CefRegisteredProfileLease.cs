@@ -55,6 +55,7 @@ internal sealed class CefRegisteredProfileLease : IDisposable
             if (!authorityCurrent())
                 throw new UnauthorizedAccessException("CEF profile registration generation changed.");
             profile = CefProtectedProfileLease.Open(root, volumeGuid, windows, readStatus, authorityCurrent);
+            profile.AcquireExclusiveLock();
             var lease = new CefRegisteredProfileLease(registration, path, original, profile);
             lease.RequireCurrent();
             return lease;

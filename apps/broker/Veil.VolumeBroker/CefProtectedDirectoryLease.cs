@@ -170,6 +170,63 @@ internal sealed class CefProtectedDirectoryLease : IDisposable
         public void Dispose() => handle.Dispose();
     }
 
+    // Acquire the same existing profile.lock used by the desktop. This
+    // is a broker-owned exclusive open, not proof of another process's
+    // lock and not a claim that all filesystem writers honor the lock.
+    // Never create, truncate, write, or take over a busy lock file.
+    internal static ExclusiveProfileLock OpenExclusiveProfileLock(string productRoot,
+        string volume, Func<BackendStatus> readStatus)
+    {
+        ArgumentNullException.ThrowIfNull(readStatus);
+        RequireCanonicalPath(productRoot);
+        string path = Path.Combine(productRoot, "profile.lock");
+        RequireRegisteredProtection(volume, readStatus());
+        // GENERIC_READ | GENERIC_WRITE, no sharing, OPEN_EXISTING,
+        // OPEN_REPARSE_POINT. No handle inheritance or backup access.
+        var handle = CreateFileW(path, 0xC0000000, FileShare.None, IntPtr.Zero,
+            FileMode.Open, 0x00200000, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            int error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            throw new Win32Exception(error, "CEF exclusive profile lock unavailable.");
+        }
+        try
+        {
+            RequireRegularFile(handle, path, volume);
+            RequireRegisteredProtection(volume, readStatus());
+            return new ExclusiveProfileLock(path, volume, handle);
+        }
+        catch { handle.Dispose(); throw; }
+    }
+
+    internal sealed class ExclusiveProfileLock : IDisposable
+    {
+        private readonly string path;
+        private readonly string volume;
+        private readonly SafeFileHandle handle;
+
+        internal ExclusiveProfileLock(string path, string volume, SafeFileHandle handle)
+        {
+            this.path = path;
+            this.volume = volume;
+            this.handle = handle;
+        }
+
+        // Keep the original exclusive handle; never release and reopen it
+        // to demonstrate exclusivity. The profile owns the ancestor pins.
+        internal void RequireCurrent(Func<BackendStatus> readStatus)
+        {
+            if (handle.IsClosed || handle.IsInvalid)
+                throw new UnauthorizedAccessException("CEF profile lock was lost.");
+            RequireRegisteredProtection(volume, readStatus());
+            RequireRegularFile(handle, path, volume);
+            RequireRegisteredProtection(volume, readStatus());
+        }
+
+        public void Dispose() => handle.Dispose();
+    }
+
     private static string FinalPath(SafeFileHandle handle, uint flags)
     {
         var buffer = new StringBuilder(32768);
