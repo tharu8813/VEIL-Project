@@ -333,3 +333,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #293 exact head `c0edbcb3efa6cf7d203d3a461ace5c40bec26375` Windows/Rust CI 46178804539 PASS, 독립 리뷰 없음.
 - WebView2 LibraryMutation의 스냅샷/검증/권한 재확인/저장/rollback을 engine-neutral CollectionMutation으로 추출하고 CEF fixture bookmark/history 추가·삭제·초기화에 연결했다. UI는 commit 후 변경, 종료 정리는 무조건 메모리 삭제. CEF fixture commit은 메모리 전용이며 파일 writer/제품 profile 경로를 받지 않는다. 실제 fixture에 권한 철회 및 쓰기 거부 rollback 검사 추가. 기존 WebView2 folder validation과 writer 유지. P1/P2 보호 runtime 및 session lifetime 미완료로 제품 CEF 영구 저장 연결은 차단 상태; preflight lease는 launch 권한 아님. 신규 CI, 실제 CEF/WPF/보호 VM/독립 리뷰 NOT RUN. startupEnabled=false 유지.
+
+### P3-02 CEF 라이브러리 수명/권한 철회 경계 (미완료)
+
+- #294 exact head `30dde1caa6a1ac3f69ec96aa6dcd0ec019bc89e6` 일반 Windows/Rust CI 46179282326 PASS; native compile CI 46179282448 미완료 (runtime 아님), 독립 리뷰 없음.
+- 공통 CefLibraryLifetime에서 owner thread, 재진입, terminal revocation, 세션 probe 예외/거부, 변경 후 및 writer 직전 재확인. 개별 요청 거부는 세션 철회와 구분한다. CEF fixture는 메모리 전용 callback 유지하고 shutdown 시작 시 revoke. 일반 CI에서 실행되는 NetworkPolicyCheck에 synthetic lifetime 회귀 검사 추가. 실제 보호 runtime authority는 아직 연결하지 않으며 preflight lease를 launch/save 권한으로 승격하지 않는다. 저장 중 lock 경합은 실제 보호 writer/broker lifecycle에서 별도 검증해야 한다. 새 CI/보호 VM/실제 CEF/독립 리뷰 미검증. startupEnabled=false 유지.
