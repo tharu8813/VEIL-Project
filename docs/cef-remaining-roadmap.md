@@ -147,3 +147,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 - VHDX를 다시 연결하여 동일 GUID를 Windows `Win32_EncryptableVolume`에서 확인했다. 드라이브 문자 없음, `ProtectionStatus=0`, 검사 후 `Attached=False`. 운영자 Windows 암호 및 별도 BitLocker 암호의 연속 보안 입력을 열었다. 보호기 생성 스크립트는 호스트 임시 폴더에서 구문 검사를 통과했다.
 - 운영자 입력 후 시험 VHDX의 BitLocker 암호화 100%, 보호 활성, 잠금 및 분리 상태를 확인했다. 초기 복구 암호가 콘솔 경고에 출력되어 해당 보호기를 교체하고 그 값이 담긴 임시 화면 파일을 삭제했다. 현재 Password 보호기 ID는 `3131BE9A-0075-4896-8B84-35EA659A1776`, RecoveryPassword 보호기 ID는 `89ED40F1-D12C-4C40-9229-8A33F09BC225`다. 기본 암호로 잠금 해제한 뒤 볼륨의 `VeilProfile`에 SYSTEM/Administrators FullControl 및 `VeilCefTest` Modify ACL을 확인하고 재잠금·분리했다. 등록 초안 도구의 운영자 외부 복구 백업 및 확인은 진행 중이다.
 - 최초 등록 초안 실행은 GUID 형식의 프로필 경로를 거부했다. 실제 권한을 확인한 드라이브 문자 경로 `E:\VeilProfile`와 별도 볼륨 GUID로 재실행하여 기본 암호 보안 프롬프트에 도달했다. 외부 복구 백업 검증 및 초안 재검증은 대기 중이다.
+
+### 2026-11-28 진단 시험 준비 보완
+
+- P2-04 코드 경로: 서명된 진단 패키지, 별도 스테이징/등록/게시, Disabled SCM 등록, 독립 기준 신뢰 등록, 표준 사용자 코드 30 준비 및 코드 31 정지 프로세스 시험 실행 도구를 연결했다. 코드 31은 동일 등록의 검증된 코드 30 정리 기록을 요구한다.
+- 위 기록은 코드/합성 시험 증거이며 실제 Windows VM, BitLocker, 독립 키, SCM/HKLM/ACL/OS 추적 및 CEF 초기화 증거가 아니다. P1 및 P2-03~05 완료 체크는 유지하지 않고 미완료로 둔다. 기존 WebView2 및 startupEnabled=false 유지.
