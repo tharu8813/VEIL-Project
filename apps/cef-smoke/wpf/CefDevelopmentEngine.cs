@@ -115,7 +115,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
     {
         onRenderProcessFailed = code =>
         {
-            if (hwnd == 0) return;
+            if (disposed || hwnd == 0) return;
             InvalidateFixtureLoginContext();
             try
             {
@@ -128,7 +128,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         };
         onPageStateChanged = kind =>
         {
-            if (hwnd == 0) return;
+            if (disposed || hwnd == 0) return;
             try
             {
                 switch (kind)
@@ -146,6 +146,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         };
         onStarting = (url, id, redirect) =>
         {
+            if (disposed) return 1;
             InvalidateFixtureLoginContext();
             var callback = NavigationStarting;
             if (callback is null) return 1;
@@ -162,6 +163,7 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         };
         onCompleted = (id, success, canceled, code) =>
         {
+            if (disposed) return;
             try
             {
                 NavigationCompleted?.Invoke(this,
@@ -500,7 +502,11 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
     public bool CanGoForward => hwnd != 0 && CefNative.VeilCefCanGoForward(NativeHandle) != 0;
     public double ZoomFactor
     {
-        get => Math.Pow(1.2, CefNative.VeilCefZoomLevel(NativeHandle));
+        get
+        {
+            RequireView();
+            return Math.Pow(1.2, CefNative.VeilCefZoomLevel(NativeHandle));
+        }
         set
         {
             if (!double.IsFinite(value) || value <= 0) throw new ArgumentOutOfRangeException(nameof(value));
@@ -527,9 +533,9 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
     }
 
     public void ShowInternalHtml(string trustedHostHtml) => throw new NotSupportedException();
-    public void GoBack() { InvalidateFixtureLoginContext(); CefNative.VeilCefGoBack(NativeHandle); }
-    public void GoForward() { InvalidateFixtureLoginContext(); CefNative.VeilCefGoForward(NativeHandle); }
-    public void Reload() { InvalidateFixtureLoginContext(); CefNative.VeilCefReload(NativeHandle); }
+    public void GoBack() { RequireView(); InvalidateFixtureLoginContext(); CefNative.VeilCefGoBack(NativeHandle); }
+    public void GoForward() { RequireView(); InvalidateFixtureLoginContext(); CefNative.VeilCefGoForward(NativeHandle); }
+    public void Reload() { RequireView(); InvalidateFixtureLoginContext(); CefNative.VeilCefReload(NativeHandle); }
     public Task ReloadIgnoringCacheAsync()
     {
         RequireView();
@@ -540,11 +546,12 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
 
     // Native find callbacks and request lifetime have not yet been verified.
     public Task<bool?> FindTextAsync(string query, bool backwards) => Task.FromResult<bool?>(null);
-    public void Stop() { InvalidateFixtureLoginContext(); CefNative.VeilCefStop(NativeHandle); }
+    public void Stop() { RequireView(); InvalidateFixtureLoginContext(); CefNative.VeilCefStop(NativeHandle); }
 
     private void RequireView()
     {
-        if (hwnd == 0 || CefNative.VeilCefClosed(NativeHandle) != 0)
+        Dispatcher.VerifyAccess();
+        if (disposed || hwnd == 0 || NativeHandle == 0 || CefNative.VeilCefClosed(NativeHandle) != 0)
             throw new InvalidOperationException("The CEF view is unavailable.");
     }
 
@@ -584,8 +591,13 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
 
     protected override void Dispose(bool disposing)
     {
+        if (disposing)
+        {
+            Dispatcher.VerifyAccess();
+            disposed = true;
+            InvalidateFixtureLoginContext();
+        }
         base.Dispose(disposing);
-        if (disposing) disposed = true;
     }
 }
 

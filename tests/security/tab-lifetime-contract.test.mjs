@@ -386,9 +386,9 @@ test('CEF managed view reservations are reclaimed only after disposal and native
     assert.match(cefView, /views\.RemoveAll\(view => view\.IsSlotReleased\);[\s\S]*?views\.Add\(view\);/);
     assert.match(cefView, /IsSlotReleased => disposed && NativeHandle == 0 &&\s*\(retiredHandle == 0 \|\| CefNative\.VeilCefClosed\(retiredHandle\) != 0\)/);
     assert.match(cefView, /if \(NativeHandle != 0\) retiredHandle = NativeHandle;\s*CefNative\.VeilCefDetachCallbacks/);
-    assert.match(cefView, /protected override void Dispose\(bool disposing\)\s*\{\s*base\.Dispose\(disposing\);\s*if \(disposing\) disposed = true;/);
+    assert.match(cefView, /protected override void Dispose\(bool disposing\)\s*\{\s*if \(disposing\)\s*\{\s*Dispatcher.VerifyAccess\(\);\s*disposed = true;\s*InvalidateFixtureLoginContext\(\);\s*\}\s*base.Dispose\(disposing\);/);
     assert.match(cefView, /if \(disposed \|\| NativeHandle != 0 \|\| \(retiredHandle != 0 && CefNative\.VeilCefClosed\(retiredHandle\) == 0\)\)/);
-    assert.match(cefSmoke, /var reservation = engine\.CreateView\(\);\s*bool reservedLimit = Rejects\(\(\) => engine\.CreateView\(\)\);\s*reservation\.Dispose\(\);/);
+    assert.match(cefSmoke, /var reservation = engine\.CreateView\(\);\s*bool reservedLimit = Rejects\(\(\) => engine\.CreateView\(\)\);[\s\S]*?bool unattachedRefused = RejectsInactiveCommands\(reservation\);\s*reservation\.Dispose\(\);\s*bool disposedRefused = RejectsInactiveCommands\(reservation\);/);
     assert.match(cefSmoke, /firstSecondaryHandle = secondaryHandle;[\s\S]*?OpenSecondary\("\/wpf-isolation-reopened"\)/);
     assert.match(cefSmoke, /secondaryHandle <= firstSecondaryHandle \|\| CefNative\.VeilCefClosed\(firstSecondaryHandle\) == 0/);
 });
@@ -743,4 +743,15 @@ test('CEF standard-user runtime wrapper never equates synthetic pass with produc
     assert.match(wrapper, /sourceCommit = \$head/);
     assert.match(wrapper, /Get-FileHash -Algorithm SHA256/);
     assert.doesNotMatch(wrapper, /Remove-Item|no-sandbox|RunAs/);
+});
+
+
+test('CEF managed navigation commands require a live dispatcher-owned view before native dispatch', () => {
+    for (const name of ['GoBack', 'GoForward', 'Reload', 'Stop'])
+        assert.match(cefView, new RegExp('public void ' + name + '\\(\\) \\{ RequireView\\(\\); InvalidateFixtureLoginContext\\(\\); CefNative\\.VeilCef' + name + '\\(NativeHandle\\);'));
+    assert.match(cefView, /private void RequireView\(\)\s*\{\s*Dispatcher.VerifyAccess\(\);\s*if \(disposed \|\| hwnd == 0 \|\| NativeHandle == 0 \|\| CefNative.VeilCefClosed\(NativeHandle\) != 0\)/);
+    assert.match(cefView, /get\s*\{\s*RequireView\(\);\s*return Math.Pow\(1.2, CefNative.VeilCefZoomLevel\(NativeHandle\)\);/);
+    assert.match(cefView, /protected override void Dispose\(bool disposing\)[\s\S]*?disposed = true;\s*InvalidateFixtureLoginContext\(\);[\s\S]*?base.Dispose\(disposing\);/);
+    assert.match(cefView, /onStarting = \(url, id, redirect\) =>\s*\{\s*if \(disposed\) return 1;/);
+    assert.match(cefView, /onCompleted = \(id, success, canceled, code\) =>\s*\{\s*if \(disposed\) return;/);
 });
