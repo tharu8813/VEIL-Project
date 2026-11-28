@@ -3,6 +3,7 @@
 #include "protected_paths.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
+#include "include/cef_find_handler.h"
 #include "include/cef_cookie.h"
 #include "include/cef_devtools_message_observer.h"
 #include "include/cef_values.h"
@@ -199,6 +200,7 @@ struct ViewState {
         page_state_changed(changed), render_process_failed(failed) {}
 
   void DetachCallbacks() {
+    InvalidateFind();
     before_browse = nullptr;
     navigation_complete = nullptr;
     page_state_changed = nullptr;
@@ -211,9 +213,25 @@ struct ViewState {
     login_probe_registration = nullptr;
     login_probe.reset();
   }
+  // Both operations are tied to the current document. If a find is
+  // interrupted before its final update, never attribute a late result
+  // to a new request on this view. CEF assigns its own identifiers.
+  void InvalidateFind() {
+    if (!find_active) return;
+    if (find_status == 0) find_poisoned = true;
+    find_status = -1;
+  }
   void InvalidateLoginProbe() {
+    InvalidateFind();
     if (login_probe) login_probe->status = -1;
   }
+  uint64_t find_ticket = 0;
+  bool find_active = false;
+  bool find_poisoned = false;
+  int find_status = -1;
+  int find_cef_id = 0;
+  int last_find_cef_id = 0;
+  int find_count = -1;
 
   const uint64_t id;
   const HWND parent;
@@ -455,11 +473,28 @@ class Client final : public CefClient,
                      public CefLifeSpanHandler,
                      public CefRequestHandler,
                      public CefLoadHandler,
+                     public CefFindHandler,
                      public CefDownloadHandler,
                      public CefPermissionHandler {
  public:
   explicit Client(std::shared_ptr<ViewState> state) : state_(std::move(state)) {}
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
+  CefRefPtr<CefFindHandler> GetFindHandler() override { return this; }
+  void OnFindResult(CefRefPtr<CefBrowser>, int identifier, int count,
+                    const CefRect&, int, bool final_update) override {
+    if (state_->closing || !state_->find_active || state_->find_status != 0 ||
+        identifier <= state_->last_find_cef_id) return;
+    if (state_->find_cef_id != 0 && state_->find_cef_id != identifier) {
+      state_->InvalidateFind();
+      return;
+    }
+    state_->find_cef_id = identifier;
+    if (count >= 0) state_->find_count = count;
+    if (!final_update) return;
+    state_->last_find_cef_id = identifier;
+    state_->find_status = state_->find_count < 0 ? -1 : state_->find_count > 0 ? 1 : 2;
+    if (state_->find_status == -1) state_->find_poisoned = true;
+  }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, int,
                      const CefString&, const CefString&,
@@ -875,6 +910,40 @@ extern "C" __declspec(dllexport) void VeilCefStop(uint64_t id) {
   if (const auto state = LookupView(id)) state->InvalidateLoginProbe();
   const auto browser = LookupBrowser(id);
   if (browser) browser->StopLoad();
+}
+// Fresh, serialized searches only in the synthetic fixture. No script,
+ // network request, or product capability is exposed.
+extern "C" __declspec(dllexport) uint64_t VeilCefStartFind(uint64_t id, const wchar_t* query, int backwards) {
+  if (!CefCurrentlyOn(TID_UI) || !fixture_enabled || !query || !*query) return 0;
+  const auto state = LookupView(id);
+  const auto browser = LookupBrowser(id);
+  if (!state || !browser || state->closing || browser->IsLoading() ||
+      state->find_active || state->find_poisoned ||
+      state->find_ticket == (std::numeric_limits<uint64_t>::max)()) return 0;
+  const std::wstring text(query);
+  if (text.size() > 256) return 0;
+  const auto ticket = ++state->find_ticket;
+  state->find_active = true;
+  state->find_status = 0;
+  state->find_cef_id = 0;
+  state->find_count = -1;
+  browser->GetHost()->Find(CefString(text), backwards == 0, false, false);
+  return ticket;
+}
+extern "C" __declspec(dllexport) int VeilCefFindStatus(uint64_t id, uint64_t ticket) {
+  if (!CefCurrentlyOn(TID_UI)) return -1;
+  const auto state = LookupView(id);
+  return state && !state->closing && state->find_active && ticket != 0 &&
+      state->find_ticket == ticket ? state->find_status : -1;
+}
+extern "C" __declspec(dllexport) void VeilCefEndFind(uint64_t id, uint64_t ticket) {
+  if (!CefCurrentlyOn(TID_UI)) return;
+  const auto state = LookupView(id);
+  if (!state || !state->find_active || ticket == 0 || state->find_ticket != ticket) return;
+  state->InvalidateFind();
+  state->find_active = false;
+  const auto browser = LookupBrowser(id);
+  if (browser && !state->closing) browser->GetHost()->StopFinding(true);
 }
 extern "C" __declspec(dllexport) double VeilCefZoomLevel(uint64_t id) {
   const auto browser = LookupBrowser(id);
