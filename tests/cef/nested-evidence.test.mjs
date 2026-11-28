@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { checkNestedEvidence } from '../../scripts/check-cef-nested-evidence.mjs';
+import { checkNestedEvidence, assessMitigationCollection } from '../../scripts/check-cef-nested-evidence.mjs';
 
 const checkout = 'a'.repeat(40);
 const encode = value => Buffer.from(JSON.stringify(value));
@@ -242,4 +242,49 @@ test('separates distinct flag sets within the same role rather than averaging th
     assert.equal(check(f).mitigationEvidence.byRole.renderer.distinctFlagSets.length, 2);
     clone.Mitigation.Flags.Aslr = 0;
     assert.equal(check(f).mitigationEvidence.byRole.renderer.distinctFlagSets.length, 1);
+});
+
+
+function fullMitigationFixture() {
+    const f = addMitigations(mitigationFixture());
+    f.sample.observed[1].Mitigation = structuredClone(f.sample.browser.Mitigation);
+    for (const [Pid, Role] of [[103, 'gpu'], [104, 'utility']]) {
+        f.sample.observed.push({ ...structuredClone(f.sample.observed[0]), Pid, Role });
+        f.sample.handleExits.push({ Pid, ExitCode: 0 });
+    }
+    f.sample.mitigationCoverage = { scope: 'last-live-sample-per-process', sampled: 5, available: 5, unavailable: 0 };
+    f.sample.jobNotifications = ['outer', 'inner'].flatMap(Job =>
+        [100, 101, 102, 103, 104].flatMap(Pid => ['start', 'exit'].map(Kind => ({ Job, Pid, Kind }))));
+    return f;
+}
+test('explicit mitigation collection target is not an admission or independent verification', () => {
+    const result = assessMitigationCollection(check(fullMitigationFixture()));
+    assert.equal(result.status, 'COLLECTION_TARGET_MET');
+    assert.equal(result.roleBaselineStatus, 'NOT ESTABLISHED');
+    assert.equal(result.independentRuntimeVerification, 'NOT ESTABLISHED');
+    assert.equal(result.productReleaseGates, 'NOT RUN');
+});
+test('collection target reports missing roles and refuses legacy evidence', () => {
+    const legacy = assessMitigationCollection(check(mitigationFixture()));
+    assert.equal(legacy.status, 'COLLECTION_INCOMPLETE');
+    assert.equal(legacy.unavailableSamples, null);
+    const incomplete = assessMitigationCollection(check(addMitigations(mitigationFixture())));
+    assert.deepEqual(incomplete.missingRoles, ['gpu', 'utility']);
+    assert.deepEqual(incomplete.rolesWithoutFlags, ['network']);
+    assert.equal(incomplete.status, 'COLLECTION_INCOMPLETE');
+});
+test('collection target refuses unknown roles, unavailable policy samples and unsampled Job starts', () => {
+    let f = fullMitigationFixture();
+    f.sample.observed[3].Role = 'unknown';
+    assert.equal(assessMitigationCollection(check(f)).unknownRoleSamples, 1);
+    assert.equal(assessMitigationCollection(check(f)).status, 'COLLECTION_INCOMPLETE');
+    f = fullMitigationFixture();
+    f.sample.observed[2].Mitigation = { Status: 'identity-unavailable', Flags: null, Win32Error: null };
+    f.sample.mitigationCoverage.available--;
+    f.sample.mitigationCoverage.unavailable++;
+    assert.equal(assessMitigationCollection(check(f)).status, 'COLLECTION_INCOMPLETE');
+    f = fullMitigationFixture();
+    f.sample.jobNotifications.push({ Job: 'outer', Kind: 'start', Pid: 105 });
+    assert.deepEqual(assessMitigationCollection(check(f)).unsampledJobPids, [105]);
+    assert.equal(assessMitigationCollection(check(f)).status, 'COLLECTION_INCOMPLETE');
 });
