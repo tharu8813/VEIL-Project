@@ -151,3 +151,95 @@ test('reject missing runtime configuration, locale or license inventory', () => 
         assert.throws(() => check(f), /Missing required fixture file/);
     }
 });
+
+
+// Keep old evidence readable; new evidence must be complete as a group,
+// with explicit query failures distinct from actual zero policy flags.
+function mitigationFixture() {
+    const f = fixture();
+    Object.assign(f.sample, { schema: 5, rendererRestrictedLow: true,
+        browser: { Pid: 100, Role: 'browser', IntegrityRid: 8192, Restricted: false, AppContainer: false, Modules: null },
+        jobNotifications: [], handleExits: [100, 101, 102].map(Pid => ({ Pid, ExitCode: 0 })) });
+    Object.assign(f.sample.observed[0], { Role: 'renderer', AppContainer: false, Modules: null });
+    Object.assign(f.sample.observed[1], { Role: 'network', AppContainer: false, Modules: null });
+    return f;
+}
+function addMitigations(f) {
+    const Flags = { Aslr: 0, DynamicCode: 0xffffffff, SystemCallDisable: 1,
+        ControlFlowGuard: 2, ImageLoad: 0, ChildProcess: 0 };
+    f.sample.browser.Mitigation = { Status: 'observed', Flags: { ...Flags }, Win32Error: null };
+    f.sample.observed[0].Mitigation = { Status: 'observed', Flags: { ...Flags }, Win32Error: null };
+    f.sample.observed[1].Mitigation = { Status: 'query-unavailable', Flags: null, Win32Error: 5 };
+    f.sample.mitigationCoverage = { scope: 'last-live-sample-per-process', sampled: 3, available: 2, unavailable: 1 };
+    return f;
+}
+test('legacy schema-5 reports do not establish mitigation evidence', () => {
+    assert.equal(check(mitigationFixture()).mitigationEvidence, null);
+});
+test('reports actual raw flag sets and missing samples by role without granting a baseline', () => {
+    const f = addMitigations(mitigationFixture());
+    const result = check(f);
+    const m = result.mitigationEvidence;
+    assert.equal(m.available, 2);
+    assert.equal(m.unavailable, 1);
+    assert.equal(m.byRole.browser.distinctFlagSets[0].Aslr, 0);
+    assert.equal(m.byRole.renderer.distinctFlagSets[0].DynamicCode, 0xffffffff);
+    assert.deepEqual(m.byRole.network.missingPids, [102]);
+    assert.deepEqual(m.byRole.network.distinctFlagSets, []);
+    assert.equal(m.roleBaselineStatus, 'NOT ESTABLISHED');
+    assert.equal(result.productReleaseGates, 'NOT RUN');
+    f.sample.observed[1].Mitigation = { Status: 'policy-changed', Flags: null, Win32Error: null };
+    assert.equal(check(f).mitigationEvidence.unavailable, 1);
+});
+test('rejects partial mitigation extension and false coverage totals', () => {
+    for (const mutate of [
+        f => delete f.sample.mitigationCoverage,
+        f => delete f.sample.browser.Mitigation,
+        f => delete f.sample.observed[0].Mitigation,
+        f => { f.sample.mitigationCoverage.available = 3; },
+        f => { f.sample.mitigationCoverage.scope = 'all-processes'; },
+        f => { f.sample.mitigationCoverage.unavailable = -1; },
+        f => { f.sample.mitigationCoverage.extra = true; }
+    ]) {
+        const f = addMitigations(mitigationFixture()); mutate(f);
+        assert.throws(() => check(f), /mitigation/i);
+    }
+});
+test('rejects missing, invalid and fabricated mitigation policy values', () => {
+    for (const mutate of [
+        m => { delete m.Flags.Aslr; },
+        m => { m.Flags.Aslr = -1; },
+        m => { m.Flags.Aslr = 0x100000000; },
+        m => { m.Flags.Aslr = '0'; },
+        m => { m.Flags.Aslr = 0.5; },
+        m => { m.Flags.Other = 0; },
+        m => { m.Win32Error = 5; },
+        m => { m.Status = 'safe'; },
+        m => { m.Status = 'identity-unavailable'; }
+    ]) {
+        const f = addMitigations(mitigationFixture()); mutate(f.sample.browser.Mitigation);
+        assert.throws(() => check(f), /mitigation/i);
+    }
+    for (const mutate of [
+        m => { m.Flags = {}; },
+        m => { m.Win32Error = 0; },
+        m => { m.Win32Error = null; },
+        m => { m.Status = 'policy-changed'; }
+    ]) {
+        const f = addMitigations(mitigationFixture()); mutate(f.sample.observed[1].Mitigation);
+        assert.throws(() => check(f), /mitigation/i);
+    }
+});
+test('separates distinct flag sets within the same role rather than averaging them', () => {
+    const f = addMitigations(mitigationFixture());
+    const clone = structuredClone(f.sample.observed[0]);
+    clone.Pid = 103;
+    clone.Mitigation.Flags.Aslr = 4;
+    f.sample.observed.push(clone);
+    f.sample.handleExits.push({ Pid: 103, ExitCode: 0 });
+    f.sample.mitigationCoverage.sampled++;
+    f.sample.mitigationCoverage.available++;
+    assert.equal(check(f).mitigationEvidence.byRole.renderer.distinctFlagSets.length, 2);
+    clone.Mitigation.Flags.Aslr = 0;
+    assert.equal(check(f).mitigationEvidence.byRole.renderer.distinctFlagSets.length, 1);
+});
