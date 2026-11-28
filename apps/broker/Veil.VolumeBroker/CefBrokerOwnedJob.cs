@@ -253,6 +253,110 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         return diagnostics;
     }
 
+    // Collect only from the two trusted Job objects, never client-supplied
+    // PIDs. A PID is a lookup hint; retained live identity, membership and
+    // unchanged accounting/list observations are required before returning.
+    // The original browser root handle remains an independent anchor.
+    internal T[] ObserveCollectedNestedDiagnostics<T>(SafeFileHandle desktopJob,
+        ClientIdentity root, SafeProcessHandle rootHandle,
+        Func<ClientIdentity, SafeProcessHandle, T> observe)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(desktopJob);
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(rootHandle);
+        ArgumentNullException.ThrowIfNull(observe);
+        if (!bound || desktopJob.IsInvalid || desktopJob.IsClosed ||
+            CompareJobObjects(job, desktopJob) || Native.ObserveProcess(rootHandle) != root)
+            throw new UnauthorizedAccessException("CEF collection root or jobs unavailable.");
+
+        var brokerBefore = Accounting();
+        var desktopBefore = Accounting(desktopJob);
+        var pids = QueryMemberPids(job, brokerBefore.ActiveProcesses);
+        if (!pids.Contains(root.ProcessId) ||
+            !pids.SequenceEqual(QueryMemberPids(desktopJob, desktopBefore.ActiveProcesses)))
+            throw new UnauthorizedAccessException("CEF job process lists differ.");
+
+        var retained = new List<(ClientIdentity Identity, SafeProcessHandle Handle)>();
+        try
+        {
+            foreach (int pid in pids)
+            {
+                // PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE only.
+                var handle = OpenObservedProcess(0x00101000, false, (uint)pid);
+                try
+                {
+                    if (handle.IsInvalid) throw new Win32Exception();
+                    var identity = Native.ObserveProcess(handle);
+                    if (identity.ProcessId != pid || identity.SessionId != root.SessionId ||
+                        !string.Equals(identity.UserSid, root.UserSid, StringComparison.OrdinalIgnoreCase) ||
+                        identity.CreatedFileTime < root.CreatedFileTime ||
+                        !string.Equals(identity.ImagePath, root.ImagePath, StringComparison.OrdinalIgnoreCase) ||
+                        (pid == root.ProcessId && (identity != root || !Native.SameLiveProcess(rootHandle, handle))))
+                        throw new UnauthorizedAccessException("CEF collected member identity mismatch.");
+                    CheckRetainedMember(identity, handle);
+                    retained.Add((identity, handle));
+                }
+                catch { handle.Dispose(); throw; }
+            }
+
+            var result = ObserveNestedRetainedDiagnostics(desktopJob, retained, observe);
+            if (!pids.SequenceEqual(QueryMemberPids(job, brokerBefore.ActiveProcesses)) ||
+                !pids.SequenceEqual(QueryMemberPids(desktopJob, desktopBefore.ActiveProcesses)) ||
+                !SameMembershipAccounting(brokerBefore, Accounting()) ||
+                !SameMembershipAccounting(desktopBefore, Accounting(desktopJob)) ||
+                Native.ObserveProcess(rootHandle) != root)
+                throw new UnauthorizedAccessException("CEF membership changed during collection.");
+            foreach (var member in retained)
+                CheckRetainedMember(member.Identity, member.Handle);
+            return result;
+        }
+        finally
+        {
+            foreach (var member in retained) member.Handle.Dispose();
+        }
+    }
+
+    private int[] QueryMemberPids(SafeFileHandle observedJob, uint expected)
+    {
+        if (!Environment.Is64BitProcess || expected == 0 || expected > activeLimit)
+            throw new UnauthorizedAccessException("Invalid CEF collection size.");
+        // JOBOBJECT_BASIC_PROCESS_ID_LIST: two DWORD counts, then ULONG_PTRs.
+        // Fixed capacity follows the existing broker cap; never retry with a
+        // larger buffer or relax the production one-process limit.
+        int bytes = checked(8 + (int)activeLimit * IntPtr.Size);
+        IntPtr buffer = Marshal.AllocHGlobal(bytes);
+        try
+        {
+            if (!QueryJobProcessList(observedJob, 3, buffer, (uint)bytes, IntPtr.Zero))
+                throw new Win32Exception();
+            uint assigned = unchecked((uint)Marshal.ReadInt32(buffer));
+            uint listed = unchecked((uint)Marshal.ReadInt32(buffer, 4));
+            if (assigned != expected || listed != expected)
+                throw new UnauthorizedAccessException("Incomplete CEF job process list.");
+            var result = new int[(int)listed];
+            var seen = new HashSet<int>();
+            for (int i = 0; i < result.Length; i++)
+            {
+                long pid = Marshal.ReadInt64(buffer, 8 + i * IntPtr.Size);
+                if (pid <= 0 || pid > int.MaxValue || !seen.Add((int)pid))
+                    throw new UnauthorizedAccessException("Invalid or duplicate CEF member PID.");
+                result[i] = (int)pid;
+            }
+            Array.Sort(result);
+            return result;
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "QueryInformationJobObject", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryJobProcessList(SafeFileHandle job, int infoClass, IntPtr info, uint length, IntPtr returned);
+
+    [DllImport("kernel32.dll", EntryPoint = "OpenProcess", SetLastError = true)]
+    private static extern SafeProcessHandle OpenObservedProcess(uint access,
+        [MarshalAs(UnmanagedType.Bool)] bool inherit, uint pid);
+
     private static bool SameMembershipAccounting(AccountingInfo before, AccountingInfo after) =>
         before.ActiveProcesses == after.ActiveProcesses && before.TotalProcesses == after.TotalProcesses &&
         before.TotalTerminatedProcesses == after.TotalTerminatedProcesses;
