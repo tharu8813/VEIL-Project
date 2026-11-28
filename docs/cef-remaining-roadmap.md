@@ -313,3 +313,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #289 수정 exact head `44d711133b2c27145f22ea812be49e93e89c396f` Windows/Rust CI 46176834359 PASS, 독립 리뷰 없음.
 - 검색 엔진/로컬 주소창 제안을 하나의 transaction으로 변경. 허용 provider, UI 및 session/dispatcher/engine 수명, private/ending/lost 상태를 검사하고 기존 library profile writer로 저장. 거부/예외 시 두 값 복원, 성공 후 일반 session의 창 UI만 갱신. 기본 provider 및 nullable suggestion schema 유지. 합성 거부/철회/실패/예외/성공 및 source contract 추가. 실제 WPF/보호 VM, 새 CI/독립 리뷰 미검증. 기존 WebView2 동작에 적용, CEF fixture 지속 저장 미연결, startupEnabled=false 유지.
+
+### P3-02 사이트 권한 공통 저장 경계 (미완료)
+
+- #290 exact head `c6b2ea360e8276ae3c6abc2fd127572af198cb2a` Windows/Rust CI 46177523014 PASS, 독립 리뷰 없음.
+- 기존 WebView2 사이트 권한 편집을 session-owned profile writer에 연결. 독립 복제한 규칙 목록의 HTTPS canonical origin, 지원 종류, Ask/Allow 및 중복 검사, private/ending/lost/dispatcher/engine/UI 권한 검사를 유지한다. 실패/예외/철회 시 원본 목록 복원, 빈 목록은 null/default deny, 성공한 이후 안내. 합성 회귀 7개와 source contract 작성. 이미 사용 중인 권한의 즉시 철회나 CEF permission callback 연결은 아님. 실제 WPF/보호 VM, 신규 CI/독립 리뷰 NOT RUN. WebView2 및 startupEnabled=false 유지.

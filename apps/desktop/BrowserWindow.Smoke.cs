@@ -249,6 +249,44 @@ public partial class BrowserWindow
                     SitePermissionPolicy.ModeFor([rule], "https://example.test:8443", "camera") == SitePermissionPolicy.Block &&
                     SitePermissionPolicy.ModeFor([rule], "https://example.test", "microphone") == SitePermissionPolicy.Block &&
                     SitePermissionPolicy.Origin("http://example.test") is null, "permission policy defaults and exact scope");
+                var permissionData = new BrowserData { SitePermissions = [rule] };
+                var originalRules = permissionData.SitePermissions;
+                var allowRule = rule with { Mode = SitePermissionPolicy.Allow };
+                int permissionWrites = 0, permissionChecks = 0;
+                bool PermissionWrite() { permissionWrites++; return true; }
+                Check(!permissionData.TryCommitSitePermissions([allowRule, allowRule], () => true, PermissionWrite) &&
+                    !permissionData.TryCommitSitePermissions([allowRule with { Origin = "http://example.test" }], () => true, PermissionWrite) &&
+                    !permissionData.TryCommitSitePermissions([allowRule], () => false, PermissionWrite) &&
+                    permissionWrites == 0 && ReferenceEquals(permissionData.SitePermissions, originalRules),
+                    "permission commit rejects invalid or unauthorized draft without write");
+                Check(!permissionData.TryCommitSitePermissions([allowRule], () => ++permissionChecks == 1, PermissionWrite) &&
+                    permissionWrites == 0 && ReferenceEquals(permissionData.SitePermissions, originalRules),
+                    "permission commit restores original rules when authority is revoked");
+                Check(!permissionData.TryCommitSitePermissions([allowRule], () => true, () => false) &&
+                    ReferenceEquals(permissionData.SitePermissions, originalRules) &&
+                    SitePermissionPolicy.ModeFor(permissionData.SitePermissions, rule.Origin, rule.Kind) == SitePermissionPolicy.Ask,
+                    "permission commit refusal never publishes a new allow rule");
+                bool permissionWriteFailed = false;
+                try
+                {
+                    permissionData.TryCommitSitePermissions([allowRule], () => true,
+                        () => throw new IOException("Synthetic permission write failure"));
+                }
+                catch (IOException) { permissionWriteFailed = true; }
+                Check(permissionWriteFailed && ReferenceEquals(permissionData.SitePermissions, originalRules),
+                    "permission commit exception restores exact previous rules");
+                var permissionDraft = new List<SitePermissionRule> { allowRule };
+                Check(permissionData.TryCommitSitePermissions(permissionDraft, () => true, PermissionWrite) &&
+                    permissionWrites == 1 && !ReferenceEquals(permissionDraft, permissionData.SitePermissions),
+                    "permission commit owns an independent copy");
+                permissionDraft.Clear();
+                Check(SitePermissionPolicy.ModeFor(permissionData.SitePermissions, rule.Origin, rule.Kind) == SitePermissionPolicy.Allow &&
+                    SitePermissionPolicy.ModeFor(permissionData.SitePermissions, rule.Origin, "microphone") == SitePermissionPolicy.Block,
+                    "committed permission remains exact-scope after dialog draft changes");
+                Check(permissionData.TryCommitSitePermissions([], () => true, PermissionWrite) &&
+                    permissionWrites == 2 && permissionData.SitePermissions is null &&
+                    SitePermissionPolicy.ModeFor(permissionData.SitePermissions, rule.Origin, rule.Kind) == SitePermissionPolicy.Block,
+                    "empty permission commit restores default deny");
                 var unusedEngine = new WebView2BrowserEngine();
                 Check(!unusedEngine.IsReady && unusedEngine.RuntimeVersion is null, "uninitialized engine state");
                 bool refusedView = false;
