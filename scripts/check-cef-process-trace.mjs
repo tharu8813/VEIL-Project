@@ -4,13 +4,70 @@ import { lstat, readFile } from 'node:fs/promises';
 import { join, win32 } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { checkNestedEvidence } from './check-cef-nested-evidence.mjs';
-import { parseCsv } from '../tests/security/outside-writes.mjs';
 
 const require = (valid, reason) => { if (!valid) throw new Error(reason); };
 const isPid = id => Number.isInteger(id) && id > 0 && id <= 0xffffffff;
 const pathKey = path => win32.normalize(path).toLowerCase();
 const parseJson = bytes => JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/, ''));
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+
+// Strict parser for this evidence format only. The shared write analyzer accepts
+// incomplete rows; that is not appropriate for a MATCHED_CAPTURE verdict.
+export function parseProcessTraceCsv(text) {
+    const input = text.replace(/^\uFEFF/, '');
+    let header = null, fields = [], field = '', state = 'start';
+    const records = [];
+    const finishField = () => {
+        fields.push(field);
+        field = '';
+        state = 'start';
+    };
+    const finishRecord = () => {
+        finishField();
+        if (header === null) {
+            header = fields.map(name => name.trim());
+            require(header.every(Boolean) && new Set(header).size === header.length,
+                'Empty or duplicate Procmon CSV header');
+            require(['Process Name', 'PID', 'Operation', 'Path', 'Result', 'Detail']
+                .every(column => header.includes(column)), 'Missing Procmon process trace columns');
+        } else {
+            require(fields.length === header.length, 'Wrong Procmon CSV record width');
+            records.push(Object.fromEntries(header.map((name, index) => [name, fields[index]])));
+        }
+        fields = [];
+    };
+    for (let i = 0; i < input.length; i++) {
+        const c = input[i];
+        if (state === 'quoted') {
+            if (c === '"') {
+                if (input[i + 1] === '"') { field += '"'; i++; }
+                else state = 'closed';
+            } else field += c;
+            continue;
+        }
+        if (c === ',') { finishField(); continue; }
+        if (c === '\r' || c === '\n') {
+            if (c === '\r') {
+                require(input[i + 1] === '\n', 'Invalid Procmon CSV line ending');
+                i++;
+            }
+            finishRecord();
+            continue;
+        }
+        require(state !== 'closed', 'Unexpected text after Procmon CSV quoted field');
+        if (c === '"') {
+            require(state === 'start', 'Unexpected quote in Procmon CSV field');
+            state = 'quoted';
+        } else {
+            field += c;
+            state = 'unquoted';
+        }
+    }
+    require(state !== 'quoted', 'Unterminated Procmon CSV quoted field');
+    if (fields.length || state !== 'start') finishRecord();
+    require(header !== null && records.length > 0, 'Missing Procmon CSV records');
+    return records;
+}
 
 // The CSV must cover the same single invocation as the hash-bound bundle report.
 // Pair events in capture order so an unrelated process reusing a PID stays outside the tree.
@@ -125,9 +182,7 @@ async function main(args) {
         readBounded(join(evidence, 'stdout.json'), 1024 * 1024), readBounded(trace, 32 * 1024 * 1024),
     ]);
     checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes, sampleBytes });
-    const events = parseCsv(traceBytes.toString('utf8'));
-    require(events.length > 0 && ['Process Name', 'PID', 'Operation', 'Path', 'Result', 'Detail']
-        .every(column => Object.hasOwn(events[0], column)), 'Missing Procmon process trace columns');
+    const events = parseProcessTraceCsv(new TextDecoder('utf-8', { fatal: true }).decode(traceBytes));
     const result = compareProcessTrace(events, { runnerPid: parseJson(reportBytes).runnerPid, image,
         sample: parseJson(sampleBytes) });
     console.log(JSON.stringify({ sourceCommit: expectedCommit, traceSha256: digest(traceBytes),
