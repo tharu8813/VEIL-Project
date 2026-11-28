@@ -936,10 +936,22 @@ test('site permission edits commit a validated detached rule set through the sha
 
 
 test('CEF fixture shares the library transaction but never obtains a persistent writer', () => {
-    assert.match(cefTabbed, /CollectionMutation.TryCommit\(entries, \(\) => fixture is not null && !shuttingDown && authorized\(\),\s*change, valid, static \(\) => true\);/);
+    assert.match(cefTabbed, /libraryLifetime.TryCommit\(entries, authorized, change, valid, static \(\) => true\);/);
     assert.match(cefTabbed, /if \(!CommitFixtureEdit\(bookmarks,[\s\S]*?\) return;\s*bookmarkList.Items.Add\(entry\);/);
     assert.match(cefTabbed, /if \(!CommitFixtureEdit\(visits, Authorized,[\s\S]*?\) return;\s*visitList.Items.Insert\(0, visit\);/);
     assert.match(cefTabbed, /if \(shuttingDown\) visits.Clear\(\);\s*else if \(!CommitFixtureEdit\(visits,/);
     assert.doesNotMatch(collectionMutation, /\b(?:File|Directory|Path|BrowserSession|ProtectedProfileSession)\./);
+});
+
+
+
+const cefLibraryLifetime = await readFile('apps/desktop/Engine/CefLibraryLifetime.cs', 'utf8');
+test('CEF library lifetime is terminal on session loss and cannot authorize a protected runtime', () => {
+    assert.match(cefLibraryLifetime, /if \(Environment.CurrentManagedThreadId != ownerThread \|\| IsRevoked\) return false;[\s\S]*?if \(lifetimeCurrent\(\) && !IsRevoked\) return true;[\s\S]*?Revoke\(\);\s*return false;/);
+    assert.match(cefLibraryLifetime, /if \(Environment.CurrentManagedThreadId != ownerThread \|\| editing \|\| IsRevoked\) return false;[\s\S]*?CollectionMutation.TryCommit\(entries,\s*\(\) => Current\(\) && authorized\(\) && !IsRevoked,\s*change, valid, \(\) => Current\(\) && save\(\)\);/);
+    assert.match(cefLibraryLifetime, /finally \{ editing = false; \}/);
+    assert.match(cefTabbed, /libraryLifetime = new CefLibraryLifetime\(\(\) => this.fixture is not null && !shuttingDown && engine.IsReady\);/);
+    assert.match(cefTabbed, /libraryLifetime.Revoke\(\);\s*shuttingDown = true;\s*bookmarks.Clear\(\);/);
+    assert.doesNotMatch(cefLibraryLifetime, /\b(?:File|Directory|Path|ProtectedProfileSession|CefPreparationLease)\./);
 });
 

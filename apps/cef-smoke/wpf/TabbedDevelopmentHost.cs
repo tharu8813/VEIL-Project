@@ -89,6 +89,7 @@ internal sealed class TabbedDevelopmentHost
     private readonly CefDevelopmentEngine engine = new();
     private readonly DispatcherTimer pump = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(10) };
     private readonly string? fixture;
+    private readonly CefLibraryLifetime libraryLifetime;
     private readonly bool freshProfileProbe;
     private readonly System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
     private Tab? active;
@@ -121,6 +122,7 @@ internal sealed class TabbedDevelopmentHost
         freshProfileProbe = fixture is not null && Environment.GetEnvironmentVariable("VEIL_CEF_WPF_TABS_FRESH_PROBE") == "1";
         result = fixture is null ? 0 : 40;
         engine.InitializeAsync(CefDevelopmentEngine.FixtureProfile, NetworkSettings.Standard).GetAwaiter().GetResult();
+        libraryLifetime = new CefLibraryLifetime(() => this.fixture is not null && !shuttingDown && engine.IsReady);
 
         DockPanel.SetDock(strip, Dock.Top);
         layout.Children.Add(strip);
@@ -547,8 +549,7 @@ internal sealed class TabbedDevelopmentHost
     // Explicitly memory-only: never substitute a file writer here. A protected
     // product adapter must be bound to a verified runtime/session lease separately.
     private bool CommitFixtureEdit<T>(List<T> entries, Func<bool> authorized, Action change, Func<bool> valid) =>
-        CollectionMutation.TryCommit(entries, () => fixture is not null && !shuttingDown && authorized(),
-            change, valid, static () => true);
+        libraryLifetime.TryCommit(entries, authorized, change, valid, static () => true);
 
     private void AddActiveBookmark()
     {
@@ -669,6 +670,7 @@ internal sealed class TabbedDevelopmentHost
     private void BeginShutdown()
     {
         if (shuttingDown) return;
+        libraryLifetime.Revoke();
         shuttingDown = true;
         bookmarks.Clear();
         bookmarkList.Items.Clear();

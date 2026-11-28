@@ -677,6 +677,54 @@ CheckCleanup(true, [openVolume], false, 1, 0, refuseLock: true);
 CheckCleanup(true, [openVolume, lockedVolume], false, 1, 1, refuseDetach: true);
 Console.WriteLine("PASS: exact-volume preflight cleanup, command refusal and detach observation");
 
+// No real profile, engine or filesystem authority is available to this test.
+{
+    var entries = new List<string> { "original" };
+    bool live = true;
+    int writes = 0, probes = 0;
+    bool Write() { writes++; return true; }
+    var lifetime = new CefLibraryLifetime(() => { probes++; return live; });
+    Check(!lifetime.TryCommit(entries, () => false, entries.Clear, () => true, Write) &&
+        !lifetime.IsRevoked && entries.SequenceEqual(["original"]) && writes == 0,
+        "request denial is not session revocation");
+    Check(lifetime.TryCommit(entries, () => true, () => entries.Add("second"), () => true, Write) &&
+        entries.SequenceEqual(["original", "second"]) && writes == 1, "live edit commits");
+    bool foreignAccepted = true;
+    int before = probes;
+    var worker = new Thread(() => foreignAccepted = lifetime.TryCommit(entries, () => true,
+        entries.Clear, () => true, Write));
+    worker.Start();
+    worker.Join();
+    Check(!foreignAccepted && probes == before && writes == 1, "foreign thread cannot edit or probe");
+    bool nestedAccepted = true;
+    Check(lifetime.TryCommit(entries, () => true, () =>
+    {
+        nestedAccepted = lifetime.TryCommit(entries, () => true, entries.Clear, () => true, Write);
+    }, () => true, Write) && !nestedAccepted && entries.Count == 2 && writes == 2,
+        "nested edit cannot enter");
+    Check(!lifetime.TryCommit(entries, () => true, () => { entries.Clear(); live = false; }, () => true, Write) &&
+        lifetime.IsRevoked && entries.SequenceEqual(["original", "second"]) && writes == 2,
+        "session loss rolls back and prevents publication");
+    live = true;
+    Check(!lifetime.TryCommit(entries, () => true, entries.Clear, () => true, Write) && writes == 2,
+        "revoked lifetime cannot be reactivated");
+    var lockDuringValidation = new CefLibraryLifetime(() => true);
+    Check(!lockDuringValidation.TryCommit(entries, () => true, entries.Clear, () =>
+    {
+        lockDuringValidation.Revoke();
+        return true;
+    }, Write) && entries.Count == 2 && writes == 2, "lock notification prevents save");
+    int checksBeforeWrite = 0;
+    var lostBeforeWrite = new CefLibraryLifetime(() => ++checksBeforeWrite < 3);
+    Check(!lostBeforeWrite.TryCommit(entries, () => true, entries.Clear, () => true, Write) &&
+        lostBeforeWrite.IsRevoked && entries.Count == 2 && writes == 2,
+        "authority rechecked at writer entry");
+    var failedProbe = new CefLibraryLifetime(() => throw new IOException("synthetic lost authority"));
+    Check(!failedProbe.TryCommit(entries, () => true, entries.Clear, () => true, Write) &&
+        failedProbe.IsRevoked && entries.Count == 2 && writes == 2, "failed lifetime probe is terminal");
+    Console.WriteLine("PASS: CEF library lifetime revocation, thread ownership, rollback and writer entry");
+}
+
 file sealed class SyntheticRetainedResource : IDisposable
 {
     internal int Disposals { get; private set; }
