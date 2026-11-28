@@ -955,3 +955,17 @@ test('CEF library lifetime is terminal on session loss and cannot authorize a pr
     assert.doesNotMatch(cefLibraryLifetime, /\b(?:File|Directory|Path|ProtectedProfileSession|CefPreparationLease)\./);
 });
 
+
+
+const protectedLibraryAuthority = await readFile('apps/desktop/Engine/CefProtectedLibraryAuthority.cs', 'utf8');
+test('prospective CEF persistence binds exact generation, retained leases and protected volume without admitting runtime', () => {
+    assert.match(protectedLibraryAuthority, /ReferenceEquals\(generation, current.Generation\) &&\s*ReferenceEquals\(runtimeLease, current.RuntimeLease\) &&\s*ReferenceEquals\(profileLease, current.ProfileLease\)/);
+    assert.match(protectedLibraryAuthority, /current.AuthenticatedOwner && current.RuntimeAdmitted &&\s*current.ProfileLeaseCurrent && current.RuntimeLeaseCurrent && !current.LockRequested/);
+    assert.match(protectedLibraryAuthority, /current.Volume is \{ FullyEncrypted: true, ProtectionOn: true, Unlocked: true, ProtectorPresent: true \} volume &&\s*string.Equals\(volumeGuid, volume.VolumeGuid, StringComparison.OrdinalIgnoreCase\)/);
+    assert.match(protectedLibraryAuthority, /lifetime = new CefLibraryLifetime\(Current\);/);
+    assert.match(protectedLibraryAuthority, /lifetime.TryCommit\(entries, authorized, change, valid, save\);/);
+    assert.doesNotMatch(protectedLibraryAuthority, /\b(?:File|Directory|Path|ProtectedProfileSession|CefPreparationLease)\./);
+    assert.doesNotMatch(cefTabbed, /\bCefProtectedLibraryAuthority\b/);
+    assert.doesNotMatch(browser, /\bCefProtectedLibraryAuthority\b/);
+});
+

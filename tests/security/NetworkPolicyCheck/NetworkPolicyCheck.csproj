@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Include="../../../apps/desktop/NetworkPolicy.cs" Link="NetworkPolicy.cs" />
     <Compile Include="../../../apps/desktop/Engine/CefLibraryLifetime.cs" Link="CefLibraryLifetime.cs" />
+    <Compile Include="../../../apps/desktop/Engine/CefProtectedLibraryAuthority.cs" Link="CefProtectedLibraryAuthority.cs" />
     <Compile Include="../../../apps/desktop/CollectionMutation.cs" Link="CollectionMutation.cs" />
     <Compile Include="../../../apps/desktop/RecoverableFailure.cs" Link="RecoverableFailure.cs" />
     <Compile Include="../../../apps/desktop/VolumeStatus.cs" Link="VolumeStatus.cs" />

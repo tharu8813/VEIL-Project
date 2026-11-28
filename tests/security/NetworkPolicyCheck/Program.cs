@@ -725,6 +725,71 @@ Console.WriteLine("PASS: exact-volume preflight cleanup, command refusal and det
     Console.WriteLine("PASS: CEF library lifetime revocation, thread ownership, rollback and writer entry");
 }
 
+// Prospective protected-library binding: fake observations only, no actual broker or files.
+{
+    var generation = new object();
+    var runtimeLease = new object();
+    var profileLease = new object();
+    var volume = new VolumeStatus("synthetic-volume", true, true, true, false, true);
+    var baseline = new CefLibraryAuthorityObservation(generation, runtimeLease, profileLease,
+        volume, true, true, true, true, false);
+    CefLibraryAuthorityObservation? current = baseline;
+    var entries = new List<string> { "original" };
+    int writes = 0;
+    bool Write() { writes++; return true; }
+    CefProtectedLibraryAuthority New() => new(generation, runtimeLease, profileLease, volume.VolumeGuid, () => current);
+    var valid = New();
+    Check(valid.TryCommit(entries, () => true, () => entries.Add("second"), () => true, Write) &&
+        entries.SequenceEqual(["original", "second"]) && writes == 1, "matching protected authority model commits");
+    foreach (var invalid in new CefLibraryAuthorityObservation?[] {
+        null,
+        baseline with { Generation = new object() },
+        baseline with { RuntimeLease = new object() },
+        baseline with { ProfileLease = new object() },
+        baseline with { AuthenticatedOwner = false },
+        baseline with { RuntimeAdmitted = false },
+        baseline with { ProfileLeaseCurrent = false },
+        baseline with { RuntimeLeaseCurrent = false },
+        baseline with { LockRequested = true },
+        baseline with { Volume = null },
+        baseline with { Volume = volume with { VolumeGuid = "different-volume" } },
+        baseline with { Volume = volume with { FullyEncrypted = false } },
+        baseline with { Volume = volume with { ProtectionOn = false } },
+        baseline with { Volume = volume with { Unlocked = false } },
+        baseline with { Volume = volume with { ProtectorPresent = false } }
+    })
+    {
+        current = invalid;
+        var before = New();
+        bool changed = false;
+        Check(!before.TryCommit(entries, () => true, () => { changed = true; entries.Clear(); }, () => true, Write) &&
+            before.IsRevoked && !changed && writes == 1, "invalid authority rejected before mutation");
+        current = baseline;
+        Check(!before.TryCommit(entries, () => true, entries.Clear, () => true, Write),
+            "retired authority cannot be reused after recovery");
+        var after = New();
+        Check(!after.TryCommit(entries, () => true, () => { entries.Clear(); current = invalid; }, () => true, Write) &&
+            after.IsRevoked && entries.SequenceEqual(["original", "second"]) && writes == 1,
+            "authority change after mutation rolls back without write");
+        current = baseline;
+        Check(!after.TryCommit(entries, () => true, entries.Clear, () => true, Write),
+            "replaced generation or recovered volume cannot resurrect old edit lifetime");
+    }
+    int probes = 0;
+    var writerEntry = new CefProtectedLibraryAuthority(generation, runtimeLease, profileLease,
+        volume.VolumeGuid, () => ++probes < 3 ? baseline : baseline with { LockRequested = true });
+    Check(!writerEntry.TryCommit(entries, () => true, entries.Clear, () => true, Write) &&
+        writerEntry.IsRevoked && entries.Count == 2 && writes == 1, "lock at writer entry prevents publication");
+    var failed = new CefProtectedLibraryAuthority(generation, runtimeLease, profileLease,
+        volume.VolumeGuid, () => throw new IOException("synthetic broker unavailable"));
+    Check(!failed.TryCommit(entries, () => true, entries.Clear, () => true, Write) && failed.IsRevoked,
+        "failed authority observation retires binding");
+    valid.Revoke();
+    Check(!valid.TryCommit(entries, () => true, entries.Clear, () => true, Write) &&
+        valid.IsRevoked && entries.Count == 2 && writes == 1, "explicit revocation prevents further writes");
+    Console.WriteLine("PASS: prospective protected CEF library authority binding and revocation (synthetic)");
+}
+
 file sealed class SyntheticRetainedResource : IDisposable
 {
     internal int Disposals { get; private set; }
