@@ -152,6 +152,26 @@ internal static class CefSessionObservationTests
         var next = new CefAuthenticatedGeneration(owner, nextGeneration);
         Check(next.Observe(owner, nextGeneration, true, true));
         Check(!authority.Observe(owner, nextGeneration, true, true));
+        // Relock remains pending through drain failure, stale generation,
+        // backend refusal and exceptions; no lock call before exit proof.
+        var relock = new CefDiagnosticRelock();
+        int lockCalls = 0;
+        bool LockVerified() { lockCalls++; return true; }
+        Check(relock.TryComplete(generation, false, LockVerified) && lockCalls == 0);
+        relock.Request(generation);
+        relock.Request(nextGeneration);
+        Check(relock.Pending);
+        Check(!relock.TryComplete(nextGeneration, true, LockVerified) && lockCalls == 0);
+        Check(!relock.TryComplete(generation, false, LockVerified) && lockCalls == 0);
+        Check(!relock.TryComplete(generation, true, () => { lockCalls++; return false; }));
+        Check(relock.Pending && lockCalls == 1);
+        RefuseGuard(() => relock.TryComplete(generation, true, () => throw new UnauthorizedAccessException()));
+        Check(relock.Pending);
+        Check(relock.TryComplete(generation, true, LockVerified) && !relock.Pending && lockCalls == 2);
+        Check(relock.TryComplete(generation, true, LockVerified) && lockCalls == 2);
+        var unknownRelock = new CefDiagnosticRelock();
+        unknownRelock.Request(null);
+        Check(!unknownRelock.TryComplete(null, true, LockVerified) && unknownRelock.Pending && lockCalls == 2);
         var runtimePin = new TrackedResource();
         var jobPin = new TrackedResource { FailNextRelease = true };
         var rootPin = new TrackedResource();

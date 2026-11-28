@@ -288,3 +288,31 @@ internal sealed class CefDiagnosticSessionSlot<T> where T : class, ICefDiagnosti
         finally { releasing = false; }
     }
 }
+
+
+// Serialized, generation-bound relock obligation. Drain completion alone
+// cannot clear it. A stale generation or uncertain lock remains blocked.
+internal sealed class CefDiagnosticRelock
+{
+    private object? generation;
+    internal bool Pending { get; private set; }
+
+    internal void Request(object? ownerGeneration)
+    {
+        if (Pending) return;
+        generation = ownerGeneration;
+        Pending = true;
+    }
+
+    internal bool TryComplete(object? currentGeneration, bool cleanupConfirmed, Func<bool> lockAndVerify)
+    {
+        ArgumentNullException.ThrowIfNull(lockAndVerify);
+        if (!Pending) return true;
+        if (generation is null || !ReferenceEquals(generation, currentGeneration) || !cleanupConfirmed)
+            return false;
+        if (!lockAndVerify()) return false;
+        Pending = false;
+        generation = null;
+        return true;
+    }
+}

@@ -20,6 +20,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     }
     private readonly List<CandidateStop> unresolvedCefStops = [];
     private bool cefStopRetryRunning;
+    private readonly CefDiagnosticRelock diagnosticRelock = new();
     private sealed record CompletedPreflight(object Generation, SafeProcessHandle Child, CefBrokerOwnedJob Job,
         IDisposable? Image, IDisposable? Runtime, long Issued);
     private CompletedPreflight? completedPreflight;
@@ -79,6 +80,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             RetryUnresolvedCefStops();
             if (diagnosticSession.Occupied)
                 throw new InvalidOperationException("CEF diagnostic lifetime remains unconfirmed; service cleanup refused.");
+            if (!TryCompleteDiagnosticRelock())
+                throw new InvalidOperationException("CEF diagnostic relock remains unconfirmed; service cleanup refused.");
             var status = backend.Status();
             if (!status.Attached) return;
             if (!string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase))
@@ -282,6 +285,9 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             if (diagnosticSession.Occupied &&
                 request.Command is BrokerCommand.Lock or BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild)
                 return Protocol.Error("CefExitUnconfirmed");
+            if (diagnosticRelock.Pending && !TryCompleteDiagnosticRelock() &&
+                request.Command != BrokerCommand.Status)
+                return Protocol.Error("LockRefused");
             // Non-forced Lock remains available even if a disabled candidate exit is unconfirmed.
             var status = backend.Status();
             RefreshAuthenticatedOwner(status);
@@ -306,6 +312,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             if (diagnosticSession.Occupied &&
                 request.Command is BrokerCommand.Lock or BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild)
                 return Protocol.Error("CefExitUnconfirmed");
+            if (diagnosticRelock.Pending && request.Command != BrokerCommand.Status)
+                return Protocol.Error("LockRefused");
             switch (request.Command)
             {
                 case BrokerCommand.Status:
@@ -560,7 +568,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         Veil.Desktop.CefRuntimeRegistrationLease registration,
         ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature)
     {
-        if (config.Development || config.CefChildImage is not { } image ||
+        if (diagnosticRelock.Pending || config.Development || config.CefChildImage is not { } image ||
             config.CefChildSha256 is not { } digest ||
             diagnosticSession.Occupied || pendingCefChild is not null ||
             completedPreflight is not null || unresolvedCefStops.Count != 0 ||
@@ -597,6 +605,10 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     {
         // Retire authorization before stopping candidates: cleanup can fail.
         // Keep unlockOwner for the independent crash-relock watcher.
+        // Latch before cleanup: even immediate release cannot erase the
+        // obligation to relock the volume after a diagnostic retirement.
+        if (diagnosticSession.Occupied)
+            diagnosticRelock.Request(unlockOwner);
         authenticatedGeneration?.Revoke();
         authenticatedGeneration = null;
         authenticatedOwner = null;
@@ -606,7 +618,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         finally
         {
             RetryDiagnosticSession();
-            if (diagnosticSession.CleanupPending) EnsureCefStopRetry();
+            if (diagnosticSession.CleanupPending || diagnosticRelock.Pending) EnsureCefStopRetry();
         }
     }
 
@@ -729,6 +741,38 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         }
     }
 
+    // All callers hold serial. Never lock a different volume or one with
+    // unconfirmed CEF lifetimes. The backend lock is non-forced.
+    private bool TryCompleteDiagnosticRelock()
+    {
+        if (!diagnosticRelock.Pending) return true;
+        try
+        {
+            if (!diagnosticRelock.TryComplete(unlockOwner,
+                authenticatedGeneration is null && !diagnosticSession.Occupied &&
+                unresolvedCefStops.Count == 0 && pendingCefChild is null && completedPreflight is null,
+                () =>
+                {
+                    var status = backend.Status();
+                    bool Registered(BackendStatus state) => state.Attached &&
+                        string.Equals(state.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase);
+                    if (!Registered(status)) return false;
+                    if (status.Unlocked && backend.Lock() != LockResult.Locked) return false;
+                    status = backend.Status();
+                    return Registered(status) && !status.Unlocked && status.ReadyToUnlock;
+                }))
+                return false;
+            unlockOwner = null;
+            log.Write("cef-diagnostic-relock", new { result = "LockedVerified" });
+            return true;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Write("cef-diagnostic-relock", new { result = "LockUnconfirmed", type = error.GetType().Name });
+            return false;
+        }
+    }
+
     private async Task RetryCefStopsAsync()
     {
         // Bounded automatic attempts. If the OS still refuses, keep the
@@ -740,11 +784,14 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             try
             {
                 RetryUnresolvedCefStops();
-                if ((unresolvedCefStops.Count == 0 && !diagnosticSession.CleanupPending) || attempt == 29)
+                TryCompleteDiagnosticRelock();
+                if ((unresolvedCefStops.Count == 0 && !diagnosticSession.CleanupPending && !diagnosticRelock.Pending) || attempt == 29)
                 {
                     cefStopRetryRunning = false;
                     if (unresolvedCefStops.Count != 0 || diagnosticSession.CleanupPending)
                         log.Write("cef-child-stop", new { result = "RetryExhausted" });
+                    if (diagnosticRelock.Pending)
+                        log.Write("cef-diagnostic-relock", new { result = "RetryExhausted" });
                     return;
                 }
             }
@@ -891,6 +938,9 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     RetryUnresolvedCefStops();
                     if (diagnosticSession.Occupied)
                         throw new InvalidOperationException("CEF diagnostic lifetime remains unconfirmed; crash relock deferred.");
+                    if (!TryCompleteDiagnosticRelock())
+                        throw new InvalidOperationException("CEF diagnostic relock remains unconfirmed.");
+                    if (!ReferenceEquals(unlockOwner, ownership)) return;
                     var status = backend.Status();
                     if (!status.Attached) { unlockOwner = null; return; }
                     if (!string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase))

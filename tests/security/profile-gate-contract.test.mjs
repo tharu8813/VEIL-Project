@@ -737,3 +737,18 @@ test('registered diagnostic session requires installed signed baseline and retir
     assert.match(monitor, /if \(diagnosticSession\.Current\(unlockOwner\) is \{ \} session\)\s*_ = session\.Observe\(\);[\s\S]*?catch \(Exception error\)[\s\S]*?ClearAuthenticatedOwner\(\);/);
     assert.equal((broker.match(/TryRegisterDiagnosticSession\(/g) ?? []).length, 1);
 });
+
+
+test('diagnostic retirement latches relock until drain and exact non-forced lock verification', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const policy = await readFile('apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs', 'utf8');
+    const clear = broker.slice(broker.indexOf('private void ClearAuthenticatedOwner()'), broker.indexOf('private void RevokePendingCefChild()'));
+    assert.match(clear, /if \(diagnosticSession\.Occupied\)\s*diagnosticRelock\.Request\(unlockOwner\);[\s\S]*?diagnosticSession\.Retire\(\);/);
+    assert.match(clear, /diagnosticSession\.CleanupPending \|\| diagnosticRelock\.Pending\) EnsureCefStopRetry/);
+    const relock = broker.slice(broker.indexOf('private bool TryCompleteDiagnosticRelock()'), broker.indexOf('private async Task RetryCefStopsAsync()'));
+    assert.match(relock, /authenticatedGeneration is null && !diagnosticSession\.Occupied &&\s*unresolvedCefStops\.Count == 0 && pendingCefChild is null && completedPreflight is null/);
+    assert.match(relock, /if \(!Registered\(status\)\) return false;\s*if \(status\.Unlocked && backend\.Lock\(\) != LockResult\.Locked\) return false;\s*status = backend\.Status\(\);\s*return Registered\(status\) && !status\.Unlocked && status\.ReadyToUnlock/);
+    assert.match(broker, /RetryUnresolvedCefStops\(\);\s*TryCompleteDiagnosticRelock\(\);[\s\S]*?!diagnosticRelock\.Pending/);
+    assert.match(broker, /diagnosticRelock\.Pending && request\.Command != BrokerCommand\.Status\)\s*return Protocol\.Error\("LockRefused"\);/);
+    assert.match(policy, /!ReferenceEquals\(generation, currentGeneration\) \|\| !cleanupConfirmed\)\s*return false;\s*if \(!lockAndVerify\(\)\) return false;\s*Pending = false/);
+});
