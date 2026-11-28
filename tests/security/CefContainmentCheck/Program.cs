@@ -274,16 +274,22 @@ try
     }
     Console.WriteLine("PASS: owned suspended creation probe retires, drains, and gates relock");
     // Periodic monitor owns the exact slot until its sample completes.
+    static void RejectAuthority(Action action)
+    {
+        try { action(); }
+        catch (UnauthorizedAccessException) { return; }
+        throw new InvalidOperationException("Expected authority refusal.");
+    }
     var observedSlot = new CefDiagnosticSessionSlot<ICefDiagnosticLifetime>();
     var observedGeneration = new object();
     var observedLifetime = new RevocationFaultFixture(null) { AllowRelease = true };
     Check(observedSlot.TryRegister(observedGeneration, observedLifetime), "Monitor fixture registration failed.");
-    Reject(() => observedSlot.ObserveCurrent(new object(), _ => throw new InvalidOperationException("Stale sample ran.")));
+    RejectAuthority(() => observedSlot.ObserveCurrent(new object(), _ => throw new InvalidOperationException("Stale sample ran.")));
     Check(observedSlot.Current(observedGeneration) == observedLifetime, "Stale monitor retired current lifetime.");
     observedSlot.ObserveCurrent(observedGeneration, candidate =>
         Check(ReferenceEquals(candidate, observedLifetime) && observedSlot.Current(observedGeneration) is null,
             "Monitor did not hold exclusive observation."));
-    Reject(() => observedSlot.ObserveCurrent(observedGeneration, _ =>
+    RejectAuthority(() => observedSlot.ObserveCurrent(observedGeneration, _ =>
     {
         observedSlot.Retire();
         Check(!observedSlot.TryReleaseRetired(0), "Reentrant retirement released observing slot.");
@@ -292,7 +298,7 @@ try
         "Retired monitor slot did not release after sample.");
     var failedObservation = new RevocationFaultFixture(null) { AllowRelease = true };
     Check(observedSlot.TryRegister(observedGeneration, failedObservation), "Second monitor fixture registration failed.");
-    Reject(() => observedSlot.ObserveCurrent(observedGeneration, _ => throw new UnauthorizedAccessException("Synthetic observation failure.")));
+    RejectAuthority(() => observedSlot.ObserveCurrent(observedGeneration, _ => throw new UnauthorizedAccessException("Synthetic observation failure.")));
     Check(observedSlot.CleanupPending && observedSlot.TryReleaseRetired(0), "Observation failure left authority active.");
     Console.WriteLine("PASS: exact monitor slot, stale generation, reentrant revocation and terminal observation failure");
     // Fault injection exercises the same drain orchestration, without
