@@ -91,6 +91,20 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
             throw new ProfileLocationException("The broker did not confirm the completed CEF preflight.");
     }
 
+#if VEIL_CEF_PREFLIGHT_ONLY
+    // One terminal request, no retry on a lost or ambiguous reply.
+    internal void ProbeCefSuspended(string expectedGuid)
+    {
+        if (config.Development || !config.RequireWindowsService ||
+            config.PipeName != "VEIL.VolumeBroker" || config.BrokerImage is null ||
+            string.IsNullOrWhiteSpace(expectedGuid))
+            throw new ProfileLocationException("CEF diagnostic requires the installed broker.");
+        using var response = SendCommand("ProbeCefSuspended");
+        if (!CefStageWire.IsSuspendedProbeReply(response.RootElement, expectedGuid))
+            throw new ProfileLocationException("The broker did not verify terminal CEF diagnostic cleanup.");
+    }
+#endif
+
     private VolumeStatus? QueryVolume(string command)
     {
         try
@@ -242,6 +256,9 @@ internal sealed class NamedPipeVolumeBroker(BrokerClientConfig config) : IVolume
                 response.WriteByte(byteBuffer[0]);
             }
             if (command is "StageCefChild" or "ConfirmCefPreflight") VerifyServer(pipe);
+#if VEIL_CEF_PREFLIGHT_ONLY
+            if (command == "ProbeCefSuspended") VerifyServer(pipe);
+#endif
             return JsonDocument.Parse(response.ToArray());
         }
         catch (Exception error) when (error is IOException or TimeoutException or UnauthorizedAccessException or

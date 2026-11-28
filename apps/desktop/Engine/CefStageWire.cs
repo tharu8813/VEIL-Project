@@ -43,6 +43,20 @@ internal static class CefStageWire
             state.GetProperty("readyToUnlock").ValueKind is JsonValueKind.True or JsonValueKind.False;
     }
 
+    // A terminal suspended probe receipt is distinct from ordinary status
+    // and the earlier disabled candidate redemption. Exact fields only.
+    internal static bool IsSuspendedProbeReply(JsonElement root, string expectedGuid)
+    {
+        if (string.IsNullOrWhiteSpace(expectedGuid) ||
+            !ExactObject(root, "ok", "cefSuspendedProbeVerified", "volumeGuid") ||
+            root.GetProperty("ok").ValueKind != JsonValueKind.True ||
+            root.GetProperty("cefSuspendedProbeVerified").ValueKind != JsonValueKind.True)
+            return false;
+        var guid = root.GetProperty("volumeGuid");
+        return guid.ValueKind == JsonValueKind.String &&
+            string.Equals(guid.GetString(), expectedGuid, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool ExactObject(JsonElement value, params string[] fields)
     {
         if (value.ValueKind != JsonValueKind.Object) return false;

@@ -635,11 +635,11 @@ test('isolated CEF preflight entry is compile-time exclusive and never falls bac
     assert.match(project, /<PropertyGroup Condition="'\$\(Configuration\)' == 'CefPreflight'">[\s\S]*?VEIL_CEF_PREFLIGHT_ONLY/);
     assert.match(program, /#if VEIL_CEF_PREFLIGHT_ONLY[\s\S]*?return CefProtectedPreflightEntry\.Run\(args\);\s*#else/);
     assert.match(entry, /#if VEIL_CEF_PREFLIGHT_ONLY/);
-    assert.match(entry, /bool prepareOnly = args is \["--cef-prepare-profile"\];\s*if \(\(!prepareOnly && args is not \["--cef-protected-preflight"\]\) \|\| !ExternalAddress\.Installed\)/);
+    assert.match(entry, /bool prepareOnly = args is \["--cef-prepare-profile"\];\s*bool brokerProbe = args is \["--cef-broker-suspended-probe"\];\s*if \(\(!prepareOnly && !brokerProbe && args is not \["--cef-protected-preflight"\]\) \|\| !ExternalAddress\.Installed\)/);
     assert.match(entry, /ProfileGate\.RejectElevated\(\);[\s\S]*?new BrowserActivation\(\);[\s\S]*?!activation\.Primary/);
     assert.match(entry, /BrokerClientConfig\.Load\(BrokerClientConfig\.ProductPath, development: false\)/);
     assert.match(entry, /ProtectedProfileSession\.TryOpen[\s\S]*?ClearPassword\(password\);[\s\S]*?CefDisabledLaunchCoordinator\.RunPreflight/);
-    assert.match(entry, /result = CefDisabledLaunchCoordinator\.RunPreflight\(session\);\s*\}\s*if \(result != expected \|\| notifications\.LockRequested\) return 1;\s*session\.CompleteCefPreflightCleanup\(\);[\s\S]*?session\?\.Dispose\(\);[\s\S]*?return !notifications\.LockRequested && result == expected\s*\? \(int\)expected : 1;/);
+    assert.match(entry, /result = CefDisabledLaunchCoordinator\.RunPreflight\(session\);\s*\}\s*if \(result != expected \|\| notifications\.LockRequested\) return 1;\s*if \(!brokerProbe\) session\.CompleteCefPreflightCleanup\(\);[\s\S]*?session\?\.Dispose\(\);[\s\S]*?return !notifications\.LockRequested && result == expected\s*\? \(int\)expected : 1;/);
     assert.doesNotMatch(entry, /new BrowserWindow|CreateEngine\(|UnmanagedDevelopmentVolume|activation\.Forward|activation\.Start|GetEnvironmentVariable/);
 });
 
@@ -1192,9 +1192,9 @@ test('isolated profile provisioning is terminal and cannot count as candidate ve
     const provision = session.slice(session.indexOf('internal void PrepareLayoutOnly()'), session.indexOf('internal IReadOnlyDictionary<string, string?> PrepareChildEnvironment()'));
     assert.match(session, /#if VEIL_CEF_PREFLIGHT_ONLY\s*\/\/[^\n]*\s*\/\/[^\n]*\s*internal void PrepareLayoutOnly\(\)\s*\{\s*RequireCurrentPreparation\(\);\s*_ = CefProtectedProfilePreparation\.Prepare\(ProductRoot, session\.broker, StillAuthorized\);\s*RequireCurrentPreparation\(\);\s*\}\s*#endif/);
     assert.doesNotMatch(provision, /PrepareRegisteredRuntime|StageSuspendedChild|GetEnvironmentVariables|CreateSuspended|Resume/);
-    assert.match(entry, /internal const uint ProfilePreparedOnly = 30;[\s\S]*?uint expected = prepareOnly \? ProfilePreparedOnly : CefDisabledPreflight\.VerifiedButDisabled;/);
+    assert.match(entry, /internal const uint ProfilePreparedOnly = 30;[\s\S]*?uint expected = brokerProbe \? SuspendedProbeVerified :\s*prepareOnly \? ProfilePreparedOnly : CefDisabledPreflight\.VerifiedButDisabled;/);
     assert.match(entry, /if \(prepareOnly\)\s*\{[\s\S]*?using \(var profile = session\.AcquireCefPreparationLease\(\)\)\s*profile\.PrepareLayoutOnly\(\);\s*result = ProfilePreparedOnly;\s*\}\s*else\s*\{\s*result = CefDisabledLaunchCoordinator\.RunPreflight\(session\);\s*\}/);
-    assert.match(entry, /if \(result != expected \|\| notifications\.LockRequested\) return 1;\s*session\.CompleteCefPreflightCleanup\(\);[\s\S]*?return !notifications\.LockRequested && result == expected\s*\? \(int\)expected : 1;/);
+    assert.match(entry, /if \(result != expected \|\| notifications\.LockRequested\) return 1;\s*if \(!brokerProbe\) session\.CompleteCefPreflightCleanup\(\);[\s\S]*?return !notifications\.LockRequested && result == expected\s*\? \(int\)expected : 1;/);
     assert.doesNotMatch(program, /--cef-prepare-profile|PrepareLayoutOnly|ProfilePreparedOnly/);
 });
 
@@ -1252,4 +1252,20 @@ test('suspended broker diagnostic IPC exists only in separate build and requires
     assert.match(broker, /#if VEIL_CEF_DIAGNOSTIC_IPC\s*case BrokerCommand.ProbeCefSuspended:[\s\S]*?config.Development \|\| config.Backend != "bitlocker"[\s\S]*?authenticatedOwner != client[\s\S]*?Native.SameLiveProcess\(probeOwner, pipeClient\)[\s\S]*?diagnosticSession.Occupied \|\| diagnosticRelock.Pending[\s\S]*?RunDiagnosticCreationProbe\(probeGeneration\);\s*if \(!diagnosticRelock.Pending \|\| !TryCompleteDiagnosticRelock\(\)\)[\s\S]*?status = backend.Status\(\);\s*if \(!Registered\(status\) \|\| status.Unlocked \|\| !status.ReadyToUnlock\)[\s\S]*?return Protocol.CefSuspendedProbeVerified\(status\);[\s\S]*?#endif/);
     assert.match(protocol, /#if VEIL_CEF_DIAGNOSTIC_IPC\s*internal static byte\[\] CefSuspendedProbeVerified[\s\S]*?status.Unlocked \|\| !status.ReadyToUnlock[\s\S]*?cefSuspendedProbeVerified = true, volumeGuid = status.VolumeGuid[\s\S]*?#endif/);
     assert.match(fixture, /#if VEIL_CEF_DIAGNOSTIC_IPC[\s\S]*?probe.Command == BrokerCommand.ProbeCefSuspended[\s\S]*?#else\s*RejectProbe\(probeRequest\);\s*#endif/);
+});
+
+
+test('desktop suspended probe is one-shot, broker-owned, and requires exact terminal receipt and cleanup', async () => {
+    const entry = await readFile('apps/desktop/Engine/CefProtectedPreflightEntry.cs', 'utf8');
+    const session = await readFile('apps/desktop/ProtectedProfileSession.cs', 'utf8');
+    const client = await readFile('apps/desktop/BrokerClient.cs', 'utf8');
+    const wire = await readFile('apps/desktop/Engine/CefStageWire.cs', 'utf8');
+    const probe = session.slice(session.indexOf('internal void RunBrokerSuspendedProbe()'), session.indexOf('internal void CompleteCefPreflightCleanup()'));
+    assert.match(entry, /if \(brokerProbe\)\s*\{\s*session.RunBrokerSuspendedProbe\(\);\s*result = SuspendedProbeVerified;\s*\}\s*else if \(prepareOnly\)/);
+    assert.match(probe, /RequireBrokerOwner\(\);[\s\S]*?broker.ProbeCefSuspended\(guid\);[\s\S]*?var locked = broker.QueryRegisteredVolume\(\);[\s\S]*?Unlocked: false, ReadyToUnlock: true[\s\S]*?string.Equals\(locked.VolumeGuid, guid, StringComparison.OrdinalIgnoreCase\)[\s\S]*?if \(attachedHere\)[\s\S]*?broker.Detach\(\);[\s\S]*?broker.QueryRegisteredVolume\(\) is not null[\s\S]*?disposed = true;/);
+    assert.doesNotMatch(probe, /AcquireCefPreparationLease|CreateSuspended|broker.Lock\(|broker.Unlock\(/);
+    assert.equal((probe.match(/broker.ProbeCefSuspended\(/g) ?? []).length, 1);
+    assert.match(client, /#if VEIL_CEF_PREFLIGHT_ONLY[\s\S]*?internal void ProbeCefSuspended[\s\S]*?SendCommand\("ProbeCefSuspended"\);[\s\S]*?IsSuspendedProbeReply[\s\S]*?#endif/);
+    assert.match(client, /#if VEIL_CEF_PREFLIGHT_ONLY\s*if \(command == "ProbeCefSuspended"\) VerifyServer\(pipe\);\s*#endif/);
+    assert.match(wire, /IsSuspendedProbeReply[\s\S]*?ExactObject\(root, "ok", "cefSuspendedProbeVerified", "volumeGuid"\)[\s\S]*?JsonValueKind.True[\s\S]*?JsonValueKind.True[\s\S]*?string.Equals\(guid.GetString\(\), expectedGuid, StringComparison.OrdinalIgnoreCase\)/);
 });

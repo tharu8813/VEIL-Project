@@ -274,6 +274,34 @@ internal sealed class ProtectedProfileSession : IDisposable
     // Success requires acknowledged commands and the exact authenticated
     // volume. On refusal the normal finally/Dispose and crash watcher still
     // attempt best-effort cleanup, but may never manufacture preflight PASS.
+    // Do not acquire a desktop profile lock or open runtime files. The
+    // broker independently takes custody and consumes this authentication.
+    internal void RunBrokerSuspendedProbe()
+    {
+        if (Environment.CurrentManagedThreadId != ownerThread || disposed ||
+            !unlockAttempted || notifications.LockRequested ||
+            authenticatedVolumeGuid is not { } guid)
+            throw new ProfileLocationException("No authenticated CEF diagnostic session.");
+        RequireBrokerOwner();
+        if (notifications.LockRequested)
+            throw new ProfileLocationException("CEF diagnostic authority revoked.");
+        broker.ProbeCefSuspended(guid);
+        // Only an acknowledged receipt and a fresh locked-volume observation
+        // can complete this mode. Never issue a second probe or unlock.
+        var locked = broker.QueryRegisteredVolume();
+        if (notifications.LockRequested || locked is not { Unlocked: false, ReadyToUnlock: true } ||
+            !string.Equals(locked.VolumeGuid, guid, StringComparison.OrdinalIgnoreCase))
+            throw new ProfileLocationException("CEF diagnostic relock unconfirmed.");
+        if (attachedHere)
+        {
+            broker.Detach();
+            if (broker.QueryRegisteredVolume() is not null)
+                throw new ProfileLocationException("CEF diagnostic detach unconfirmed.");
+        }
+        authenticatedVolumeGuid = null;
+        disposed = true;
+    }
+
     internal void CompleteCefPreflightCleanup()
     {
         if (Environment.CurrentManagedThreadId != ownerThread || disposed ||
