@@ -53,6 +53,57 @@ try
 finally { Directory.Delete(directoryFixture); }
 Console.WriteLine("PASS: synthetic protection state and actual wrong-volume directory refusal");
 
+// Real filesystem handles, synthetic backend protection status. The
+// actual CI disk is not asserted to be BitLocker protected.
+string profileFixture = Path.Combine(Path.GetTempPath(), "veil-cef-profile-" + Guid.NewGuid().ToString("N"));
+string driveRoot = Path.GetPathRoot(profileFixture)!;
+var volumeBuffer = new System.Text.StringBuilder(64);
+Check(GetVolumeNameForVolumeMountPointW(driveRoot, volumeBuffer, (uint)volumeBuffer.Capacity),
+    "Cannot identify fixture volume.");
+string fixtureVolume = volumeBuffer.ToString();
+var fixtureStatus = new BackendStatus(true, fixtureVolume, true, true, true, true);
+string fixtureWindows = Path.Combine(driveRoot, "veil-synthetic-system-" + Guid.NewGuid().ToString("N"));
+var profileLayout = new CefProfileLayout(profileFixture);
+bool authority = true;
+Directory.CreateDirectory(profileFixture);
+try
+{
+    foreach (string path in profileLayout.Directories) Directory.CreateDirectory(path);
+    using (var profile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        var plan = profile.VerifiedEnvironment();
+        Check(plan.Count == 7 && plan["TEMP"] == profileLayout.Scratch &&
+            plan[CefChildEnvironmentPlan.RootKey] == profileLayout.EngineRoot &&
+            plan[CefChildEnvironmentPlan.CacheKey] == profileLayout.Cache &&
+            plan[CefChildEnvironmentPlan.LogKey] == profileLayout.LogFile,
+            "Retained profile environment mismatch.");
+        profile.RequireCurrent();
+        authority = false;
+        Reject(() => profile.RequireCurrent());
+        authority = true;
+        Reject(() => profile.RequireCurrent());
+    }
+    using (var profile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        File.WriteAllText(profileLayout.LogFile, "synthetic");
+        Reject(() => profile.VerifiedEnvironment());
+        File.Delete(profileLayout.LogFile);
+        Reject(() => profile.RequireCurrent());
+    }
+    Directory.Delete(profileLayout.Cache);
+    bool missingRefused = false;
+    try { using var missing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority); }
+    catch (System.ComponentModel.Win32Exception) { missingRefused = true; }
+    Check(missingRefused && !Directory.Exists(profileLayout.Cache),
+        "Missing directory was accepted or created.");
+    // The failed open must release earlier pins so cleanup can proceed.
+}
+finally { Directory.Delete(profileFixture, recursive: true); }
+Console.WriteLine("PASS: retained profile directory chain, explicit environment and irreversible refusal (synthetic protection)");
+
 // Exercise the actual production parser with no broker or volume access.
 using (var parsed = Protocol.Parse("""{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"123"}"""u8))
 {
@@ -320,3 +371,9 @@ static extern bool AssignProcessToJobObject(Microsoft.Win32.SafeHandles.SafeFile
 [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
 [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
 static extern bool TerminateJobObject(Microsoft.Win32.SafeHandles.SafeFileHandle job, uint code);
+
+
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode,
+    ExactSpelling = true, SetLastError = true)]
+[return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+static extern bool GetVolumeNameForVolumeMountPointW(string root, System.Text.StringBuilder name, uint length);

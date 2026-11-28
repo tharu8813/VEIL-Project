@@ -1014,3 +1014,18 @@ test('disconnected broker directory pin verifies handle-derived volume and live 
     assert.doesNotMatch(pin, /Directory\.CreateDirectory|File\.Delete|Process\.Start/);
     assert.doesNotMatch(broker + prep, /CefProtectedDirectoryLease/);
 });
+
+
+test('protected profile lease pins ancestors and all fixed directories before exposing environment', async () => {
+    const profile = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedProfileLease.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const prep = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
+    assert.match(profile, /RequireAuthority\(registeredVolume, readStatus, authorityCurrent\);\s*var environment = CefChildEnvironmentPlan.BuildBrokerProtected[\s\S]*?ancestors.Push\(path\);[\s\S]*?foreach \(string path in ancestors.Concat\(layout.Directories\)\)[\s\S]*?pins.Add\(CefProtectedDirectoryLease.Open\(path, registeredVolume, readStatus\)\);[\s\S]*?lease.RequireCurrent\(\);\s*return lease;/);
+    assert.match(profile, /catch\s*\{\s*for \(int i = pins.Count - 1; i >= 0; --i\) pins\[i\].Dispose\(\);\s*throw;/);
+    assert.match(profile, /if \(!authorityCurrent\(\)\)[\s\S]*?CefProtectedDirectoryLease.RequireRegisteredProtection\(volume, readStatus\(\)\);[\s\S]*?if \(!authorityCurrent\(\)\)/);
+    assert.match(profile, /if \(retired\)[\s\S]*?RequireAuthority\(volume, readStatus, authorityCurrent\);\s*foreach \(var directory in directories\) directory.RequireCurrent\(readStatus\);\s*RequireAbsentLog\(\);\s*RequireAuthority\(volume, readStatus, authorityCurrent\);[\s\S]*?catch\s*\{\s*retired = true;\s*throw;/);
+    assert.match(profile, /try \{ _ = File.GetAttributes\(layout.LogFile\); \}\s*catch \(FileNotFoundException\) \{ return; \}\s*throw new UnauthorizedAccessException/);
+    assert.match(profile, /VerifiedEnvironment\(\)\s*\{\s*RequireCurrent\(\);\s*return environment;/);
+    assert.doesNotMatch(profile, /Directory\.CreateDirectory|File\.Write|Process\.Start|ResumeRetainedRoot/);
+    assert.doesNotMatch(broker + prep, /CefProtectedProfileLease|VerifiedEnvironment\(/);
+});

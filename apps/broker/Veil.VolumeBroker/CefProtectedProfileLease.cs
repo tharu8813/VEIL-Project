@@ -1,0 +1,129 @@
+// SPDX-License-Identifier: MPL-2.0
+using Veil.Desktop;
+
+namespace Veil.VolumeBroker;
+
+// Disconnected, read-only protected profile preparation. All existing
+// non-root ancestors and fixed CEF directories are retained together.
+// The caller must independently authenticate the registered profile path,
+// Windows system directory and generation. No browser launch authority.
+internal sealed class CefProtectedProfileLease : IDisposable
+{
+    private readonly CefProfileLayout layout;
+    private readonly IReadOnlyDictionary<string, string?> environment;
+    private readonly string volume;
+    private readonly Func<BackendStatus> readStatus;
+    private readonly Func<bool> authorityCurrent;
+    private readonly List<CefProtectedDirectoryLease> directories;
+    private bool retired;
+    private bool disposed;
+
+    private CefProtectedProfileLease(CefProfileLayout layout,
+        IReadOnlyDictionary<string, string?> environment, string volume,
+        Func<BackendStatus> readStatus, Func<bool> authorityCurrent,
+        List<CefProtectedDirectoryLease> directories)
+    {
+        this.layout = layout;
+        this.environment = environment;
+        this.volume = volume;
+        this.readStatus = readStatus;
+        this.authorityCurrent = authorityCurrent;
+        this.directories = directories;
+    }
+
+    internal static CefProtectedProfileLease Open(string registeredProductRoot,
+        string registeredVolume, string windowsDirectory, Func<BackendStatus> readStatus,
+        Func<bool> authorityCurrent)
+    {
+        ArgumentNullException.ThrowIfNull(readStatus);
+        ArgumentNullException.ThrowIfNull(authorityCurrent);
+        RequireAuthority(registeredVolume, readStatus, authorityCurrent);
+        var environment = CefChildEnvironmentPlan.BuildBrokerProtected(registeredProductRoot, windowsDirectory);
+        var layout = new CefProfileLayout(registeredProductRoot);
+        // Retain every non-root ancestor in root-to-leaf order. Each
+        // handle independently checks the volume GUID and full DOS path.
+        // Mounted directories, network paths and reparse targets cannot
+        // substitute for the registered local drive.
+        var ancestors = new Stack<string>();
+        for (string? path = layout.ProductRoot; path is not null &&
+            !string.Equals(path, Path.GetPathRoot(path), StringComparison.OrdinalIgnoreCase);
+            path = Path.GetDirectoryName(path))
+        {
+            if (ancestors.Count >= 64)
+                throw new UnauthorizedAccessException("CEF profile path depth exceeds bound.");
+            ancestors.Push(path);
+        }
+        var pins = new List<CefProtectedDirectoryLease>(ancestors.Count + 4);
+        try
+        {
+            foreach (string path in ancestors.Concat(layout.Directories))
+            {
+                RequireAuthority(registeredVolume, readStatus, authorityCurrent);
+                pins.Add(CefProtectedDirectoryLease.Open(path, registeredVolume, readStatus));
+            }
+            var lease = new CefProtectedProfileLease(layout, environment, registeredVolume,
+                readStatus, authorityCurrent, pins);
+            lease.RequireCurrent();
+            return lease;
+        }
+        catch
+        {
+            for (int i = pins.Count - 1; i >= 0; --i) pins[i].Dispose();
+            throw;
+        }
+    }
+
+    private static void RequireAuthority(string volume, Func<BackendStatus> readStatus,
+        Func<bool> authorityCurrent)
+    {
+        if (!authorityCurrent())
+            throw new UnauthorizedAccessException("CEF profile generation unavailable.");
+        CefProtectedDirectoryLease.RequireRegisteredProtection(volume, readStatus());
+        if (!authorityCurrent())
+            throw new UnauthorizedAccessException("CEF profile generation changed.");
+    }
+
+    // Initial probe supports an absent log only. Existing files (including
+    // links), directories and uncertain I/O results are refused. A separate
+    // retained file policy is required before using existing log files.
+    private void RequireAbsentLog()
+    {
+        try { _ = File.GetAttributes(layout.LogFile); }
+        catch (FileNotFoundException) { return; }
+        throw new UnauthorizedAccessException("CEF existing log requires separate verification.");
+    }
+
+    internal void RequireCurrent()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (retired)
+            throw new UnauthorizedAccessException("CEF profile lifetime retired.");
+        try
+        {
+            RequireAuthority(volume, readStatus, authorityCurrent);
+            foreach (var directory in directories) directory.RequireCurrent(readStatus);
+            RequireAbsentLog();
+            RequireAuthority(volume, readStatus, authorityCurrent);
+        }
+        catch
+        {
+            retired = true;
+            throw;
+        }
+    }
+
+    // Read-only snapshot, not a permit. No native creation path consumes
+    // this plan yet; the future caller must retain this lease through drain.
+    internal IReadOnlyDictionary<string, string?> VerifiedEnvironment()
+    {
+        RequireCurrent();
+        return environment;
+    }
+
+    public void Dispose()
+    {
+        if (disposed) return;
+        retired = disposed = true;
+        for (int i = directories.Count - 1; i >= 0; --i) directories[i].Dispose();
+    }
+}
