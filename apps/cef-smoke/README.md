@@ -135,6 +135,16 @@ node scripts/check-cef-nested-evidence.mjs --commit '287cd139cc779765c59d0922191
 
 The optional strict collection target requires at least one observed browser, renderer, GPU, network and utility process, no unknown role or unavailable mitigation sample, and no recorded Job start without a live sample. It reports incomplete collections with exit code 1, preserving the JSON diagnosis. The ordinary analysis still accepts historical smoke reports without mitigation evidence. Do not infer that any service must start on every machine, that Job notifications cover all processes, or that a collected flag set is secure. Retain failed and incomplete runs, and obtain independent Procmon evidence and review on the exact pinned CEF/Windows configuration. Do not relax the target to manufacture a passing collection. No product gate is satisfied by this command.
 
+### Correlate mitigation collection with an independent process trace
+
+In the disposable VM, use an independent administrator-operated Procmon capture of the same single invocation, retaining Process Create and Process Exit rows in capture order. Export the English CSV columns as UTF-8, without filtering away unexpected child processes. Keep the original trace locally; inspect it for sensitive information before sharing.
+
+```powershell
+node scripts/check-cef-process-trace.mjs '287cd139cc779765c59d09221914647f009c948a' 'C:\veil-test\bundle\manifest.json' 'C:\veil-test\mitigation-evidence' 'C:\veil-test\trace.csv' 'C:\veil-test\bundle\smoke\veil-cef-smoke.exe' --require-mitigation-correlation
+```
+
+Use the actual exact checkout and guest path if different. The opt-in correlation target requires the collection target, matching lifecycle capture, a live sample for every recorded trace PID, and retained exit coverage. Incomplete evidence exits 1 and retains JSON reasons. The trace parser rejects malformed CSV and tracked lifecycle records. This corroborates process identities and lifecycle coverage within one reported capture, not the mitigation flags themselves, continuous containment, capture completeness or a production security gate.
+
 ### Run the broker authorization regression without building CEF
 
 From a clean checkout on an interactive, non-elevated Windows x64 test account (prefer a disposable VM), with Node 22 and .NET 10 SDK:

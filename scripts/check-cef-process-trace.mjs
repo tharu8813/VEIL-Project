@@ -3,14 +3,71 @@ import { createHash } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
 import { join, win32 } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { checkNestedEvidence } from './check-cef-nested-evidence.mjs';
-import { parseCsv } from '../tests/security/outside-writes.mjs';
+import { checkNestedEvidence, assessMitigationCollection } from './check-cef-nested-evidence.mjs';
 
 const require = (valid, reason) => { if (!valid) throw new Error(reason); };
 const isPid = id => Number.isInteger(id) && id > 0 && id <= 0xffffffff;
 const pathKey = path => win32.normalize(path).toLowerCase();
 const parseJson = bytes => JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/, ''));
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+
+// Strict parser for this evidence format only. The shared write analyzer accepts
+// incomplete rows; that is not appropriate for a MATCHED_CAPTURE verdict.
+export function parseProcessTraceCsv(text) {
+    const input = text.replace(/^\uFEFF/, '');
+    let header = null, fields = [], field = '', state = 'start';
+    const records = [];
+    const finishField = () => {
+        fields.push(field);
+        field = '';
+        state = 'start';
+    };
+    const finishRecord = () => {
+        finishField();
+        if (header === null) {
+            header = fields.map(name => name.trim());
+            require(header.every(Boolean) && new Set(header).size === header.length,
+                'Empty or duplicate Procmon CSV header');
+            require(['Process Name', 'PID', 'Operation', 'Path', 'Result', 'Detail']
+                .every(column => header.includes(column)), 'Missing Procmon process trace columns');
+        } else {
+            require(fields.length === header.length, 'Wrong Procmon CSV record width');
+            records.push(Object.fromEntries(header.map((name, index) => [name, fields[index]])));
+        }
+        fields = [];
+    };
+    for (let i = 0; i < input.length; i++) {
+        const c = input[i];
+        if (state === 'quoted') {
+            if (c === '"') {
+                if (input[i + 1] === '"') { field += '"'; i++; }
+                else state = 'closed';
+            } else field += c;
+            continue;
+        }
+        if (c === ',') { finishField(); continue; }
+        if (c === '\r' || c === '\n') {
+            if (c === '\r') {
+                require(input[i + 1] === '\n', 'Invalid Procmon CSV line ending');
+                i++;
+            }
+            finishRecord();
+            continue;
+        }
+        require(state !== 'closed', 'Unexpected text after Procmon CSV quoted field');
+        if (c === '"') {
+            require(state === 'start', 'Unexpected quote in Procmon CSV field');
+            state = 'quoted';
+        } else {
+            field += c;
+            state = 'unquoted';
+        }
+    }
+    require(state !== 'quoted', 'Unterminated Procmon CSV quoted field');
+    if (fields.length || state !== 'start') finishRecord();
+    require(header !== null && records.length > 0, 'Missing Procmon CSV records');
+    return records;
+}
 
 // The CSV must cover the same single invocation as the hash-bound bundle report.
 // Pair events in capture order so an unrelated process reusing a PID stays outside the tree.
@@ -25,14 +82,27 @@ export function compareProcessTrace(events, { runnerPid, image, sample }) {
     const ended = new Set();
     const unexpectedImagePids = [];
     const ambiguousPids = new Set();
+    const invalidTreeEvents = [];
     let rootMatches = 0;
-    for (const event of events) {
+    for (const [index, event] of events.entries()) {
         const pid = Number(event.PID);
         const processName = event['Process Name']?.toLowerCase();
-        if (!isPid(pid) || !processName) continue;
+        if (!isPid(pid)) continue;
+        const tracked = active.has(pid);
+        // A malformed lifecycle record for an active member must not disappear
+        // from the comparison, even if the remaining PID sets agree.
+        if (tracked && (event.Operation === 'Process Create' || event.Operation === 'Process Exit') &&
+            active.get(pid) !== processName) {
+            invalidTreeEvents.push({ row: index + 1, pid, reason: 'process-name-mismatch' });
+            continue;
+        }
+        if (!processName) continue;
         if (event.Operation === 'Process Create' && event.Result === 'SUCCESS') {
             const created = Number(/^PID:\s*(\d+)(?:,|$)/.exec(event.Detail ?? '')?.[1]);
-            if (!isPid(created) || !event.Path) continue;
+            if (!isPid(created) || !event.Path) {
+                if (tracked) invalidTreeEvents.push({ row: index + 1, pid, reason: 'malformed-create' });
+                continue;
+            }
             const root = pid === runnerPid && processName === 'cefnestedsmoke.exe' &&
                 created === sample.rootPid && pathKey(event.Path) === expectedImage;
             if (root) rootMatches++;
@@ -45,8 +115,8 @@ export function compareProcessTrace(events, { runnerPid, image, sample }) {
             active.set(created, win32.basename(event.Path).toLowerCase());
             if (pathKey(event.Path) !== expectedImage) unexpectedImagePids.push(created);
         } else if (event.Operation === 'Process Exit' && active.has(pid)) {
-            if (active.get(pid) !== processName) {
-                ambiguousPids.add(pid);
+            if (event.Result !== 'SUCCESS') {
+                invalidTreeEvents.push({ row: index + 1, pid, reason: 'unsuccessful-exit' });
                 continue;
             }
             active.delete(pid);
@@ -71,7 +141,9 @@ export function compareProcessTrace(events, { runnerPid, image, sample }) {
     const sampled = new Set([sample.rootPid, ...sample.observed.map(entry => entry.Pid)]);
     const retainedExits = sample.schema === 5 ? new Set(sample.handleExits.map(entry => entry.Pid)) : null;
     const unobservedSamples = difference(sampled, seen);
+    const retainedWithoutTrace = retainedExits ? difference(retainedExits, ended) : null;
     const agrees = rootMatches === 1 && active.size === 0 && unexpectedImagePids.length === 0 &&
+        invalidTreeEvents.length === 0 && (retainedWithoutTrace === null || retainedWithoutTrace.length === 0) &&
         ambiguousPids.size === 0 && unobservedSamples.length === 0 &&
         Object.values(unmatched).every(job => Object.values(job).every(ids => ids.length === 0));
     return {
@@ -83,12 +155,35 @@ export function compareProcessTrace(events, { runnerPid, image, sample }) {
         liveSamplesWithoutTraceStart: unobservedSamples,
         missingExitPids: sorted(active.keys()),
         traceExitsWithoutRetainedHandle: retainedExits ? difference(ended, retainedExits) : null,
-        retainedHandleExitsWithoutTrace: retainedExits ? difference(retainedExits, ended) : null,
+        retainedHandleExitsWithoutTrace: retainedWithoutTrace,
+        invalidTreeEvents,
         unexpectedImagePids: sorted(unexpectedImagePids),
         ambiguousPids: sorted(ambiguousPids),
         unmatched,
         productReleaseGates: 'NOT RUN',
         limitations: 'Correlates one exported capture; capture loss and full process-handle coverage are not established.',
+    };
+}
+
+// Correlate the reported mitigation collection with independent lifecycle
+// evidence. Neither source establishes the correctness of mitigation flags.
+export function assessMitigationTrace(collection, trace) {
+    const gaps = {
+        unsampledTracePids: trace.tracePidsWithoutLiveSample,
+        traceExitsWithoutRetainedHandle: trace.traceExitsWithoutRetainedHandle,
+        retainedHandleExitsWithoutTrace: trace.retainedHandleExitsWithoutTrace
+    };
+    const complete = collection.status === 'COLLECTION_TARGET_MET' &&
+        trace.status === 'MATCHED_CAPTURE' &&
+        Object.values(gaps).every(ids => Array.isArray(ids) && ids.length === 0);
+    return {
+        status: complete ? 'COLLECTION_CORRELATED' : 'COLLECTION_NOT_CORRELATED',
+        collectionStatus: collection.status,
+        traceStatus: trace.status,
+        ...gaps,
+        roleBaselineStatus: 'NOT ESTABLISHED',
+        independentMitigationVerification: 'NOT ESTABLISHED',
+        productReleaseGates: 'NOT RUN'
     };
 }
 
@@ -101,22 +196,25 @@ async function readBounded(path, limit) {
 }
 
 async function main(args) {
-    require(args.length === 5,
-        'Usage: node scripts/check-cef-process-trace.mjs <commit> <bundle-manifest> <evidence-dir> <trace.csv> <guest-image-path>');
+    const strict = args.length === 6 && args[5] === '--require-mitigation-correlation';
+    require(args.length === 5 || strict,
+        'Usage: node scripts/check-cef-process-trace.mjs <commit> <bundle-manifest> <evidence-dir> <trace.csv> <guest-image-path> [--require-mitigation-correlation]');
     const [expectedCommit, manifest, evidence, trace, image] = args;
     const [manifestBytes, reportBytes, sampleBytes, traceBytes] = await Promise.all([
         readBounded(manifest, 4 * 1024 * 1024), readBounded(join(evidence, 'result.json'), 65536),
         readBounded(join(evidence, 'stdout.json'), 1024 * 1024), readBounded(trace, 32 * 1024 * 1024),
     ]);
-    checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes, sampleBytes });
-    const events = parseCsv(traceBytes.toString('utf8'));
-    require(events.length > 0 && ['Process Name', 'PID', 'Operation', 'Path', 'Result', 'Detail']
-        .every(column => Object.hasOwn(events[0], column)), 'Missing Procmon process trace columns');
+    const nested = checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes, sampleBytes });
+    const events = parseProcessTraceCsv(new TextDecoder('utf-8', { fatal: true }).decode(traceBytes));
     const result = compareProcessTrace(events, { runnerPid: parseJson(reportBytes).runnerPid, image,
         sample: parseJson(sampleBytes) });
+    const mitigationCollection = assessMitigationCollection(nested);
+    const mitigationTrace = assessMitigationTrace(mitigationCollection, result);
     console.log(JSON.stringify({ sourceCommit: expectedCommit, traceSha256: digest(traceBytes),
-        sampleSha256: digest(sampleBytes), ...result }, null, 2));
-    if (result.status !== 'MATCHED_CAPTURE') process.exitCode = 1;
+        manifestSha256: nested.manifestSha256, reportSha256: nested.reportSha256,
+        sampleSha256: digest(sampleBytes), ...result, mitigationCollection, mitigationTrace }, null, 2));
+    if (result.status !== 'MATCHED_CAPTURE' ||
+        (strict && mitigationTrace.status !== 'COLLECTION_CORRELATED')) process.exitCode = 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)

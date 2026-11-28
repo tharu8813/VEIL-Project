@@ -226,3 +226,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #271 exact head Windows 46163947798 / Native 46163947800 PASS, #272 exact head Windows 46164440580 PASS. Native 실행에서 mitigation 지원 nested bundle artifact 15270802631 확인(merge checkout `287cd139cc779765c59d09221914647f009c948a`, PR head `08f52fa25c67d1741581a7317a3cfcf412b69453`). 만료 전 사용하거나 정확한 새 checkout으로 재빌드한다. README에 일반 사용자 실행 및 분석 명령을 기록했다.
 - 기존 분석 CLI에 `--require-mitigation-collection` 선택 모드를 추가한다. Browser/Renderer/GPU/Network/Utility 표본, 정책 조회 성공, Unknown 부재 및 기록된 Job start의 live sample 대응을 요구한다. 미충족은 JSON 진단과 exit 1, 이전 증거는 일반 검토에서 호환한다. 다섯 역할이 모든 환경에서 반드시 실행된다는 보장은 없으며 best-effort Job 알림 및 마지막 표본에 한정된다. 실제 VM 실측, 독립 리뷰, 새 CI 및 역할별 보안 허용 기준 NOT RUN/NOT ESTABLISHED. 제품 실행 차단/Job cap=1/WebView2 유지.
+
+### P2-05 mitigation 수집 및 독립 lifecycle trace 대조 (미완료)
+
+- #273 정확한 head Windows CI 46164985493 PASS, Native 46164985482 실행 중 확인. 별도 미병합 #230의 head `17be1ebd8c7f7f7dc3658ff46e6ea75a2bee0814`에 있는 엄격한 CSV parser, 추적 중 잘못된 lifecycle row/보존 handle exit 누락 거부 및 회귀를 두 파일의 base blob이 동일함을 확인해 이 stack에 재적용했다. #230 자체는 병합/닫지 않았다.
+- `check-cef-process-trace.mjs`에 `--require-mitigation-correlation` 추가. 기존 수집 목표, 일치하는 OS trace 및 모든 trace PID의 live sample/보존 exit 대응을 함께 요구하며 불완전하면 JSON 진단과 exit 1. manifest/report/sample/trace digest를 출력한다. 새 회귀 및 README 명령 추가. 실제 VM 수집, 보안 완화 flags 독립 증명, 전체 수명 및 역할 허용 기준은 NOT RUN/NOT ESTABLISHED. 새 CI와 독립 리뷰 미확인. startupEnabled=false, Job cap=1, WebView2 및 기존 역할 차단 유지.
