@@ -117,6 +117,24 @@ node scripts/check-cef-nested-evidence.mjs --commit '<exact artifact checkout SH
 
 This accepts the existing bundle's result.json and stdout.json, compares exact checkout and raw manifest hash, requires the report's raw stdout SHA-256 to match stdout.json (older reports without this field require a fresh run), validates required fixture inventory pins including locale, runner configuration and licenses, empty-job flags, and actual reported restricted Low/Untrusted token samples. Output is `CONSISTENT_REPORTED_SMOKE_PASS`, not independent attestation. It never marks product gates passed; a local report can be fabricated and the validator does not measure installed files or execute a browser. Keep stderr.log for diagnosis; do not share the temporary profile.
 
+### Collect mitigation evidence for P2-05
+
+Use the exact successful native workflow artifact with mitigation-enabled runner, not a product build. For the initial capture, workflow run [46163947800](https://github.com/tharu8813/VEIL-Project/actions/runs/46163947800) published artifact `cef-nested-smoke-287cd139cc779765c59d09221914647f009c948a` (PR #271 head `08f52fa25c67d1741581a7317a3cfcf412b69453`). The artifact name identifies the synthetic merge checkout, not the PR head. Verify the manifest against that checkout. Artifacts expire; if unavailable, rebuild a fresh pinned bundle and use its exact checkout instead.
+
+In a disposable, non-elevated interactive x64 Windows VM, extract the verified artifact to a fresh directory and run its PowerShell 7 script (choose new directories):
+
+```powershell
+.\run-cef-nested-bundle.ps1 -ExpectedCommit '287cd139cc779765c59d09221914647f009c948a' -EvidenceRoot 'C:\veil-test\mitigation-evidence'
+```
+
+From a checkout containing the updated analysis tool, review the original manifest and returned result:
+
+```powershell
+node scripts/check-cef-nested-evidence.mjs --commit '287cd139cc779765c59d09221914647f009c948a' --manifest 'C:\veil-test\bundle\manifest.json' --evidence 'C:\veil-test\mitigation-evidence' --require-mitigation-collection
+```
+
+The optional strict collection target requires at least one observed browser, renderer, GPU, network and utility process, no unknown role or unavailable mitigation sample, and no recorded Job start without a live sample. It reports incomplete collections with exit code 1, preserving the JSON diagnosis. The ordinary analysis still accepts historical smoke reports without mitigation evidence. Do not infer that any service must start on every machine, that Job notifications cover all processes, or that a collected flag set is secure. Retain failed and incomplete runs, and obtain independent Procmon evidence and review on the exact pinned CEF/Windows configuration. Do not relax the target to manufacture a passing collection. No product gate is satisfied by this command.
+
 ### Run the broker authorization regression without building CEF
 
 From a clean checkout on an interactive, non-elevated Windows x64 test account (prefer a disposable VM), with Node 22 and .NET 10 SDK:
