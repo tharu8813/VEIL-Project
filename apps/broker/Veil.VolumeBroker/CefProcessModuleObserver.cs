@@ -41,21 +41,18 @@ internal static class CefNestedProcessDiagnostics
 {
     internal static CefRetainedProcessDiagnostic[] Observe(CefBrokerOwnedJob brokerJob,
         SafeFileHandle desktopJob,
-        IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members,
-        ClientIdentity root, CefRuntimeRegistrationLease registration,
+        ClientIdentity root, SafeProcessHandle rootHandle,
+        CefRuntimeRegistrationLease registration,
         CefSystemModuleVerifier? systemVerifier = null)
     {
         ArgumentNullException.ThrowIfNull(brokerJob);
-        ArgumentNullException.ThrowIfNull(members);
         ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(rootHandle);
         ArgumentNullException.ThrowIfNull(registration);
-        var retained = members.ToArray();
-        // root and both Job handles must originate from the serialized broker,
-        // not from an IPC request or a client-supplied role claim.
-        if (retained.Count(member => member.Identity == root) != 1)
-            throw new UnauthorizedAccessException("Missing unique CEF diagnostic root.");
+        // Only the independently retained root and trusted jobs are inputs.
+        // The broker collects member handles itself, never from IPC.
         registration.RequireCurrent();
-        var result = brokerJob.ObserveNestedRetainedDiagnostics(desktopJob, retained,
+        var result = brokerJob.ObserveCollectedNestedDiagnostics(desktopJob, root, rootHandle,
             (identity, handle) =>
             {
                 var role = CefCommandRoleObserver.Observe(handle, identity, root);
