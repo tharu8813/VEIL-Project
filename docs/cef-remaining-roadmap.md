@@ -176,3 +176,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 ### P2-05 브로커 객체 고정 (미완료)
 
 - 네이티브 권한 요청을 호출마다 SCM 프로세스를 새로 열던 함수 대신 한 실행의 고정 `RuntimeAuthoritySession`으로 변경했다. 원본 프로세스 핸들을 유지하며 각 연결 전후 SCM/pipe PID 및 원본 생존 상태를 검사한다. 거부/예외/재진입은 해당 객체에 영구 반영된다. 새 객체 생성으로 복구하는 실행 경로는 추가하지 않았다. 합성 latch 및 wire 테스트만 추가했다. 실제 SCM 재시작/IPC/CEF/보호 VM 검증과 하위 프로세스 admission은 미완료. 기존 시작 차단 유지.
+
+### P2-05 하위 프로세스 권한 검증 준비 (미완료)
+
+- 진단 전용 권한 요청자를 브라우저 루트 외에 두 private Job의 실제 멤버까지 검사하도록 확장했다. IPC의 retained process handle을 브로커가 독립 수집한 멤버 객체와 비교하며, 전체 관측의 Job accounting, 이미지, 모듈, 토큰 및 세션 검증을 유지한다. 클라이언트가 역할/PID를 제출하지 않는다.
+- 현재 역할 정책은 Browser 및 Renderer의 기존 잠정 토큰 기준만 허용 대상으로 분류한다. GPU/Utility/Network/Unknown 및 불일치 역할은 거부한다. 잠정 기준은 실제 sandbox admission 증명이 아니다. 기존 활성화 금지 및 production Job cap=1을 유지하며 네이티브 진입점 연결, 실제 멀티프로세스 CEF, SCM/BitLocker/VM 검증은 NOT RUN. P2-03~05 미완료.
