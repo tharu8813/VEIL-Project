@@ -651,3 +651,20 @@ test('authenticated owner is monitored even without an active CEF candidate', as
     assert.match(monitor, /catch \(Exception error\)[\s\S]*?if \(ReferenceEquals\(authenticatedGeneration, expected\)\)\s*ClearAuthenticatedOwner\(\);[\s\S]*?return;[\s\S]*?finally \{ serial\.Release\(\); \}/);
     assert.doesNotMatch(monitor, /pendingCefChild|completedPreflight|backend\.(Lock|Unlock|Detach|Attach)\(/);
 });
+
+
+test('nested diagnostic lifetime requires an independently trusted initial root-only job pair', async () => {
+    const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
+    const nested = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const initial = job.slice(job.indexOf('internal void RequireInitialNestedBinding('), job.indexOf('// P2-03 observation primitive'));
+    assert.match(initial, /CompareJobObjects\(job, desktopJob\)/);
+    assert.match(initial, /IsProcessInJob\(ownerHandle, job, out bool inBroker\) \|\| inBroker[\s\S]*?IsProcessInJob\(ownerHandle, desktopJob, out bool inDesktop\) \|\| inDesktop/);
+    assert.match(initial, /brokerState\.ActiveProcesses != 1 \|\| brokerState\.TotalProcesses != 1 \|\|[\s\S]*?brokerState\.TotalTerminatedProcesses != 0[\s\S]*?desktopState\.ActiveProcesses != 1 \|\| desktopState\.TotalProcesses != 1 \|\|[\s\S]*?desktopState\.TotalTerminatedProcesses != 0/);
+    assert.match(initial, /RequireContainmentLimits\(job, activeLimit\);\s*RequireContainmentLimits\(desktopJob, null\)/);
+    assert.match(initial, /RequireInitialState\(\);\s*_ = ObserveNestedRetainedMembers\(desktopJob, \[\(root, rootHandle\)\]\);\s*RequireInitialState\(\)/);
+    assert.match(initial, /const uint killOnClose = 0x00002000, breakaway = 0x00000800 \| 0x00001000;/);
+    assert.match(initial, /\(flags & killOnClose\) == 0 \|\| \(flags & breakaway\) != 0/);
+    assert.match(nested, /registration\.RequireCurrent\(\);\s*brokerJob\.RequireInitialNestedBinding\(desktopJob, owner, ownerHandle, root, rootHandle\);\s*registration\.RequireCurrent\(\);[\s\S]*?lifetime = new CefRetainedLifetime/);
+    assert.doesNotMatch(broker, /new CefBoundDiagnosticSession|IssueAssignmentHandle|DuplicateCefJobAssignment/);
+});
