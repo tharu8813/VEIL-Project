@@ -13,7 +13,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private CefAuthenticatedGeneration? authenticatedGeneration;
     private SafeProcessHandle? authenticatedOwnerHandle;
     private CefPendingChild? pendingCefChild;
-    private readonly CefDiagnosticSessionSlot<CefBoundDiagnosticSession> diagnosticSession = new();
+    private readonly CefDiagnosticSessionSlot<ICefDiagnosticLifetime> diagnosticSession = new();
     private sealed record CandidateStop(SafeProcessHandle Child, CefBrokerOwnedJob? Job, IDisposable? Image, IDisposable? Runtime)
     {
         internal CefRetainedLifetime Lifetime { get; } = new(Runtime, Image, Job, Child);
@@ -567,17 +567,68 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private CefBrokerLaunchPreparation PrepareDiagnosticLaunch(object expectedGeneration,
         ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature)
     {
-        bool Available() => !diagnosticRelock.Pending && !config.Development &&
-            !diagnosticSession.Occupied && pendingCefChild is null &&
-            completedPreflight is null && unresolvedCefStops.Count == 0 &&
+        // Initial admission requires an empty slot. Once the probe owns
+        // it, rechecks must allow that occupied slot but never a retired
+        // generation or pending relock. All calls remain serialized.
+        bool AuthorityCurrent() => !diagnosticRelock.Pending && !config.Development &&
+            pendingCefChild is null && completedPreflight is null && unresolvedCefStops.Count == 0 &&
             CandidateAuthorityCurrent(expectedGeneration);
-        if (!Available() || config.CefChildImage is not { } image ||
+        if (diagnosticSession.Occupied || !AuthorityCurrent() || config.CefChildImage is not { } image ||
             config.CefChildSha256 is not { } digest ||
             authenticatedOwner is not { } owner ||
             authenticatedOwnerHandle is not { } ownerHandle)
             throw new UnauthorizedAccessException("CEF preparation unavailable.");
         return CefBrokerLaunchPreparation.Open(image, digest, owner, ownerHandle,
-            Available, baselinePayload, baselineSignature);
+            AuthorityCurrent, baselinePayload, baselineSignature);
+    }
+
+    // Disconnected internal probe: create, verify and drain, NEVER resume.
+    // No request, service startup or product caller. All operations hold serial.
+    private void RunDiagnosticCreationProbe(object expectedGeneration,
+        ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature)
+    {
+        CefBrokerLaunchPreparation? preparation = null;
+        CefBrokerOwnedJob? outer = null, inner = null;
+        bool accepted = false;
+        try
+        {
+            preparation = PrepareDiagnosticLaunch(expectedGeneration, baselinePayload, baselineSignature);
+            outer = CefBrokerOwnedJob.CreateDisabledCandidate();
+            inner = CefBrokerOwnedJob.CreateDisabledCandidate();
+            var probe = new CefPreparedCreationLifetime(outer, inner, preparation,
+                preparation.CreateDiagnosticCandidate);
+            var outcome = diagnosticSession.RegisterAndActivate(expectedGeneration, probe, () =>
+            {
+                accepted = true; // The slot owns everything before creation.
+                probe.Create();
+            }, out var failure);
+            if (outcome == CefDiagnosticActivationOutcome.Refused)
+                throw new UnauthorizedAccessException("CEF creation probe slot unavailable.");
+            if (failure is not null) throw new UnauthorizedAccessException("CEF creation probe refused.", failure);
+            log.Write("cef-creation-probe", new { result = "SuspendedVerified" });
+        }
+        finally
+        {
+            if (accepted)
+            {
+                // Even a successful probe is terminal: revoke, prove exit,
+                // release and request non-forced relock. Reentrant revocation
+                // during creation cannot release an activating slot.
+                diagnosticRelock.Request(expectedGeneration);
+                try { ClearAuthenticatedOwner(); }
+                finally { EnsureCefStopRetry(); }
+            }
+            else
+            {
+                // No native creation could have run before acceptance.
+                try { inner?.Dispose(); }
+                finally
+                {
+                    try { outer?.Dispose(); }
+                    finally { preparation?.Dispose(); }
+                }
+            }
+        }
     }
 
     private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession(object expectedGeneration,
@@ -901,7 +952,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 // Only an already registered internal diagnostic session can
                 // reach this path. Observation failure retires the owner and
                 // the session through the existing catch/cleanup path.
-                if (diagnosticSession.Current(unlockOwner) is { } session)
+                if (diagnosticSession.Current(unlockOwner) is CefBoundDiagnosticSession session)
                     _ = session.Observe();
             }
             catch (Exception error) when (error is not OutOfMemoryException)

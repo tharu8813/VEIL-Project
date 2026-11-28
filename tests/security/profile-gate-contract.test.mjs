@@ -746,7 +746,7 @@ test('registered diagnostic session requires installed signed baseline and retir
     assert.match(verifier, /if \(requireHostCurrent is null\)\s*throw new UnauthorizedAccessException[\s\S]*?requireHostCurrent\(\);/);
     const monitor = broker.slice(broker.indexOf('private async Task MonitorAuthenticatedGenerationAsync('),
         broker.indexOf('private async Task MonitorCompletedPreflightAsync('));
-    assert.match(monitor, /if \(diagnosticSession\.Current\(unlockOwner\) is \{ \} session\)\s*_ = session\.Observe\(\);[\s\S]*?catch \(Exception error\)[\s\S]*?ClearAuthenticatedOwner\(\);/);
+    assert.match(monitor, /if \(diagnosticSession\.Current\(unlockOwner\) is CefBoundDiagnosticSession session\)\s*_ = session\.Observe\(\);[\s\S]*?catch \(Exception error\)[\s\S]*?ClearAuthenticatedOwner\(\);/);
     assert.equal((broker.match(/TryRegisterDiagnosticSession\(/g) ?? []).length, 1);
 });
 
@@ -825,7 +825,7 @@ test('prepared diagnostic lifetime is retained before activation and retired on 
     assert.match(policy, /!retired && !activating && ReferenceEquals\(generation, expectedGeneration\)/);
     assert.match(policy, /if \(!retired \|\| releasing \|\| activating\) return false/);
     assert.match(fixture, /slot\.RegisterAndActivate\(generation, session,[\s\S]*?candidate\.ResumeRetainedRoot\(retained\)[\s\S]*?Synthetic lost resume confirmation[\s\S]*?slot\.TryReleaseRetired\(5000\)/);
-    assert.equal((broker.match(/diagnosticSession\.RegisterAndActivate\(/g) ?? []).length, 1);
+    assert.equal((broker.match(/diagnosticSession\.RegisterAndActivate\(/g) ?? []).length, 2);
 });
 
 
@@ -869,9 +869,9 @@ test('broker pre-creation preparation independently pins executable, runtime, tr
     assert.match(pin, /RequireRegisteredPath\(registeredPath\);\s*AdminOnlyFile\.RequireProtectedExecutable\(registeredPath\);[\s\S]*?FileShare\.Read\);[\s\S]*?RequireRetainedBeforeCreation\(image, registeredPath, digest\)/);
     assert.match(pin, /var image = OpenVerifiedBeforeCreation\(registeredPath, digest\);[\s\S]*?!Native\.MatchesLiveProcessImage\(process, child\)/);
     const entry = broker.slice(broker.indexOf('private CefBrokerLaunchPreparation PrepareDiagnosticLaunch('), broker.indexOf('private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession('));
-    assert.match(entry, /!diagnosticRelock\.Pending && !config\.Development &&[\s\S]*?!diagnosticSession\.Occupied && pendingCefChild is null &&[\s\S]*?completedPreflight is null && unresolvedCefStops\.Count == 0 &&[\s\S]*?CandidateAuthorityCurrent\(expectedGeneration\)/);
-    assert.match(entry, /config\.CefChildImage is not \{ \} image[\s\S]*?config\.CefChildSha256 is not \{ \} digest[\s\S]*?CefBrokerLaunchPreparation\.Open\(image, digest, owner, ownerHandle,\s*Available, baselinePayload, baselineSignature\)/);
-    assert.equal((broker.match(/PrepareDiagnosticLaunch\(/g) ?? []).length, 1);
+    assert.match(entry, /!diagnosticRelock\.Pending && !config\.Development &&[\s\S]*?pendingCefChild is null && completedPreflight is null && unresolvedCefStops\.Count == 0 &&[\s\S]*?CandidateAuthorityCurrent\(expectedGeneration\);[\s\S]*?if \(diagnosticSession\.Occupied \|\| !AuthorityCurrent\(\)/);
+    assert.match(entry, /config\.CefChildImage is not \{ \} image[\s\S]*?config\.CefChildSha256 is not \{ \} digest[\s\S]*?CefBrokerLaunchPreparation\.Open\(image, digest, owner, ownerHandle,\s*AuthorityCurrent, baselinePayload, baselineSignature\)/);
+    assert.equal((broker.match(/PrepareDiagnosticLaunch\(/g) ?? []).length, 2);
     assert.doesNotMatch(protocol, /PrepareDiagnosticLaunch|CefBrokerLaunchPreparation/);
     assert.doesNotMatch(prep, /CreateProcessAsUser|CreateSuspended|ResumeThread|ResumeRetainedRoot/);
 });
@@ -910,5 +910,23 @@ test('prepared broker candidate creation is single-root, token-bound and remains
     assert.match(observer, /#if VEIL_CEF_BROKER[\s\S]*?CreateRetainedDiagnosticRoot[\s\S]*?RequireCurrent\(\);\s*Veil\.Desktop\.CefContainedProcess\.CreateRetainedUserRoot\(image, environment, outer, inner,\s*duplicate, custody\);[\s\S]*?RequireCreatedRoot[\s\S]*?ObserveLaunchToken\(root, identity\);\s*CefLaunchTokenPolicy\.RequirePair\(sourceSnapshot, observed\);[\s\S]*?RequireCurrent\(\);/);
     assert.match(launch, /validating = true;\s*try\s*\{\s*child\.RequireRetainedPreparedRoot\(child.process\);\s*verify\(child.process\);\s*child\.RequireRetainedPreparedRoot\(child.process\);\s*\}\s*catch\s*\{\s*rejected = true;\s*throw;\s*\}\s*finally \{ validating = false; \}/);
     assert.match(fixture, /custody\.VerifyRetainedRoot\(root =>[\s\S]*?Reject\(\(\) => custody\.TakeVerified\(\)\);[\s\S]*?!custody\.TryDrainAndRelease\(0\)[\s\S]*?Synthetic post-create token refusal[\s\S]*?custody\.HasRetainedProcess[\s\S]*?custody\.TryDrainAndRelease\(5000\)/);
-    assert.doesNotMatch(broker, /CreateDiagnosticCandidate|CreateRetainedDiagnosticPair/);
+    assert.equal((broker.match(/preparation\.CreateDiagnosticCandidate/g) ?? []).length, 1);
+    assert.doesNotMatch(broker, /CreateRetainedDiagnosticPair/);
+});
+
+
+test('disconnected creation probe owns the slot before native creation and always retires before relock', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const life = await readFile('apps/broker/Veil.VolumeBroker/CefPreparedCreationLifetime.cs', 'utf8');
+    const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
+    const probe = broker.slice(broker.indexOf('private void RunDiagnosticCreationProbe('), broker.indexOf('private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession('));
+    assert.match(broker, /CefDiagnosticSessionSlot<ICefDiagnosticLifetime> diagnosticSession/);
+    assert.match(probe, /preparation = PrepareDiagnosticLaunch[\s\S]*?outer = CefBrokerOwnedJob\.CreateDisabledCandidate\(\);\s*inner = CefBrokerOwnedJob\.CreateDisabledCandidate\(\);[\s\S]*?new CefPreparedCreationLifetime[\s\S]*?diagnosticSession\.RegisterAndActivate\(expectedGeneration, probe, \(\) =>\s*\{\s*accepted = true;[^\n]*\s*probe\.Create\(\);/);
+    assert.match(probe, /finally\s*\{\s*if \(accepted\)[\s\S]*?diagnosticRelock\.Request\(expectedGeneration\);\s*try \{ ClearAuthenticatedOwner\(\); \}\s*finally \{ EnsureCefStopRetry\(\); \}/);
+    assert.match(life, /if \(creating\) return false;\s*return lifetime\.TryRelease\(\(\) =>[\s\S]*?custody\.TryDrainAndRelease\(Remaining\(\)\)[\s\S]*?outer\.TerminateAndDrain\(Remaining\(\)\)[\s\S]*?inner\.TerminateAndDrain\(Remaining\(\)\)[\s\S]*?return outer\.HasNoActiveProcesses\(\) && inner\.HasNoActiveProcesses\(\);/);
+    assert.match(life, /lifetime = new CefRetainedLifetime\(prerequisites, inner, outer\)/);
+    assert.doesNotMatch(life, /ResumeRetainedRoot|ResumeAfterVerification|TakeVerified/);
+    assert.doesNotMatch(probe, /ResumeRetainedRoot|TryRegisterDiagnosticSession\(/);
+    assert.equal((broker.match(/RunDiagnosticCreationProbe\(/g) ?? []).length, 1);
+    assert.doesNotMatch(protocol, /RunDiagnosticCreationProbe|CefPreparedCreationLifetime/);
 });

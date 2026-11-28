@@ -176,6 +176,42 @@ try
             inner.HasNoActiveProcesses() && !File.Exists(markerPath), "Post-create refusal did not drain.");
     }
     Console.WriteLine("PASS: second-stage validation refusal retains original root and blocks transfer");
+    // Exercise the production-shaped lifetime with the isolated apphost,
+    // not the installed product, service token or real encrypted volume.
+    foreach (bool injectFailure in new[] { false, true })
+    {
+        using var outer = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var inner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var prerequisites = new MemoryStream();
+        var slot = new CefDiagnosticSessionSlot<ICefDiagnosticLifetime>();
+        var generation = new object();
+        var relock = new CefDiagnosticRelock();
+        var probe = new CefPreparedCreationLifetime(outer, inner, prerequisites, (a, b, custody) =>
+        {
+            Check(slot.Occupied && slot.Current(generation) is null,
+                "Creation ran before slot ownership.");
+            a.CreateAtomicRetainedPairFixture(b, image, environment, custody, injectFailure);
+            Check(!File.Exists(markerPath), "Creation probe unexpectedly executed.");
+            // Simulate reentrant owner revocation while creating.
+            relock.Request(generation);
+            slot.Retire();
+            Check(!slot.TryReleaseRetired(0) && prerequisites.CanRead,
+                "Creating slot released prerequisites.");
+        });
+        var outcome = slot.RegisterAndActivate(generation, probe, probe.Create, out var failure);
+        Check(outcome == CefDiagnosticActivationOutcome.Retired && failure is not null &&
+            slot.CleanupPending && prerequisites.CanRead && !File.Exists(markerPath),
+            "Creation probe did not retain the retired lifetime.");
+        relock.Request(generation);
+        bool locked = false;
+        Check(!relock.TryComplete(generation, !slot.Occupied, () => { locked = true; return true; }) && !locked,
+            "Relock accepted before creation drain.");
+        Check(slot.TryReleaseRetired(5000) && !slot.Occupied && !prerequisites.CanRead &&
+            !File.Exists(markerPath), "Creation probe did not release after drain.");
+        Check(relock.TryComplete(generation, !slot.Occupied, () => { locked = true; return true; }) && locked,
+            "Relock policy did not complete after creation drain.");
+    }
+    Console.WriteLine("PASS: owned suspended creation probe retires, drains, and gates relock");
     // Same-user synthetic atomic Job pair: handoff before resume, including
     // a failure after resume actually ran. No product or BitLocker access.
     using (var owner = Process.GetCurrentProcess())
