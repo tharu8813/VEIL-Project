@@ -351,7 +351,7 @@ test('product-named CEF candidate is isolated and does not initialize CEF', asyn
     const product = await readFile('apps/cef-smoke/product_candidate.cc', 'utf8');
     const packageBuild = await readFile('scripts/build-package.ps1', 'utf8');
     const packagePolicy = await readFile('scripts/package-common.ps1', 'utf8');
-    assert.match(cmake, /add_library\(veil-cef-product SHARED EXCLUDE_FROM_ALL product_candidate\.cc\s+protected_bootstrap\.cc bootstrap_registration\.cc broker_verification\.cc product_module_policy\.cc\)/);
+    assert.match(cmake, /add_library\(veil-cef-product SHARED EXCLUDE_FROM_ALL product_candidate\.cc\s+protected_bootstrap\.cc bootstrap_registration\.cc broker_verification\.cc product_module_policy\.cc\s+protected_initialization_settings\.cc\)/);
     assert.match(cmake, /RUNTIME_OUTPUT_DIRECTORY "\$\{CMAKE_BINARY_DIR\}\/product-candidate"/);
     assert.match(product, /RunProductPreflight\(allowed,\s*veil_cef::LoadRegisteredBootstrap, veil_cef::VerifyRegisteredBootstrap\)/);
     assert.match(product, /sandbox_info != nullptr[\s\S]*?command_line\[0\] == L'\\0'[\s\S]*?IsProcessInJob/);
