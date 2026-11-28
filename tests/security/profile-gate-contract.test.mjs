@@ -299,7 +299,7 @@ test('native CEF receipt helper does not authorize smoke startup', async () => {
     assert.match(header, /return reply == kVerifiedReply/);
     assert.match(impl, /GetNamedPipeServerProcessId[\s\S]*?ServicePid\(\) == expected/);
     assert.match(impl, /CancelIoEx\(pipe, &operation\)/);
-    assert.match(impl, /return IsVerifiedReply\(reply\) && SameServer/);
+    assert.match(impl, /return is_reply\(reply\) && SameServer/);
     assert.doesNotMatch(impl, /GetEnvironmentVariable|CefInitialize/);
     assert.doesNotMatch(smoke + wpf, /RequestChildVerification|broker_verification\.h/);
 });
@@ -1299,4 +1299,17 @@ test('protected execution authority is sticky and broker monitoring retains the 
     assert.match(lifecycle, /bool retired = false;[\s\S]*?if \(retired\) return false;[\s\S]*?require_current\(\)[\s\S]*?retired = true;[\s\S]*?fixture\(current\)/);
     assert.match(slot, /ObserveCurrent\(object\? expectedGeneration, Action<T> observe\)[\s\S]*?!ReferenceEquals\(generation, expectedGeneration\)[\s\S]*?observing = true;[\s\S]*?observe\(candidate\);[\s\S]*?Retire\(\);[\s\S]*?finally \{ observing = false; \}/);
     assert.match(slot, /if \(!retired \|\| releasing \|\| activating \|\| observing\) return false;/);
+});
+
+
+test('runtime authority wire remains separate from redemption and unreachable for suspended creation', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const session = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    const wire = await readFile('apps/cef-smoke/broker_verification.h', 'utf8');
+    const product = await readFile('apps/cef-smoke/product_candidate.cc', 'utf8');
+    assert.match(broker, /#if VEIL_CEF_DIAGNOSTIC_IPC\s*else if \(request.Command == BrokerCommand.CheckCefRuntimeAuthority\)[\s\S]*?redemptionCandidate[\s\S]*?CheckCefRuntimeAuthority\(request, client, pipeClient\)[\s\S]*?#endif/);
+    assert.match(session, /MatchesRuntimeRoot[\s\S]*?borrowedCreation is null \|\| !activated[\s\S]*?Native.SameLiveProcess\(retainedRoot, pipeClient\)/);
+    assert.match(session, /if \(borrowedCreation is not null\)\s*throw new UnauthorizedAccessException\("CEF prepared successor activation is disabled."\);/);
+    assert.match(wire, /CheckCefRuntimeAuthority/);
+    assert.doesNotMatch(product, /RequestRuntimeAuthority|RunProtectedCefLifecycle/);
 });
