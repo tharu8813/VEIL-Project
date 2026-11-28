@@ -64,6 +64,52 @@ internal static class CefSessionObservationTests
         Check(Observe(active, [browser, child]));
         Check(!Observe(active, [browser, child], protectedVolume: false));
         Check(!Observe(active, [browser, child]));
+        var context = new CefDiagnosticSessionContext(owner, generation, lease, true, true);
+        CefDiagnosticSessionGuard NewGuard() => new(owner, generation, lease);
+        void RefuseGuard(Action attempt)
+        {
+            try { attempt(); }
+            catch (UnauthorizedAccessException) { return; }
+            throw new InvalidOperationException("Invalid diagnostic session accepted.");
+        }
+        var valid = NewGuard();
+        Check(valid.Observe(() => context, () => 42) == 42);
+        Check(valid.Observe(() => context, () => 43) == 43);
+        foreach (var invalid in new[] {
+            context with { Owner = owner with { CreatedFileTime = 101 } },
+            context with { Generation = new object() },
+            context with { RuntimeLease = new object() },
+            context with { OwnerObjectVerified = false },
+            context with { VolumeProtected = false } })
+        {
+            var before = NewGuard();
+            bool called = false;
+            RefuseGuard(() => before.Observe(() => invalid, () => { called = true; return 1; }));
+            Check(!called);
+            RefuseGuard(() => before.Observe(() => context, () => 1));
+            var after = NewGuard();
+            var current = context;
+            RefuseGuard(() => after.Observe(() => current, () => { current = invalid; return 1; }));
+            RefuseGuard(() => after.Observe(() => context, () => 1));
+        }
+        var failed = NewGuard();
+        RefuseGuard(() => failed.Observe<int>(() => context, () => throw new UnauthorizedAccessException()));
+        RefuseGuard(() => failed.Observe(() => context, () => 1));
+        var revoked = NewGuard();
+        RefuseGuard(() => revoked.Observe(() => context, () => { revoked.Revoke(); return 1; }));
+        Check(!revoked.RevokeAndCheckDrain(() => false));
+        RefuseGuard(() => revoked.Observe(() => context, () => 1));
+        RefuseGuard(() => revoked.RevokeAndCheckDrain(() => throw new UnauthorizedAccessException()));
+        Check(revoked.RevokeAndCheckDrain(() => true));
+        RefuseGuard(() => revoked.Observe(() => context, () => 1));
+        var reentrant = NewGuard();
+        RefuseGuard(() => reentrant.Observe(() => context, () =>
+        {
+            Check(!reentrant.RevokeAndCheckDrain(() => throw new InvalidOperationException("Drain ran during observation.")));
+            return 1;
+        }));
+        Check(reentrant.RevokeAndCheckDrain(() => true));
+        Console.WriteLine("PASS: diagnostic session pre/post checks, irreversible retirement and retryable drain");
         Console.WriteLine("PASS: pure CEF multi-process observation, generation/lease binding and irreversible revocation");
     }
 }
