@@ -237,6 +237,31 @@ try
                     [(binding.Identity, retained)],
                     (expected, _) => { diagnosticCalls++; return expected.ProcessId; }));
                 Check(diagnosticCalls == 2, "Incomplete membership reached diagnostic callback.");
+                var openedByCollector = new List<Microsoft.Win32.SafeHandles.SafeProcessHandle>();
+                var collected = brokerJob.ObserveCollectedNestedDiagnostics(candidate.FixtureJobHandle,
+                    binding.Identity, retained, (expected, handle) =>
+                    {
+                        Check(Native.ObserveProcess(handle) == expected, "Collected handle identity mismatch.");
+                        Check(Native.SameLiveProcess(handle, expected == binding.Identity ? retained : descendantHandle),
+                            "Collected handle was not the original member object.");
+                        openedByCollector.Add(handle);
+                        return expected.ProcessId;
+                    });
+                Check(collected.OrderBy(pid => pid).SequenceEqual(snapshot.Select(item => item.ProcessId).OrderBy(pid => pid)),
+                    "Collector did not enumerate the complete nested membership.");
+                Check(openedByCollector.Count == 2 && openedByCollector.All(handle => handle.IsClosed) &&
+                    Native.IsRunning(retained) && Native.IsRunning(descendantHandle),
+                    "Collection did not release only its own handles.");
+                RefuseObservation(() => brokerJob.ObserveCollectedNestedDiagnostics(candidate.FixtureJobHandle,
+                    binding.Identity, descendantHandle, (expected, _) => expected.ProcessId));
+                RefuseObservation(() => brokerJob.ObserveCollectedNestedDiagnostics(candidate.FixtureJobHandle,
+                    binding.Identity with { CreatedFileTime = binding.Identity.CreatedFileTime + 1 },
+                    retained, (expected, _) => expected.ProcessId));
+                using (var unrelated = CefContainedProcess.CreateSuspended(image, environment))
+                {
+                    RefuseObservation(() => brokerJob.ObserveCollectedNestedDiagnostics(unrelated.FixtureJobHandle,
+                        binding.Identity, retained, (expected, _) => expected.ProcessId));
+                }
                 RefuseObservation(() => brokerJob.ObserveNestedRetainedMembers(candidate.FixtureJobHandle,
                     [(binding.Identity, retained)]));
                 RefuseObservation(() => brokerJob.ObserveSameJobFixture(
@@ -259,13 +284,16 @@ try
                     case 3:
                         // Force both members to exit DURING the diagnostic.
                         // No result may escape the post-observation checks.
-                        RefuseObservation(() => brokerJob.ObserveNestedRetainedDiagnostics(candidate.FixtureJobHandle,
-                            [(binding.Identity, retained), (descendantIdentity, descendantHandle)],
-                            (expected, _) =>
+                        var failedCollectionHandles = new List<Microsoft.Win32.SafeHandles.SafeProcessHandle>();
+                        RefuseObservation(() => brokerJob.ObserveCollectedNestedDiagnostics(candidate.FixtureJobHandle,
+                            binding.Identity, retained, (expected, handle) =>
                             {
+                                failedCollectionHandles.Add(handle);
                                 Check(brokerJob.TerminateAndDrain(5000), "Broker fixture termination did not drain.");
                                 return expected.ProcessId;
                             }));
+                        Check(failedCollectionHandles.Count == 1 && failedCollectionHandles.All(handle => handle.IsClosed),
+                            "Failed collection leaked its observed process handle.");
                         break;
                     case 4: candidate.TerminateAndDrain(5000); break;
                 }
