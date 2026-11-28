@@ -913,3 +913,12 @@ test('ordinary tab save rolls back incomplete or failed layouts and reports actu
     assert.match(browser, /internal void PrepareForProtectedShutdown\(\)\s*\{\s*try \{ session\.Save\(\); \}\s*finally \{ session\.IsEnding = true; \}/);
 });
 
+
+
+test('search preferences use session-owned persistence and publish only after the paired commit', () => {
+    assert.match(layoutData, /if \(!SearchPolicy.IsKnown\(engine\) \|\| !authorized\(\)\) return false;\s*var previous = \(SearchEngine, LocalAddressSuggestions\);[\s\S]*?SearchEngine = engine == SearchPolicy.Default \? null : engine;\s*LocalAddressSuggestions = localSuggestions \? null : false;\s*committed = authorized\(\) && save\(\);[\s\S]*?if \(!committed\)\s*\(SearchEngine, LocalAddressSuggestions\) = previous;/);
+    assert.match(session, /internal bool TryCommitSearchSettings\([^)]*\)\s*\{\s*libraryDispatcher.VerifyAccess\(\);\s*bool Authorized\(\) => !IsPrivate && !IsEnding && !EngineLost && EngineHost.IsReady &&\s*persistentStatePath is not null && authorized\(\);[\s\S]*?return Data.TryCommitSearchSettings\(engine, localSuggestions, Authorized,\s*\(\) => TrySaveLibrary\(Authorized\)\);/);
+    assert.match(search, /bool Authorized\(\) => SettingsReady\(\) && IsActive && session.SettingsUiOpen && session.PermissionUiOpen;\s*if \(!session.TryCommitSearchSettings\(dialog.Engine, dialog.LocalSuggestions, Authorized\)\)[\s\S]*?return;\s*\}\s*foreach \(var window in session.Windows.ToArray\(\)\)/);
+    assert.doesNotMatch(search, /\bdata\.Save\(|\bdata\.(?:SearchEngine|LocalAddressSuggestions)\s*=(?!=)/);
+});
+

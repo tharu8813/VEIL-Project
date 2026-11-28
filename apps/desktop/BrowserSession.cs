@@ -190,6 +190,17 @@ internal sealed class BrowserSession
             return false;
         }
     }
+    internal bool TryCommitSearchSettings(string? engine, bool localSuggestions, Func<bool> authorized)
+    {
+        libraryDispatcher.VerifyAccess();
+        bool Authorized() => !IsPrivate && !IsEnding && !EngineLost && EngineHost.IsReady &&
+            persistentStatePath is not null && authorized();
+        // Reuse the protected-profile writer used by the library, without
+        // capturing tabs or accepting a path from the settings dialog.
+        return Data.TryCommitSearchSettings(engine, localSuggestions, Authorized,
+            () => TrySaveLibrary(Authorized));
+    }
+
     internal Stack<ClosedTab> ClosedTabs { get; } = new();
     internal bool RestoringClosedTab { get; set; }
     internal int TabTransferDepth { get; set; }

@@ -308,3 +308,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 - 일반 BrowserSession.Save에도 이전 배치 rollback을 적용하고 실제 쓰기 성공 여부를 bool로 반환한다. dispatcher 확인, private/ending/transfer 및 불완전 복원 중 쓰기 거부. 엔진 손실 직후에는 기존 managed snapshot 저장을 허용하되 종료 후 쓰기는 거부한다. 엔진 crash 안내가 skip을 성공으로 표시하지 않도록 수정했다. 보호 종료 finally 순서 유지. fixture 프로필 scratch에서 .new 경로를 디렉터리로 막아 실제 파일 열기 실패, 기존 바이트/메모리 복원, 정상 재시도/readback을 확인하는 smoke 및 source contracts 작성. 새 CI, 실제 WPF runtime 및 보호 VM NOT RUN; 설정 데이터 직접 저장 경로는 별도 작업. CEF startupEnabled=false, WebView2 유지.
 
 - #289 최초 head `29633997f15180e524332f5c3f444d7c1f337c91` Windows CI 46176414282 FAIL: 이전 탭 이동 source contract가 `void Save()`의 return 형식을 요구했다. 일반 저장의 새 bool 반환/종료/transfer guard 및 실제 쓰기 전 snapshot 거부 조건을 검사하도록 수정했다. Rust PASS. 새 head CI 확인 필요; 기존 실패 증거 유지.
+
+### P3-02 검색 설정 공통 저장 경계 (미완료)
+
+- #289 수정 exact head `44d711133b2c27145f22ea812be49e93e89c396f` Windows/Rust CI 46176834359 PASS, 독립 리뷰 없음.
+- 검색 엔진/로컬 주소창 제안을 하나의 transaction으로 변경. 허용 provider, UI 및 session/dispatcher/engine 수명, private/ending/lost 상태를 검사하고 기존 library profile writer로 저장. 거부/예외 시 두 값 복원, 성공 후 일반 session의 창 UI만 갱신. 기본 provider 및 nullable suggestion schema 유지. 합성 거부/철회/실패/예외/성공 및 source contract 추가. 실제 WPF/보호 VM, 새 CI/독립 리뷰 미검증. 기존 WebView2 동작에 적용, CEF fixture 지속 저장 미연결, startupEnabled=false 유지.
