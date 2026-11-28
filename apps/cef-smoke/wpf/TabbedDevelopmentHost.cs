@@ -22,6 +22,17 @@ internal sealed class TabbedDevelopmentHost
         internal ulong LastNavigationId;
     }
 
+    private sealed record FindRequest(Tab Tab, ulong ViewId, ulong NavigationId, string Source, string Query);
+    private FindRequest? currentFind;
+    private bool findInFlight;
+    private Task? fixtureFind;
+    private readonly DockPanel findBar = new() { Margin = new Thickness(6), Visibility = Visibility.Collapsed };
+    private readonly TextBox findQuery = new() { MaxLength = 256, MinWidth = 180 };
+    private readonly Button findOpen = new() { Content = "Find" };
+    private readonly Button findSearch = new() { Content = "Search" };
+    private readonly Button findClose = new() { Content = "Close find" };
+    private readonly TextBlock findResult = new() { Margin = new Thickness(8, 0, 8, 0) };
+
     private readonly Application app = new() { ShutdownMode = ShutdownMode.OnExplicitShutdown };
     private readonly Window window = new() { Width = 1000, Height = 700, Title = "VEIL CEF development tabs" };
     private readonly DockPanel layout = new();
@@ -88,7 +99,18 @@ internal sealed class TabbedDevelopmentHost
         }
         DockPanel.SetDock(go, Dock.Right);
         toolbar.Children.Add(go);
+        DockPanel.SetDock(findOpen, Dock.Right);
+        toolbar.Children.Add(findOpen);
+        findOpen.Visibility = fixture is null ? Visibility.Collapsed : Visibility.Visible;
         toolbar.Children.Add(address);
+        DockPanel.SetDock(findBar, Dock.Top);
+        layout.Children.Add(findBar);
+        foreach (var element in new FrameworkElement[] { findClose, findSearch, findResult })
+        {
+            DockPanel.SetDock(element, Dock.Right);
+            findBar.Children.Add(element);
+        }
+        findBar.Children.Add(findQuery);
         DockPanel.SetDock(status, Dock.Bottom);
         layout.Children.Add(status);
         DockPanel.SetDock(popupNotice, Dock.Bottom);
@@ -102,6 +124,31 @@ internal sealed class TabbedDevelopmentHost
         forward.Click += (_, _) => WithActive(view => view.GoForward());
         reload.Click += (_, _) => WithActive(view => view.Reload());
         go.Click += (_, _) => NavigateAddress();
+        findOpen.Click += (_, _) => ShowFindBar(true);
+        findClose.Click += (_, _) => ShowFindBar(false);
+        findSearch.Click += async (_, _) => await SearchPageAsync(false);
+        findQuery.TextChanged += (_, _) => InvalidateFindUi();
+        findQuery.KeyDown += async (_, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            await SearchPageAsync((Keyboard.Modifiers & ModifierKeys.Shift) != 0);
+        };
+        // WPF-routed keys only; keyboard focus within native CEF HWND still
+        // requires separate integration and runtime verification.
+        window.PreviewKeyDown += (_, e) =>
+        {
+            if (fixture is not null && e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
+            {
+                ShowFindBar(true);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape && findBar.Visibility == Visibility.Visible)
+            {
+                ShowFindBar(false);
+                e.Handled = true;
+            }
+        };
         address.KeyDown += (_, e) =>
         {
             if (e.Key == Key.Enter) { NavigateAddress(); e.Handled = true; }
@@ -161,6 +208,7 @@ internal sealed class TabbedDevelopmentHost
             }
             tab.PendingNavigationId = request.NavigationId;
             tab.LastNavigationId = request.NavigationId;
+            if (ReferenceEquals(active, tab)) InvalidateFindUi();
             SetTabStatus(tab, "Loading...");
         };
         view.NavigationCompleted += (_, completed) =>
@@ -171,10 +219,15 @@ internal sealed class TabbedDevelopmentHost
             SetTabStatus(tab, completed.IsCanceled ? "Navigation canceled." :
                 completed.IsSuccess ? "Page loaded." : "Page navigation failed.");
         };
+        view.SourceChanged += (_, _) =>
+        {
+            if (AcceptTabEvent(tab) && ReferenceEquals(active, tab)) InvalidateFindUi();
+        };
         view.ProcessFailed += (_, failure) =>
         {
             if (!AcceptTabEvent(tab)) return;
             tab.PendingNavigationId = 0;
+            if (ReferenceEquals(active, tab)) InvalidateFindUi();
             SetTabStatus(tab, "CEF child process failed.");
             if (freshProfileProbe && expectLoginRendererFailure && phase == 81 && tab == first &&
                 view.NativeHandle == firstId && failure.Scope == EngineFailureScope.PageOrChildProcess &&
@@ -213,6 +266,7 @@ internal sealed class TabbedDevelopmentHost
         {
             active?.View.InvalidateFixtureLoginContext();
             tab.View.InvalidateFixtureLoginContext();
+            InvalidateFindUi();
         }
         active = tab;
         foreach (var item in tabs)
@@ -226,10 +280,71 @@ internal sealed class TabbedDevelopmentHost
         RefreshToolbar();
     }
 
+    private void InvalidateFindUi()
+    {
+        currentFind = null;
+        findResult.Text = "";
+    }
+
+    private void ShowFindBar(bool visible, bool focus = true)
+    {
+        if (visible && (fixture is null || shuttingDown || active is not { Closing: false })) return;
+        InvalidateFindUi();
+        findBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (visible && focus)
+        {
+            findQuery.Focus();
+            findQuery.SelectAll();
+        }
+    }
+
+    private bool CanPublishFind(FindRequest request) =>
+        ReferenceEquals(currentFind, request) && findBar.Visibility == Visibility.Visible &&
+        AcceptTabEvent(request.Tab) && ReferenceEquals(active, request.Tab) &&
+        request.Tab.View.NativeHandle == request.ViewId && request.ViewId != 0 &&
+        CefNative.VeilCefClosed(request.ViewId) == 0 && request.Tab.PendingNavigationId == 0 &&
+        request.Tab.LastNavigationId == request.NavigationId &&
+        request.Tab.View.Source == request.Source && findQuery.Text == request.Query;
+
+    private void PublishFindResult(FindRequest request, bool? found)
+    {
+        if (!CanPublishFind(request)) return;
+        findResult.Text = found switch { true => "Match found.", false => "No match.", _ => "Search unavailable." };
+    }
+
+    private async Task SearchPageAsync(bool backwards)
+    {
+        if (fixture is null || findInFlight || findBar.Visibility != Visibility.Visible ||
+            active is not { } tab || !AcceptTabEvent(tab) || tab.View.NativeHandle == 0 ||
+            tab.PendingNavigationId != 0 || string.IsNullOrWhiteSpace(findQuery.Text)) return;
+        var request = new FindRequest(tab, tab.View.NativeHandle, tab.LastNavigationId,
+            tab.View.Source, findQuery.Text);
+        currentFind = request;
+        if (!CanPublishFind(request)) return;
+        findInFlight = true;
+        findResult.Text = "Searching...";
+        RefreshToolbar();
+        try
+        {
+            bool? found = await tab.View.FindTextAsync(request.Query, backwards);
+            PublishFindResult(request, found);
+        }
+        catch (InvalidOperationException)
+        {
+            PublishFindResult(request, null);
+        }
+        finally
+        {
+            findInFlight = false;
+            RefreshToolbar();
+        }
+    }
+
     private void WithActive(Action<CefDevelopmentView> operation)
     {
         if (active is not { Closing: false } tab || tab.View.NativeHandle == 0 ||
             CefNative.VeilCefClosed(tab.View.NativeHandle) != 0) return;
+        InvalidateFindUi();
         try { operation(tab.View); }
         catch (Exception error) when (error is ArgumentException or InvalidOperationException)
         { SetTabStatus(tab, error.Message); }
@@ -243,6 +358,7 @@ internal sealed class TabbedDevelopmentHost
         tab.Closing = true;
         tab.View.InvalidateFixtureLoginContext();
         tab.PendingNavigationId = 0;
+        if (ReferenceEquals(active, tab)) ShowFindBar(false);
         tab.ClosingId = tab.View.NativeHandle;
         tab.Header.IsEnabled = false;
         CefNative.VeilCefCancelOwnedAttachment(tab.ClosingId);
@@ -254,6 +370,7 @@ internal sealed class TabbedDevelopmentHost
     {
         if (shuttingDown) return;
         shuttingDown = true;
+        ShowFindBar(false);
         foreach (var tab in tabs.ToArray()) RequestClose(tab);
     }
 
@@ -262,6 +379,8 @@ internal sealed class TabbedDevelopmentHost
         var live = active is { Closing: false } tab && tab.View.NativeHandle != 0 &&
                    CefNative.VeilCefClosed(tab.View.NativeHandle) == 0;
         go.IsEnabled = reload.IsEnabled = address.IsEnabled = live && !shuttingDown;
+        findOpen.IsEnabled = fixture is not null && live && !shuttingDown;
+        findSearch.IsEnabled = findOpen.IsEnabled && !findInFlight && active!.PendingNavigationId == 0;
         back.IsEnabled = live && !shuttingDown && active!.View.CanGoBack;
         forward.IsEnabled = live && !shuttingDown && active!.View.CanGoForward;
         close.IsEnabled = active is { Closing: false } && !shuttingDown;
@@ -401,6 +520,34 @@ internal sealed class TabbedDevelopmentHost
             if (status.Text != "Page loaded.") { Fail(); return; }
             SetTabStatus(first, "Page loaded.");
             Log("Per-tab completion state and synthetic background status remained isolated");
+            Select(first);
+            ShowFindBar(true, focus: false);
+            findQuery.Text = "VEIL-TAB-FIND-ONLY-FIRST";
+            fixtureFind = SearchPageAsync(false);
+            phase = 90;
+        }
+        else if (phase == 90 && fixtureFind is { IsCompleted: true })
+        {
+            if (!fixtureFind.IsCompletedSuccessfully || findResult.Text != "Match found." ||
+                currentFind is not { } oldRequest || first is null || second is null) { Fail(); return; }
+            Select(second);
+            // Synthetic stale UI publication using the real previous request.
+            PublishFindResult(oldRequest, true);
+            if (findResult.Text != "") { Fail(); return; }
+            fixtureFind = SearchPageAsync(false);
+            phase = 91;
+        }
+        else if (phase == 91 && fixtureFind is { IsCompleted: true })
+        {
+            if (!fixtureFind.IsCompletedSuccessfully || findResult.Text != "No match." ||
+                currentFind is not { } oldRequest || first is null || second is null) { Fail(); return; }
+            findQuery.Text = "different";
+            PublishFindResult(oldRequest, true);
+            if (findResult.Text != "") { Fail(); return; }
+            ShowFindBar(false);
+            PublishFindResult(oldRequest, true);
+            if (findResult.Text != "" || findBar.Visibility != Visibility.Collapsed) { Fail(); return; }
+            Log("Find UI showed per-tab match results and discarded stale publication on switch, edit and close");
             firstDomains = ((IEngineSiteDataReader)first.View).GetCookieDomainsAsync();
             secondDomains = ((IEngineSiteDataReader)second.View).GetCookieDomainsAsync();
             phase = 11;

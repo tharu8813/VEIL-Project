@@ -773,7 +773,7 @@ test('CEF tab status publication is scoped to live tab and current navigation id
     assert.match(cefTabbed, /request.IsRedirected && tab.PendingNavigationId != request.NavigationId/);
     assert.match(cefTabbed, /!request.IsRedirected && request.NavigationId <= tab.LastNavigationId/);
     assert.match(cefTabbed, /view.NavigationCompleted \+= \(_, completed\) =>\s*\{\s*if \(!AcceptTabEvent\(tab\) \|\| completed.NavigationId == 0 \|\|\s*tab.PendingNavigationId != completed.NavigationId\) return;\s*tab.PendingNavigationId = 0;/);
-    assert.match(cefTabbed, /view.ProcessFailed \+= \(_, failure\) =>\s*\{\s*if \(!AcceptTabEvent\(tab\)\) return;\s*tab.PendingNavigationId = 0;\s*SetTabStatus\(tab, "CEF child process failed."\);/);
+    assert.match(cefTabbed, /view.ProcessFailed \+= \(_, failure\) =>\s*\{\s*if \(!AcceptTabEvent\(tab\)\) return;\s*tab.PendingNavigationId = 0;\s*if \(ReferenceEquals\(active, tab\)\) InvalidateFindUi\(\);\s*SetTabStatus\(tab, "CEF child process failed."\);/);
     assert.match(cefTabbed, /tab.LastSource = tab.View.Source;\s*status.Text = tab.Status;/);
     assert.match(cefTabbed, /SetTabStatus\(first, "Synthetic background status."\);[\s\S]*?Per-tab completion state and synthetic background status remained isolated/);
 });
@@ -812,4 +812,15 @@ test('CEF fixture find is bounded, serialized and tied to native view and docume
     assert.match(cefView, /while \(!disposed && NativeHandle == id && loginContextEpoch == epoch/);
     assert.match(cefView, /if \(ticket != 0\) CefNative.VeilCefEndFind\(id, ticket\);/);
     assert.match(cefSmoke, /Native page find observed match, no match and independent view results/);
+});
+
+
+test('CEF fixture find UI scopes result publication to exact tab, query, navigation and request', () => {
+    assert.match(cefTabbed, /window.PreviewKeyDown \+= \(_, e\) =>[\s\S]*?e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control/);
+    assert.match(cefTabbed, /findQuery.TextChanged \+= \(_, _\) => InvalidateFindUi\(\);/);
+    assert.match(cefTabbed, /private bool CanPublishFind\(FindRequest request\) =>[\s\S]*?ReferenceEquals\(currentFind, request\)[\s\S]*?ReferenceEquals\(active, request.Tab\)[\s\S]*?request.Tab.View.NativeHandle == request.ViewId[\s\S]*?request.Tab.LastNavigationId == request.NavigationId[\s\S]*?request.Tab.View.Source == request.Source && findQuery.Text == request.Query;/);
+    assert.match(cefTabbed, /private void PublishFindResult\(FindRequest request, bool\? found\)\s*\{\s*if \(!CanPublishFind\(request\)\) return;/);
+    assert.match(cefTabbed, /bool\? found = await tab.View.FindTextAsync\(request.Query, backwards\);\s*PublishFindResult\(request, found\);/);
+    assert.match(cefTabbed, /findOpen.Visibility = fixture is null \? Visibility.Collapsed : Visibility.Visible;/);
+    assert.match(cefTabbed, /Find UI showed per-tab match results and discarded stale publication on switch, edit and close/);
 });

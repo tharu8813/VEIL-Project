@@ -261,3 +261,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #278 Windows/native PASS, #279 exact head Windows 46168165728 PASS, Native 46168165795 실행 중 확인. 독립 리뷰 미완료.
 - CEF native Find/GetFindHandler 연결과 per-view ticket, final update/monotonic CEF ID, 취소·탐색·종료·timeout 시 stale result 거부, 미완료 검색이 중단되면 해당 view의 검색 재사용 차단을 추가했다. 관리 코드의 document/selection epoch 검사를 유지하며 결과 unknown은 null로 처리한다. 256 UTF-16 unit 제한, fixture_enabled 전용, fresh search만 지원(다음/이전 일치 순환 및 검색 UI 미구현). CEF가 내부 ID를 부여하므로 실제 callback 상관 관계 검증 필요. 두 창의 동일 검색어 match/no match와 두 번째 fresh search의 회귀 코드를 작성했다. 실제 WPF 실행, 새 CI, 독립 리뷰 및 보호 VM 미검증. 제품 엔진/보안 게이트/startupEnabled=false 유지.
+
+### P3-02 개발용 검색창 및 WPF 단축키 (미완료)
+
+- #279 Windows/native PASS, #280 exact head Windows 46168780848 PASS, Native 46168780842 실행 중 확인. 독립 리뷰 없음.
+- TabbedDevelopmentHost에 fixture 전용 검색 버튼/검색창/결과 안내, WPF routed Ctrl+F/Esc/Enter/Shift+Enter 연결. 검색 요청 객체와 tab/native ID/navigation ID/source/query를 모두 대조하고 선택/탐색/주소 변경/오류/종료/검색어 변경에서 결과를 폐기한다. 한 번에 한 요청만 dispatch. 실제 두 tab의 match/no match와 이전 요청을 통한 합성 stale publication 거부 검사를 추가했다. 검색창은 native HWND 키 포커스 통합, 지속 강조, 항목 순환 및 제품 검색 기능을 주장하지 않는다. 새 CI, 실제 WPF runtime, 보호 VM, 독립 리뷰 NOT RUN. 기존 WebView2 및 startupEnabled=false 유지.
