@@ -464,12 +464,15 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                             // The watcher owns the handle; a signaled/closed handle refuses.
                             authenticatedOwner = client;
                             authenticatedOwnerHandle = ownerHandle;
-                            authenticatedGeneration = new CefAuthenticatedGeneration(client, unlockOwner!);
+                            var authority = new CefAuthenticatedGeneration(client, unlockOwner!);
+                            authenticatedGeneration = authority;
                             if (!RefreshAuthenticatedOwner(status))
                             {
                                 log.Write("rejected-unlock-lock", new { result = LockCode(backend.Lock()) ?? "ok" });
                                 code = "NotAuthenticatedOwner";
                             }
+                            else
+                                _ = MonitorAuthenticatedGenerationAsync(authority);
                         }
                     }
                     else
@@ -700,6 +703,30 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         {
             ClearAuthenticatedOwner();
             throw;
+        }
+    }
+
+    // Observe the owner even while no client commands or CEF candidates are
+    // active. This is a periodic sample, not continuous protection evidence.
+    private async Task MonitorAuthenticatedGenerationAsync(CefAuthenticatedGeneration expected)
+    {
+        while (true)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1));
+            await serial.WaitAsync();
+            try
+            {
+                if (!ReferenceEquals(authenticatedGeneration, expected)) return;
+                if (!RefreshAuthenticatedOwner(backend.Status())) return;
+            }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                if (ReferenceEquals(authenticatedGeneration, expected))
+                    ClearAuthenticatedOwner();
+                log.Write("cef-owner-monitor-refused", new { type = error.GetType().Name });
+                return;
+            }
+            finally { serial.Release(); }
         }
     }
 
