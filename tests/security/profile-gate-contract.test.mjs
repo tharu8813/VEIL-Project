@@ -1391,3 +1391,17 @@ test('nested Win32 smoke records mitigation evidence without treating missing da
     assert.match(source, /return new\("query-unavailable", null, error.NativeErrorCode\);/);
     assert.match(source, /scope = "last-live-sample-per-process"/);
 });
+
+
+test('broker lock and prospective library publication use the same serialized operation boundary', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const gate = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOperationGate.cs', 'utf8');
+    assert.match(broker, /private readonly CefBrokerOperationGate serial = new\(\);/);
+    assert.match(broker, /internal async Task RevokeWindowsSessionAsync\(uint sessionId\)\s*\{\s*await serial.WaitAsync\(\);[\s\S]*?ClearAuthenticatedOwner\(\);[\s\S]*?finally \{ serial.Release\(\); \}/);
+    assert.match(broker, /internal async Task SecureVolumeAsync\(\)\s*\{\s*await serial.WaitAsync\(\);[\s\S]*?ClearAuthenticatedOwner\(\);[\s\S]*?finally \{ serial.Release\(\); \}/);
+    assert.match(gate, /private readonly SemaphoreSlim serial = new\(1, 1\);/);
+    assert.match(gate, /await WaitAsync\(cancellation\).ConfigureAwait\(false\);[\s\S]*?catch \(OperationCanceledException\) when \(cancellation.IsCancellationRequested\) \{ return false; \}[\s\S]*?if \(cancellation.IsCancellationRequested \|\| !current\(\) \|\| cancellation.IsCancellationRequested\)\s*return false;\s*return publish\(\);[\s\S]*?finally \{ Release\(\); \}/);
+    assert.doesNotMatch(broker, /\bTryPublishAsync\s*\(/);
+    assert.doesNotMatch(gate, /\b(?:File|Directory|Path|Native|Protocol)\./);
+});
+

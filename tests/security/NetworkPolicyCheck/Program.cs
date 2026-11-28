@@ -892,6 +892,105 @@ Console.WriteLine("PASS: exact-volume preflight cleanup, command refusal and det
     finally { Directory.Delete(publicationLab, recursive: true); }
 }
 
+// Exercise the same gate used by the actual broker lock/revocation paths.
+{
+    var gate = new Veil.VolumeBroker.CefBrokerOperationGate();
+    var generation = new object();
+    object? currentGeneration = generation;
+    int publishes = 0, observations = 0;
+    bool Current() { observations++; return ReferenceEquals(generation, currentGeneration); }
+    bool Publish() { publishes++; return true; }
+
+    await gate.WaitAsync();
+    try
+    {
+        var waiting = gate.TryPublishAsync(Current, Publish);
+        Check(!waiting.IsCompleted && observations == 0 && publishes == 0,
+            "publication cannot observe or replace while lock owns broker gate");
+        currentGeneration = null; // revoke under broker serialization
+        gate.Release();
+        try
+        {
+            Check(!await waiting.WaitAsync(TimeSpan.FromSeconds(5)) && observations == 1 && publishes == 0,
+                "lock first refuses queued publication");
+        }
+        finally { await gate.WaitAsync(); }
+    }
+    finally { gate.Release(); }
+
+    currentGeneration = new object();
+    Check(!await gate.TryPublishAsync(Current, Publish) && publishes == 0,
+        "fresh unlock does not authorize old generation");
+    currentGeneration = generation;
+    using (var cancel = new CancellationTokenSource())
+    {
+        await gate.WaitAsync();
+        try
+        {
+            var waiting = gate.TryPublishAsync(Current, Publish, cancel.Token);
+            cancel.Cancel();
+            Check(!await waiting.WaitAsync(TimeSpan.FromSeconds(5)) && publishes == 0,
+                "cancelled waiter never enters publication");
+            using var secondCancel = new CancellationTokenSource();
+            var second = gate.TryPublishAsync(Current, Publish, secondCancel.Token);
+            Check(!second.IsCompleted, "cancelled waiter did not release another operation's gate");
+            secondCancel.Cancel();
+            Check(!await second.WaitAsync(TimeSpan.FromSeconds(5)), "second cancelled waiter refused");
+        }
+        finally { gate.Release(); }
+    }
+    using (var cancel = new CancellationTokenSource())
+    {
+        Check(!await gate.TryPublishAsync(() => { cancel.Cancel(); return true; }, Publish, cancel.Token) &&
+            publishes == 0, "cancel during observation prevents replacement");
+    }
+    bool threw = false;
+    try { await gate.TryPublishAsync(Current, () => throw new IOException("synthetic replace failure")); }
+    catch (IOException) { threw = true; }
+    Check(threw && publishes == 0, "publication exception propagates");
+    Check(!await gate.TryPublishAsync(Current, () => false), "publication refusal propagates");
+
+    // Real overlap: publication has entered the serialized section before
+    // the lock waiter. No delay-based scheduling assumptions.
+    using (var entered = new ManualResetEventSlim())
+    using (var finish = new ManualResetEventSlim())
+    using (var cancel = new CancellationTokenSource())
+    {
+        var publishing = Task.Run(() => gate.TryPublishAsync(Current, () =>
+        {
+            entered.Set();
+            if (!finish.Wait(TimeSpan.FromSeconds(5))) throw new TimeoutException("synthetic publisher stalled");
+            return Publish();
+        }, cancel.Token));
+        Task? locking = null;
+        try
+        {
+            Check(entered.Wait(TimeSpan.FromSeconds(5)), "publisher entered");
+            locking = gate.WaitAsync();
+            Check(!locking.IsCompleted, "lock waits for irreversible publication");
+            cancel.Cancel(); // after entry into publisher: cannot undo its result
+        }
+        finally { finish.Set(); }
+        try
+        {
+            Check(await publishing.WaitAsync(TimeSpan.FromSeconds(5)) && publishes == 1,
+                "committed publication survives cancellation after entry");
+        }
+        finally
+        {
+            if (locking is not null)
+            {
+                await locking.WaitAsync(TimeSpan.FromSeconds(5));
+                try { currentGeneration = null; }
+                finally { gate.Release(); }
+            }
+        }
+    }
+    Check(!await gate.TryPublishAsync(Current, Publish) && publishes == 1,
+        "lock after publication prevents further writes");
+    Console.WriteLine("PASS: broker operation gate serializes prospective publication and lock");
+}
+
 file sealed class SyntheticRetainedResource : IDisposable
 {
     internal int Disposals { get; private set; }
