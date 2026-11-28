@@ -314,6 +314,45 @@ try
             attempts.SequenceEqual(new[] { 0, 1, 2, 3 }), "Private drain retry did not release after proof.");
     }
     Console.WriteLine("PASS: private drain failures still attempt every stop and retain prerequisites until retry proof");
+    // Retry worker policy: recoverable faults do not erase the pending
+    // generation or allow a relock after an incomplete cleanup callback.
+    foreach (int failedPhase in new[] { 0, 1 })
+    {
+        var retryGeneration = new object();
+        var obligation = new CefDiagnosticRelock();
+        obligation.Request(retryGeneration);
+        bool cleanupConfirmed = false;
+        int lockCalls = 0;
+        bool retried = false;
+        var injected = new IOException("Synthetic retry worker failure.");
+        void Cleanup()
+        {
+            if (!retried && failedPhase == 0) throw injected;
+            cleanupConfirmed = true;
+        }
+        void Relock()
+        {
+            Check(obligation.TryComplete(retryGeneration, cleanupConfirmed, () =>
+            {
+                ++lockCalls;
+                if (!retried && failedPhase == 1) throw injected;
+                return true;
+            }), "Retry relock not completed.");
+        }
+        var failure = CefStopRetryPolicy.TryAttempt(Cleanup, Relock);
+        Check(ReferenceEquals(failure, injected) && obligation.Pending &&
+            lockCalls == failedPhase, "Retry fault cleared obligation or attempted premature lock.");
+        Check(CefStopRetryPolicy.ShouldContinue(0, 30, obligation.Pending, failure) &&
+            CefStopRetryPolicy.ShouldContinue(0, 30, false, failure) &&
+            !CefStopRetryPolicy.ShouldContinue(29, 30, obligation.Pending, failure),
+            "Retry policy ignored failure or attempt bound.");
+        retried = true;
+        Check(CefStopRetryPolicy.TryAttempt(Cleanup, Relock) is null && !obligation.Pending &&
+            lockCalls == failedPhase + 1 &&
+            !CefStopRetryPolicy.ShouldContinue(1, 30, false, null),
+            "Successful retry did not verify relock and stop.");
+    }
+    Console.WriteLine("PASS: retry worker defers unsafe relock, retains generation and retries recoverable faults");
     // Exercise in-place ownership handoff using the actual synthetic root.
     // No apphost execution and no second native handle owner.
     foreach (int mode in new[] { 0, 1, 2 })
