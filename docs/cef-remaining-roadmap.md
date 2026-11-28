@@ -338,3 +338,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #294 exact head `30dde1caa6a1ac3f69ec96aa6dcd0ec019bc89e6` 일반 Windows/Rust CI 46179282326 PASS; native compile CI 46179282448 미완료 (runtime 아님), 독립 리뷰 없음.
 - 공통 CefLibraryLifetime에서 owner thread, 재진입, terminal revocation, 세션 probe 예외/거부, 변경 후 및 writer 직전 재확인. 개별 요청 거부는 세션 철회와 구분한다. CEF fixture는 메모리 전용 callback 유지하고 shutdown 시작 시 revoke. 일반 CI에서 실행되는 NetworkPolicyCheck에 synthetic lifetime 회귀 검사 추가. 실제 보호 runtime authority는 아직 연결하지 않으며 preflight lease를 launch/save 권한으로 승격하지 않는다. 저장 중 lock 경합은 실제 보호 writer/broker lifecycle에서 별도 검증해야 한다. 새 CI/보호 VM/실제 CEF/독립 리뷰 미검증. startupEnabled=false 유지.
+
+### P3-02 보호 라이브러리 권한 바인딩 모델 (미완료)
+
+- #294 exact head native compile CI 46179282448 최종 PASS (runtime 아님). #295 exact head `c5fc5cf4f7849cae121ec81f866e91590c1213cf` Windows/Rust CI 46179722555 PASS; native compile CI 46179722552 미완료, 독립 리뷰 없음.
+- CefProtectedLibraryAuthority prospective model: 정확한 unlock generation/retained runtime lease/profile lease identity, authenticated owner, 별도 runtime admission, lease current, lock 요청, 보호 상태와 volume GUID의 일치가 모두 필요. CefLibraryLifetime에 연결하여 전/후 변경 및 writer 진입 시 검사; 불일치 후 재사용 거부. NetworkPolicyCheck에 15개 부정 context의 전/후 변경 검사와 예외/명시 철회/직전 lock/success 추가. 실제 broker IPC·runtime admission·파일 writer·제품 연결 없음. 이 모델은 검증된 로컬 관측을 미래 caller가 제공해야 하며 preflight나 일반 Status로 대체 불가. 실제 writer publish 경합은 broker 수명과 별도 결합 필요. P1/P2/실제 VM 미완료, 새 CI 및 독립 리뷰 미검증, startupEnabled=false 유지.
