@@ -66,7 +66,7 @@ target_link_libraries(veil-cef-product-module-test PRIVATE psapi)
 add_library(veil-cef-product SHARED EXCLUDE_FROM_ALL product_candidate.cc
   protected_bootstrap.cc bootstrap_registration.cc broker_verification.cc product_module_policy.cc
   protected_initialization_settings.cc)
-target_sources(veil-cef-product PRIVATE protected_cef_lifecycle.cc)
+target_sources(veil-cef-product PRIVATE protected_cef_lifecycle.cc protected_fixed_fixture.cc)
 target_compile_features(veil-cef-product PRIVATE cxx_std_17)
 add_dependencies(veil-cef-product veil-cef-product-preflight-test veil-cef-product-module-test)
 SET_LIBRARY_TARGET_PROPERTIES(veil-cef-product)
