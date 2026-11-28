@@ -622,7 +622,10 @@ test('broker retains executable and runtime pins until confirmed candidate exit'
     assert.match(broker, /candidate\.Lifetime\.TryRelease\(\(\) => exitAlreadyConfirmed \|\| TryStopVerifiedChild\(candidate\)\)/);
     assert.match(policy, /if \(!exitConfirmed\)\s*\{\s*if \(!verifyExit\(\)\) return false;\s*exitConfirmed = true;\s*\}[\s\S]*?retained\[next\]\?\.Dispose\(\);\s*retained\[next\+\+\] = null;/);
     assert.match(nested, /lifetime = new CefRetainedLifetime\(registration, preparedRoot, peerJob, brokerJob, rootHandle\)/);
-    assert.match(nested, /guard\.Revoke\(\);\s*return lifetime\.TryRelease\(\(\) => guard\.RevokeAndCheckDrain\(\(\) => drain\(milliseconds\)\)\)/);
+    assert.match(nested, /guard\.Revoke\(\);\s*if \(borrowedCreation is not null\)\s*return guard\.RevokeAndCheckDrain\(\(\) => borrowedCreation\.RevokeAndRelease\(milliseconds\)\);\s*return lifetime!\.TryRelease\(\(\) => guard\.RevokeAndCheckDrain\(\(\) => drain\(milliseconds\)\)\);/);
+    const creation = await readFile('apps/broker/Veil.VolumeBroker/CefPreparedCreationLifetime.cs', 'utf8');
+    assert.match(creation, /lifetime = new CefRetainedLifetime\(prerequisites, inner, outer\)/);
+    assert.match(creation, /return lifetime\.TryRelease\(\(\) =>[\s\S]*?if \(!custody\.TryDrainAndRelease\(Remaining\(\)\)\) return false;[\s\S]*?return outer\.HasNoActiveProcesses\(\) && inner\.HasNoActiveProcesses\(\);/);
 });
 
 test('isolated CEF preflight entry is compile-time exclusive and never falls back to browsing', async () => {
@@ -979,4 +982,21 @@ test('prepared successor replaces occupied slot without transferring raw resourc
     assert.match(session, /if \(borrowedCreation is not null\)\s*throw new UnauthorizedAccessException\("CEF prepared successor activation is disabled\."\);/);
     assert.match(broker, /diagnosticSession\.ReplacePrepared\(expectedGeneration, probe,\s*\(\) => preparation\.PrepareBoundSession\(expectedGeneration, probe\), out var handoffFailure\)/);
     assert.match(fixture, /slot\.ReplacePrepared\(generation, probe,[\s\S]*?Synthetic successor construction refusal[\s\S]*?BorrowingFixtureSuccessor\(probe\)[\s\S]*?slot\.TryReleaseRetired\(5000\)/);
+});
+
+
+test('broker protected environment plan is explicit and disconnected from native creation', async () => {
+    const plan = await readFile('apps/desktop/Engine/CefChildEnvironmentPlan.cs', 'utf8');
+    const preparation = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const project = await readFile('apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj', 'utf8');
+    const start = plan.indexOf('internal static IReadOnlyDictionary<string, string?> BuildBrokerProtected(');
+    const end = plan.indexOf('internal static IReadOnlyDictionary<string, string?> Build(', start);
+    assert.ok(start >= 0 && end > start);
+    const explicit = plan.slice(start, end);
+    assert.match(explicit, /RequireCanonicalLocalDirectory\(registeredProductRoot\);\s*RequireCanonicalLocalDirectory\(windowsDirectory\);[\s\S]*?Overlaps\(registeredProductRoot, windowsDirectory\)/);
+    assert.match(explicit, /\["SystemRoot"\] = windowsDirectory,\s*\["WINDIR"\] = windowsDirectory,\s*\["TEMP"\] = layout.Scratch,\s*\["TMP"\] = layout.Scratch,\s*\[RootKey\] = layout.EngineRoot,\s*\[CacheKey\] = layout.Cache,\s*\[LogKey\] = layout.LogFile,/);
+    assert.doesNotMatch(explicit, /GetEnvironmentVariable|SetEnvironmentVariable|Directory\.CreateDirectory|Process\.Start/);
+    assert.match(project, /CefProfileLayout\.cs[\s\S]*?CefChildEnvironmentPlan\.cs/);
+    assert.doesNotMatch(preparation + broker, /BuildBrokerProtected\(/);
 });

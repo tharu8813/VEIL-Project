@@ -15,5 +15,7 @@
     <Compile Include="../../desktop/Engine/CefRuntimeFileLease.cs" Link="Shared/CefRuntimeFileLease.cs" />
     <Compile Include="../../desktop/Engine/CefRuntimeRegistrationLease.cs" Link="Shared/CefRuntimeRegistrationLease.cs" />
     <Compile Include="../../desktop/Engine/CefContainedProcess.cs" Link="Shared/CefContainedProcess.cs" />
+    <Compile Include="../../desktop/Engine/CefProfileLayout.cs" Link="Shared/CefProfileLayout.cs" />
+    <Compile Include="../../desktop/Engine/CefChildEnvironmentPlan.cs" Link="Shared/CefChildEnvironmentPlan.cs" />
   </ItemGroup>
 </Project>

@@ -468,6 +468,38 @@ Check(ambiguousEnvironmentRejected, "Ambiguous unrelated environment accepted");
 Check(!Directory.Exists(layoutRoot), "Child environment plan created a profile");
 Console.WriteLine("PASS: isolated CEF child environment planning without launch or parent mutation");
 
+// Broker planning has no inherited environment input at all. Use
+// synthetic canonical paths; real registered volume and system directory
+// checks are deliberately outside this pure fixture.
+string systemRoot = Path.Combine(Path.GetTempPath(), "veil-synthetic-system-" + Guid.NewGuid().ToString("N"));
+var brokerCefEnvironment = CefChildEnvironmentPlan.BuildBrokerProtected(layoutRoot, systemRoot);
+Check(brokerCefEnvironment.Count == 7 &&
+    brokerCefEnvironment["SystemRoot"] == systemRoot &&
+    brokerCefEnvironment["WINDIR"] == systemRoot &&
+    brokerCefEnvironment["TEMP"] == cefLayout.Scratch &&
+    brokerCefEnvironment["TMP"] == cefLayout.Scratch &&
+    brokerCefEnvironment[CefChildEnvironmentPlan.RootKey] == cefLayout.EngineRoot &&
+    brokerCefEnvironment[CefChildEnvironmentPlan.CacheKey] == cefLayout.Cache &&
+    brokerCefEnvironment[CefChildEnvironmentPlan.LogKey] == cefLayout.LogFile,
+    "Broker CEF environment allowlist mismatch");
+foreach (string unexpected in new[] { "PATH", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+    "CHROME_LOG_FILE", "VEIL_CEF_WPF_TEST_URL", "DOTNET_STARTUP_HOOKS", "COR_ENABLE_PROFILING" })
+    Check(!brokerCefEnvironment.ContainsKey(unexpected), "Broker CEF inherited an unapproved variable");
+foreach (string bad in new[] { "relative-profile", Path.GetPathRoot(layoutRoot)!,
+    Path.Combine(layoutRoot, "..", "other"), layoutRoot + Path.DirectorySeparatorChar,
+    Path.Combine(layoutRoot, "stream:alternate"), Path.Combine(layoutRoot, "trailing."),
+    Path.Combine(layoutRoot, "trailing "), @"\\server\share\profile", systemRoot,
+    Path.Combine(systemRoot, "profile") })
+{
+    bool rejected = false;
+    try { _ = CefChildEnvironmentPlan.BuildBrokerProtected(bad, systemRoot); }
+    catch (ArgumentException) { rejected = true; }
+    Check(rejected, "Broker CEF environment accepted an ambiguous or overlapping directory");
+}
+Check(!Directory.Exists(layoutRoot) && !Directory.Exists(systemRoot),
+    "Broker environment planning created a directory");
+Console.WriteLine("PASS: broker CEF explicit protected environment allowlist and path refusal (planning only)");
+
 // Pure child admission model; no OS process, credential or volume access.
 var ownerIdentity = new Veil.VolumeBroker.ClientIdentity(100, 1, "S-1-synthetic", "owner.exe", 1000);
 var childIdentity = new Veil.VolumeBroker.ClientIdentity(101, 1, "S-1-synthetic", "child.exe", 2000);
