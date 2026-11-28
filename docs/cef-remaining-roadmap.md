@@ -328,3 +328,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #292 exact head `109e3c1ed3eabc1fefc99a1802d38c9d1b532c32` Windows/Rust CI 46178371861 PASS, 독립 리뷰 없음.
 - 보안 설정 저장을 session-owned writer에 연결. private/ending/lost/dispatcher/engine/UI authorization 유지. SecurityManager.Change는 bool persist 거부 시 Saved/State/뷰를 변경하지 않으며 예외에서도 저장 이전 값을 보존한다. 저장 성공 후에만 기존 다중 창 적용을 수행하고 Pending/Failed를 적용 성공으로 표시하지 않는다. 기본 SmartScreen on/null 및 복구 마커 의미 유지. 합성/기존 live smoke 확장 및 source contracts 작성. 실제 CEF SmartScreen 대체 구현이 아니며 신규 CI/실제 Windows 및 보호 VM/독립 리뷰 미검증. CEF startupEnabled=false 유지.
+
+### P3-02 CEF fixture 공통 라이브러리 트랜잭션 연결 (미완료)
+
+- #293 exact head `c0edbcb3efa6cf7d203d3a461ace5c40bec26375` Windows/Rust CI 46178804539 PASS, 독립 리뷰 없음.
+- WebView2 LibraryMutation의 스냅샷/검증/권한 재확인/저장/rollback을 engine-neutral CollectionMutation으로 추출하고 CEF fixture bookmark/history 추가·삭제·초기화에 연결했다. UI는 commit 후 변경, 종료 정리는 무조건 메모리 삭제. CEF fixture commit은 메모리 전용이며 파일 writer/제품 profile 경로를 받지 않는다. 실제 fixture에 권한 철회 및 쓰기 거부 rollback 검사 추가. 기존 WebView2 folder validation과 writer 유지. P1/P2 보호 runtime 및 session lifetime 미완료로 제품 CEF 영구 저장 연결은 차단 상태; preflight lease는 launch 권한 아님. 신규 CI, 실제 CEF/WPF/보호 VM/독립 리뷰 NOT RUN. startupEnabled=false 유지.
