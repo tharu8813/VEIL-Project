@@ -20,6 +20,7 @@ internal sealed class TabbedDevelopmentHost
         internal string Status = "";
         internal ulong PendingNavigationId;
         internal ulong LastNavigationId;
+        internal string PendingNavigationUrl = "";
     }
 
     private sealed record FindRequest(Tab Tab, ulong ViewId, ulong NavigationId, string Source, string Query);
@@ -51,6 +52,17 @@ internal sealed class TabbedDevelopmentHost
     private readonly Button bookmarkOpen = new() { Content = "Open bookmark" };
     private readonly Button bookmarkRemove = new() { Content = "Remove bookmark" };
     private readonly StackPanel bookmarkBar = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(6) };
+    private sealed record FixtureVisit(ulong ViewId, ulong NavigationId, string Url, DateTimeOffset VisitedAt)
+    {
+        public string Label => $"{VisitedAt:HH:mm:ss} {Url}";
+    }
+    private const int FixtureHistoryLimit = 128;
+    private readonly List<FixtureVisit> visits = new();
+    private readonly ComboBox visitList = new() { MinWidth = 180, MaxWidth = 350, DisplayMemberPath = "Label" };
+    private readonly Button visitOpen = new() { Content = "Open visit" };
+    private readonly Button visitRemove = new() { Content = "Remove visit" };
+    private readonly Button visitClear = new() { Content = "Clear history" };
+    private readonly StackPanel historyBar = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(6) };
     private readonly DockPanel toolbar = new() { Margin = new Thickness(6) };
     private readonly Button fullscreenToggle = new() { Content = "Full screen (F11)" };
     private readonly Button pageFullscreenExit = new() { Content = "Exit page full screen", Visibility = Visibility.Collapsed };
@@ -137,6 +149,11 @@ internal sealed class TabbedDevelopmentHost
         foreach (var element in new FrameworkElement[] { bookmarkAdd, bookmarkList, bookmarkOpen, bookmarkRemove })
             bookmarkBar.Children.Add(element);
         layout.Children.Add(bookmarkBar);
+        DockPanel.SetDock(historyBar, Dock.Top);
+        historyBar.Visibility = fixture is null ? Visibility.Collapsed : Visibility.Visible;
+        foreach (var element in new FrameworkElement[] { visitList, visitOpen, visitRemove, visitClear })
+            historyBar.Children.Add(element);
+        layout.Children.Add(historyBar);
         DockPanel.SetDock(findBar, Dock.Top);
         layout.Children.Add(findBar);
         foreach (var element in new FrameworkElement[] { findClose, findSearch, findResult })
@@ -170,6 +187,10 @@ internal sealed class TabbedDevelopmentHost
         bookmarkOpen.Click += (_, _) => OpenSelectedBookmark();
         bookmarkRemove.Click += (_, _) => RemoveSelectedBookmark();
         bookmarkList.SelectionChanged += (_, _) => RefreshBookmarkControls();
+        visitList.SelectionChanged += (_, _) => RefreshHistoryControls();
+        visitOpen.Click += (_, _) => OpenSelectedVisit();
+        visitRemove.Click += (_, _) => RemoveSelectedVisit();
+        visitClear.Click += (_, _) => ClearFixtureHistory();
         zoomOut.Click += (_, _) => ChangeZoom(-0.25);
         zoomIn.Click += (_, _) => ChangeZoom(0.25);
         zoomReset.Click += (_, _) => ChangeZoom(0, reset: true);
@@ -281,6 +302,7 @@ internal sealed class TabbedDevelopmentHost
             }
             tab.PendingNavigationId = request.NavigationId;
             tab.LastNavigationId = request.NavigationId;
+            tab.PendingNavigationUrl = request.Uri;
             if (ReferenceEquals(active, tab)) InvalidateFindUi();
             SetTabStatus(tab, "Loading...");
         };
@@ -291,6 +313,9 @@ internal sealed class TabbedDevelopmentHost
             tab.PendingNavigationId = 0;
             SetTabStatus(tab, completed.IsCanceled ? "Navigation canceled." :
                 completed.IsSuccess ? "Page loaded." : "Page navigation failed.");
+            string expectedUrl = tab.PendingNavigationUrl;
+            tab.PendingNavigationUrl = "";
+            RecordFixtureVisit(tab, completed, expectedUrl);
         };
         view.SourceChanged += (_, _) =>
         {
@@ -302,6 +327,7 @@ internal sealed class TabbedDevelopmentHost
             tab.PendingNavigationId = 0;
             if (ReferenceEquals(active, tab)) InvalidateFindUi();
             SetTabStatus(tab, "CEF child process failed.");
+            tab.PendingNavigationUrl = "";
             if (freshProfileProbe && expectLoginRendererFailure && phase == 81 && tab == first &&
                 view.NativeHandle == firstId && failure.Scope == EngineFailureScope.PageOrChildProcess &&
                 CefNative.VeilCefLoginProbeStatus(firstId) == -1 && loginRendererFailures == 0)
@@ -447,6 +473,7 @@ internal sealed class TabbedDevelopmentHost
         browserFullscreen = enabled;
         strip.Visibility = toolbar.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
         bookmarkBar.Visibility = enabled || fixture is null ? Visibility.Collapsed : Visibility.Visible;
+        historyBar.Visibility = bookmarkBar.Visibility;
         fullscreenToggle.Content = enabled ? "Exit full screen (F11)" : "Full screen (F11)";
     }
 
@@ -546,6 +573,63 @@ internal sealed class TabbedDevelopmentHost
         RefreshBookmarkControls();
     }
 
+    private void RecordFixtureVisit(Tab tab, EngineNavigationCompletedEventArgs completed, string expectedUrl)
+    {
+        // Completion has consumed the pending ID. Never record a title or
+        // address edit, failed load, or unrelated selected tab.
+        if (!AcceptTabEvent(tab) || !completed.IsSuccess || completed.IsCanceled ||
+            completed.NativeResult.Domain != EngineErrorDomain.Cef ||
+            completed.NavigationId == 0 || completed.NavigationId != tab.LastNavigationId ||
+            tab.PendingNavigationId != 0 || tab.View.NativeHandle == 0 ||
+            CefNative.VeilCefClosed(tab.View.NativeHandle) != 0 ||
+            tab.View.Source != expectedUrl || !IsFixtureBookmarkUrl(expectedUrl)) return;
+        ulong id = tab.View.NativeHandle;
+        if (visits.Any(entry => entry.ViewId == id && entry.NavigationId == completed.NavigationId)) return;
+        // URL only: title callbacks have no navigation identity and may lag.
+        var visit = new FixtureVisit(id, completed.NavigationId, expectedUrl, DateTimeOffset.Now);
+        visits.Insert(0, visit);
+        visitList.Items.Insert(0, visit);
+        if (visits.Count > FixtureHistoryLimit)
+        {
+            visits.RemoveAt(visits.Count - 1);
+            visitList.Items.RemoveAt(visitList.Items.Count - 1);
+        }
+        RefreshHistoryControls();
+    }
+
+    private void RefreshHistoryControls()
+    {
+        bool available = fixture is not null && !shuttingDown;
+        bool selected = available && visitList.SelectedItem is FixtureVisit visit &&
+            visits.Contains(visit) && IsFixtureBookmarkUrl(visit.Url);
+        visitOpen.IsEnabled = selected && active is { } tab && CanBookmark(tab);
+        visitRemove.IsEnabled = selected;
+        visitClear.IsEnabled = available && visits.Count != 0;
+    }
+
+    private void OpenSelectedVisit()
+    {
+        if (active is not { } tab || !CanBookmark(tab) ||
+            visitList.SelectedItem is not FixtureVisit entry ||
+            !visits.Contains(entry) || !IsFixtureBookmarkUrl(entry.Url)) return;
+        WithActive(view => view.Navigate(entry.Url));
+    }
+
+    private void RemoveSelectedVisit()
+    {
+        if (fixture is null || shuttingDown || visitList.SelectedItem is not FixtureVisit entry ||
+            !visits.Remove(entry)) return;
+        visitList.Items.Remove(entry);
+        RefreshHistoryControls();
+    }
+
+    private void ClearFixtureHistory()
+    {
+        visits.Clear();
+        visitList.Items.Clear();
+        RefreshHistoryControls();
+    }
+
     private void NavigateAddress() => WithActive(view => view.Navigate(address.Text));
 
     private void RequestClose(Tab tab)
@@ -554,6 +638,7 @@ internal sealed class TabbedDevelopmentHost
         tab.Closing = true;
         tab.View.InvalidateFixtureLoginContext();
         tab.PendingNavigationId = 0;
+        tab.PendingNavigationUrl = "";
         if (ReferenceEquals(active, tab)) ShowFindBar(false);
         tab.ClosingId = tab.View.NativeHandle;
         tab.Header.IsEnabled = false;
@@ -568,6 +653,7 @@ internal sealed class TabbedDevelopmentHost
         shuttingDown = true;
         bookmarks.Clear();
         bookmarkList.Items.Clear();
+        ClearFixtureHistory();
         SetBrowserFullscreen(false);
         ShowFindBar(false);
         foreach (var tab in tabs.ToArray()) RequestClose(tab);
@@ -595,6 +681,7 @@ internal sealed class TabbedDevelopmentHost
         fullscreenNotice.Text = pageFullscreen ? "Page requested full screen; host controls remain available." : "";
         fullscreenToggle.IsEnabled = !shuttingDown;
         RefreshBookmarkControls();
+        RefreshHistoryControls();
         add.IsEnabled = !shuttingDown && tabs.Count + retired.Count < CefNative.VeilCefViewLimit();
         // Read the selected live view only. A denial is informational, not
         // a deferred popup request or a permission to replay the target URL.
@@ -814,6 +901,16 @@ internal sealed class TabbedDevelopmentHost
             RemoveSelectedBookmark();
             if (bookmarks.Count != 0 || bookmarkList.Items.Count != 0) { Fail(); return; }
             Log("Fixture bookmarks used live committed sources, deduplicated and removed exact entries");
+            if (visits.Count != 2 || visits.Count(v => v.ViewId == firstId && v.Url == Url("/tabs-first")) != 1 ||
+                visits.Count(v => v.ViewId == secondId && v.Url == Url("/tabs-second")) != 1 ||
+                visitList.Items.Count != 2) { Fail(); return; }
+            visitList.SelectedItem = visits.Single(v => v.ViewId == secondId);
+            RemoveSelectedVisit();
+            if (visits.Count != 1 || visits[0].ViewId != firstId || visitList.Items.Count != 1)
+            { Fail(); return; }
+            ClearFixtureHistory();
+            if (visits.Count != 0 || visitList.Items.Count != 0 || visitClear.IsEnabled) { Fail(); return; }
+            Log("Fixture history recorded both live completions and removed exact selected visit then cleared");
             firstDomains = ((IEngineSiteDataReader)first.View).GetCookieDomainsAsync();
             secondDomains = ((IEngineSiteDataReader)second.View).GetCookieDomainsAsync();
             phase = 11;
@@ -882,14 +979,26 @@ internal sealed class TabbedDevelopmentHost
                 CefNative.VeilCefCookieDomainAt(secondId, 0) != 0) { Fail(); return; }
             Log("Closed view cookie scan identity rejected");
             CefNative.VeilCefNavigate(secondId, Url("/tabs-stale"));
+            address.Text = Url("/tabs-history-error");
+            NavigateAddress();
+            phase = 94;
+        }
+        else if (phase == 94 && first is not null && first.PendingNavigationId == 0 &&
+                 first.Status == "Page navigation failed.")
+        {
+            if (visits.Count != 0 || visitList.Items.Count != 0) { Fail(); return; }
+            Log("Failed HTTP navigation did not create a fixture visit");
             address.Text = Url("/tabs-after-close");
             NavigateAddress();
             phase = 4;
         }
-        else if (phase == 4 && first?.View.DocumentTitle == "TAB_AFTER_CLOSE")
+        else if (phase == 4 && first?.View.DocumentTitle == "TAB_AFTER_CLOSE" && first.PendingNavigationId == 0)
         {
             if (first.View.NativeHandle != firstId || first.View.Source != Url("/tabs-after-close") ||
                 !first.View.CanGoBack) { Fail(); return; }
+            if (visits.Count != 1 || visits[0].Url != Url("/tabs-after-close") ||
+                visits[0].ViewId != firstId) { Fail(); return; }
+            Log("Successful recovery navigation created a new fixture visit");
             Log("Closing active tab preserved surviving view and navigation");
             address.Text = Url("/tabs-preserved");
             NavigateAddress();

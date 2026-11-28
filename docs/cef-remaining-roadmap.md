@@ -281,3 +281,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #282 exact Windows 46169834248 / Native 46169834303 PASS, #283 exact Windows 46170338813 / Native 46170338825 PASS. 독립 리뷰 없음.
 - 기존 제품 BrowserWindow의 PageEntry/SettingsReady/암호화 상태 저장 경로는 변경하지 않았다. 개발 TabbedDevelopmentHost fixture에서만 64개 한도의 메모리 북마크 목록, 추가/열기/삭제, 현재 live 성공 탐색 source 검증, exact duplicate 차단, fixture port 및 loopback HTTP/userinfo 제한, 종료 시 폐기를 추가했다. 두 origin의 추가/중복/정확 삭제 및 외부/credential URL 거부 회귀를 작성했으며 실제 bookmark reopen, 저장/복원, 폴더, 제품 보호 데이터 연동 및 방문 기록은 미구현/미검증. 신규 CI/WPF runtime/보호 VM/독립 리뷰 NOT RUN. WebView2/startupEnabled=false 유지.
+
+### P3-02 개발용 방문 기록 (미완료)
+
+- #284 exact Windows 46170874531 / Native 46170874524 PASS, 독립 리뷰 없음.
+- fixture 전용 128개 메모리 history, 성공 completion의 native ID/navigation ID/expected URL/source 일치 검증, 동일 ID 중복 방지, 최신순 조회/열기/선택 삭제/전체 삭제 및 종료 폐기. title callback에는 탐색 ID가 없어 URL+시간만 기록한다. 두 창의 성공 기록, 삭제/전체 삭제, HTTP 404 제외 및 후속 정상 탐색 기록을 요구하는 회귀 작성. history reopen, 제품 암호화 저장/복원, same-URL stale native callback 구분 및 실제 WPF runtime 미검증. 새 CI/보호 VM/독립 리뷰 NOT RUN. WebView2/startupEnabled=false 유지.
