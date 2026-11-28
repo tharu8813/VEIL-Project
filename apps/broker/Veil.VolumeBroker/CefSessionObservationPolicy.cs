@@ -393,3 +393,34 @@ internal sealed class CefDiagnosticRelock
         return true;
     }
 }
+
+// One retry iteration under the broker's serial gate. A cleanup exception
+// is not exit proof: defer relock until the next safe attempt. A relock
+// exception likewise leaves the existing generation-bound obligation intact.
+// This policy does not modify ownership, unlock state or the retry flag.
+internal static class CefStopRetryPolicy
+{
+    internal static Exception? TryAttempt(Action cleanup, Action relock)
+    {
+        ArgumentNullException.ThrowIfNull(cleanup);
+        ArgumentNullException.ThrowIfNull(relock);
+        try
+        {
+            cleanup();
+            relock();
+            return null;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            return error;
+        }
+    }
+
+    internal static bool ShouldContinue(int attempt, int maximumAttempts, bool pending, Exception? failure)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(attempt);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumAttempts);
+        if (attempt >= maximumAttempts) throw new ArgumentOutOfRangeException(nameof(attempt));
+        return attempt < maximumAttempts - 1 && (pending || failure is not null);
+    }
+}
