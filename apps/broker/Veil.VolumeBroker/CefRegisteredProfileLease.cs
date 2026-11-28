@@ -54,8 +54,7 @@ internal sealed class CefRegisteredProfileLease : IDisposable
             string root = Parse(original, volumeId, pipeName, expectedBroker, windows);
             if (!authorityCurrent())
                 throw new UnauthorizedAccessException("CEF profile registration generation changed.");
-            profile = CefProtectedProfileLease.Open(root, volumeGuid, windows, readStatus, authorityCurrent);
-            profile.AcquireExclusiveLock();
+            profile = CefProtectedProfileLease.OpenExclusive(root, volumeGuid, windows, readStatus, authorityCurrent);
             var lease = new CefRegisteredProfileLease(registration, path, original, profile);
             lease.RequireCurrent();
             return lease;

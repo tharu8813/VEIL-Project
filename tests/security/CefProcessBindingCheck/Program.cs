@@ -142,6 +142,48 @@ try
         Check(!File.Exists(profileLockPath), "Broker created a missing profile lock.");
     }
     File.WriteAllText(profileLockPath, "original-lock");
+    // Installed-style broker-first acquisition must refuse a busy lock
+    // before inspecting missing CEF descendants. No actual installed
+    // broker or encrypted volume is used in this fixture.
+    Directory.Delete(profileLayout.Cache);
+    using (var busy = new FileStream(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+    {
+        bool busyRefused = false;
+        try
+        {
+            using var blocked = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+                fixtureWindows, () => fixtureStatus, () => authority);
+        }
+        catch (System.ComponentModel.Win32Exception error) when (error.NativeErrorCode == 32)
+        { busyRefused = true; }
+        Check(busyRefused, "Broker-first open inspected missing descendants before refusing busy lock.");
+    }
+    bool incompleteRefused = false;
+    try
+    {
+        using var incomplete = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority);
+    }
+    catch (System.ComponentModel.Win32Exception) { incompleteRefused = true; }
+    Check(incompleteRefused && !Directory.Exists(profileLayout.Cache),
+        "Broker-first open accepted or created a missing descendant.");
+    // Failed acquisition must release the lock rather than strand it.
+    using (var recovered = new FileStream(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        Check(recovered.Length > 0, "Failed broker-first acquisition lost lock contents.");
+    Directory.CreateDirectory(profileLayout.Cache);
+    using (var first = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        Check(first.VerifiedExclusiveEnvironment().Count == 7,
+            "Broker-first lease did not hold the exclusive lock.");
+        Reject(() =>
+        {
+            using var blocked = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+                fixtureWindows, () => fixtureStatus, () => authority);
+        });
+        first.RequireCurrent();
+    }
+    Console.WriteLine("PASS: broker-first profile lock ordering, contention and failed-open release");
     using (var desktopLock = new FileStream(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
     using (var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
         fixtureWindows, () => fixtureStatus, () => authority))

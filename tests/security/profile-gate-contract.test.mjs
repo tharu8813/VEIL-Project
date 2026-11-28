@@ -1021,8 +1021,8 @@ test('protected profile lease pins ancestors and all fixed directories before ex
     const profile = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedProfileLease.cs', 'utf8');
     const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
     const prep = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
-    assert.match(profile, /RequireAuthority\(registeredVolume, readStatus, authorityCurrent\);\s*var environment = CefChildEnvironmentPlan.BuildBrokerProtected[\s\S]*?ancestors.Push\(path\);[\s\S]*?foreach \(string path in ancestors.Concat\(layout.Directories\)\)[\s\S]*?pins.Add\(CefProtectedDirectoryLease.Open\(path, registeredVolume, readStatus\)\);[\s\S]*?lease.RequireCurrent\(\);\s*return lease;/);
-    assert.match(profile, /catch\s*\{\s*log\?\.Dispose\(\);\s*for \(int i = pins.Count - 1; i >= 0; --i\) pins\[i\].Dispose\(\);\s*throw;/);
+    assert.match(profile, /RequireAuthority\(registeredVolume, readStatus, authorityCurrent\);\s*var environment = CefChildEnvironmentPlan.BuildBrokerProtected[\s\S]*?ancestors.Push\(path\);[\s\S]*?foreach \(string path in ancestors\)[\s\S]*?pins.Add\(CefProtectedDirectoryLease.Open\(path, registeredVolume, readStatus\)\);[\s\S]*?foreach \(string path in layout.Directories\)[\s\S]*?pins.Add\(CefProtectedDirectoryLease.Open\(path, registeredVolume, readStatus\)\);[\s\S]*?lease.RequireCurrent\(\);\s*return lease;/);
+    assert.match(profile, /catch\s*\{\s*\/\/[^\n]*\s*\/\/[^\n]*\s*try \{ log\?\.Dispose\(\); \}\s*finally\s*\{\s*try\s*\{\s*for \(int i = pins.Count - 1; i >= 0; --i\) pins\[i\].Dispose\(\);\s*\}\s*finally \{ exclusive\?\.Dispose\(\); \}\s*\}\s*throw;/);
     assert.match(profile, /if \(!authorityCurrent\(\)\)[\s\S]*?CefProtectedDirectoryLease.RequireRegisteredProtection\(volume, readStatus\(\)\);[\s\S]*?if \(!authorityCurrent\(\)\)/);
     assert.match(profile, /if \(retired\)[\s\S]*?RequireAuthority\(volume, readStatus, authorityCurrent\);\s*foreach \(var directory in directories\) directory.RequireCurrent\(readStatus\);\s*profileLock\?\.RequireCurrent\(readStatus\);\s*RequireLog\(\);\s*InspectExistingTree\(\);\s*RequireLog\(\);\s*profileLock\?\.RequireCurrent\(readStatus\);\s*RequireAuthority\(volume, readStatus, authorityCurrent\);[\s\S]*?catch\s*\{\s*retired = true;\s*throw;/);
     assert.match(profile, /try \{ _ = File.GetAttributes\(path\); return true; \}\s*catch \(FileNotFoundException\) \{ return false; \}/);
@@ -1054,7 +1054,7 @@ test('broker profile authority reads fixed installed client registration and pin
     const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
     assert.match(registered, /Environment.SpecialFolder.ProgramFiles[\s\S]*?"VEIL", "Broker", "Veil.VolumeBroker.exe"[\s\S]*?Environment.ProcessPath, expectedBroker/);
     assert.match(registered, /Environment.SpecialFolder.CommonApplicationData[\s\S]*?"VEIL", "client.json"[\s\S]*?AdminOnlyFile.RequireProtectedExecutable\(path\);\s*var registration = new FileStream\(path, FileMode.Open, FileAccess.Read, FileShare.Read\)/);
-    assert.match(registered, /byte\[\] original = ReadPinned\(registration, path\);\s*string root = Parse\(original, volumeId, pipeName, expectedBroker, windows\);[\s\S]*?profile = CefProtectedProfileLease.Open\(root, volumeGuid, windows, readStatus, authorityCurrent\)/);
+    assert.match(registered, /byte\[\] original = ReadPinned\(registration, path\);\s*string root = Parse\(original, volumeId, pipeName, expectedBroker, windows\);[\s\S]*?profile = CefProtectedProfileLease.OpenExclusive\(root, volumeGuid, windows, readStatus, authorityCurrent\)/);
     assert.match(registered, /!remaining.Remove\(property.Name\)[\s\S]*?TextEquals\(root.GetProperty\("volumeId"\), volumeId, StringComparison.Ordinal\)[\s\S]*?TextEquals\(root.GetProperty\("pipeName"\), pipeName, StringComparison.Ordinal\)[\s\S]*?TextEquals\(root.GetProperty\("brokerImage"\), expectedBroker, StringComparison.OrdinalIgnoreCase\)[\s\S]*?JsonValueKind.True[\s\S]*?JsonValueKind.False/);
     assert.match(registered, /AdminOnlyFile.RequireProtectedExecutable\(path\);\s*Native.RequireCanonicalSingleLinkImage\(file.SafeFileHandle, path\);[\s\S]*?file.ReadExactly\(bytes\);[\s\S]*?AdminOnlyFile.RequireProtectedExecutable\(path\);\s*Native.RequireCanonicalSingleLinkImage\(file.SafeFileHandle, path\);/);
     assert.match(registered, /ReadPinned\(registration, registrationPath\).AsSpan\(\).SequenceEqual\(original\)[\s\S]*?profile.RequireCurrent\(\);[\s\S]*?ReadPinned\(registration, registrationPath\).AsSpan\(\).SequenceEqual\(original\)[\s\S]*?retired = true;/);
@@ -1078,7 +1078,7 @@ test('installed broker acquires existing exclusive profile lock without takeover
     assert.doesNotMatch(owner, /CreateFileW|OpenDirectory|OpenRegularFile/);
     assert.match(profile, /AcquireExclusiveLock\(\)\s*\{\s*RequireCurrent\(\);[\s\S]*?profileLock = CefProtectedDirectoryLease.OpenExclusiveProfileLock\(\s*layout.ProductRoot, volume, readStatus\);\s*RequireCurrent\(\);[\s\S]*?retired = true;/);
     assert.match(profile, /retired = disposed = true;\s*profileLock\?\.Dispose\(\);\s*log\?\.Dispose\(\);/);
-    assert.match(registration, /profile = CefProtectedProfileLease.Open\(root, volumeGuid, windows, readStatus, authorityCurrent\);\s*profile.AcquireExclusiveLock\(\);\s*var lease = new CefRegisteredProfileLease/);
+    assert.match(registration, /profile = CefProtectedProfileLease.OpenExclusive\(root, volumeGuid, windows, readStatus, authorityCurrent\);\s*var lease = new CefRegisteredProfileLease/);
     assert.match(fixture, /missingLock.AcquireExclusiveLock\(\)[\s\S]*?desktopLock = new FileStream\(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None\)[\s\S]*?owned.AcquireExclusiveLock\(\);[\s\S]*?CreateHardLinkW\(lockAlias, profileLockPath, IntPtr.Zero\)/);
 });
 
@@ -1169,4 +1169,17 @@ test('owner revocation attempts all independent cleanup phases and preserves the
     assert.match(clear, /if \(unresolvedCefStops\.Count != 0 \|\| diagnosticSession\.CleanupPending \|\| diagnosticRelock\.Pending\)\s*EnsureCefStopRetry\(\);/);
     assert.match(policy, /internal static class CefOwnerRevocationCleanup[\s\S]*?catch \(Exception error\) when \(error is not OutOfMemoryException\)[\s\S]*?failure \?\?= error;[\s\S]*?Attempt\(retire\);\s*Attempt\(revokePending\);\s*Attempt\(retry\);\s*Attempt\(schedule\);\s*if \(failure is not null\)\s*System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture\(failure\).Throw\(\);/);
     assert.match(fixture, /foreach \(int failedPhase in new\[\] \{ 0, 1, 2, 3, 4 \}\)[\s\S]*?phases.SequenceEqual\(new\[\] \{ 0, 1, 2, 3 \}\)[\s\S]*?slot.CleanupPending && slot.Current\(generation\) is null[\s\S]*?candidate.AllowRelease = true;[\s\S]*?slot.TryReleaseRetired\(0\) && obligation.TryComplete/);
+});
+
+
+test('installed broker takes existing exclusive profile lock before inspecting CEF descendants', async () => {
+    const profile = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedProfileLease.cs', 'utf8');
+    const registration = await readFile('apps/broker/Veil.VolumeBroker/CefRegisteredProfileLease.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    assert.match(profile, /internal static CefProtectedProfileLease OpenExclusive[\s\S]*?OpenCore\(registeredProductRoot, registeredVolume, windowsDirectory, readStatus, authorityCurrent, true\)/);
+    assert.match(profile, /foreach \(string path in ancestors\)[\s\S]*?if \(acquireExclusive\)[\s\S]*?exclusive = CefProtectedDirectoryLease.OpenExclusiveProfileLock\(\s*layout.ProductRoot, registeredVolume, readStatus\);[\s\S]*?foreach \(string path in layout.Directories\)[\s\S]*?if \(LogExists\(layout.LogFile\)\)[\s\S]*?lease.profileLock = exclusive;\s*lease.RequireCurrent\(\);\s*return lease;/);
+    assert.match(profile, /catch\s*\{[\s\S]*?try \{ log\?\.Dispose\(\); \}[\s\S]*?finally \{ exclusive\?\.Dispose\(\); \}[\s\S]*?throw;/);
+    assert.match(registration, /profile = CefProtectedProfileLease.OpenExclusive\(root, volumeGuid, windows, readStatus, authorityCurrent\);/);
+    assert.doesNotMatch(registration, /profile.AcquireExclusiveLock\(\)/);
+    assert.match(fixture, /Directory.Delete\(profileLayout.Cache\);\s*using \(var busy = new FileStream[\s\S]*?error.NativeErrorCode == 32[\s\S]*?Check\(incompleteRefused && !Directory.Exists\(profileLayout.Cache\)[\s\S]*?using \(var recovered = new FileStream[\s\S]*?Directory.CreateDirectory\(profileLayout.Cache\);[\s\S]*?first.VerifiedExclusiveEnvironment\(\).Count == 7/);
 });
