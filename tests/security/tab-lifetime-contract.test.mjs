@@ -279,7 +279,7 @@ test('hard reload and find use narrow engine operations with stale result guards
     assert.match(webView2, /JsonSerializer\.Serialize\(query\)[\s\S]*?Core\.ExecuteScriptAsync\(\$"window\.find\(\{text\}, false, \{reverse\}, true\)"\)/);
     assert.match(cefView, /RequireView\(\);\s*InvalidateFixtureLoginContext\(\);\s*CefNative\.VeilCefReloadIgnoringCache\(NativeHandle\)/);
     assert.match(cefNative, /VeilCefReloadIgnoringCache\(uint64_t id\) \{\s*if \(const auto state = LookupView\(id\)\) state->InvalidateLoginProbe\(\);\s*const auto browser = LookupBrowser\(id\);\s*if \(browser\) browser->ReloadIgnoreCache\(\);/);
-    assert.match(cefView, /FindTextAsync\(string query, bool backwards\) => Task\.FromResult<bool\?>\(null\)/);
+    assert.match(cefView, /public async Task<bool\?> FindTextAsync\(string query, bool backwards\)/);
     assert.match(browser, /null => "현재 엔진에서는 페이지 검색을 지원하지 않습니다."/);
 });
 
@@ -797,4 +797,19 @@ test('CEF secondary window events retain exact managed and native owner across r
     assert.match(cefSmoke, /if \(!OwnsSecondary\(\)\) return;[\s\S]*?secondaryClosing = true;\s*pendingId = 0;\s*second.InvalidateFixtureLoginContext\(\);/);
     assert.match(cefSmoke, /second.Dispose\(\);\s*if \(OwnsSecondary\(\)\) secondaryWindowClosed = true;/);
     assert.match(cefSmoke, /retiredSecondaryCompletion\(new EngineNavigationCompletedEventArgs\(1, false, false,[\s\S]*?Retired secondary completion ignored after window replacement/);
+});
+
+
+test('CEF fixture find is bounded, serialized and tied to native view and document lifetime', () => {
+    assert.match(cefNative, /CefRefPtr<CefFindHandler> GetFindHandler\(\) override/);
+    assert.match(cefNative, /identifier <= state_->last_find_cef_id/);
+    assert.match(cefNative, /state_->find_cef_id != 0 && state_->find_cef_id != identifier/);
+    assert.match(cefNative, /if \(!final_update\) return;/);
+    assert.match(cefNative, /if \(find_status == 0\) find_poisoned = true;/);
+    assert.match(cefNative, /VeilCefStartFind\([\s\S]*?!fixture_enabled[\s\S]*?state->find_active \|\| state->find_poisoned[\s\S]*?Find\(CefString\(text\), backwards == 0, false, false\)/);
+    assert.match(cefNative, /VeilCefEndFind\([\s\S]*?state->find_ticket != ticket\) return;[\s\S]*?state->InvalidateFind\(\);/);
+    assert.match(cefView, /findInProgress \|\| string.IsNullOrWhiteSpace\(query\) \|\| query.Length > 256/);
+    assert.match(cefView, /while \(!disposed && NativeHandle == id && loginContextEpoch == epoch/);
+    assert.match(cefView, /if \(ticket != 0\) CefNative.VeilCefEndFind\(id, ticket\);/);
+    assert.match(cefSmoke, /Native page find observed match, no match and independent view results/);
 });

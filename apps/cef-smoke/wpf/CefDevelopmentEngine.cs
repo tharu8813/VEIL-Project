@@ -544,8 +544,38 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         return Task.CompletedTask;
     }
 
-    // Native find callbacks and request lifetime have not yet been verified.
-    public Task<bool?> FindTextAsync(string query, bool backwards) => Task.FromResult<bool?>(null);
+    private bool findInProgress;
+    // Fixture-only fresh search. A missing/expired result is unknown, not "no match".
+    public async Task<bool?> FindTextAsync(string query, bool backwards)
+    {
+        Dispatcher.VerifyAccess();
+        if (findInProgress || string.IsNullOrWhiteSpace(query) || query.Length > 256 ||
+            query.Contains('\0')) return null;
+        RequireView();
+        ulong id = NativeHandle, epoch = loginContextEpoch;
+        findInProgress = true;
+        ulong ticket = 0;
+        try
+        {
+            ticket = CefNative.VeilCefStartFind(id, query, backwards ? 1 : 0);
+            if (ticket == 0) return null;
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (!disposed && NativeHandle == id && loginContextEpoch == epoch &&
+                   CefNative.VeilCefClosed(id) == 0)
+            {
+                int status = CefNative.VeilCefFindStatus(id, ticket);
+                if (status != 0) return status switch { 1 => true, 2 => false, _ => null };
+                if (deadline.Elapsed > TimeSpan.FromSeconds(3)) return null;
+                await Task.Delay(10);
+            }
+            return null;
+        }
+        finally
+        {
+            if (ticket != 0) CefNative.VeilCefEndFind(id, ticket);
+            findInProgress = false;
+        }
+    }
     public void Stop() { RequireView(); InvalidateFixtureLoginContext(); CefNative.VeilCefStop(NativeHandle); }
 
     private void RequireView()
@@ -693,6 +723,10 @@ internal static class CefNative
     [DllImport(Module)] internal static extern void VeilCefReload(ulong id);
     [DllImport(Module)] internal static extern void VeilCefReloadIgnoringCache(ulong id);
     [DllImport(Module)] internal static extern void VeilCefStop(ulong id);
+    [DllImport(Module, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern ulong VeilCefStartFind(ulong id, string query, int backwards);
+    [DllImport(Module)] internal static extern int VeilCefFindStatus(ulong id, ulong ticket);
+    [DllImport(Module)] internal static extern void VeilCefEndFind(ulong id, ulong ticket);
     [DllImport(Module)] internal static extern double VeilCefZoomLevel(ulong id);
     [DllImport(Module)] internal static extern void VeilCefSetZoomLevel(ulong id, double level);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
