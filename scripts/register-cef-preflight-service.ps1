@@ -10,7 +10,8 @@ param(
     [Parameter(Mandatory)][guid]$ProtectorId,
     [Parameter(Mandatory)][guid]$RecoveryProtectorId,
     [Parameter(Mandatory)][string]$UserSid,
-    [Parameter(Mandatory)][switch]$DisposableVm
+    [Parameter(Mandatory)][switch]$DisposableVm,
+    [switch]$Diagnostic
 )
 $ErrorActionPreference = 'Stop'
 if (-not $DisposableVm -or -not [Environment]::Is64BitProcess -or $PSVersionTable.PSEdition -ne 'Desktop') {
@@ -24,21 +25,31 @@ $program = [Environment]::GetFolderPath('ProgramFiles')
 $data = [Environment]::GetFolderPath('CommonApplicationData')
 $bin = Join-Path $program 'VEIL'
 $registration = Join-Path $data 'VEIL'
-$stage = Join-Path $program 'VEIL.cef-preflight-staging'
-$prepared = Join-Path $program 'VEIL.cef-preflight-registration'
-$transaction = Join-Path $program 'VEIL.cef-preflight-publication'
-$serviceJournal = Join-Path $program 'VEIL.cef-preflight-service'
+$prefix = if ($Diagnostic) { 'VEIL.cef-diagnostic' } else { 'VEIL.cef-preflight' }
+$other = if ($Diagnostic) { 'VEIL.cef-preflight' } else { 'VEIL.cef-diagnostic' }
+$suffix = if ($Diagnostic) { '.cef-diagnostic-pending' } else { '.cef-preflight-pending' }
+$otherSuffix = if ($Diagnostic) { '.cef-preflight-pending' } else { '.cef-diagnostic-pending' }
+$stage = Join-Path $program ($prefix + '-staging')
+$prepared = Join-Path $program ($prefix + '-registration')
+$transaction = Join-Path $program ($prefix + '-publication')
+$serviceJournal = Join-Path $program ($prefix + '-service')
+$otherPaths = @((Join-Path $program ($other + '-staging')),(Join-Path $program ($other + '-registration')),
+    (Join-Path $program ($other + '-publication')),(Join-Path $program ($other + '-service')),
+    ($bin + $otherSuffix),($registration + $otherSuffix))
 $command = '"{0}" --service' -f (Join-Path $bin 'Broker\Veil.VolumeBroker.exe')
 $image = (Get-Item -LiteralPath $ImagePath -Force).FullName
 $parent = Split-Path -Parent $image
 if ((Split-Path -Parent $parent) -ne $program -or
-    $parent -in @($bin,$stage,$prepared,$transaction,$serviceJournal,($bin + '.cef-preflight-pending'),(Join-Path $program 'VEIL.cef-candidate-staging')) -or
+    $parent -in @($bin,$stage,$prepared,$transaction,$serviceJournal,($bin + $suffix),(Join-Path $program 'VEIL.cef-candidate-staging')) -or
     (Get-Item -LiteralPath $image -Force).PSIsContainer) { throw 'Expected separate administrator-owned test VHDX directory.' }
 Assert-VeilAdminPath $program
 if ((Get-Item -LiteralPath $data -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirected ProgramData refused.' }
 $readService = { Get-CimInstance Win32_Service -Filter "Name='Veil.VolumeBroker'" }
 if ((Test-Path -LiteralPath $serviceJournal) -or $null -ne (& $readService)) { throw 'Existing or interrupted service registration refused.' }
 $requireSafe = {
+    foreach ($path in $otherPaths) {
+        if (Test-Path -LiteralPath $path) { throw 'Opposite-mode preparation or service state refused.' }
+    }
     Assert-VeilAdminPath $parent
     Assert-VeilAdminPath $image
     if ((Get-DiskImage -ImagePath $image).Attached) { throw 'Test volume must be detached.' }
@@ -46,7 +57,7 @@ $requireSafe = {
     if ($null -ne $current) { Assert-VeilDisabledPreflightService $current $command }
 }
 $verifyFiles = {
-    Get-VeilPreflightPublicationState $stage $prepared $bin $registration $transaction $SignerThumbprint $SourceCommit $image $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid $requireSafe
+    Get-VeilPreflightPublicationState $stage $prepared $bin $registration $transaction $SignerThumbprint $SourceCommit $image $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid $requireSafe -Diagnostic:$Diagnostic
 }
 $initial = & $verifyFiles
 if ($initial.state -cne 'files-published-only') { throw 'Complete file publication required.' }
@@ -79,5 +90,5 @@ $readDacl = {
     if ($descriptors.Count -ne 1) { throw 'Unexpected SCM descriptor output.' }
     return $descriptors[0]
 }
-[void](Register-VeilDisabledPreflightService $serviceJournal $command $verifyPublication $readService $create $setDacl $readDacl)
+[void](Register-VeilDisabledPreflightService $serviceJournal $command $verifyPublication $readService $create $setDacl $readDacl -Diagnostic:$Diagnostic)
 Write-Host 'PASS: bootstrap registry and broker registered disabled and stopped. Service startup and CEF initialization NOT RUN.'
