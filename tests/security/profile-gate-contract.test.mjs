@@ -1482,3 +1482,22 @@ test('Windows ACL denial fixtures remove only their explicit deny rule and verif
     assert.match(fixture, /liveAcl.RemoveAccessRuleSpecific\(scratchDeny\);\s*scratch.SetAccessControl\(liveAcl\);\s*RequireRestored\(originalAcl, scratch.GetAccessControl\(AccessControlSections.Access\)\);[\s\S]*?Reject\(\(\) => deniedProfile.VerifiedExclusiveEnvironment\(\)\);[\s\S]*?using \(var restoredScratch = CefProtectedProfileLease.OpenExclusive[\s\S]*?restoredScratch.RequireUserAccess\(fixtureUser.AccessToken\)/);
 });
 
+
+
+test('legacy replacement experiment distinguishes retained target refusal from isolated unpinned success', async () => {
+    const pin = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedDirectoryLease.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    const start = pin.indexOf('internal static bool ProbeLibraryReplacementFixture');
+    const end = pin.indexOf('[StructLayout(LayoutKind.Sequential)]', start);
+    assert.ok(start > pin.indexOf('#if VEIL_CEF_PROFILE_ACCESS_TEST') && end > start && end < pin.indexOf('#endif'));
+    const probe = pin.slice(start, end);
+    assert.match(probe, /using var target = OpenAccess\(destinationPath, 0x81\);\s*RequireRegularFile\(target, destinationPath, volume\);/);
+    assert.match(probe, /if \(!current\(\)\) return false;\s*RequireRegularFile\(source, stagedPath, volume\);\s*RequireRegularFile\(target, destinationPath, volume\);/);
+    assert.match(probe, /if \(!retainDestination\) target.Dispose\(\);[\s\S]*?buffer\[0\] = 1;[\s\S]*?NtSetInformationFile\(source, out _, buffer, \(uint\)buffer.Length, 10\);/);
+    assert.match(probe, /if \(status == 0\) return true;[\s\S]*?if \(error is 5 or 32 or 33\) return false;/);
+    assert.match(fixture, /!ProbeReplacement\(true\) && OriginalPair\(\)[\s\S]*?Revoked replacement modified data[\s\S]*?Linked destination was overwritten[\s\S]*?Busy destination was overwritten[\s\S]*?ProbeReplacement\(false\) && !File.Exists\(libraryStage\)/);
+    assert.doesNotMatch(broker, /\bProbeLibraryReplacementFixture\b/);
+    assert.doesNotMatch(probe, /\bFile\.(?:Move|Replace|Delete)\(/);
+});
+

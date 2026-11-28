@@ -269,6 +269,49 @@ internal sealed class CefProtectedDirectoryLease : IDisposable
         throw new Win32Exception(unchecked((int)RtlNtStatusToDosError(status)), "Synthetic CEF rename refused.");
     }
 
+    // Disposable fixture only: compare legacy replacement with a retained
+    // destination pin and after its release. The second case intentionally
+    // has an identity-to-rename gap, and MUST NOT become a product writer.
+    internal static bool ProbeLibraryReplacementFixture(string engineRoot, string volume,
+        Func<BackendStatus> readStatus, Func<bool> current, bool retainDestination)
+    {
+        if (!Environment.Is64BitProcess || !current()) return false;
+        using var directory = Open(engineRoot, volume, readStatus);
+        using var directoryAccess = OpenAccess(engineRoot, 0xA1);
+        RequireDirectory(directoryAccess, engineRoot, volume);
+        RequireSameIdentity(directory.handle, directoryAccess);
+        string stagedPath = Path.Combine(engineRoot, "library-state.stage");
+        string destinationPath = Path.Combine(engineRoot, "library-state.json");
+        using var source = CreateFileW(stagedPath, 0x00110081, FileShare.Read, IntPtr.Zero,
+            FileMode.Open, 0x00200000, IntPtr.Zero);
+        if (source.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        RequireRegularFile(source, stagedPath, volume);
+        // Actual data-access handle: unlike a metadata-only handle, it
+        // denies delete sharing for the destination while retained.
+        using var target = OpenAccess(destinationPath, 0x81);
+        RequireRegularFile(target, destinationPath, volume);
+        directory.RequireCurrent(readStatus);
+        RequireSameIdentity(directory.handle, directoryAccess);
+        RequireRegisteredProtection(volume, readStatus());
+        if (!current()) return false;
+        RequireRegularFile(source, stagedPath, volume);
+        RequireRegularFile(target, destinationPath, volume);
+
+        // ONLY the controlled fixture may release this pin before rename.
+        // No production fallback, retry, or POSIX sharing override.
+        if (!retainDestination) target.Dispose();
+        byte[] name = Encoding.Unicode.GetBytes("library-state.json");
+        byte[] buffer = new byte[24 + name.Length];
+        buffer[0] = 1; // legacy FILE_RENAME_INFORMATION ReplaceIfExists
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(16, 4), name.Length);
+        name.CopyTo(buffer, 20);
+        int status = NtSetInformationFile(source, out _, buffer, (uint)buffer.Length, 10);
+        if (status == 0) return true;
+        int error = unchecked((int)RtlNtStatusToDosError(status));
+        if (error is 5 or 32 or 33) return false; // access/sharing/lock violation
+        throw new Win32Exception(error, "Synthetic CEF legacy replacement refused.");
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct IoStatusBlock
     {
