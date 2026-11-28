@@ -1105,7 +1105,14 @@ test('registered CEF environment requires actual user-token filesystem access wi
     assert.match(pin, /OpenAccess\(path, writable \? 0xA7u : 0xA0u\);\s*RequireDirectory\(observed, path, volume\);\s*RequireSameIdentity\(handle, observed\);/);
     assert.match(pin, /CreateFileW\(path, rights, FileShare.ReadWrite, IntPtr.Zero,\s*FileMode.Open, 0x02000000 \| 0x00200000/);
     assert.match(pin, /OpenAccess\(path, 0x87\);\s*RequireRegularFile\(observed, path, volume\);\s*RequireSameIdentity\(handle, observed\);/);
-    const scope = profile.slice(profile.indexOf('WindowsIdentity.RunImpersonated(access,'), profile.indexOf('});', profile.indexOf('WindowsIdentity.RunImpersonated(access,')) + 3);
+    // Scope this check to the outer profile method, not the library inspection's
+    // similarly named method. Both impersonation scopes have independent contracts.
+    const methodStart = profile.indexOf('\n    internal void RequireUserAccess(SafeAccessTokenHandle access)');
+    assert.ok(methodStart >= 0, 'outer profile access method missing');
+    const profileMethod = profile.slice(methodStart, profile.indexOf('\n    public void Dispose()', methodStart));
+    const impersonationStart = profileMethod.indexOf('WindowsIdentity.RunImpersonated(access,');
+    assert.ok(impersonationStart >= 0, 'outer profile impersonation missing');
+    const scope = profileMethod.slice(impersonationStart, profileMethod.indexOf('});', impersonationStart) + 3);
     assert.match(scope, /directories\[i\].RequireUserAccess\(i >= writableStart\);[\s\S]*?log\?\.RequireUserAccess\(\);/);
     assert.doesNotMatch(scope, /readStatus|authorityCurrent|RequireCurrent\(|File\.Write|CreateDirectory/);
     assert.match(profile, /RequireUserAccess\(SafeAccessTokenHandle access\)[\s\S]*?RequireCurrent\(\);[\s\S]*?profileLock is null[\s\S]*?WindowsIdentity.RunImpersonated[\s\S]*?RequireCurrent\(\);[\s\S]*?catch\s*\{\s*retired = true;/);
@@ -1451,6 +1458,15 @@ test('prospective library access uses retained user token and actual fixed file 
     assert.match(profile, /WindowsIdentity.RunImpersonated\(access, \(\) =>\s*\{[\s\S]*?owner.directories\[\^4\].RequireLibraryDirectoryAccess\(\);\s*committed.RequireLibraryDataAccess\(staged: false\);\s*staged.RequireLibraryDataAccess\(staged: true\);\s*\}\);\s*RequireCurrent\(\);[\s\S]*?owner.retired = true;/);
     assert.match(observer, /RequireLibraryAccess\(CefProtectedProfileLease.LibraryFileInspection inspection\)[\s\S]*?RequireCurrent\(\);\s*if \(!DuplicateTokenEx\(duplicate, 0x000C, IntPtr.Zero, 2, 2, out var access\)\)[\s\S]*?CefLaunchTokenPolicy.RequireDuplicate\(duplicateSnapshot, snapshot\);\s*RequireCurrent\(\);\s*inspection.RequireUserAccess\(access\);\s*CefLaunchTokenPolicy.RequireSame\(snapshot,[\s\S]*?RequireCurrent\(\);/);
     assert.match(fixture, /FileSystemRights.ReadData[\s\S]*?FileSystemRights.WriteData[\s\S]*?FileSystemRights.AppendData[\s\S]*?Reject\(\(\) => deniedInspection.RequireUserAccess\(fixtureUser.AccessToken\)\);[\s\S]*?FileSystemRights.CreateFiles, FileSystemRights.DeleteSubdirectoriesAndFiles/);
+    const inspectionStart = profile.indexOf('internal sealed class LibraryFileInspection');
+    const inspectionEnd = profile.indexOf('// Read-only snapshot, not a permit.', inspectionStart);
+    assert.ok(inspectionStart >= 0 && inspectionEnd > inspectionStart, 'library inspection scope missing');
+    const inspection = profile.slice(inspectionStart, inspectionEnd);
+    const accessStart = inspection.indexOf('WindowsIdentity.RunImpersonated(access,');
+    assert.ok(accessStart >= 0, 'library impersonation missing');
+    const libraryScope = inspection.slice(accessStart, inspection.indexOf('});', accessStart) + 3);
+    assert.match(libraryScope, /owner.directories\[\^4\].RequireLibraryDirectoryAccess\(\);\s*committed.RequireLibraryDataAccess\(staged: false\);\s*staged.RequireLibraryDataAccess\(staged: true\);/);
+    assert.doesNotMatch(libraryScope, /readStatus|authorityCurrent|RequireCurrent\(|File\.Write|CreateDirectory/);
     assert.doesNotMatch(broker, /\bRequireLibraryAccess\s*\(/);
 });
 
