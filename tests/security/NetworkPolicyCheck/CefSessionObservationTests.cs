@@ -109,6 +109,28 @@ internal static class CefSessionObservationTests
             return 1;
         }));
         Check(reentrant.RevokeAndCheckDrain(() => true));
+        foreach (uint eventType in new uint[] { 6, 7 })
+        {
+            Check(CefWindowsSessionRevocation.IsRevocationEvent(eventType));
+            Check(CefWindowsSessionRevocation.TryDecode(eventType, 8, 1, out uint session));
+            Check(session == 1 && CefWindowsSessionRevocation.MatchesOwner(owner, session));
+            Check(!CefWindowsSessionRevocation.MatchesOwner(owner with { SessionId = 2 }, session));
+            Check(!CefWindowsSessionRevocation.MatchesOwner(null, session));
+            Check(!CefWindowsSessionRevocation.MatchesOwner(owner with { SessionId = 0 }, session));
+            Check(!CefWindowsSessionRevocation.MatchesOwner(owner with { SessionId = -1 }, session));
+        }
+        foreach (uint eventType in new uint[] { 0, 1, 2, 3, 4, 5, 8, 9, uint.MaxValue })
+        {
+            Check(!CefWindowsSessionRevocation.IsRevocationEvent(eventType));
+            Check(!CefWindowsSessionRevocation.TryDecode(eventType, 8, 1, out uint ignored) && ignored == 0);
+        }
+        foreach (int size in new[] { -1, 0, 4, 7, 9, 16 })
+            Check(!CefWindowsSessionRevocation.TryDecode(7, size, 1, out uint ignored) && ignored == 0);
+        foreach (uint sessionId in new uint[] { 0, 0x80000000, uint.MaxValue })
+            Check(!CefWindowsSessionRevocation.TryDecode(7, 8, sessionId, out uint ignored) && ignored == 0);
+        Check(CefWindowsSessionRevocation.TryDecode(6, 8, int.MaxValue, out uint lastSession) &&
+            lastSession == int.MaxValue);
+        Console.WriteLine("PASS: Windows lock/logoff notification filtering and authenticated owner isolation");
         Console.WriteLine("PASS: diagnostic session pre/post checks, irreversible retirement and retryable drain");
         Console.WriteLine("PASS: pure CEF multi-process observation, generation/lease binding and irreversible revocation");
     }
