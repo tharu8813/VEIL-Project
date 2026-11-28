@@ -245,6 +245,20 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         return peerHandle;
     }
 
+    // Recheck the exact bound root-only Job pair just before resume.
+    // This does not attest thread suspension or a sandbox.
+    internal void RequirePreparedPrivateRoot(CefBrokerOwnedJob peer,
+        ClientIdentity owner, SafeProcessHandle ownerHandle,
+        ClientIdentity root, SafeProcessHandle rootHandle)
+    {
+        var peerHandle = RequireBoundPrivatePeer(peer, rootHandle);
+        if (privateRootIdentity != root)
+            throw new UnauthorizedAccessException("CEF prepared root identity changed.");
+        RequireContainmentLimits(peerHandle, peer.activeLimit);
+        RequireInitialNestedBinding(peerHandle, owner, ownerHandle, root, rootHandle);
+        RequireContainmentLimits(peerHandle, peer.activeLimit);
+    }
+
     internal T[] ObservePrivateNestedDiagnostics<T>(CefBrokerOwnedJob peer,
         ClientIdentity root, SafeProcessHandle rootHandle, Func<ClientIdentity, SafeProcessHandle, T> observe)
     {

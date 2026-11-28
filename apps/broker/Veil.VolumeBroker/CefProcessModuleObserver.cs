@@ -88,6 +88,9 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
     private readonly CefDiagnosticSessionGuard guard;
     private readonly Func<CefDiagnosticSessionContext> readContext;
     private readonly Func<CefRetainedProcessDiagnostic[]> observe;
+    private readonly Action requirePreparedRoot;
+    private bool activationAttempted;
+    private bool activated;
     private readonly Func<int, bool> drain;
     private readonly CefRetainedLifetime lifetime;
 
@@ -129,13 +132,37 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
             return new(Native.ObserveProcess(ownerHandle), current.Generation, current.RuntimeLease,
                 Native.IsRunning(ownerHandle), current.VolumeProtected);
         };
+        requirePreparedRoot = () => brokerJob.RequirePreparedPrivateRoot(peerJob, owner, ownerHandle, root, rootHandle);
         observe = () => CefNestedProcessDiagnostics.Observe(brokerJob, peerJob, root, rootHandle,
             registration, systemVerifier);
         drain = milliseconds => brokerJob.TerminateAndVerifyPrivateDrain(peerJob, rootHandle, milliseconds);
         lifetime = new CefRetainedLifetime(registration, peerJob, brokerJob, rootHandle);
     }
 
-    internal CefRetainedProcessDiagnostic[] Observe() => guard.Observe(readContext, observe);
+    // The slot owns this lifetime before invoking this method. No module
+    // inventory is required while the loader has not yet executed; the
+    // regular post-resume monitor checks it independently.
+    internal void ActivatePreparedRoot(Action resume)
+    {
+        ArgumentNullException.ThrowIfNull(resume);
+        if (activationAttempted)
+            throw new UnauthorizedAccessException("CEF activation already attempted.");
+        activationAttempted = true;
+        _ = guard.Observe(readContext, () =>
+        {
+            requirePreparedRoot();
+            resume();
+            return true;
+        });
+        activated = true;
+    }
+
+    internal CefRetainedProcessDiagnostic[] Observe()
+    {
+        if (!activated)
+            throw new UnauthorizedAccessException("CEF diagnostic session has not activated.");
+        return guard.Observe(readContext, observe);
+    }
     public void Revoke() => guard.Revoke();
     // Keep this session in the owning broker until true; false or an exception
     // leaves all unconfirmed/unreleased resources retained for retry.

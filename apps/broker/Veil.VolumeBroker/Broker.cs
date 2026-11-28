@@ -562,12 +562,15 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     // Prepared internal registration only; no request handler calls this.
     // Caller holds serial, owns the already assigned private pair and pins,
     // and must retain/stop them if registration refuses or throws.
-    private bool TryRegisterDiagnosticSession(object expectedGeneration,
+    private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession(object expectedGeneration,
         ClientIdentity root, SafeProcessHandle rootHandle,
         CefBrokerOwnedJob brokerJob, CefBrokerOwnedJob peerJob,
         Veil.Desktop.CefRuntimeRegistrationLease registration,
-        ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature)
+        ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature,
+        Action resumePreparedRoot, out bool ownershipTransferred)
     {
+        ownershipTransferred = false;
+        ArgumentNullException.ThrowIfNull(resumePreparedRoot);
         if (diagnosticRelock.Pending || config.Development || config.CefChildImage is not { } image ||
             config.CefChildSha256 is not { } digest ||
             diagnosticSession.Occupied || pendingCefChild is not null ||
@@ -575,20 +578,20 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             !CandidateAuthorityCurrent(expectedGeneration) ||
             authenticatedOwner is not { } owner ||
             authenticatedOwnerHandle is not { } ownerHandle)
-            return false;
+            return CefDiagnosticActivationOutcome.Refused;
         // The installed runtime lease pins the image throughout the session.
         // Independently verify the broker's signed image/digest before transfer.
         using var verified = CefPinnedImage.OpenVerified(root, rootHandle, image, new CefImageDigest(digest));
         registration.RequireCurrent();
         if (!string.Equals(registration.ImagePath, image, StringComparison.OrdinalIgnoreCase) ||
             !CandidateAuthorityCurrent(expectedGeneration))
-            return false;
+            return CefDiagnosticActivationOutcome.Refused;
         // No caller-selected verifier or fallback to unverified System32.
         // Exact payload digest, signing key, approval authority and actual host
         // are obtained/checked against the protected installed trust state.
         var systemVerifier = CefSignedSystemModuleBaseline.VerifyInstalledTrust(baselinePayload, baselineSignature);
         systemVerifier.RequireBoundTrust();
-        if (!CandidateAuthorityCurrent(expectedGeneration)) return false;
+        if (!CandidateAuthorityCurrent(expectedGeneration)) return CefDiagnosticActivationOutcome.Refused;
         var session = new CefBoundDiagnosticSession(owner, ownerHandle, expectedGeneration,
             registration, brokerJob, peerJob, root, rootHandle, () =>
             {
@@ -597,8 +600,36 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 registration.RequireCurrent();
                 return (expectedGeneration, registration, true);
             }, systemVerifier);
-        // All operations are serialized; no IPC or startup enablement.
-        return diagnosticSession.TryRegister(expectedGeneration, session);
+        // Transfer before resume. The caller must NOT dispose any retained
+        // resources after ownershipTransferred, even if cleanup throws.
+        // Still disconnected: only a future reviewed internal launch path
+        // may supply the prepared root's one-shot resume action.
+        bool accepted = false;
+        bool activated = false;
+        try
+        {
+            var outcome = diagnosticSession.RegisterAndActivate(expectedGeneration, session, () =>
+            {
+                accepted = true;
+                session.ActivatePreparedRoot(resumePreparedRoot);
+            }, out var failure);
+            activated = outcome == CefDiagnosticActivationOutcome.Activated;
+            if (failure is not null)
+                log.Write("cef-diagnostic-activation-refused", new { type = failure.GetType().Name });
+            return outcome;
+        }
+        finally
+        {
+            ownershipTransferred = accepted;
+            if (accepted && !activated)
+            {
+                // Latch even if the activation's context check already
+                // retired the generation or cleanup previously failed.
+                diagnosticRelock.Request(expectedGeneration);
+                try { ClearAuthenticatedOwner(); }
+                finally { EnsureCefStopRetry(); }
+            }
+        }
     }
 
     private void ClearAuthenticatedOwner()

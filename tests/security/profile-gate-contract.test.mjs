@@ -191,7 +191,7 @@ test('future CEF executable checks use a retained file handle and do not extend 
     assert.match(admin, /Require\(file\.GetAccessControl\(\), "executable"\);\s*Require\(file\.Directory!\.GetAccessControl\(\), "executable directory"\);/);
     // The disconnected broker-internal diagnostic registration now performs
     // the same pin check. Ordinary IPC and admission paths must not gain it.
-    const start = broker.indexOf('private bool TryRegisterDiagnosticSession(');
+    const start = broker.indexOf('private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession(');
     const end = broker.indexOf('private void ClearAuthenticatedOwner()', start);
     assert.ok(start >= 0 && end > start);
     const registration = broker.slice(start, end);
@@ -707,12 +707,12 @@ test('broker retains diagnostic slot through revocation and refuses unsafe opera
     const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
     const policy = await readFile('apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs', 'utf8');
     const startup = await readFile('apps/desktop/Program.cs', 'utf8');
-    const registerStart = broker.indexOf('private bool TryRegisterDiagnosticSession(');
+    const registerStart = broker.indexOf('private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession(');
     const registerEnd = broker.indexOf('private void ClearAuthenticatedOwner()');
     assert.ok(registerStart >= 0 && registerEnd > registerStart);
     const register = broker.slice(registerStart, registerEnd);
     assert.match(register, /diagnosticSession\.Occupied \|\| pendingCefChild is not null \|\|[\s\S]*?completedPreflight is not null \|\| unresolvedCefStops\.Count != 0 \|\|[\s\S]*?!CandidateAuthorityCurrent\(expectedGeneration\)/);
-    assert.match(register, /CefPinnedImage\.OpenVerified[\s\S]*?registration\.RequireCurrent\(\);[\s\S]*?!CandidateAuthorityCurrent\(expectedGeneration\)[\s\S]*?new CefBoundDiagnosticSession[\s\S]*?diagnosticSession\.TryRegister\(expectedGeneration, session\)/);
+    assert.match(register, /CefPinnedImage\.OpenVerified[\s\S]*?registration\.RequireCurrent\(\);[\s\S]*?!CandidateAuthorityCurrent\(expectedGeneration\)[\s\S]*?new CefBoundDiagnosticSession[\s\S]*?diagnosticSession\.RegisterAndActivate\(expectedGeneration, session,/);
     assert.equal((broker.match(/TryRegisterDiagnosticSession\(/g) ?? []).length, 1, 'registration must remain disconnected from requests');
     assert.doesNotMatch(startup, /CefBoundDiagnosticSession|TryRegisterDiagnosticSession/);
     assert.match(broker, /diagnosticSession\.Retire\(\);\s*try \{ RevokePendingCefChild\(\); \}[\s\S]*?RetryDiagnosticSession\(\);[\s\S]*?EnsureCefStopRetry\(\)/);
@@ -730,10 +730,10 @@ test('registered diagnostic session requires installed signed baseline and retir
     const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
     const nested = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
     const verifier = await readFile('apps/broker/Veil.VolumeBroker/CefSystemModuleVerifier.cs', 'utf8');
-    const register = broker.slice(broker.indexOf('private bool TryRegisterDiagnosticSession('),
+    const register = broker.slice(broker.indexOf('private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession('),
         broker.indexOf('private void ClearAuthenticatedOwner()'));
     assert.match(register, /ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature/);
-    assert.match(register, /CefSignedSystemModuleBaseline\.VerifyInstalledTrust\(baselinePayload, baselineSignature\);\s*systemVerifier\.RequireBoundTrust\(\);[\s\S]*?new CefBoundDiagnosticSession[\s\S]*?\}, systemVerifier\);[\s\S]*?diagnosticSession\.TryRegister/);
+    assert.match(register, /CefSignedSystemModuleBaseline\.VerifyInstalledTrust\(baselinePayload, baselineSignature\);\s*systemVerifier\.RequireBoundTrust\(\);[\s\S]*?new CefBoundDiagnosticSession[\s\S]*?\}, systemVerifier\);[\s\S]*?diagnosticSession\.RegisterAndActivate/);
     assert.doesNotMatch(nested, /CefSystemModuleVerifier\?|systemVerifier\s+is null/);
     assert.match(nested, /systemVerifier\.RequireModules\);\s*systemVerifier\.RequireBoundTrust\(\);\s*if \(result\.UnverifiedSystemModules != 0\)/);
     assert.match(nested, /readContext = \(\) =>\s*\{\s*systemVerifier\.RequireBoundTrust\(\);/);
@@ -819,5 +819,20 @@ test('prepared diagnostic lifetime is retained before activation and retired on 
     assert.match(policy, /!retired && !activating && ReferenceEquals\(generation, expectedGeneration\)/);
     assert.match(policy, /if \(!retired \|\| releasing \|\| activating\) return false/);
     assert.match(fixture, /slot\.RegisterAndActivate\(generation, session,[\s\S]*?candidate\.ResumeAfterVerification[\s\S]*?Synthetic lost resume confirmation[\s\S]*?slot\.TryReleaseRetired\(5000\)/);
-    assert.doesNotMatch(broker, /RegisterAndActivate/);
+    assert.equal((broker.match(/diagnosticSession\.RegisterAndActivate\(/g) ?? []).length, 1);
+});
+
+
+test('private broker activation transfers ownership before resume and latches relock on failure', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const nested = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
+    const reg = broker.slice(broker.indexOf('private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession('),
+        broker.indexOf('private void ClearAuthenticatedOwner()'));
+    assert.match(reg, /ownershipTransferred = false;[\s\S]*?return CefDiagnosticActivationOutcome\.Refused;[\s\S]*?diagnosticSession\.RegisterAndActivate\(expectedGeneration, session, \(\) =>\s*\{\s*accepted = true;\s*session\.ActivatePreparedRoot\(resumePreparedRoot\);/);
+    assert.match(reg, /finally\s*\{\s*ownershipTransferred = accepted;\s*if \(accepted && !activated\)[\s\S]*?diagnosticRelock\.Request\(expectedGeneration\);\s*try \{ ClearAuthenticatedOwner\(\); \}\s*finally \{ EnsureCefStopRetry\(\); \}/);
+    assert.match(nested, /activationAttempted = true;\s*_ = guard\.Observe\(readContext, \(\) =>\s*\{\s*requirePreparedRoot\(\);\s*resume\(\);[\s\S]*?activated = true;/);
+    assert.match(nested, /if \(!activated\)\s*throw new UnauthorizedAccessException[\s\S]*?return guard\.Observe\(readContext, observe\)/);
+    assert.match(job, /RequirePreparedPrivateRoot[\s\S]*?RequireBoundPrivatePeer\(peer, rootHandle\)[\s\S]*?privateRootIdentity != root[\s\S]*?RequireInitialNestedBinding\(peerHandle, owner, ownerHandle, root, rootHandle\)/);
+    assert.equal((broker.match(/TryRegisterDiagnosticSession\(/g) ?? []).length, 1);
 });
