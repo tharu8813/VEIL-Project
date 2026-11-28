@@ -92,6 +92,17 @@ public partial class BrowserWindow
                     saves == 2 && localData.BookmarkFolders.Single() == editFolder,
                     "library authorized save commits once");
                 localData.BookmarkFolders.Clear();
+                var originalHistory = localData.History.ToArray();
+                var pendingVisit = new PageEntry("Visit", "https://example.test/visit", DateTimeOffset.Now);
+                Check(!LibraryMutation.TryCommit(localData.History, null, () => true,
+                    () => localData.History.Insert(0, pendingVisit), () => false) &&
+                    localData.History.SequenceEqual(originalHistory),
+                    "failed automatic history commit restores prior list");
+                Check(LibraryMutation.TryCommit(localData.History, null, () => true,
+                    () => localData.History.Insert(0, pendingVisit), () => true) &&
+                    ReferenceEquals(localData.History[0], pendingVisit),
+                    "successful automatic history commit publishes exact entry");
+                localData.History.RemoveAt(0);
                 const string bookmarksHtml = """
                     <!DOCTYPE NETSCAPE-Bookmark-file-1>
                     <DL><p><DT><H3>Study &amp; Code</H3><DL><p>
@@ -380,6 +391,18 @@ public partial class BrowserWindow
                     Check(data.Bookmarks.Count == 1 && data.Bookmarks[0].Url == origin + "/", "bookmark restored");
                     Check(data.ShowBookmarksBar && BookmarkBarItems.Items.Count == 1, "bookmark bar restored");
                     Check(data.History.Any(entry => entry.Url.EndsWith("/second")), "history restored");
+                    Check(BrowserData.Load(statePath).History.SequenceEqual(data.History),
+                        "successful history commit persisted shared state");
+                    var completedTab = Active!;
+                    if (completedTab.CompletedNavigationId is ulong completedId)
+                    {
+                        int historyBeforeDuplicate = data.History.Count;
+                        OnNavigationCompleted(completedTab, new EngineNavigationCompletedEventArgs(completedId,
+                            true, false, new EngineNavigationError(EngineErrorDomain.WebView2, 0, "Synthetic duplicate")));
+                        Check(data.History.Count == historyBeforeDuplicate,
+                            "duplicate completion did not record another visit");
+                    }
+                    else throw new InvalidOperationException("Navigation completion identity not observed.");
                     await Active!.View.ExecuteScriptAsync("probe('read').then(result => window.smoke = Object.values(result).every(Boolean)); null;");
                     await WaitForScript("window.smoke === true", "five site storage types restored");
                     if (stage == "read")
