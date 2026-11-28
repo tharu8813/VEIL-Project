@@ -72,13 +72,16 @@ internal static class CefNestedProcessDiagnostics
 }
 
 // Prepared broker-internal binding, not an IPC endpoint or launch permit.
-// The serialized caller retains all handles and the registration until drain.
+// On successful construction, the serialized caller transfers root, both
+// Jobs and registration ownership; the authenticated owner handle is borrowed.
+// No production caller may construct this until the trusted Job handoff exists.
 internal sealed class CefBoundDiagnosticSession
 {
     private readonly CefDiagnosticSessionGuard guard;
     private readonly Func<CefDiagnosticSessionContext> readContext;
     private readonly Func<CefRetainedProcessDiagnostic[]> observe;
     private readonly Func<int, bool> drain;
+    private readonly CefRetainedLifetime lifetime;
 
     internal CefBoundDiagnosticSession(ClientIdentity owner, SafeProcessHandle ownerHandle,
         object generation, CefRuntimeRegistrationLease registration,
@@ -108,10 +111,17 @@ internal sealed class CefBoundDiagnosticSession
         observe = () => CefNestedProcessDiagnostics.Observe(brokerJob, desktopJob, root, rootHandle,
             registration, systemVerifier);
         drain = milliseconds => brokerJob.TerminateAndVerifyNestedDrain(desktopJob, rootHandle, milliseconds);
+        lifetime = new CefRetainedLifetime(registration, desktopJob, brokerJob, rootHandle);
     }
 
     internal CefRetainedProcessDiagnostic[] Observe() => guard.Observe(readContext, observe);
     internal void Revoke() => guard.Revoke();
-    internal bool RevokeAndDrain(int milliseconds) =>
-        guard.RevokeAndCheckDrain(() => drain(milliseconds));
+    // Keep this session in the owning broker until true; false or an exception
+    // leaves all unconfirmed/unreleased resources retained for retry.
+    internal bool RevokeAndRelease(int milliseconds)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        guard.Revoke();
+        return lifetime.TryRelease(() => guard.RevokeAndCheckDrain(() => drain(milliseconds)));
+    }
 }
