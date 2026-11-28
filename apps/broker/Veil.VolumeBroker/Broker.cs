@@ -10,6 +10,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private int unlockFailures;
     private object? unlockOwner;
     private ClientIdentity? authenticatedOwner;
+    private CefAuthenticatedGeneration? authenticatedGeneration;
     private SafeProcessHandle? authenticatedOwnerHandle;
     private CefPendingChild? pendingCefChild;
     private sealed record CandidateStop(SafeProcessHandle Child, CefBrokerOwnedJob? Job, IDisposable? Image, IDisposable? Runtime);
@@ -209,12 +210,9 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     authenticatedOwnerHandle is not { } ownerHandle || !Native.IsRunning(ownerHandle))
                     return Protocol.Error("CefChildRejected");
 
-                bool Protected(BackendStatus state) => state.Attached && state.Unlocked &&
-                    state.FullyEncrypted && state.ProtectionOn && state.ProtectorPresent &&
-                    string.Equals(state.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase);
-                if (!Protected(backend.Status()) ||
+                if (!CandidateAuthorityCurrent(generation) ||
                     !CefChildPreflight.VerifyRedemption(pending, owner, ownerHandle, client, path, hash) ||
-                    !Protected(backend.Status()) ||
+                    !CandidateAuthorityCurrent(generation) ||
                     pending.ProcessResource is not SafeProcessHandle childHandle ||
                     Native.ObserveProcess(ownerHandle) != owner ||
                     Native.ObserveProcess(childHandle) != client ||
@@ -275,6 +273,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 return Protocol.Error("CefExitUnconfirmed");
             // Non-forced Lock remains available even if an exit is unconfirmed.
             var status = backend.Status();
+            RefreshAuthenticatedOwner(status);
             bool Registered(BackendStatus current) => current.Attached &&
                 string.Equals(current.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase);
             if (pendingCefChild is { } pending && (pending.IsExpired || !Registered(status) ||
@@ -469,6 +468,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                             // The watcher owns the handle; a signaled/closed handle refuses.
                             authenticatedOwner = client;
                             authenticatedOwnerHandle = ownerHandle;
+                            authenticatedGeneration = new CefAuthenticatedGeneration(client, unlockOwner!);
                         }
                     }
                     else
@@ -512,7 +512,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            RevokePendingCefChild();
+            ClearAuthenticatedOwner();
             log.Write("command", new { client.ProcessId, command, result = "BackendFailure", type = error.GetType().Name });
             return Protocol.Error("BackendFailure");
         }
@@ -530,6 +530,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     {
         // Retire authorization before stopping candidates: cleanup can fail.
         // Keep unlockOwner for the independent crash-relock watcher.
+        authenticatedGeneration?.Revoke();
+        authenticatedGeneration = null;
         authenticatedOwner = null;
         authenticatedOwnerHandle = null;
         RevokePendingCefChild();
@@ -662,15 +664,42 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         }
     }
 
-    private bool CandidateAuthorityCurrent(object generation)
+    // All callers hold serial. A failed observation invalidates the owner
+    // even if no child was staged yet. Never revive the same unlock generation
+    // merely because a later backend snapshot looks protected again.
+    private bool RefreshAuthenticatedOwner(BackendStatus state)
     {
-        if (!ReferenceEquals(unlockOwner, generation) ||
-            authenticatedOwnerHandle is not { } owner || !Native.IsRunning(owner))
-            return false;
-        var state = backend.Status();
-        return state.Attached && state.Unlocked && state.FullyEncrypted &&
+        if (authenticatedGeneration is not { } authority) return false;
+        bool protectedVolume = state.Attached && state.Unlocked && state.FullyEncrypted &&
             state.ProtectionOn && state.ProtectorPresent &&
             string.Equals(state.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase);
+        bool verified = false;
+        try
+        {
+            verified = authenticatedOwner is { } expected &&
+                authenticatedOwnerHandle is { } owner && Native.IsRunning(owner) &&
+                Native.ObserveProcess(owner) == expected;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Write("cef-owner-observation-refused", new { type = error.GetType().Name });
+        }
+        if (authority.Observe(authenticatedOwner, unlockOwner, verified, protectedVolume))
+            return true;
+        ClearAuthenticatedOwner();
+        return false;
+    }
+
+    private bool CandidateAuthorityCurrent(object generation)
+    {
+        if (!ReferenceEquals(unlockOwner, generation) || authenticatedGeneration is null)
+            return false;
+        try { return RefreshAuthenticatedOwner(backend.Status()); }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            ClearAuthenticatedOwner();
+            throw;
+        }
     }
 
     private async Task MonitorCompletedPreflightAsync(CompletedPreflight expected)
