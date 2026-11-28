@@ -184,6 +184,26 @@ try
         first.RequireCurrent();
     }
     Console.WriteLine("PASS: broker-first profile lock ordering, contention and failed-open release");
+    // A fresh generation is required. Once an existing owner is retired,
+    // a matching later status must not revive it or release its lock early.
+    using (var retiredProfile = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        authority = false;
+        Reject(() => retiredProfile.VerifiedExclusiveEnvironment());
+        authority = true;
+        Reject(() => retiredProfile.VerifiedExclusiveEnvironment());
+        Reject(() =>
+        {
+            using var refused = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+                fixtureWindows, () => fixtureStatus, () => authority);
+        });
+    }
+    using (var freshProfile = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+        Check(freshProfile.VerifiedExclusiveEnvironment().Count == 7,
+            "Fresh profile owner could not acquire after retired owner disposal.");
+    Console.WriteLine("PASS: retired broker-first profile refuses revival and retains exclusive lock until disposal");
     using (var desktopLock = new FileStream(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
     using (var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
         fixtureWindows, () => fixtureStatus, () => authority))

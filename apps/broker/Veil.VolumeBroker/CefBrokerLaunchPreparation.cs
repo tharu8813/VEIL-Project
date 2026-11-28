@@ -74,6 +74,12 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
             var prepared = new CefBrokerLaunchPreparation(registeredPath, digest, authorityCurrent,
                 registration, image, token, verifier, owner, ownerHandle, profile);
             prepared.RequireCurrent();
+            // Before the broker allocates private Jobs or accepts a
+            // creation slot, prove that the fresh authenticated user's
+            // token can access the already provisioned fixed layout.
+            // This snapshot is discarded; native creation checks again.
+            _ = profile.GetEnvironmentSnapshot(token);
+            prepared.RequireCurrent();
             return prepared;
         }
         catch

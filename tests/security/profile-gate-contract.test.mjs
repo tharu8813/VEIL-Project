@@ -1077,7 +1077,7 @@ test('installed broker acquires existing exclusive profile lock without takeover
     assert.match(owner, /handle.IsClosed \|\| handle.IsInvalid[\s\S]*?RequireRegisteredProtection\(volume, readStatus\(\)\);\s*RequireRegularFile\(handle, path, volume\);\s*RequireRegisteredProtection\(volume, readStatus\(\)\);/);
     assert.doesNotMatch(owner, /CreateFileW|OpenDirectory|OpenRegularFile/);
     assert.match(profile, /AcquireExclusiveLock\(\)\s*\{\s*RequireCurrent\(\);[\s\S]*?profileLock = CefProtectedDirectoryLease.OpenExclusiveProfileLock\(\s*layout.ProductRoot, volume, readStatus\);\s*RequireCurrent\(\);[\s\S]*?retired = true;/);
-    assert.match(profile, /retired = disposed = true;\s*profileLock\?\.Dispose\(\);\s*log\?\.Dispose\(\);/);
+    assert.match(profile, /retired = disposed = true;[\s\S]*?try \{ log\?\.Dispose\(\); \}\s*finally\s*\{\s*try\s*\{\s*for \(int i = directories.Count - 1; i >= 0; --i\) directories\[i\].Dispose\(\);\s*\}\s*finally \{ profileLock\?\.Dispose\(\); \}/);
     assert.match(registration, /profile = CefProtectedProfileLease.OpenExclusive\(root, volumeGuid, windows, readStatus, authorityCurrent\);\s*var lease = new CefRegisteredProfileLease/);
     assert.match(fixture, /missingLock.AcquireExclusiveLock\(\)[\s\S]*?desktopLock = new FileStream\(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None\)[\s\S]*?owned.AcquireExclusiveLock\(\);[\s\S]*?CreateHardLinkW\(lockAlias, profileLockPath, IntPtr.Zero\)/);
 });
@@ -1124,7 +1124,7 @@ test('suspended broker creation owns the registered profile and uses only its to
     assert.match(prep, /catch\s*\{[\s\S]*?try \{ profile\?\.Dispose\(\); \}[\s\S]*?try \{ token\?\.Dispose\(\); \}[\s\S]*?registration\?\.Dispose\(\)/);
     assert.match(prep, /token.RequireCurrent\(\);\s*profile.RequireCurrent\(\);\s*token.RequireCurrent\(\);\s*if \(!authorityCurrent\(\)\)/);
     assert.match(prep, /creationAttempted = true;\s*RequireCurrent\(\);\s*var environment = profile.GetEnvironmentSnapshot\(token\);[\s\S]*?RequireCurrent\(\);\s*outer.CreateRetainedDiagnosticPair\(inner, token, path, environment, custody\);/);
-    assert.equal((prep.match(/profile.GetEnvironmentSnapshot\(token\)/g) ?? []).length, 3);
+    assert.equal((prep.match(/profile.GetEnvironmentSnapshot\(token\)/g) ?? []).length, 4);
     assert.match(prep, /outer.RequirePreparedPrivateRoot\(inner, owner, ownerHandle, identity, root\);\s*RequireCurrent\(\);\s*\}\);/);
     assert.match(prep, /session.RequirePreparedForHandoff\(\);[\s\S]*?_ = profile.GetEnvironmentSnapshot\(token\);\s*RequireCurrent\(\);\s*outer.RequirePreparedPrivateRoot\(inner, owner, ownerHandle, identity, root\);\s*RequireCurrent\(\);\s*return session;/);
     assert.doesNotMatch(prep, /GetEnvironmentVariables|new Dictionary<string, string\?>|ResumeThread|ResumeRetainedRoot|TakeVerified/);
@@ -1196,4 +1196,16 @@ test('isolated profile provisioning is terminal and cannot count as candidate ve
     assert.match(entry, /if \(prepareOnly\)\s*\{[\s\S]*?using \(var profile = session\.AcquireCefPreparationLease\(\)\)\s*profile\.PrepareLayoutOnly\(\);\s*result = ProfilePreparedOnly;\s*\}\s*else\s*\{\s*result = CefDisabledLaunchCoordinator\.RunPreflight\(session\);\s*\}/);
     assert.match(entry, /if \(result != expected \|\| notifications\.LockRequested\) return 1;\s*session\.CompleteCefPreflightCleanup\(\);[\s\S]*?return !notifications\.LockRequested && result == expected\s*\? \(int\)expected : 1;/);
     assert.doesNotMatch(program, /--cef-prepare-profile|PrepareLayoutOnly|ProfilePreparedOnly/);
+});
+
+
+test('broker verifies fresh user profile access before accepting a creation slot', async () => {
+    const prep = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    const open = prep.slice(prep.indexOf('internal static CefBrokerLaunchPreparation Open('), prep.indexOf('internal void RequireCurrent()'));
+    assert.match(open, /token = CefProcessTokenObserver.LaunchTokenLease.Acquire\(ownerHandle, owner\);[\s\S]*?profile = CefRegisteredProfileLease.OpenInstalled[\s\S]*?prepared.RequireCurrent\(\);[\s\S]*?_ = profile.GetEnvironmentSnapshot\(token\);\s*prepared.RequireCurrent\(\);\s*return prepared;/);
+    assert.match(open, /catch\s*\{[\s\S]*?try \{ profile\?\.Dispose\(\); \}[\s\S]*?try \{ token\?\.Dispose\(\); \}[\s\S]*?try \{ image\?\.Dispose\(\); \}[\s\S]*?finally \{ registration\?\.Dispose\(\); \}/);
+    assert.match(broker, /preparation = PrepareDiagnosticLaunch\(expectedGeneration, baselinePayload, baselineSignature\);\s*outer = CefBrokerOwnedJob.CreateDisabledCandidate\(\);\s*inner = CefBrokerOwnedJob.CreateDisabledCandidate\(\);[\s\S]*?diagnosticSession.RegisterAndActivate/);
+    assert.match(fixture, /using \(var retiredProfile = CefProtectedProfileLease.OpenExclusive[\s\S]*?authority = false;\s*Reject\(\(\) => retiredProfile.VerifiedExclusiveEnvironment\(\)\);\s*authority = true;\s*Reject\(\(\) => retiredProfile.VerifiedExclusiveEnvironment\(\)\);[\s\S]*?using var refused = CefProtectedProfileLease.OpenExclusive[\s\S]*?using \(var freshProfile = CefProtectedProfileLease.OpenExclusive[\s\S]*?freshProfile.VerifiedExclusiveEnvironment\(\).Count == 7/);
 });
