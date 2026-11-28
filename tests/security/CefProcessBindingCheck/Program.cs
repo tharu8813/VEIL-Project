@@ -3,6 +3,8 @@ using System.Diagnostics;
 using Veil.VolumeBroker;
 using Veil.Desktop;
 using System.Text.Json;
+using System.Security.AccessControl;
+using System.Security.Principal;
 
 if (args is ["--child"] or ["--child", "--type=renderer"])
 {
@@ -203,8 +205,45 @@ try
             if (!lockOwner.HasExited) { lockOwner.Kill(); lockOwner.WaitForExit(10000); }
         }
     }
+    // Actual fixture-token access, with no assertion of standard-user
+    // service execution or real BitLocker protection.
+    using (var fixtureUser = WindowsIdentity.GetCurrent())
+    {
+        using (var accessProfile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority))
+        {
+            accessProfile.AcquireExclusiveLock();
+            accessProfile.RequireUserAccess(fixtureUser.AccessToken);
+            if (Environment.GetEnvironmentVariable("VEIL_TEST_STANDARD_USER_PROFILE_ACCESS") == "1")
+            {
+                using var process = Process.GetCurrentProcess();
+                using var token = CefProcessTokenObserver.LaunchTokenLease.Acquire(process.SafeHandle,
+                    Native.ObserveProcess(process.SafeHandle));
+                token.RequireProfileAccess(accessProfile);
+                Console.WriteLine("PASS: opt-in standard-user token profile access");
+            }
+        }
+        var scratch = new DirectoryInfo(profileLayout.Scratch);
+        var originalAcl = scratch.GetAccessControl();
+        var deniedAcl = scratch.GetAccessControl();
+        deniedAcl.AddAccessRule(new FileSystemAccessRule(fixtureUser.User!, FileSystemRights.CreateFiles,
+            AccessControlType.Deny));
+        using (var deniedProfile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority))
+        {
+            deniedProfile.AcquireExclusiveLock();
+            try
+            {
+                scratch.SetAccessControl(deniedAcl);
+                Reject(() => deniedProfile.RequireUserAccess(fixtureUser.AccessToken));
+            }
+            finally { scratch.SetAccessControl(originalAcl); }
+            Reject(() => deniedProfile.VerifiedExclusiveEnvironment());
+        }
+    }
     File.Delete(profileLockPath);
     Console.WriteLine("PASS: existing exclusive profile lock, busy/missing/linked refusal and release");
+    Console.WriteLine("PASS: fixture-token directory access and denied add-file right (synthetic protection)");
     Directory.Delete(profileLayout.Cache);
     bool missingRefused = false;
     try { using var missing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,

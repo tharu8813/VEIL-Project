@@ -92,11 +92,12 @@ internal static class CefProcessTokenObserver
     }
 
     private static CefLaunchTokenSnapshot ReadTokenSnapshot(SafeAccessTokenHandle token,
-        ClientIdentity expected, bool inspectLaunchPrivileges)
+        ClientIdentity expected, bool inspectLaunchPrivileges, bool impersonation = false)
     {
         var before = ReadFixed<TokenStatistics>(token, 10); // TokenStatistics
-        if (before.TokenType != 1)
-            throw new UnauthorizedAccessException("Expected a primary process token.");
+        if (before.TokenType != (impersonation ? 2 : 1) ||
+            (impersonation && before.ImpersonationLevel != 2))
+            throw new UnauthorizedAccessException("Unexpected CEF token type or impersonation level.");
         using var identity = new WindowsIdentity(token.DangerousGetHandle());
         if (!string.Equals(identity.User?.Value, expected.UserSid, StringComparison.OrdinalIgnoreCase) ||
             ReadFixed<uint>(token, 12) != (uint)expected.SessionId)
@@ -113,7 +114,8 @@ internal static class CefProcessTokenObserver
         bool administratorGroup = inspectLaunchPrivileges && HasAdministratorGroup(token);
         bool standardPrivileges = inspectLaunchPrivileges && HasOnlyStandardPrivileges(token);
         var after = ReadFixed<TokenStatistics>(token, 10);
-        if (!SameToken(before, after) || before.AuthenticationId != after.AuthenticationId)
+        if (!SameToken(before, after) || before.AuthenticationId != after.AuthenticationId ||
+            (impersonation && after.ImpersonationLevel != 2))
             throw new UnauthorizedAccessException("CEF token changed during observation.");
         return new(new(expected, integrity, restricted, appContainer, elevated, elevationType),
             after.AuthenticationId, after.TokenId, after.ModifiedId, administratorGroup, standardPrivileges);
@@ -267,6 +269,32 @@ internal static class CefProcessTokenObserver
             CefLaunchTokenPolicy.RequireSame(duplicateSnapshot,
                 ReadTokenSnapshot(duplicate, sourceSnapshot.Token.Identity, true));
         }
+
+#if VEIL_CEF_BROKER || VEIL_CEF_PROFILE_ACCESS_TEST
+        // Synchronous, non-inheritable security-impersonation token.
+        // Never export it, adjust privileges or fall back to service access.
+        internal void RequireProfileAccess(CefProtectedProfileLease profile)
+        {
+            ArgumentNullException.ThrowIfNull(profile);
+            RequireCurrent();
+            if (!DuplicateTokenEx(duplicate, 0x000C, IntPtr.Zero, 2, 2, out var access))
+            {
+                int error = Marshal.GetLastWin32Error();
+                access?.Dispose();
+                throw new Win32Exception(error, "CEF profile access token unavailable.");
+            }
+            using (access)
+            {
+                var snapshot = ReadTokenSnapshot(access, sourceSnapshot.Token.Identity, true, impersonation: true);
+                CefLaunchTokenPolicy.RequireDuplicate(duplicateSnapshot, snapshot);
+                RequireCurrent();
+                profile.RequireUserAccess(access);
+                CefLaunchTokenPolicy.RequireSame(snapshot,
+                    ReadTokenSnapshot(access, sourceSnapshot.Token.Identity, true, impersonation: true));
+                RequireCurrent();
+            }
+        }
+#endif
 
 #if VEIL_CEF_BROKER
         // No primary-token handle leaves the lease. Custody must already

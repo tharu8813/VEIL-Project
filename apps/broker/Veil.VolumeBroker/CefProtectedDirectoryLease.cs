@@ -85,6 +85,38 @@ internal sealed class CefProtectedDirectoryLease : IDisposable
         RequireRegisteredProtection(volume, readStatus());
     }
 
+    // Actual requested access, under the synchronous user token scope.
+    // No create, write or delete operations. Compare to the retained pin.
+    internal void RequireUserAccess(bool writable)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        using var observed = OpenAccess(path, writable ? 0xA7u : 0xA0u);
+        RequireDirectory(observed, path, volume);
+        RequireSameIdentity(handle, observed);
+    }
+
+    private static SafeFileHandle OpenAccess(string path, uint rights)
+    {
+        var result = CreateFileW(path, rights, FileShare.ReadWrite, IntPtr.Zero,
+            FileMode.Open, 0x02000000 | 0x00200000, IntPtr.Zero);
+        if (result.IsInvalid)
+        {
+            int error = Marshal.GetLastWin32Error();
+            result.Dispose();
+            throw new Win32Exception(error, "CEF user filesystem access refused.");
+        }
+        return result;
+    }
+
+    private static void RequireSameIdentity(SafeFileHandle retained, SafeFileHandle observed)
+    {
+        var original = Identity(retained);
+        var current = Identity(observed);
+        if (original.VolumeSerial != current.VolumeSerial ||
+            original.IndexHigh != current.IndexHigh || original.IndexLow != current.IndexLow)
+            throw new UnauthorizedAccessException("CEF user filesystem object changed.");
+    }
+
     private static SafeFileHandle OpenDirectory(string path)
     {
         // FILE_READ_ATTRIBUTES, OPEN_EXISTING, BACKUP_SEMANTICS and
@@ -165,6 +197,14 @@ internal sealed class CefProtectedDirectoryLease : IDisposable
                 original.IndexHigh != observed.IndexHigh || original.IndexLow != observed.IndexLow)
                 throw new UnauthorizedAccessException("CEF regular file identity changed.");
             RequireRegisteredProtection(volume, readStatus());
+        }
+
+        internal void RequireUserAccess()
+        {
+            // READ_DATA | WRITE_DATA | APPEND_DATA | READ_ATTRIBUTES
+            using var observed = OpenAccess(path, 0x87);
+            RequireRegularFile(observed, path, volume);
+            RequireSameIdentity(handle, observed);
         }
 
         public void Dispose() => handle.Dispose();

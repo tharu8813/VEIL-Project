@@ -5,6 +5,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <DefineConstants>$(DefineConstants);VEIL_CEF_PROFILE_ACCESS_TEST</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/Native.cs" Link="Native.cs" />

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 using Veil.Desktop;
+using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
 
 namespace Veil.VolumeBroker;
 
@@ -208,6 +210,35 @@ internal sealed class CefProtectedProfileLease : IDisposable
         if (profileLock is null)
             throw new UnauthorizedAccessException("CEF exclusive profile ownership required.");
         return VerifiedEnvironment();
+    }
+
+    // Only fixed OPEN_EXISTING operations are impersonated. Backend and
+    // generation checks remain outside the user scope. This is a snapshot,
+    // not proof of descendant ACLs or future sandbox access.
+    internal void RequireUserAccess(SafeAccessTokenHandle access)
+    {
+        ArgumentNullException.ThrowIfNull(access);
+        RequireCurrent();
+        if (profileLock is null)
+            throw new UnauthorizedAccessException("CEF exclusive profile ownership required.");
+        try
+        {
+            if (access.IsInvalid || access.IsClosed)
+                throw new UnauthorizedAccessException("CEF profile access token unavailable.");
+            WindowsIdentity.RunImpersonated(access, () =>
+            {
+                int writableStart = directories.Count - 5; // product root + four fixed directories
+                for (int i = 0; i < directories.Count; ++i)
+                    directories[i].RequireUserAccess(i >= writableStart);
+                log?.RequireUserAccess();
+            });
+            RequireCurrent();
+        }
+        catch
+        {
+            retired = true;
+            throw;
+        }
     }
 
     public void Dispose()

@@ -1085,8 +1085,26 @@ test('registered environment requires the broker exclusive lock and separate pro
     const registration = await readFile('apps/broker/Veil.VolumeBroker/CefRegisteredProfileLease.cs', 'utf8');
     const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
     assert.match(profile, /VerifiedExclusiveEnvironment\(\)\s*\{\s*ObjectDisposedException.ThrowIf\(disposed, this\);\s*if \(profileLock is null\)\s*throw new UnauthorizedAccessException[\s\S]*?return VerifiedEnvironment\(\);/);
-    assert.match(registration, /GetEnvironmentSnapshot\(\)\s*\{\s*RequireCurrent\(\);\s*var environment = profile.VerifiedExclusiveEnvironment\(\);\s*RequireCurrent\(\);/);
+    assert.match(registration, /GetEnvironmentSnapshot\(\s*CefProcessTokenObserver.LaunchTokenLease token\)\s*\{[\s\S]*?RequireCurrent\(\);\s*try\s*\{\s*token.RequireProfileAccess\(profile\);\s*var environment = profile.VerifiedExclusiveEnvironment\(\);\s*RequireCurrent\(\);\s*token.RequireCurrent\(\);/);
     assert.match(fixture, /string lockAlias = Path.Combine\(profileFixture, "profile-lock-alias"\);\s*Check\(CreateHardLinkW\(lockAlias, profileLockPath, IntPtr.Zero\)/);
     assert.match(fixture, /args is \["--profile-lock-fixture", var lockPath\][\s\S]*?new FileStream\(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None\)/);
     assert.match(fixture, /ArgumentList = \{ "--profile-lock-fixture", profileLockPath \}[\s\S]*?Reject\(\(\) => refused.AcquireExclusiveLock\(\)\);[\s\S]*?lockOwner.WaitForExit\(10000\)[\s\S]*?Reject\(\(\) => refused.AcquireExclusiveLock\(\)\);[\s\S]*?fresh.AcquireExclusiveLock\(\);[\s\S]*?fresh.VerifiedExclusiveEnvironment\(\)/);
+});
+
+
+test('registered CEF environment requires actual user-token filesystem access without service fallback', async () => {
+    const observer = await readFile('apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs', 'utf8');
+    const pin = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedDirectoryLease.cs', 'utf8');
+    const profile = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedProfileLease.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    assert.match(observer, /RequireProfileAccess\(CefProtectedProfileLease profile\)[\s\S]*?RequireCurrent\(\);\s*if \(!DuplicateTokenEx\(duplicate, 0x000C, IntPtr.Zero, 2, 2, out var access\)\)[\s\S]*?ReadTokenSnapshot\(access, sourceSnapshot.Token.Identity, true, impersonation: true\);[\s\S]*?CefLaunchTokenPolicy.RequireDuplicate\(duplicateSnapshot, snapshot\);\s*RequireCurrent\(\);\s*profile.RequireUserAccess\(access\);[\s\S]*?CefLaunchTokenPolicy.RequireSame\(snapshot,[\s\S]*?RequireCurrent\(\);/);
+    assert.match(observer, /before.TokenType != \(impersonation \? 2 : 1\)[\s\S]*?before.ImpersonationLevel != 2/);
+    assert.match(pin, /OpenAccess\(path, writable \? 0xA7u : 0xA0u\);\s*RequireDirectory\(observed, path, volume\);\s*RequireSameIdentity\(handle, observed\);/);
+    assert.match(pin, /CreateFileW\(path, rights, FileShare.ReadWrite, IntPtr.Zero,\s*FileMode.Open, 0x02000000 \| 0x00200000/);
+    assert.match(pin, /OpenAccess\(path, 0x87\);\s*RequireRegularFile\(observed, path, volume\);\s*RequireSameIdentity\(handle, observed\);/);
+    const scope = profile.slice(profile.indexOf('WindowsIdentity.RunImpersonated(access,'), profile.indexOf('});', profile.indexOf('WindowsIdentity.RunImpersonated(access,')) + 3);
+    assert.match(scope, /directories\[i\].RequireUserAccess\(i >= writableStart\);[\s\S]*?log\?\.RequireUserAccess\(\);/);
+    assert.doesNotMatch(scope, /readStatus|authorityCurrent|RequireCurrent\(|File\.Write|CreateDirectory/);
+    assert.match(profile, /RequireUserAccess\(SafeAccessTokenHandle access\)[\s\S]*?RequireCurrent\(\);[\s\S]*?profileLock is null[\s\S]*?WindowsIdentity.RunImpersonated[\s\S]*?RequireCurrent\(\);[\s\S]*?catch\s*\{\s*retired = true;/);
+    assert.match(fixture, /FileSystemRights.CreateFiles,\s*AccessControlType.Deny[\s\S]*?scratch.SetAccessControl\(deniedAcl\);\s*Reject\(\(\) => deniedProfile.RequireUserAccess\(fixtureUser.AccessToken\)\);[\s\S]*?scratch.SetAccessControl\(originalAcl\)/);
 });

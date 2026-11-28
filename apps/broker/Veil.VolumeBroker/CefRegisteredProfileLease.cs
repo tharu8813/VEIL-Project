@@ -138,13 +138,27 @@ internal sealed class CefRegisteredProfileLease : IDisposable
         }
     }
 
-    internal IReadOnlyDictionary<string, string?> GetEnvironmentSnapshot()
+#if VEIL_CEF_BROKER || VEIL_CEF_PROFILE_ACCESS_TEST
+    internal IReadOnlyDictionary<string, string?> GetEnvironmentSnapshot(
+        CefProcessTokenObserver.LaunchTokenLease token)
     {
+        ArgumentNullException.ThrowIfNull(token);
         RequireCurrent();
-        var environment = profile.VerifiedExclusiveEnvironment();
-        RequireCurrent();
-        return environment;
+        try
+        {
+            token.RequireProfileAccess(profile);
+            var environment = profile.VerifiedExclusiveEnvironment();
+            RequireCurrent();
+            token.RequireCurrent();
+            return environment;
+        }
+        catch
+        {
+            retired = true;
+            throw;
+        }
     }
+#endif
 
     public void Dispose()
     {
