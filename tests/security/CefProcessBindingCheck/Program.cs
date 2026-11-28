@@ -475,6 +475,27 @@ foreach (var invalidReply in new[] {
     using var reply = JsonDocument.Parse(invalidReply);
     Check(!CefStageWire.IsProtectedStageReply(reply.RootElement, "synthetic-guid"), "Invalid staging response accepted.");
 }
+const string suspendedReply = """{"ok":true,"cefSuspendedProbeVerified":true,"volumeGuid":"synthetic-guid"}""";
+using (var reply = JsonDocument.Parse(suspendedReply))
+{
+    Check(CefStageWire.IsSuspendedProbeReply(reply.RootElement, "synthetic-guid"), "Valid suspended probe receipt refused.");
+    Check(!CefStageWire.IsSuspendedProbeReply(reply.RootElement, "other-guid"), "Wrong probe volume accepted.");
+}
+foreach (var badReceipt in new[] {
+    protectedReply,
+    """{"ok":true,"cefChildVerified":true}""",
+    """{"ok":false,"error":"LockRefused"}""",
+    suspendedReply.Replace("\"ok\":true", "\"ok\":false,\"ok\":true"),
+    suspendedReply.Replace("\"cefSuspendedProbeVerified\":true", "\"cefSuspendedProbeVerified\":false"),
+    suspendedReply.Replace("\"volumeGuid\":\"synthetic-guid\"", "\"volumeGuid\":123"),
+    suspendedReply.Replace("\"ok\":true", "\"ok\":true,\"extra\":true")
+})
+{
+    using var receipt = JsonDocument.Parse(badReceipt);
+    Check(!CefStageWire.IsSuspendedProbeReply(receipt.RootElement, "synthetic-guid"),
+        "Invalid terminal probe receipt accepted.");
+}
+Console.WriteLine("PASS: strict suspended probe receipt parsing");
 Console.WriteLine("PASS: strict CEF preflight protocol parsing and desktop staging wire");
 
 using var owner = Process.GetCurrentProcess();
