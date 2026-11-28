@@ -144,6 +144,24 @@ internal sealed class BrowserData
         }
     }
 
+    internal bool TryCommitSecuritySettings(SecuritySettings chosen, Func<bool> authorized, Func<bool> save)
+    {
+        if (!authorized()) return false;
+        var previous = Security;
+        bool committed = false;
+        try
+        {
+            var normalized = chosen with { Recovered = false };
+            Security = normalized == SecuritySettings.Default ? null : normalized;
+            committed = authorized() && save();
+            return committed;
+        }
+        finally
+        {
+            if (!committed) Security = previous;
+        }
+    }
+
     internal void Save(string path)
     {
         string temporary = path + ".new";

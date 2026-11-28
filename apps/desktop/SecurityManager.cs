@@ -119,15 +119,18 @@ internal sealed class SecurityManager
     /// Saves a new policy, then applies it to every open view (the engine uses it from the next
     /// navigation or download). If saving fails nothing changes; if applying fails the state says so.
     /// </summary>
-    internal void Change(SecuritySettings chosen, Action<SecuritySettings> persist)
+    internal bool Change(SecuritySettings chosen, Func<SecuritySettings, bool> persist)
     {
-        persist(chosen); // throws on failure: the old policy stays saved and applied
-        Saved = chosen with { Recovered = false };
+        var normalized = chosen with { Recovered = false };
+        // Refusal or exception must not change the live policy or enumerate views.
+        if (!persist(normalized)) return false;
+        Saved = normalized;
         var current = views().ToList();
         LastFailure = null;
         bool all = true;
         foreach (var view in current) all &= Set(view, Saved.SmartScreen);
         State = current.Count == 0 ? SmartScreenState.Pending : all ? SmartScreenState.Applied : SmartScreenState.Failed;
+        return true; // persistence committed; State separately reports application
     }
 
     /// <summary>Re-reads every open view; Failed when any view disagrees with the saved value.</summary>

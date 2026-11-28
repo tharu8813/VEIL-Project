@@ -1,4 +1,3 @@
-using System.IO;
 using System.Windows;
 
 namespace Veil.Desktop;
@@ -17,7 +16,8 @@ public partial class BrowserWindow
             var dialog = new SecuritySettingsDialog(this, session.Security);
             if (await ShowManagementPageAsync("veil://settings/security", dialog) != true || dialog.Result is not { } chosen ||
                 closing || session.IsEnding || session.EngineLost) return;
-            ChangeSecurity(chosen);
+            bool Authorized() => SettingsReady() && IsActive && session.SettingsUiOpen && session.PermissionUiOpen;
+            ChangeSecurity(chosen, Authorized);
         }
         catch (Exception error) when (RecoverableFailure.Is(error))
         {
@@ -31,26 +31,16 @@ public partial class BrowserWindow
     }
 
     /// <summary>Saves first, then applies to every open view; failures are shown, never ignored.</summary>
-    private bool ChangeSecurity(SecuritySettings chosen)
+    private bool ChangeSecurity(SecuritySettings chosen, Func<bool> authorized)
     {
-        try
-        {
-            session.Security.Change(chosen, settings =>
-            {
-                var before = data.Security;
-                data.Security = settings == SecuritySettings.Default ? null : settings;
-                try { data.Save(statePath); }
-                catch { data.Security = before; throw; }
-            });
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        if (!session.Security.Change(chosen, settings => session.TryCommitSecuritySettings(settings, authorized)))
         {
             Status.Text = "보안 설정을 저장하지 못했습니다. 이전 설정이 그대로 적용됩니다.";
             UpdateSecurityIndicators();
             return false;
         }
         UpdateSecurityIndicators();
-        Status.Text = session.Security.State == SmartScreenState.Failed
+        Status.Text = session.Security.State != SmartScreenState.Applied
             ? session.Security.Describe()
             : chosen.SmartScreen ? "SmartScreen을 켰습니다." : "SmartScreen을 껐습니다. 피싱·악성 사이트 경고를 받지 못합니다.";
         return session.Security.State != SmartScreenState.Failed;

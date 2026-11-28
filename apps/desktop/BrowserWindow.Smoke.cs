@@ -1944,7 +1944,52 @@ public partial class BrowserWindow
                     Check((await security.Threats.CheckAsync(new Uri("https://example.test/"), TimeSpan.FromSeconds(1))).Verdict == ThreatVerdict.Unknown,
                         "no engine gives Unknown, not safe");
 
-                    // A save failure changes nothing (saved or applied).
+                    // A save refusal or failure changes nothing (saved or applied).
+                    Check(!security.Change(new SecuritySettings(!want), _ => false) &&
+                        security.Saved.SmartScreen == want, "save refusal keeps live security policy");
+                    AllViews(want, "after refused save");
+                    var originalSecurity = data.Security;
+                    Check(!session.TryCommitSecuritySettings(new SecuritySettings(!want), () => false) &&
+                        ReferenceEquals(data.Security, originalSecurity), "session refuses unauthorized security write");
+                    var securityData = new BrowserData { Security = SecuritySettings.Default with { Recovered = true } };
+                    var recovered = securityData.Security;
+                    int securityWrites = 0, securityChecks = 0, viewEnumerations = 0;
+                    bool SecurityWrite() { securityWrites++; return true; }
+                    var isolatedSecurity = new SecurityManager(recovered, () =>
+                    {
+                        viewEnumerations++;
+                        return [];
+                    });
+                    bool CommitSecurity(SecuritySettings settings, Func<bool> authorized, Func<bool> write) =>
+                        securityData.TryCommitSecuritySettings(settings, authorized, write);
+                    Check(!isolatedSecurity.Change(new SecuritySettings(false), settings =>
+                        CommitSecurity(settings, () => ++securityChecks == 1, SecurityWrite)) &&
+                        securityWrites == 0 && viewEnumerations == 0 &&
+                        ReferenceEquals(securityData.Security, recovered) && ReferenceEquals(isolatedSecurity.Saved, recovered),
+                        "revoked security authority preserves saved and applied policy without view access");
+                    Check(!isolatedSecurity.Change(new SecuritySettings(false), settings =>
+                        CommitSecurity(settings, () => true, () => false)) &&
+                        viewEnumerations == 0 && ReferenceEquals(securityData.Security, recovered),
+                        "security write refusal restores recovered marker and skips engine application");
+                    bool securityException = false;
+                    try
+                    {
+                        isolatedSecurity.Change(new SecuritySettings(false), settings =>
+                            CommitSecurity(settings, () => true, () => throw new IOException("Synthetic security write failure")));
+                    }
+                    catch (IOException) { securityException = true; }
+                    Check(securityException && viewEnumerations == 0 && ReferenceEquals(securityData.Security, recovered) &&
+                        ReferenceEquals(isolatedSecurity.Saved, recovered), "security write exception rolls back before engine access");
+                    Check(isolatedSecurity.Change(new SecuritySettings(false), settings =>
+                        CommitSecurity(settings, () => true, SecurityWrite)) &&
+                        securityWrites == 1 && viewEnumerations == 1 && securityData.Security is { SmartScreen: false, Recovered: false } &&
+                        isolatedSecurity.Saved.SmartScreen == false && isolatedSecurity.State == SmartScreenState.Pending,
+                        "security commit precedes application and reports pending without views");
+                    Check(isolatedSecurity.Change(SecuritySettings.Default, settings =>
+                        CommitSecurity(settings, () => true, SecurityWrite)) &&
+                        securityWrites == 2 && viewEnumerations == 2 && securityData.Security is null &&
+                        isolatedSecurity.Saved.SmartScreen, "security default encoding restores SmartScreen on");
+
                     try { security.Change(new SecuritySettings(!want), _ => throw new IOException("simulated")); Check(false, "save failure surfaced"); }
                     catch (IOException) { checks.Add("save failure surfaced"); }
                     Check(security.Saved.SmartScreen == want, "save failure keeps saved policy");
@@ -1953,7 +1998,7 @@ public partial class BrowserWindow
                     if (Environment.GetEnvironmentVariable("VEIL_TEST_SECURITY_SET") is { } set)
                     {
                         bool value = set == "on";
-                        Check(ChangeSecurity(new SecuritySettings(value)), $"change to {set} applied");
+                        Check(ChangeSecurity(new SecuritySettings(value), () => smokeRun && SettingsReady()), $"change to {set} applied");
                         AllViews(value, "after change");
                         var stored = BrowserData.Load(statePath).Security ?? SecuritySettings.Default;
                         Check(stored.SmartScreen == value && !stored.Recovered, "change saved to profile state");
