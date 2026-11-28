@@ -452,8 +452,9 @@ try
             (libraryStage, FileSystemRights.AppendData) })
         {
             var info = new FileInfo(file);
-            var originalFileAcl = info.GetAccessControl();
-            var deniedFileAcl = info.GetAccessControl();
+            var originalFileAcl = info.GetAccessControl(AccessControlSections.Access);
+            byte[] originalFileDescriptor = originalFileAcl.GetSecurityDescriptorBinaryForm();
+            var deniedFileAcl = info.GetAccessControl(AccessControlSections.Access);
             deniedFileAcl.AddAccessRule(new FileSystemAccessRule(fixtureUser.User!, deniedRight, AccessControlType.Deny));
             using var deniedLibraryProfile = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
                 fixtureWindows, () => fixtureStatus, () => authority);
@@ -463,14 +464,23 @@ try
                 info.SetAccessControl(deniedFileAcl);
                 Reject(() => deniedInspection.RequireUserAccess(fixtureUser.AccessToken));
             }
-            finally { info.SetAccessControl(originalFileAcl); }
+            finally
+            {
+                // Reapplying an unchanged GetAccessControl object does not
+                // mark its DACL dirty. Explicitly restore the saved descriptor.
+                originalFileAcl.SetSecurityDescriptorBinaryForm(originalFileDescriptor, AccessControlSections.Access);
+                info.SetAccessControl(originalFileAcl);
+                Check(info.GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access) ==
+                    originalFileAcl.GetSecurityDescriptorSddlForm(AccessControlSections.Access), "Library file DACL restoration failed.");
+            }
             Reject(() => deniedInspection.RequireUserAccess(fixtureUser.AccessToken));
         }
         foreach (var deniedRight in new[] { FileSystemRights.CreateFiles, FileSystemRights.DeleteSubdirectoriesAndFiles })
         {
             var directory = new DirectoryInfo(profileLayout.EngineRoot);
-            var originalDirectoryAcl = directory.GetAccessControl();
-            var deniedDirectoryAcl = directory.GetAccessControl();
+            var originalDirectoryAcl = directory.GetAccessControl(AccessControlSections.Access);
+            byte[] originalDirectoryDescriptor = originalDirectoryAcl.GetSecurityDescriptorBinaryForm();
+            var deniedDirectoryAcl = directory.GetAccessControl(AccessControlSections.Access);
             deniedDirectoryAcl.AddAccessRule(new FileSystemAccessRule(fixtureUser.User!, deniedRight, AccessControlType.Deny));
             using var deniedLibraryProfile = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
                 fixtureWindows, () => fixtureStatus, () => authority);
@@ -480,17 +490,30 @@ try
                 directory.SetAccessControl(deniedDirectoryAcl);
                 Reject(() => deniedInspection.RequireUserAccess(fixtureUser.AccessToken));
             }
-            finally { directory.SetAccessControl(originalDirectoryAcl); }
+            finally
+            {
+                originalDirectoryAcl.SetSecurityDescriptorBinaryForm(originalDirectoryDescriptor, AccessControlSections.Access);
+                directory.SetAccessControl(originalDirectoryAcl);
+                Check(directory.GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access) ==
+                    originalDirectoryAcl.GetSecurityDescriptorSddlForm(AccessControlSections.Access), "Library directory DACL restoration failed.");
+            }
             Reject(() => deniedInspection.RequireCurrent());
         }
+        // A new exclusive lifetime must succeed after restoration, whereas
+        // every earlier refused lifetime remains permanently retired.
+        using (var restoredProfile = CefProtectedProfileLease.OpenExclusive(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority))
+        using (var restoredInspection = restoredProfile.InspectLibraryFiles())
+            restoredInspection.RequireUserAccess(fixtureUser.AccessToken);
         Check(File.ReadAllText(libraryPath) == "committed-acl-synthetic" &&
             File.ReadAllText(libraryStage) == "staged-acl-synthetic", "Library access probes changed data.");
         File.Delete(libraryPath);
         File.Delete(libraryStage);
         Console.WriteLine("PASS: CEF library user-token data and directory ACL refusal (synthetic protection)");
         var scratch = new DirectoryInfo(profileLayout.Scratch);
-        var originalAcl = scratch.GetAccessControl();
-        var deniedAcl = scratch.GetAccessControl();
+        var originalAcl = scratch.GetAccessControl(AccessControlSections.Access);
+        byte[] originalScratchDescriptor = originalAcl.GetSecurityDescriptorBinaryForm();
+        var deniedAcl = scratch.GetAccessControl(AccessControlSections.Access);
         deniedAcl.AddAccessRule(new FileSystemAccessRule(fixtureUser.User!, FileSystemRights.CreateFiles,
             AccessControlType.Deny));
         using (var deniedProfile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
@@ -502,7 +525,13 @@ try
                 scratch.SetAccessControl(deniedAcl);
                 Reject(() => deniedProfile.RequireUserAccess(fixtureUser.AccessToken));
             }
-            finally { scratch.SetAccessControl(originalAcl); }
+            finally
+            {
+                originalAcl.SetSecurityDescriptorBinaryForm(originalScratchDescriptor, AccessControlSections.Access);
+                scratch.SetAccessControl(originalAcl);
+                Check(scratch.GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access) ==
+                    originalAcl.GetSecurityDescriptorSddlForm(AccessControlSections.Access), "Scratch DACL restoration failed.");
+            }
             Reject(() => deniedProfile.VerifiedExclusiveEnvironment());
         }
     }

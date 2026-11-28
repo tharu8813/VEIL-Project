@@ -1470,3 +1470,13 @@ test('prospective library access uses retained user token and actual fixed file 
     assert.doesNotMatch(broker, /\bRequireLibraryAccess\s*\(/);
 });
 
+
+
+test('Windows ACL denial fixtures explicitly restore the saved DACL and verify fresh authority', async () => {
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    assert.match(fixture, /byte\[\] originalFileDescriptor = originalFileAcl.GetSecurityDescriptorBinaryForm\(\);[\s\S]*?finally\s*\{\s*(?:\/\/[^\n]*\s*)*originalFileAcl.SetSecurityDescriptorBinaryForm\(originalFileDescriptor, AccessControlSections.Access\);\s*info.SetAccessControl\(originalFileAcl\);[\s\S]*?Library file DACL restoration failed/);
+    assert.match(fixture, /byte\[\] originalDirectoryDescriptor = originalDirectoryAcl.GetSecurityDescriptorBinaryForm\(\);[\s\S]*?finally\s*\{\s*originalDirectoryAcl.SetSecurityDescriptorBinaryForm\(originalDirectoryDescriptor, AccessControlSections.Access\);\s*directory.SetAccessControl\(originalDirectoryAcl\);[\s\S]*?Library directory DACL restoration failed/);
+    assert.match(fixture, /using \(var restoredProfile = CefProtectedProfileLease.OpenExclusive[\s\S]*?using \(var restoredInspection = restoredProfile.InspectLibraryFiles\(\)\)\s*restoredInspection.RequireUserAccess\(fixtureUser.AccessToken\);\s*Check\(File.ReadAllText\(libraryPath\)/);
+    assert.match(fixture, /byte\[\] originalScratchDescriptor = originalAcl.GetSecurityDescriptorBinaryForm\(\);[\s\S]*?finally\s*\{\s*originalAcl.SetSecurityDescriptorBinaryForm\(originalScratchDescriptor, AccessControlSections.Access\);\s*scratch.SetAccessControl\(originalAcl\);[\s\S]*?Scratch DACL restoration failed/);
+});
+
