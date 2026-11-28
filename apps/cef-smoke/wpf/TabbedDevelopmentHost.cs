@@ -17,6 +17,9 @@ internal sealed class TabbedDevelopmentHost
         internal ulong ClosingId;
         internal bool Closing;
         internal string LastSource = "";
+        internal string Status = "";
+        internal ulong PendingNavigationId;
+        internal ulong LastNavigationId;
     }
 
     private readonly Application app = new() { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -142,11 +145,34 @@ internal sealed class TabbedDevelopmentHost
         view.NavigationStarting += (_, request) =>
         {
             // Native and managed loopback restrictions remain in force.
-            request.Cancel = tab.Closing || shuttingDown;
+            request.Cancel = !AcceptTabEvent(tab);
+            if (request.Cancel) return;
+            // Redirects retain the current ID; stale callbacks cannot publish
+            // a new loading state for a completed or newer request.
+            if (request.NavigationId == 0 ||
+                (request.IsRedirected && tab.PendingNavigationId != request.NavigationId) ||
+                (!request.IsRedirected && request.NavigationId <= tab.LastNavigationId))
+            {
+                request.Cancel = true;
+                return;
+            }
+            tab.PendingNavigationId = request.NavigationId;
+            tab.LastNavigationId = request.NavigationId;
+            SetTabStatus(tab, "Loading...");
+        };
+        view.NavigationCompleted += (_, completed) =>
+        {
+            if (!AcceptTabEvent(tab) || completed.NavigationId == 0 ||
+                tab.PendingNavigationId != completed.NavigationId) return;
+            tab.PendingNavigationId = 0;
+            SetTabStatus(tab, completed.IsCanceled ? "Navigation canceled." :
+                completed.IsSuccess ? "Page loaded." : "Page navigation failed.");
         };
         view.ProcessFailed += (_, failure) =>
         {
-            status.Text = "CEF child process failed.";
+            if (!AcceptTabEvent(tab)) return;
+            tab.PendingNavigationId = 0;
+            SetTabStatus(tab, "CEF child process failed.");
             if (freshProfileProbe && expectLoginRendererFailure && phase == 81 && tab == first &&
                 view.NativeHandle == firstId && failure.Scope == EngineFailureScope.PageOrChildProcess &&
                 CefNative.VeilCefLoginProbeStatus(firstId) == -1 && loginRendererFailures == 0)
@@ -167,6 +193,16 @@ internal sealed class TabbedDevelopmentHost
         return tab;
     }
 
+    private bool AcceptTabEvent(Tab tab) =>
+        !shuttingDown && !tab.Closing && tabs.Contains(tab);
+
+    private void SetTabStatus(Tab tab, string message)
+    {
+        if (!AcceptTabEvent(tab)) return;
+        tab.Status = message;
+        if (ReferenceEquals(active, tab)) status.Text = message;
+    }
+
     private void Select(Tab tab)
     {
         if (shuttingDown || tab.Closing || !tabs.Contains(tab)) return;
@@ -183,6 +219,7 @@ internal sealed class TabbedDevelopmentHost
         }
         address.Text = tab.View.Source;
         tab.LastSource = tab.View.Source;
+        status.Text = tab.Status;
         RefreshToolbar();
     }
 
@@ -192,7 +229,7 @@ internal sealed class TabbedDevelopmentHost
             CefNative.VeilCefClosed(tab.View.NativeHandle) != 0) return;
         try { operation(tab.View); }
         catch (Exception error) when (error is ArgumentException or InvalidOperationException)
-        { status.Text = error.Message; }
+        { SetTabStatus(tab, error.Message); }
     }
 
     private void NavigateAddress() => WithActive(view => view.Navigate(address.Text));
@@ -202,6 +239,7 @@ internal sealed class TabbedDevelopmentHost
         if (tab.Closing || !tabs.Contains(tab)) return;
         tab.Closing = true;
         tab.View.InvalidateFixtureLoginContext();
+        tab.PendingNavigationId = 0;
         tab.ClosingId = tab.View.NativeHandle;
         tab.Header.IsEnabled = false;
         CefNative.VeilCefCancelOwnedAttachment(tab.ClosingId);
@@ -244,7 +282,11 @@ internal sealed class TabbedDevelopmentHost
                     active = null;
                     var next = tabs.FirstOrDefault(candidate => !candidate.Closing);
                     if (next is not null && !shuttingDown) Select(next);
-                    else address.Clear();
+                    else
+                    {
+                        address.Clear();
+                        status.Text = "";
+                    }
                 }
                 continue;
             }
@@ -321,7 +363,9 @@ internal sealed class TabbedDevelopmentHost
             NavigateAddress();
             phase = 2;
         }
-        else if (phase == 2 && first?.View.DocumentTitle == "TAB_FIRST" && second?.View.DocumentTitle == "TAB_SECOND")
+        else if (phase == 2 && first?.View.DocumentTitle == "TAB_FIRST" && second?.View.DocumentTitle == "TAB_SECOND" &&
+                 first.PendingNavigationId == 0 && second.PendingNavigationId == 0 &&
+                 first.Status == "Page loaded." && second.Status == "Page loaded.")
         {
             Select(first);
             if (address.Text != Url("/tabs-first") || first.View.NativeHandle != firstId ||
@@ -331,6 +375,16 @@ internal sealed class TabbedDevelopmentHost
             if (address.Text != Url("/tabs-second") || first.View.NativeHandle != firstId ||
                 second.View.NativeHandle != secondId) { Fail(); return; }
             Log("Tab selection preserved both native identities and active address");
+            // Exercise the same status publication path used by real callbacks.
+            // This is a synthetic background status update, not a renderer crash.
+            SetTabStatus(first, "Synthetic background status.");
+            if (status.Text != "Page loaded." || active != second) { Fail(); return; }
+            Select(first);
+            if (status.Text != "Synthetic background status.") { Fail(); return; }
+            Select(second);
+            if (status.Text != "Page loaded.") { Fail(); return; }
+            SetTabStatus(first, "Page loaded.");
+            Log("Per-tab completion state and synthetic background status remained isolated");
             firstDomains = ((IEngineSiteDataReader)first.View).GetCookieDomainsAsync();
             secondDomains = ((IEngineSiteDataReader)second.View).GetCookieDomainsAsync();
             phase = 11;
