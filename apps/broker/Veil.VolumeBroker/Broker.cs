@@ -325,9 +325,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     CefChildPreflight.Check(client, preflightOwner, request.ChildHandle!.Value,
                         childPath, childHash);
                     status = backend.Status();
-                    if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
-                        !status.ProtectionOn || !status.ProtectorPresent ||
-                        !Native.IsRunning(preflightOwner))
+                    if (!RefreshAuthenticatedOwner(status) || !Native.IsRunning(preflightOwner))
                         code = "NotAuthenticatedOwner";
                     break;
                 case BrokerCommand.StageCefChild:
@@ -356,8 +354,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     try
                     {
                         status = backend.Status();
-                        if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
-                            !status.ProtectionOn || !status.ProtectorPresent ||
+                        if (!RefreshAuthenticatedOwner(status) ||
                             !Native.IsRunning(stagingOwner) || candidate.IsExpired)
                         {
                             code = "NotAuthenticatedOwner";
@@ -399,8 +396,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                             break;
                         }
                         status = backend.Status();
-                        if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
-                            !status.ProtectionOn || !status.ProtectorPresent || Expired(receipt) ||
+                        if (!RefreshAuthenticatedOwner(status) || Expired(receipt) ||
                             !Native.SameLiveProcess(confirmOwner, pipeClient) || !receipt.Job.HasNoActiveProcesses())
                             code = "CefChildRejected";
                         else confirmed = true;
@@ -469,6 +465,11 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                             authenticatedOwner = client;
                             authenticatedOwnerHandle = ownerHandle;
                             authenticatedGeneration = new CefAuthenticatedGeneration(client, unlockOwner!);
+                            if (!RefreshAuthenticatedOwner(status))
+                            {
+                                log.Write("rejected-unlock-lock", new { result = LockCode(backend.Lock()) ?? "ok" });
+                                code = "NotAuthenticatedOwner";
+                            }
                         }
                     }
                     else
