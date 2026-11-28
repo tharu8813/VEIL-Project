@@ -1,4 +1,3 @@
-using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -105,15 +104,9 @@ public partial class BrowserWindow
         {
             var dialog = new SearchSettingsDialog(this, data.SearchEngine, data.LocalAddressSuggestions != false);
             if (await ShowManagementPageAsync("veil://settings/search", dialog) != true || !SettingsReady() || !SearchPolicy.IsKnown(dialog.Engine)) return;
-            var previous = data.SearchEngine;
-            var previousLocal = data.LocalAddressSuggestions;
-            data.SearchEngine = dialog.Engine == SearchPolicy.Default ? null : dialog.Engine;
-            data.LocalAddressSuggestions = dialog.LocalSuggestions ? null : false;
-            try { data.Save(statePath); }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            bool Authorized() => SettingsReady() && IsActive && session.SettingsUiOpen && session.PermissionUiOpen;
+            if (!session.TryCommitSearchSettings(dialog.Engine, dialog.LocalSuggestions, Authorized))
             {
-                data.SearchEngine = previous;
-                data.LocalAddressSuggestions = previousLocal;
                 Status.Text = "검색 설정을 저장하지 못했습니다. 이전 설정을 유지합니다.";
                 return;
             }

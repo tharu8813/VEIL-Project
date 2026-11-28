@@ -59,6 +59,34 @@ public partial class BrowserWindow
                 localData.Bookmarks.RemoveAt(1);
                 localData.LocalAddressSuggestions = false;
                 Check(SearchPolicy.Suggest(localData, "synthetic").Count == 0, "local suggestions disabled");
+                int searchWrites = 0, searchAuthorization = 0;
+                bool SearchWrite() { searchWrites++; return true; }
+                Check(!localData.TryCommitSearchSettings("unknown", true, () => true, SearchWrite) &&
+                    !localData.TryCommitSearchSettings("google", true, () => false, SearchWrite) &&
+                    searchWrites == 0 && localData.SearchEngine is null && localData.LocalAddressSuggestions == false,
+                    "search settings reject invalid provider and denied authority without write");
+                Check(!localData.TryCommitSearchSettings("google", true, () => ++searchAuthorization == 1, SearchWrite) &&
+                    searchWrites == 0 && localData.SearchEngine is null && localData.LocalAddressSuggestions == false,
+                    "search settings restore both fields when authorization is revoked");
+                Check(!localData.TryCommitSearchSettings("google", true, () => true, () => false) &&
+                    localData.SearchEngine is null && localData.LocalAddressSuggestions == false,
+                    "search settings restore both fields after write refusal");
+                bool searchException = false;
+                try
+                {
+                    localData.TryCommitSearchSettings("google", true, () => true,
+                        () => throw new IOException("Synthetic search write failure"));
+                }
+                catch (IOException) { searchException = true; }
+                Check(searchException && localData.SearchEngine is null && localData.LocalAddressSuggestions == false,
+                    "search settings restore both fields after write exception");
+                Check(localData.TryCommitSearchSettings("google", true, () => true, SearchWrite) &&
+                    searchWrites == 1 && localData.SearchEngine == "google" && localData.LocalAddressSuggestions is null &&
+                    SearchPolicy.Suggest(localData, "synthetic").Count == 1,
+                    "search settings commit provider and enable local suggestions together");
+                Check(localData.TryCommitSearchSettings(SearchPolicy.Default, false, () => true, SearchWrite) &&
+                    searchWrites == 2 && localData.SearchEngine is null && localData.LocalAddressSuggestions == false,
+                    "search settings preserve default provider and disabled suggestions encoding");
                 var parentFolder = new BookmarkFolder(Guid.NewGuid(), "Parent");
                 var childFolder = new BookmarkFolder(Guid.NewGuid(), "Child", parentFolder.Id);
                 localData.BookmarkFolders.AddRange([parentFolder, childFolder]);

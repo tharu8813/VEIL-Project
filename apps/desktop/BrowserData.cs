@@ -83,6 +83,28 @@ internal sealed class BrowserData
         }
     }
 
+    // Search provider and local suggestions are a single preference transaction.
+    // The session supplies authorization and the existing profile writer.
+    internal bool TryCommitSearchSettings(string? engine, bool localSuggestions,
+        Func<bool> authorized, Func<bool> save)
+    {
+        if (!SearchPolicy.IsKnown(engine) || !authorized()) return false;
+        var previous = (SearchEngine, LocalAddressSuggestions);
+        bool committed = false;
+        try
+        {
+            SearchEngine = engine == SearchPolicy.Default ? null : engine;
+            LocalAddressSuggestions = localSuggestions ? null : false;
+            committed = authorized() && save();
+            return committed;
+        }
+        finally
+        {
+            if (!committed)
+                (SearchEngine, LocalAddressSuggestions) = previous;
+        }
+    }
+
     internal void Save(string path)
     {
         string temporary = path + ".new";
