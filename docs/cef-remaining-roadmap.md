@@ -191,3 +191,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - 정확한 제목을 관측한 뒤 모순되는 제목/페이지 콜백이 오면 성공을 영구 거부한다. 알려지지 않은 브라우저의 load/title 콜백 또는 생성 전 콜백은 모호한 수명으로 분류하여 정상 shutdown 증거를 금지한다. 초기 제목 변경은 허용한다. 닫기 메시지 펌프에서도 권한을 주기적으로 확인하고 철회 후 닫기 시도는 계속하되 성공을 금지한다. 합성 회귀 6개 추가.
 - 실제 CEF 콜백 순서/닫기, Windows native CI 및 보호 VM 실행은 이 변경 시점에 NOT RUN. #265의 진입점 차단, Job cap=1, GPU/Utility/Network 거부와 제품 WebView2 유지. P2-03~05 미완료.
+
+### P2-05 주기 감시 역할 정책 일치 (미완료)
+
+- 브로커의 활성 진단 세션 주기 감시와 IPC 실행 권한 확인에 동일한 `RequireMemberRole` 검사를 적용한다. 두 private Job에서 독립 수집한 retained handle이 유지되는 동안 모든 멤버에 Browser-root/Renderer-descendant 잠정 정책을 적용한다. GPU/Utility/Network/Unknown 및 잘못된 역할 또는 token decision은 거부하며, 기존 관측 실패→slot retirement→drain 경로를 사용한다. 역할/결정 조합 및 미정의 enum, GPU 관측 후 slot 정리 합성 시험과 source contract를 추가했다.
+- #265/#266의 직전 정확한 head Windows/native CI는 PASS, 독립 리뷰는 없음. 새 CI와 실제 보호 VM, 연속 admission, 실제 CEF 역할별 sandbox 기준은 NOT RUN. 샘플링은 전체 수명 보안 증명이 아니다. 생산 Job cap=1, borrowed activation 차단 및 WebView2 제품 시작을 변경하지 않는다. P2-03~05 미완료.

@@ -57,4 +57,11 @@ internal static class CefRuntimeRolePolicy
         CefRoleTokenDecision decision) =>
         decision == CefRoleTokenDecision.MatchesProvisionalBaseline &&
         (isRoot ? role == CefObservedRole.Browser : role == CefObservedRole.Renderer);
+
+    internal static void RequireProvisionalRole(bool isRoot, CefObservedRole role,
+        CefRoleTokenDecision decision)
+    {
+        if (!MatchesProvisionalRole(isRoot, role, decision))
+            throw new UnauthorizedAccessException("CEF runtime role policy unavailable.");
+    }
 }
