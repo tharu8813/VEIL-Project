@@ -125,6 +125,9 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
         creationAttempted = true;
         RequireCurrent();
         var environment = profile.GetEnvironmentSnapshot(token);
+        // Access inspection may take time. Revalidate all retained launch
+        // prerequisites, not just profile and token, before native creation.
+        RequireCurrent();
         outer.CreateRetainedDiagnosticPair(inner, token, path, environment, custody);
         custody.VerifyRetainedRoot(root =>
         {
@@ -140,6 +143,7 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
             _ = profile.GetEnvironmentSnapshot(token);
             RequireCurrent();
             outer.RequirePreparedPrivateRoot(inner, owner, ownerHandle, identity, root);
+            RequireCurrent();
         });
         // Keep preparation, Jobs and custody alive. No ownership transfer,
         // activation or cleanup/relock authorization occurs here.
@@ -167,6 +171,12 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
                     return (generation, registration, true);
                 }, verifier, child, borrowedCreation: creation);
             session.RequirePreparedForHandoff();
+            // The successor remains suspended and unpublished. Recheck
+            // the original user's filesystem access before handoff, not
+            // merely the broker's ability to inspect the retained paths.
+            _ = profile.GetEnvironmentSnapshot(token);
+            RequireCurrent();
+            outer.RequirePreparedPrivateRoot(inner, owner, ownerHandle, identity, root);
             RequireCurrent();
             return session;
         });
