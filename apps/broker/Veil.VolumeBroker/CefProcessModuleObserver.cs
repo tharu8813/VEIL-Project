@@ -101,6 +101,11 @@ internal sealed class CefBoundDiagnosticSession
             root.CreatedFileTime < owner.CreatedFileTime ||
             !string.Equals(root.ImagePath, registration.ImagePath, StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException("CEF diagnostic session identity mismatch.");
+        // The trusted caller supplies an independently acquired desktop Job.
+        // Before accepting ownership, verify initial root-only containment.
+        registration.RequireCurrent();
+        brokerJob.RequireInitialNestedBinding(desktopJob, owner, ownerHandle, root, rootHandle);
+        registration.RequireCurrent();
         guard = new(owner, generation, registration);
         readContext = () =>
         {
