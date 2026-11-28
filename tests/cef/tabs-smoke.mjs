@@ -243,6 +243,7 @@ try {
   assert.ok(!requests.includes('/tabs-stale'));
   assert.ok(!requests.includes('/tabs-popup-denied-target'), 'Denied popup must not reach HTTP');
   assert.match(evidence, /Blocked popup count visible only for the owning tab; no extra native view/);
+  assert.match(evidence, /Zoom readback followed selected distinct-origin view and reset to 100 percent/);
   assert.equal(cookieChecks.get('/tabs-after-close'), '', 'Deleted domain must not send its cookie');
   assert.equal(cookieChecks.get('/tabs-preserved'), 'fixture_second=synthetic-two', 'Other domain must retain its synthetic cookie');
   assert.equal(cookieChecks.get('/tabs-cleared-first'), '', 'Profile cookie clear must remove first domain cookie');
