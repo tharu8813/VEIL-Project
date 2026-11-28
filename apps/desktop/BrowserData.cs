@@ -126,6 +126,24 @@ internal sealed class BrowserData
         }
     }
 
+    // Persist only the next-start choice; the running session owns its applied network policy.
+    internal bool TryCommitNetworkSettings(NetworkSettings chosen, Func<bool> authorized, Func<bool> save)
+    {
+        if (chosen.Problem is not null || !authorized()) return false;
+        var previous = Network;
+        bool committed = false;
+        try
+        {
+            Network = chosen == NetworkSettings.Standard ? null : chosen;
+            committed = authorized() && save();
+            return committed;
+        }
+        finally
+        {
+            if (!committed) Network = previous;
+        }
+    }
+
     internal void Save(string path)
     {
         string temporary = path + ".new";

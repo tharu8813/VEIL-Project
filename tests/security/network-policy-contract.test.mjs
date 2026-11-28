@@ -64,3 +64,17 @@ test('old or future TCP probe timestamps cannot claim current protection', () =>
     assert.match(policy, /TimeSpan age = \(now \?\? DateTimeOffset\.Now\) - checkedAt\.Value;/);
     assert.match(policy, /age < TimeSpan\.Zero \|\| age > TimeSpan\.FromSeconds\(30\)/);
 });
+
+
+const networkDataSource = await readFile('apps/desktop/BrowserData.cs', 'utf8');
+const networkUi = await readFile('apps/desktop/BrowserWindow.Network.cs', 'utf8');
+test('network choice uses session-owned persistence without changing the applied transport', () => {
+    assert.match(networkDataSource, /if \(chosen.Problem is not null \|\| !authorized\(\)\) return false;\s*var previous = Network;[\s\S]*?Network = chosen == NetworkSettings.Standard \? null : chosen;\s*committed = authorized\(\) && save\(\);[\s\S]*?if \(!committed\) Network = previous;/);
+    const commit = sessionSource.slice(sessionSource.indexOf('internal bool TryCommitNetworkSettings('), sessionSource.indexOf('internal Stack<ClosedTab>'));
+    assert.match(commit, /libraryDispatcher.VerifyAccess\(\);\s*bool Authorized\(\) => !IsPrivate && !IsEnding && !EngineLost && EngineHost.IsReady &&\s*persistentStatePath is not null && authorized\(\);[\s\S]*?return Data.TryCommitNetworkSettings\(chosen, Authorized,\s*\(\) => TrySaveLibrary\(Authorized\)\);/);
+    assert.doesNotMatch(commit, /\bNetwork\s*=|\bConfigureNetwork\(|\bApplyDns\(|\bInitializeAsync\(/);
+    assert.match(networkUi, /bool Authorized\(\) => SettingsReady\(\) && IsActive && session.SettingsUiOpen && session.PermissionUiOpen;\s*if \(!session.TryCommitNetworkSettings\(chosen, Authorized\)\)[\s\S]*?return;\s*\}\s*foreach \(var window in session.Windows.ToArray\(\)\)/);
+    assert.doesNotMatch(networkUi, /\bdata\.Save\(|\bdata\.Network\s*=(?!=)/);
+    assert.match(sessionSource, /internal NetworkSettings Network \{ get; \}/);
+});
+

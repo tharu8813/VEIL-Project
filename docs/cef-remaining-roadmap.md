@@ -318,3 +318,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #290 exact head `c6b2ea360e8276ae3c6abc2fd127572af198cb2a` Windows/Rust CI 46177523014 PASS, 독립 리뷰 없음.
 - 기존 WebView2 사이트 권한 편집을 session-owned profile writer에 연결. 독립 복제한 규칙 목록의 HTTPS canonical origin, 지원 종류, Ask/Allow 및 중복 검사, private/ending/lost/dispatcher/engine/UI 권한 검사를 유지한다. 실패/예외/철회 시 원본 목록 복원, 빈 목록은 null/default deny, 성공한 이후 안내. 합성 회귀 7개와 source contract 작성. 이미 사용 중인 권한의 즉시 철회나 CEF permission callback 연결은 아님. 실제 WPF/보호 VM, 신규 CI/독립 리뷰 NOT RUN. WebView2 및 startupEnabled=false 유지.
+
+### P3-02 네트워크 설정 공통 저장 경계 (미완료)
+
+- #291 exact head `a1042ded8588eb7d6a5efb4361c3a244e779b341` Windows/Rust CI 46177932325 PASS, 독립 리뷰 없음.
+- 네트워크 저장을 session-owned profile writer에 연결. 기존 NetworkSettings.Problem 검증 및 private/ending/lost/dispatcher/engine/UI guard 유지. 저장 거부/철회/예외에서 이전 선택을 복원하며, 현재 적용된 session.Network, 엔진, vault transport는 변경하지 않는다. 표준 기본값 null 및 DoH 저장 형식 유지. 합성 회귀 6개 및 source contract 작성. 기존 프록시/DoH 런타임 정책 변경 없음. 신규 CI 및 실제 WPF/보호 VM/독립 리뷰 미검증, CEF startupEnabled=false 유지.
