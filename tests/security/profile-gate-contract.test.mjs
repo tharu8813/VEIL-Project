@@ -1286,9 +1286,9 @@ test('protected lifecycle adapter remains disconnected from product startup', as
     const product = await readFile('apps/cef-smoke/product_candidate.cc', 'utf8');
     const adapter = await readFile('apps/cef-smoke/protected_cef_lifecycle.cc', 'utf8');
     const lifecycle = await readFile('apps/cef-smoke/protected_lifecycle.h', 'utf8');
-    assert.match(cmake, /target_sources\(veil-cef-product PRIVATE protected_cef_lifecycle\.cc\)/);
+    assert.match(cmake, /target_sources\(veil-cef-product PRIVATE protected_cef_lifecycle\.cc protected_fixed_fixture\.cc\)/);
     assert.doesNotMatch(product, /RunProtectedCefLifecycle|CefInitialize\s*\(|CefExecuteProcess\s*\(|CefShutdown\s*\(/);
-    assert.match(adapter, /CefExecuteProcess\(args, nullptr, sandbox_info\)[\s\S]*?PrepareProtectedInitializationSettings\(registration\)[\s\S]*?CefInitialize\(args, \*settings, nullptr, sandbox_info\)[\s\S]*?run_fixture\(kProtectedSyntheticPage, current\)[\s\S]*?CefShutdown\(\)/);
+    assert.match(adapter, /CefExecuteProcess\(args, nullptr, sandbox_info\)[\s\S]*?PrepareProtectedInitializationSettings\(registration\)[\s\S]*?CefInitialize\(args, \*settings, nullptr, sandbox_info\)[\s\S]*?RunProtectedFixedFixture\(kProtectedSyntheticPage, current\)[\s\S]*?CefShutdown\(\)/);
     assert.match(lifecycle, /if \(!outcome\.browsers_closed\) return \{Status::kCleanupUnconfirmed\};[\s\S]*?try \{ shutdown\(\); \}/);
 });
 
@@ -1335,4 +1335,16 @@ test('runtime member authority compares the pipe object inside retained nested o
     assert.match(session, /observeMember = \(client, pipeClient\) =>[\s\S]*?CefNestedProcessDiagnostics.Observe[\s\S]*?MatchesProvisionalRole[\s\S]*?Native.SameLiveProcess\(handle, pipeClient\)[\s\S]*?matches != 1/);
     assert.match(session, /RequireRuntimeAuthority[\s\S]*?guard.Observe\(readContext,[\s\S]*?observeMember\(client, pipeClient\)/);
     assert.match(roles, /decision == CefRoleTokenDecision.MatchesProvisionalBaseline &&\s*\(isRoot \? role == CefObservedRole.Browser : role == CefObservedRole.Renderer\)/);
+});
+
+
+test('fixed protected fixture requires exact load and closure evidence without product activation', async () => {
+    const fixture = await readFile('apps/cef-smoke/protected_fixed_fixture.cc', 'utf8');
+    const policy = await readFile('apps/cef-smoke/protected_fixture_observation.h', 'utf8');
+    const entry = await readFile('apps/cef-smoke/product_candidate.cc', 'utf8');
+    assert.match(fixture, /CreateBrowserSync\(window, client, kProtectedSyntheticPage/);
+    assert.match(fixture, /OnBeforeClose[\s\S]*?observation\.Closed\(browser->GetIdentifier\(\)\)/);
+    assert.match(fixture, /if \(!result\.browsers_closed\) return \{false, false\};[\s\S]*?DestroyWindow\(parent\)/);
+    assert.match(policy, /confirmed && ready_at_close_ && !failed_, confirmed/);
+    assert.doesNotMatch(entry, /RunProtectedFixedFixture|RunProtectedCefLifecycle/);
 });

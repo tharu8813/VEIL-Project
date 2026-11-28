@@ -5,12 +5,10 @@
 #include <functional>
 
 namespace veil_cef {
-// Disconnected CEF adapter. No production caller, IPC, browser admission
-// or authority source yet. A future fixture must close every browser
-// before reporting browsers_closed; the fixed URL is not network isolation.
+// Disconnected CEF adapter. No production caller or admission authority.
+// Only the fixed fixture is allowed; the fixed URL is not network isolation.
 ProtectedLifecycleResult RunProtectedCefLifecycle(HINSTANCE instance,
     void* sandbox_info, ProtectedProcessRole role,
     const RegisteredBootstrap& registration,
-    const std::function<bool()>& require_current,
-    const std::function<ProtectedFixtureResult(const char*, const std::function<bool()>&)>& run_fixture);
+    const std::function<bool()>& require_current);
 }  // namespace veil_cef

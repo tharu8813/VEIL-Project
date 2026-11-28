@@ -2,6 +2,7 @@
 #include "product_preflight.h"
 #include "protected_initialization_plan.h"
 #include "protected_lifecycle_test.h"
+#include "protected_fixture_observation_test.h"
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -106,6 +107,7 @@ int main() {
   if (std::string(kProtectedSyntheticPage).find("data:text/html,") != 0) return 13;
   std::cout << "PASS: protected initialization settings plan, no fallback and repeat inspection (synthetic)\n";
   if (const int lifecycle = TestProtectedLifecycle(); lifecycle != 0) return 20 + lifecycle;
+  if (const int fixture = TestProtectedFixtureObservation(); fixture != 0) return 50 + fixture;
   std::cout << "PASS: synthetic product preflight order, refusal and disabled startup\n";
   return 0;
 }
