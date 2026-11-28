@@ -187,6 +187,8 @@ internal static class CefSystemBaselineTrustRegistry
 {
     private const string Leaf = "VEIL.CefSystemBaselineTrust";
     private const string Value = "TrustRecord";
+    private const string AuthorityLeaf = "VEIL.CefSystemBaselineApproval";
+    private const string AuthorityValue = "ApprovalPublicKey";
     private const string Descriptor = "O:BAG:BAD:P(A;;KA;;;SY)(A;;KA;;;BA)(A;;KR;;;BU)";
     private const int Read64 = 0x20119;
     private const int OpenLink = 8;
@@ -208,6 +210,37 @@ internal static class CefSystemBaselineTrustRegistry
         var first = ReadOnce();
         first.RequireSame(ReadOnce());
         return first;
+    }
+
+    // The fixed protected machine registry is the independent trust source.
+    // This method never enrolls a key or accepts candidate envelope data.
+    internal static CefBaselineApprovalAuthority ReadApprovalAuthorityStable()
+    {
+        if (!OperatingSystem.IsWindows() || RuntimeInformation.OSArchitecture != Architecture.X64 ||
+            RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            throw new PlatformNotSupportedException("Expected native Windows x64.");
+        var first = ReadApprovalAuthorityOnce();
+        first.RequireSame(ReadApprovalAuthorityOnce());
+        return first;
+    }
+
+    private static CefBaselineApprovalAuthority ReadApprovalAuthorityOnce()
+    {
+        using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+        using var software = Open(machine, "SOFTWARE");
+        RequireOrdinary(software);
+        using var leaf = Open(software, AuthorityLeaf);
+        RequireProtected(leaf);
+        if (leaf.SubKeyCount != 0 || leaf.ValueCount != 1 ||
+            !leaf.GetValueNames().SequenceEqual(new[] { AuthorityValue }, StringComparer.Ordinal) ||
+            leaf.GetValueKind(AuthorityValue) != RegistryValueKind.Binary ||
+            leaf.GetValue(AuthorityValue, null, RegistryValueOptions.DoNotExpandEnvironmentNames) is not byte[] key ||
+            key.Length is 0 or > 4096)
+            throw new UnauthorizedAccessException("Unexpected baseline approval registry layout.");
+        RequireProtected(leaf);
+        // This hash is derived from administrator-protected storage, not
+        // from an untrusted request. Provisioning that storage is separate.
+        return new CefBaselineApprovalAuthority(key, SHA256.HashData(key));
     }
 
     private static CefSystemBaselineTrustState ReadOnce()
@@ -278,6 +311,8 @@ internal static class CefSystemBaselineTrustRegistry
         RequireOrdinary(software);
         using var existing = TryOpen(software, Leaf, Read64 | 2);
         var current = existing is null ? null : ReadRecord(existing);
+        var authority = ReadApprovalAuthorityStable();
+        update.RequirePublicationAuthority(authority);
         // Validate before creating a key. An existing empty/partial key is
         // never treated as absent and is not deleted or repaired automatically.
         byte[] record = update.RequireExpectedAndCopyRecord(current, CefSystemBaselineHostObserver.Observe());
@@ -295,11 +330,13 @@ internal static class CefSystemBaselineTrustRegistry
         }
         // Recheck host immediately before the sole record write.
         _ = update.RequireExpectedAndCopyRecord(current, CefSystemBaselineHostObserver.Observe());
+        authority.RequireSame(ReadApprovalAuthorityStable());
         target.SetValue(Value, record, RegistryValueKind.Binary);
         int flush = RegFlushKey(target.Handle);
         if (flush != 0) throw new Win32Exception(flush);
         update.RequirePublished(ReadRecord(target), CefSystemBaselineHostObserver.Observe());
         update.RequirePublished(ReadStable(), CefSystemBaselineHostObserver.Observe());
+        authority.RequireSame(ReadApprovalAuthorityStable());
         // Never undo a write on an uncertain result: rollback could lower the
         // floor. Operators must inspect the installed state before retry.
     }
@@ -322,11 +359,14 @@ internal static class CefSystemBaselineTrustRegistry
         ArgumentNullException.ThrowIfNull(update);
         RequireMaintenanceAuthority();
         using var mutex = CefSystemBaselineWriterLock.Acquire();
+        var authority = ReadApprovalAuthorityStable();
+        update.RequirePublicationAuthority(authority);
         var host = CefSystemBaselineHostObserver.Observe();
         var first = ObservePublication(update, host);
         var second = ObservePublication(update, CefSystemBaselineHostObserver.Observe());
         if (first != second)
             throw new UnauthorizedAccessException("Baseline publication changed during inspection.");
+        authority.RequireSame(ReadApprovalAuthorityStable());
         return first;
     }
 
@@ -359,11 +399,15 @@ internal static class CefSystemBaselineTrustRegistry
         using var software = Open(machine, "SOFTWARE");
         RequireOrdinary(software);
         using var leaf = Open(software, Leaf);
+        var authority = ReadApprovalAuthorityStable();
+        update.RequirePublicationAuthority(authority);
         update.RequirePublished(ReadRecord(leaf), CefSystemBaselineHostObserver.Observe());
+        authority.RequireSame(ReadApprovalAuthorityStable());
         int flush = RegFlushKey(leaf.Handle);
         if (flush != 0) throw new Win32Exception(flush);
         update.RequirePublished(ReadRecord(leaf), CefSystemBaselineHostObserver.Observe());
         update.RequirePublished(ReadStable(), CefSystemBaselineHostObserver.Observe());
+        authority.RequireSame(ReadApprovalAuthorityStable());
     }
 
     private static RegistryKey CreateNew(RegistryKey parent)

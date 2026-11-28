@@ -34,15 +34,26 @@ internal sealed class CefBaselineApprovalAuthority
         keyId = CefSystemBaselineTrustState.KeyId(key);
     }
 
+    internal void RequireSame(CefBaselineApprovalAuthority current)
+    {
+        if (current is null || !CryptographicOperations.FixedTimeEquals(key, current.key))
+            throw new UnauthorizedAccessException("Baseline approval authority changed.");
+    }
+
+    internal void RequireIndependent(CefSystemBaselineTrustState state)
+    {
+        if (keyId == CefSystemBaselineTrustState.KeyId(state.CopyPublicKey()) ||
+            state.CopyRetiredKeyIds().Contains(keyId, StringComparer.Ordinal))
+            throw new UnauthorizedAccessException("Approval authority must be independent of baseline keys.");
+    }
+
     internal void RequireApproval(ReadOnlySpan<byte> digest, ReadOnlySpan<byte> signature,
         CefSystemBaselineTrustState previous, CefSystemBaselineTrustState next)
     {
-        if (digest.Length != 32 || signature.Length is < 384 or > 512 ||
-            keyId == CefSystemBaselineTrustState.KeyId(previous.CopyPublicKey()) ||
-            keyId == CefSystemBaselineTrustState.KeyId(next.CopyPublicKey()) ||
-            previous.CopyRetiredKeyIds().Contains(keyId, StringComparer.Ordinal) ||
-            next.CopyRetiredKeyIds().Contains(keyId, StringComparer.Ordinal))
-            throw new UnauthorizedAccessException("Approval authority must be independent of baseline keys.");
+        RequireIndependent(previous);
+        RequireIndependent(next);
+        if (digest.Length != 32 || signature.Length is < 384 or > 512)
+            throw new UnauthorizedAccessException("Invalid approval signature size.");
         using var rsa = RSA.Create();
         try
         {
@@ -63,13 +74,16 @@ internal sealed class CefSystemBaselineTrustUpdate
     private readonly CefSystemBaselineTrustState? previous;
     private readonly CefSystemBaselineTrustState next;
     private readonly CefSystemBaselineHost host;
+    private readonly CefBaselineApprovalAuthority? approvedBy;
 
     private CefSystemBaselineTrustUpdate(CefSystemBaselineTrustState? previous,
-        CefSystemBaselineTrustState next, CefSystemBaselineHost host)
+        CefSystemBaselineTrustState next, CefSystemBaselineHost host,
+        CefBaselineApprovalAuthority? approvedBy = null)
     {
         this.previous = previous;
         this.next = next;
         this.host = host;
+        this.approvedBy = approvedBy;
     }
 
     internal static CefSystemBaselineTrustUpdate PrepareEnrollment(
@@ -115,7 +129,7 @@ internal sealed class CefSystemBaselineTrustUpdate
         hash.AppendData("VEIL-CEF-BASELINE-KEY-REVOCATION-V1"u8);
         hash.AppendData(SHA256.HashData(installed.CopyRecord()));
         authority.RequireApproval(hash.GetHashAndReset(), approvalSignature, installed, revoked);
-        return new(installed, revoked, host);
+        return new(installed, revoked, host, authority);
     }
 
     // Separate emergency/planned rotation: the old signing key may be
@@ -162,7 +176,7 @@ internal sealed class CefSystemBaselineTrustUpdate
         hash.AppendData(SHA256.HashData(installed.CopyRecord()));
         hash.AppendData(SHA256.HashData(prepared.next.CopyRecord()));
         authority.RequireApproval(hash.GetHashAndReset(), approvalSignature, installed, prepared.next);
-        return prepared;
+        return new(installed, prepared.next, host, authority);
     }
 
     private static CefSystemBaselineTrustUpdate Prepare(CefSystemBaselineTrustState? previous,
@@ -177,6 +191,17 @@ internal sealed class CefSystemBaselineTrustUpdate
             ? CefSystemBaselineTrustState.CreateVerifiedRecord(document, key, validated.Sequence)
             : previous.CreateSuccessor(document, key, validated.Sequence);
         return new(previous, next, host);
+    }
+
+    // All persistent publications require an independently provisioned
+    // authority, including enrollment and ordinary replacement. Rotation
+    // and revocation additionally bind the exact authority used to approve.
+    internal void RequirePublicationAuthority(CefBaselineApprovalAuthority current)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        if (previous is not null) current.RequireIndependent(previous);
+        current.RequireIndependent(next);
+        approvedBy?.RequireSame(current);
     }
 
     // Must be called under the single administrator writer transaction,

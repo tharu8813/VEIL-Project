@@ -203,6 +203,22 @@ internal static class CefSignedSystemModuleBaselineTests
         var rotation = Rotate(nextState, rotationPayload,
             rotationSignature, rotatedPublicKey, approval, host);
         var rotated = CefSystemBaselineTrustState.Parse(rotation.RequireExpectedAndCopyRecord(nextState, host));
+        using var alternateApprovalKey = RSA.Create(3072);
+        byte[] alternateApprovalPublic = alternateApprovalKey.ExportSubjectPublicKeyInfo();
+        var alternateAuthority = new CefBaselineApprovalAuthority(alternateApprovalPublic,
+            SHA256.HashData(alternateApprovalPublic));
+        var sameAuthority = new CefBaselineApprovalAuthority(approvalPublic, approvalAnchor);
+        authority.RequireSame(sameAuthority);
+        Reject(() => authority.RequireSame(alternateAuthority));
+        rotation.RequirePublicationAuthority(sameAuthority);
+        Reject(() => rotation.RequirePublicationAuthority(alternateAuthority));
+        Reject(() => rotation.RequirePublicationAuthority(oldAuthority));
+        Reject(() => rotation.RequirePublicationAuthority(newAuthority));
+        enrollment.RequirePublicationAuthority(authority);
+        update.RequirePublicationAuthority(authority);
+        Reject(() => enrollment.RequirePublicationAuthority(oldAuthority));
+        Reject(() => update.RequirePublicationAuthority(oldAuthority));
+        Console.WriteLine("PASS: publication authority identity freshness and baseline key-role refusal");
         proposed.RequireSame(rotated);
         rotation.RequirePublished(rotated, host);
         Reject(() => rotation.RequireExpectedAndCopyRecord(enrolled, host));
@@ -250,6 +266,8 @@ internal static class CefSignedSystemModuleBaselineTests
             thirdKey.SignData(thirdPayload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss),
             thirdPublic, Approval(afterRotationState, thirdProposed), host);
         var thirdState = CefSystemBaselineTrustState.Parse(thirdUpdate.RequireExpectedAndCopyRecord(afterRotationState, host));
+        thirdUpdate.RequirePublicationAuthority(authority);
+        Reject(() => thirdUpdate.RequirePublicationAuthority(oldAuthority));
         thirdProposed.RequireSame(thirdState);
         Reject(() => thirdState.CreateSuccessor(Payload(sequence: 13), publicKey, 13));
         Reject(() => thirdState.CreateSuccessor(Payload(sequence: 13), rotatedPublicKey, 13));
@@ -279,6 +297,8 @@ internal static class CefSignedSystemModuleBaselineTests
         var revoke = Revoke(nextState, revocationApproval, host);
         Console.WriteLine("PASS: independent RSA-PSS approval, domain separation and current/new/retired key refusal");
         var revoked = CefSystemBaselineTrustState.Parse(revoke.RequireExpectedAndCopyRecord(nextState, host));
+        revoke.RequirePublicationAuthority(sameAuthority);
+        Reject(() => revoke.RequirePublicationAuthority(alternateAuthority));
         if (!revoked.Revoked || revoked.MinimumSequence != nextState.MinimumSequence ||
             !revoked.CopyPublicKey().SequenceEqual(publicKey))
             throw new InvalidOperationException("Revocation record regression.");
