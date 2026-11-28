@@ -38,7 +38,20 @@ internal sealed class CefProtectedProfileLease : IDisposable
 
     internal static CefProtectedProfileLease Open(string registeredProductRoot,
         string registeredVolume, string windowsDirectory, Func<BackendStatus> readStatus,
-        Func<bool> authorityCurrent)
+        Func<bool> authorityCurrent) =>
+        OpenCore(registeredProductRoot, registeredVolume, windowsDirectory, readStatus, authorityCurrent, false);
+
+    // Installed broker path: own the existing lock before inspecting any
+    // CEF descendants. Never release/reopen a desktop lock or accept a
+    // busy lock as evidence of ownership. This is not launch authority.
+    internal static CefProtectedProfileLease OpenExclusive(string registeredProductRoot,
+        string registeredVolume, string windowsDirectory, Func<BackendStatus> readStatus,
+        Func<bool> authorityCurrent) =>
+        OpenCore(registeredProductRoot, registeredVolume, windowsDirectory, readStatus, authorityCurrent, true);
+
+    private static CefProtectedProfileLease OpenCore(string registeredProductRoot,
+        string registeredVolume, string windowsDirectory, Func<BackendStatus> readStatus,
+        Func<bool> authorityCurrent, bool acquireExclusive)
     {
         ArgumentNullException.ThrowIfNull(readStatus);
         ArgumentNullException.ThrowIfNull(authorityCurrent);
@@ -60,9 +73,22 @@ internal sealed class CefProtectedProfileLease : IDisposable
         }
         var pins = new List<CefProtectedDirectoryLease>(ancestors.Count + 4);
         CefProtectedDirectoryLease.RegularFilePin? log = null;
+        CefProtectedDirectoryLease.ExclusiveProfileLock? exclusive = null;
         try
         {
-            foreach (string path in ancestors.Concat(layout.Directories))
+            foreach (string path in ancestors)
+            {
+                RequireAuthority(registeredVolume, readStatus, authorityCurrent);
+                pins.Add(CefProtectedDirectoryLease.Open(path, registeredVolume, readStatus));
+            }
+            if (acquireExclusive)
+            {
+                RequireAuthority(registeredVolume, readStatus, authorityCurrent);
+                exclusive = CefProtectedDirectoryLease.OpenExclusiveProfileLock(
+                    layout.ProductRoot, registeredVolume, readStatus);
+                RequireAuthority(registeredVolume, readStatus, authorityCurrent);
+            }
+            foreach (string path in layout.Directories)
             {
                 RequireAuthority(registeredVolume, readStatus, authorityCurrent);
                 pins.Add(CefProtectedDirectoryLease.Open(path, registeredVolume, readStatus));
@@ -71,13 +97,23 @@ internal sealed class CefProtectedProfileLease : IDisposable
                 log = CefProtectedDirectoryLease.OpenRegularFile(layout.LogFile, registeredVolume, readStatus);
             var lease = new CefProtectedProfileLease(layout, environment, registeredVolume,
                 readStatus, authorityCurrent, pins, log);
+            lease.profileLock = exclusive;
             lease.RequireCurrent();
             return lease;
         }
         catch
         {
-            log?.Dispose();
-            for (int i = pins.Count - 1; i >= 0; --i) pins[i].Dispose();
+            // No process can have been created from a failed open.
+            // Keep ownership until the partially acquired pins are closed.
+            try { log?.Dispose(); }
+            finally
+            {
+                try
+                {
+                    for (int i = pins.Count - 1; i >= 0; --i) pins[i].Dispose();
+                }
+                finally { exclusive?.Dispose(); }
+            }
             throw;
         }
     }
