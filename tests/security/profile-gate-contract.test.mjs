@@ -826,7 +826,7 @@ test('prepared diagnostic lifetime is retained before activation and retired on 
     const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
     assert.match(policy, /if \(!TryRegister\(expectedGeneration, candidate\)\)\s*return CefDiagnosticActivationOutcome\.Refused;\s*activating = true;[\s\S]*?activate\(\);[\s\S]*?if \(retired\)[\s\S]*?committed = true/);
     assert.match(policy, /failure = error;\s*return CefDiagnosticActivationOutcome\.Retired;[\s\S]*?try \{ if \(!committed\) Retire\(\); \}\s*finally \{ activating = false; \}/);
-    assert.match(policy, /!retired && !activating && ReferenceEquals\(generation, expectedGeneration\)/);
+    assert.match(policy, /!retired && !activating && !observing && ReferenceEquals\(generation, expectedGeneration\)/);
     assert.match(policy, /if \(!retired \|\| releasing \|\| activating \|\| observing\) return false/);
     assert.match(fixture, /slot\.RegisterAndActivate\(generation, session,[\s\S]*?candidate\.ResumeRetainedRoot\(retained\)[\s\S]*?Synthetic lost resume confirmation[\s\S]*?slot\.TryReleaseRetired\(5000\)/);
     assert.equal((broker.match(/diagnosticSession\.RegisterAndActivate\(/g) ?? []).length, 2);
