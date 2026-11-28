@@ -76,7 +76,7 @@ internal static class CefNestedProcessDiagnostics
 // Jobs and registration ownership; the authenticated owner handle is borrowed.
 // Both Jobs must be privately broker-created and never exported. The actual
 // desktop containment is separate; no production admission is enabled here.
-internal sealed class CefBoundDiagnosticSession
+internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
 {
     private readonly CefDiagnosticSessionGuard guard;
     private readonly Func<CefDiagnosticSessionContext> readContext;
@@ -121,10 +121,10 @@ internal sealed class CefBoundDiagnosticSession
     }
 
     internal CefRetainedProcessDiagnostic[] Observe() => guard.Observe(readContext, observe);
-    internal void Revoke() => guard.Revoke();
+    public void Revoke() => guard.Revoke();
     // Keep this session in the owning broker until true; false or an exception
     // leaves all unconfirmed/unreleased resources retained for retry.
-    internal bool RevokeAndRelease(int milliseconds)
+    public bool RevokeAndRelease(int milliseconds)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
         guard.Revoke();
