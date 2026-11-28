@@ -27,8 +27,9 @@ int main() {
   if (RequestChildVerification("invalid/volume")) return 5;
   if (!BuildRuntimeAuthorityRequest("volume_01-A", request) ||
       request != "{\"command\":\"CheckCefRuntimeAuthority\",\"volumeId\":\"volume_01-A\"}\n") return 6;
+  RuntimeAuthoritySession invalid("bad/volume");
   if (BuildRuntimeAuthorityRequest("bad/volume", request) || !request.empty() ||
-      RequestRuntimeAuthority("bad/volume")) return 7;
+      invalid.Check() || invalid.Check()) return 7;
   if (!IsRuntimeAuthorityReply(kRuntimeAuthorityReply) ||
       IsRuntimeAuthorityReply(kVerifiedReply) || IsVerifiedReply(kRuntimeAuthorityReply)) return 8;
   for (std::string_view bad : {"", "{\"ok\":true}\n",
@@ -36,6 +37,19 @@ int main() {
       "{\"ok\":true,\"cefRuntimeAuthorityCurrent\":true}\r\n",
       "{\"ok\":true,\"cefRuntimeAuthorityCurrent\":true,\"extra\":1}\n"})
     if (IsRuntimeAuthorityReply(bad)) return 9;
-  std::cout << "PASS: native CEF redemption and distinct runtime authority wire checks\n";
+  RuntimeAuthorityLatch latch;
+  int samples = 0;
+  if (!latch.Check([&] { ++samples; return true; }) ||
+      latch.Check([&] { ++samples; return false; }) ||
+      latch.Check([&] { ++samples; return true; }) || samples != 2) return 10;
+  RuntimeAuthorityLatch recursive;
+  if (recursive.Check([&] {
+        if (recursive.Check([] { return true; })) return false;
+        return true;
+      }) || recursive.Check([] { return true; })) return 11;
+  RuntimeAuthorityLatch throwing;
+  if (throwing.Check([]() -> bool { throw 1; }) ||
+      throwing.Check([] { return true; })) return 12;
+  std::cout << "PASS: native CEF redemption, runtime wire and sticky sample refusal\n";
   return 0;
 }
