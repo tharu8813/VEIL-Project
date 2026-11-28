@@ -70,3 +70,48 @@ internal static class CefNestedProcessDiagnostics
         return result;
     }
 }
+
+// Prepared broker-internal binding, not an IPC endpoint or launch permit.
+// The serialized caller retains all handles and the registration until drain.
+internal sealed class CefBoundDiagnosticSession
+{
+    private readonly CefDiagnosticSessionGuard guard;
+    private readonly Func<CefDiagnosticSessionContext> readContext;
+    private readonly Func<CefRetainedProcessDiagnostic[]> observe;
+    private readonly Func<int, bool> drain;
+
+    internal CefBoundDiagnosticSession(ClientIdentity owner, SafeProcessHandle ownerHandle,
+        object generation, CefRuntimeRegistrationLease registration,
+        CefBrokerOwnedJob brokerJob, SafeFileHandle desktopJob,
+        ClientIdentity root, SafeProcessHandle rootHandle,
+        Func<(object Generation, CefRuntimeRegistrationLease RuntimeLease, bool VolumeProtected)> readCurrent,
+        CefSystemModuleVerifier? systemVerifier = null)
+    {
+        ArgumentNullException.ThrowIfNull(readCurrent);
+        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(brokerJob);
+        ArgumentNullException.ThrowIfNull(desktopJob);
+        if (Native.ObserveProcess(ownerHandle) != owner ||
+            Native.ObserveProcess(rootHandle) != root ||
+            owner.ProcessId == root.ProcessId || owner.SessionId != root.SessionId ||
+            !string.Equals(owner.UserSid, root.UserSid, StringComparison.OrdinalIgnoreCase) ||
+            root.CreatedFileTime < owner.CreatedFileTime ||
+            !string.Equals(root.ImagePath, registration.ImagePath, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("CEF diagnostic session identity mismatch.");
+        guard = new(owner, generation, registration);
+        readContext = () =>
+        {
+            var current = readCurrent();
+            return new(Native.ObserveProcess(ownerHandle), current.Generation, current.RuntimeLease,
+                Native.IsRunning(ownerHandle), current.VolumeProtected);
+        };
+        observe = () => CefNestedProcessDiagnostics.Observe(brokerJob, desktopJob, root, rootHandle,
+            registration, systemVerifier);
+        drain = milliseconds => brokerJob.TerminateAndVerifyNestedDrain(desktopJob, rootHandle, milliseconds);
+    }
+
+    internal CefRetainedProcessDiagnostic[] Observe() => guard.Observe(readContext, observe);
+    internal void Revoke() => guard.Revoke();
+    internal bool RevokeAndDrain(int milliseconds) =>
+        guard.RevokeAndCheckDrain(() => drain(milliseconds));
+}
