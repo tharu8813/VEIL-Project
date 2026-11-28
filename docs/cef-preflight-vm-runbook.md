@@ -181,3 +181,7 @@ $diagnosticPlan = .\scripts\stage-cef-preflight-package.ps1 -Diagnostic -Disposa
 ### 진단 파일 게시 및 중단 상태 복구 (서비스 미등록)
 
 `publish-cef-preflight-package.ps1 -Diagnostic -DisposableVm` 및 `recover-cef-preflight-publication.ps1 -Diagnostic -DisposableVm`을 동일한 독립 입력으로 사용한다. 복구는 기본적으로 읽기 전용이며 `-Resume`을 명시해야 검증된 경계부터 진행한다. 별도 `VEIL.cef-diagnostic-publication` 기록과 `.cef-diagnostic-pending` 경로를 사용하며, 일반 모드의 준비/게시 흔적을 거부한다. 최종 파일 위치는 기존 고정 설치 경로이므로 폐기용 VM 전용이다. 서명된 패키지·등록 초안 및 두 기준 파일 해시를 의도 기록에 바인딩한다. 복사 미검증 상태는 자동 재개하지 않는다. 실제 VM/전원 손실/ACL/BitLocker NOT RUN. 서비스/신뢰 등록 및 exit 31 실행 도구는 별도 후속 작업이다.
+
+### 진단 전용 서비스 등록 및 확인 (시작 금지)
+
+`register-cef-preflight-service.ps1 -Diagnostic -DisposableVm`은 진단 게시 증거를 확인하고 보호 프로필 bootstrap 레지스트리 및 고정 SCM 서비스를 등록한다. 별도 `VEIL.cef-diagnostic-service` 기록을 사용한다. LocalSystem/Disabled/Stopped/PID 0, 명령 및 SCM DACL을 검증한다. `test-cef-preflight-service.ps1 -Diagnostic -DisposableVm`은 읽기 전용 확인만 가능하며 `-RunProbe` 조합을 거부한다. 일반 서비스 시험과 exit 29 증거 경로도 진단 등록을 거부한다. 실제 SCM/HKLM/BitLocker/VM NOT RUN. 독립 기준 신뢰 등록 및 별도 진단 실행 도구가 필요하다.
