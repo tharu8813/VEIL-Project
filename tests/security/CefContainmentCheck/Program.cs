@@ -222,6 +222,21 @@ try
                 var nestedSnapshot = brokerJob.ObserveNestedRetainedMembers(candidate.FixtureJobHandle,
                     [(binding.Identity, retained), (descendantIdentity, descendantHandle)]);
                 Check(nestedSnapshot.SequenceEqual(snapshot), "Nested Job snapshot differs.");
+                int diagnosticCalls = 0;
+                var diagnosticPids = brokerJob.ObserveNestedRetainedDiagnostics(candidate.FixtureJobHandle,
+                    [(binding.Identity, retained), (descendantIdentity, descendantHandle)],
+                    (expected, handle) =>
+                    {
+                        Check(Native.ObserveProcess(handle) == expected, "Diagnostic got wrong retained object.");
+                        diagnosticCalls++;
+                        return expected.ProcessId;
+                    });
+                Check(diagnosticCalls == 2 && diagnosticPids.SequenceEqual(snapshot.Select(item => item.ProcessId)),
+                    "Nested diagnostics did not cover both original members.");
+                RefuseObservation(() => brokerJob.ObserveNestedRetainedDiagnostics(candidate.FixtureJobHandle,
+                    [(binding.Identity, retained)],
+                    (expected, _) => { diagnosticCalls++; return expected.ProcessId; }));
+                Check(diagnosticCalls == 2, "Incomplete membership reached diagnostic callback.");
                 RefuseObservation(() => brokerJob.ObserveNestedRetainedMembers(candidate.FixtureJobHandle,
                     [(binding.Identity, retained)]));
                 RefuseObservation(() => brokerJob.ObserveSameJobFixture(
@@ -241,7 +256,17 @@ try
                 {
                     case 1: brokerJob.Dispose(); break;
                     case 2: candidate.Dispose(); break;
-                    case 3: Check(brokerJob.TerminateAndDrain(5000), "Broker fixture termination did not drain."); break;
+                    case 3:
+                        // Force both members to exit DURING the diagnostic.
+                        // No result may escape the post-observation checks.
+                        RefuseObservation(() => brokerJob.ObserveNestedRetainedDiagnostics(candidate.FixtureJobHandle,
+                            [(binding.Identity, retained), (descendantIdentity, descendantHandle)],
+                            (expected, _) =>
+                            {
+                                Check(brokerJob.TerminateAndDrain(5000), "Broker fixture termination did not drain.");
+                                return expected.ProcessId;
+                            }));
+                        break;
                     case 4: candidate.TerminateAndDrain(5000); break;
                 }
                 Check(descendant.WaitForExit(10000), $"Descendant survived fixture cleanup (mode {mode}).");
