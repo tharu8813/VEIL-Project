@@ -496,14 +496,14 @@ public partial class BrowserWindow : Window
         if (closing || session.EngineLost) return;
         session.EngineLost = true;
         bool saved = false;
-        try { session.MainSession.Save(); saved = true; }
+        try { saved = session.MainSession.Save(); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         session.IsEnding = true;
         foreach (var window in session.AllWindows.ToList())
             window.Status.Text = "브라우저 엔진이 종료되었습니다. VEIL을 다시 시작하세요.";
         if (smokeRun) return; // the smoke harness observes and closes on its own
         MessageBox.Show(this, "브라우저 엔진이 예기치 않게 종료되었습니다. " +
-            (saved ? "세션 저장 작업을 요청했습니다. " : "열린 탭을 저장하지 못했습니다. ") + "VEIL을 다시 시작하세요.",
+            (saved ? "열린 탭을 저장했습니다. " : "열린 탭을 새로 저장하지 못했습니다. ") + "VEIL을 다시 시작하세요.",
             "VEIL", MessageBoxButton.OK, MessageBoxImage.Warning);
         foreach (var window in session.AllWindows.ToList()) window.Close();
     }

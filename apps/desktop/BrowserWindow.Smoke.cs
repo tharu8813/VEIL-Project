@@ -140,6 +140,51 @@ public partial class BrowserWindow
                     localData.Selected == 0 && localData.PinnedCount == 0 && localData.Windows is null,
                     "successful combined commit retains history and replacement layout");
                 localData.History.RemoveAt(0);
+                // Exercise a real filesystem refusal in a synthetic directory inside
+                // the fixture profile; do not touch the active browser-state.json.
+                string layoutTestRoot = Path.Combine(Path.GetTempPath(), "layout-save-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(layoutTestRoot);
+                try
+                {
+                    string layoutPath = Path.Combine(layoutTestRoot, "state.json");
+                    localData.Tabs = oldTabs;
+                    localData.Selected = 1;
+                    localData.PinnedCount = 1;
+                    localData.Windows = oldWindows;
+                    localData.Save(layoutPath);
+                    byte[] originalBytes = File.ReadAllBytes(layoutPath);
+                    // A directory at the staging path prevents FileStream creation.
+                    Directory.CreateDirectory(layoutPath + ".new");
+                    bool writeRefused = false;
+                    try
+                    {
+                        localData.TryCommitTabLayout(() =>
+                        {
+                            CaptureReplacement();
+                            localData.Save(layoutPath);
+                            return true;
+                        });
+                    }
+                    catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+                    {
+                        writeRefused = true;
+                    }
+                    Check(writeRefused && OriginalLayout() &&
+                        File.ReadAllBytes(layoutPath).SequenceEqual(originalBytes),
+                        "ordinary tab save filesystem refusal keeps previous layout and committed bytes");
+                    Directory.Delete(layoutPath + ".new");
+                    Check(localData.TryCommitTabLayout(() =>
+                    {
+                        CaptureReplacement();
+                        localData.Save(layoutPath);
+                        return true;
+                    }), "ordinary tab save retry commits replacement layout");
+                    var savedLayout = BrowserData.Load(layoutPath);
+                    Check(savedLayout.Tabs.SequenceEqual(localData.Tabs) &&
+                        savedLayout.Selected == 0 && savedLayout.PinnedCount == 0 && savedLayout.Windows is null,
+                        "ordinary tab save retry reads back replacement layout");
+                }
+                finally { Directory.Delete(layoutTestRoot, recursive: true); }
                 const string bookmarksHtml = """
                     <!DOCTYPE NETSCAPE-Bookmark-file-1>
                     <DL><p><DT><H3>Study &amp; Code</H3><DL><p>

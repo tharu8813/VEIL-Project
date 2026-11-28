@@ -900,3 +900,14 @@ test('combined history and tab layout commit restores prior layout on refusal or
     assert.match(session, /var additional = open.Count == 1 \? null :[\s\S]*?\.ToList\(\);[\s\S]*?\(Data.Tabs, Data.Selected, Data.PinnedCount, Data.Windows\) =\s*\(tabs, selected, pinned, additional\);/);
 });
 
+
+
+test('ordinary tab save rolls back incomplete or failed layouts and reports actual crash save result', () => {
+    const save = session.slice(session.indexOf('internal bool Save()'), session.indexOf('private bool CaptureOpenTabs()'));
+    assert.match(save, /libraryDispatcher\.VerifyAccess\(\);\s*if \(IsPrivate \|\| IsEnding \|\| TabTransferDepth != 0 \|\| persistentStatePath is null\) return false;/);
+    assert.match(save, /return Data\.TryCommitTabLayout\(\(\) =>\s*\{\s*if \(!CaptureOpenTabs\(\) \|\| IsEnding\) return false;\s*Data\.Save\(persistentStatePath\);\s*return true;/);
+    assert.doesNotMatch(save, /if \([^)]*EngineLost/);
+    assert.match(browser, /session\.EngineLost = true;\s*bool saved = false;\s*try \{ saved = session\.MainSession\.Save\(\); \}[\s\S]*?session\.IsEnding = true;/);
+    assert.match(browser, /internal void PrepareForProtectedShutdown\(\)\s*\{\s*try \{ session\.Save\(\); \}\s*finally \{ session\.IsEnding = true; \}/);
+});
+

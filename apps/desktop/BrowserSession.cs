@@ -214,12 +214,19 @@ internal sealed class BrowserSession
     /// <summary>The shared engine's browser process exited; no window can use it any more.</summary>
     internal bool EngineLost { get => MainSession.engineLost; set => MainSession.engineLost = value; }
 
-    /// <summary>Writes the open windows. Skipped while any window is still restoring its tabs.</summary>
-    internal void Save()
+    /// <summary>Writes a complete open-window snapshot; false means no write was committed.</summary>
+    internal bool Save()
     {
-        if (IsPrivate || TabTransferDepth != 0) return;
-        if (!CaptureOpenTabs()) return;
-        Data.Save(StatePath);
+        libraryDispatcher.VerifyAccess();
+        if (IsPrivate || IsEnding || TabTransferDepth != 0 || persistentStatePath is null) return false;
+        // Engine loss is intentionally allowed here: the crash handler can save
+        // the last managed tab layout before ending the session, without engine calls.
+        return Data.TryCommitTabLayout(() =>
+        {
+            if (!CaptureOpenTabs() || IsEnding) return false;
+            Data.Save(persistentStatePath);
+            return true;
+        });
     }
 
     private bool CaptureOpenTabs()
