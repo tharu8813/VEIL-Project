@@ -126,6 +126,25 @@ internal sealed class CefSystemBaselineTrustUpdate
         return Prepare(null, payload, signature, key, independentMinimumSequence, host);
     }
 
+    // Initial diagnostic enrollment additionally pins the exact release
+    // document and sequence and binds the independently anchored authority.
+    internal static CefSystemBaselineTrustUpdate PrepareDiagnosticEnrollment(
+        ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature,
+        ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> independentKeySha256,
+        ReadOnlySpan<byte> independentPayloadSha256, long independentSequence,
+        CefSystemBaselineHost host, CefBaselineApprovalAuthority authority)
+    {
+        if (payload.Length is 0 or > 1048576 || independentPayloadSha256.Length != 32 ||
+            !CryptographicOperations.FixedTimeEquals(SHA256.HashData(payload), independentPayloadSha256))
+            throw new UnauthorizedAccessException("Independent diagnostic payload digest mismatch.");
+        var prepared = PrepareEnrollment(payload, signature, publicKey, independentKeySha256,
+            independentSequence, host);
+        if (prepared.next.MinimumSequence != independentSequence)
+            throw new UnauthorizedAccessException("Independent diagnostic sequence mismatch.");
+        authority.RequireIndependent(prepared.next);
+        return new(null, prepared.next, host, authority);
+    }
+
     internal static CefSystemBaselineTrustUpdate PrepareReplacement(
         CefSystemBaselineTrustState installed, ReadOnlySpan<byte> payload,
         ReadOnlySpan<byte> signature, CefSystemBaselineHost host)
