@@ -969,3 +969,12 @@ test('prospective CEF persistence binds exact generation, retained leases and pr
     assert.doesNotMatch(browser, /\bCefProtectedLibraryAuthority\b/);
 });
 
+
+
+test('prospective CEF staged publication rechecks authority and discards only uncommitted work', () => {
+    assert.match(cefLibraryLifetime, /stage\(\);\s*if \(!Current\(\) \|\| !authorized\(\) \|\| IsRevoked \|\| !valid\(\) \|\| !Current\(\)\) return false;\s*published = publish\(\);[\s\S]*?return published;/);
+    assert.match(cefLibraryLifetime, /finally\s*\{\s*if \(!published\)\s*\{\s*try \{ discard\(\); \}[\s\S]*?Revoke\(\);/);
+    assert.match(protectedLibraryAuthority, /lifetime.TryCommitStaged\(entries, authorized, change, valid, stage, publish, discard\);/);
+    assert.doesNotMatch(cefTabbed, /\bTryCommitStaged\b/);
+});
+
