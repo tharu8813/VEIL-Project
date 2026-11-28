@@ -41,6 +41,30 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         finally { await pipe.DisposeAsync(); }
     }
 
+    // SCM notifications are delivered by a single service-owned worker.
+    // Retire only the matching authenticated session under the same serial
+    // gate as unlock, redemption, explicit lock and crash cleanup.
+    internal async Task RevokeWindowsSessionAsync(uint sessionId)
+    {
+        await serial.WaitAsync();
+        try
+        {
+            if (authenticatedOwner is not { } owner || owner.SessionId <= 0 ||
+                (uint)owner.SessionId != sessionId)
+                return;
+            ClearAuthenticatedOwner();
+            RetryUnresolvedCefStops();
+            log.Write("cef-session-revoked", new { reason = "windows-session" });
+            // Do not force a BitLocker lock or detach here. The desktop lock
+            // path and crash watcher retain their existing non-forced rules.
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Write("cef-session-revoke-failed", new { type = error.GetType().Name });
+        }
+        finally { serial.Release(); }
+    }
+
     /// <summary>Serializes non-forced service cleanup with any in-progress client operation.</summary>
     internal async Task SecureVolumeAsync()
     {
