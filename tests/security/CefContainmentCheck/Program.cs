@@ -178,6 +178,14 @@ try
             using var rootObserver = Process.GetProcessById(checked((int)binding.Identity.ProcessId));
             _ = rootObserver.SafeHandle;
             brokerJob.AssignVerifiedCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+            // Only mode 5 adds a third, independently broker-created Job.
+            // Production still has a one-process limit and no launch path.
+            using var privatePeer = mode == 5 ? CefBrokerOwnedJob.CreateMultiprocessFixture() : null;
+            if (privatePeer is not null)
+            {
+                privatePeer.AssignVerifiedCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+                brokerJob.RequirePrivateNestedBinding(privatePeer, identity, owner.SafeHandle, binding.Identity, retained);
+            }
             brokerJob.RequireInitialNestedBinding(candidate.FixtureJobHandle,
                 identity, owner.SafeHandle, binding.Identity, retained);
             Check(brokerJob.ContainsVerifiedCandidate(binding.Identity, retained) == (mode == 0),
@@ -323,6 +331,31 @@ try
                         break;
                     case 4: candidate.TerminateAndDrain(5000); break;
                     case 5:
+                        if (privatePeer is null) throw new InvalidOperationException("Missing private peer.");
+                        var privateMembers = brokerJob.ObservePrivateNestedDiagnostics(privatePeer,
+                            binding.Identity, retained, (expected, handle) =>
+                            {
+                                Check(Native.ObserveProcess(handle) == expected, "Private diagnostic identity mismatch.");
+                                return expected.ProcessId;
+                            });
+                        Check(privateMembers.SequenceEqual(snapshot.Select(item => item.ProcessId).Order()),
+                            "Private Job pair did not observe both members.");
+                        RefuseObservation(() => brokerJob.RequirePrivateNestedBinding(privatePeer,
+                            identity, owner.SafeHandle, binding.Identity, retained));
+                        RefuseObservation(() => brokerJob.ObservePrivateNestedDiagnostics(brokerJob,
+                            binding.Identity, retained, (expected, _) => expected.ProcessId));
+                        RefuseObservation(() => brokerJob.ObservePrivateNestedDiagnostics(privatePeer,
+                            binding.Identity, rootObserver.SafeHandle, (expected, _) => expected.ProcessId));
+                        RefuseObservation(() => brokerJob.TerminateAndVerifyPrivateDrain(privatePeer, owner.SafeHandle, 0));
+                        using (var substitute = CefBrokerOwnedJob.CreateMultiprocessFixture())
+                        {
+                            RefuseObservation(() => brokerJob.TerminateAndVerifyPrivateDrain(substitute, retained, 0));
+                        }
+                        Check(!rootObserver.HasExited && !descendant.HasExited, "Rejected private drain stopped members.");
+                        Check(brokerJob.TerminateAndVerifyPrivateDrain(privatePeer, retained, 5000),
+                            "Private Job pair did not drain.");
+                        Check(brokerJob.TerminateAndVerifyPrivateDrain(privatePeer, retained, 5000),
+                            "Private Job pair did not verify repeated drain.");
                         Check(brokerJob.TerminateAndVerifyNestedDrain(candidate.FixtureJobHandle, retained, 5000),
                             "Nested drain did not verify both jobs and retained root exit.");
                         Check(brokerJob.TerminateAndVerifyNestedDrain(candidate.FixtureJobHandle, retained, 5000),
