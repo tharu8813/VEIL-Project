@@ -231,3 +231,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #273 정확한 head Windows CI 46164985493 PASS, Native 46164985482 실행 중 확인. 별도 미병합 #230의 head `17be1ebd8c7f7f7dc3658ff46e6ea75a2bee0814`에 있는 엄격한 CSV parser, 추적 중 잘못된 lifecycle row/보존 handle exit 누락 거부 및 회귀를 두 파일의 base blob이 동일함을 확인해 이 stack에 재적용했다. #230 자체는 병합/닫지 않았다.
 - `check-cef-process-trace.mjs`에 `--require-mitigation-correlation` 추가. 기존 수집 목표, 일치하는 OS trace 및 모든 trace PID의 live sample/보존 exit 대응을 함께 요구하며 불완전하면 JSON 진단과 exit 1. manifest/report/sample/trace digest를 출력한다. 새 회귀 및 README 명령 추가. 실제 VM 수집, 보안 완화 flags 독립 증명, 전체 수명 및 역할 허용 기준은 NOT RUN/NOT ESTABLISHED. 새 CI와 독립 리뷰 미확인. startupEnabled=false, Job cap=1, WebView2 및 기존 역할 차단 유지.
+
+### P3-01 개발용 WPF view 명령 수명 검증 (미완료)
+
+- P2 실제 VM 차단과 독립적인 제품 통합 준비. CEF development adapter의 GoBack/GoForward/Reload/Stop 및 ZoomFactor 읽기에 dispatcher/live view guard를 추가한다. RequireView는 disposed, zero HWND/ID, 닫힌 native ID를 거부한다. Dispose 시작 시 권한 세대를 폐기하고 late callbacks를 거부한다. 개발용 합성 WPF runner에서 미연결/폐기 view의 명령 거부 및 기존 view mute 보존을 확인하는 코드, JS 로그 계약과 source tests를 추가했다. 제품 엔진/기능을 변경하지 않는다.
+- #273 exact Windows/native PASS, #274 Windows PASS, Native 46165492128 실행 중 확인. 새 CI, 실제 WPF runtime 및 보호 CEF VM NOT RUN. P2-03~05 및 P3-01 미완료; startupEnabled=false 및 WebView2 유지.
