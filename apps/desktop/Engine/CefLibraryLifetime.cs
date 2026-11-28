@@ -38,4 +38,39 @@ internal sealed class CefLibraryLifetime(Func<bool> lifetimeCurrent)
         }
         finally { editing = false; }
     }
+
+    // Stage must not replace the committed file. Publish returns true only
+    // after the irreversible commit point; false/exception means unchanged.
+    // The caller owns its staged resource and must discard only that resource.
+    // A production publisher must serialize revocation and replacement in the
+    // retained broker/profile boundary; these probes alone cannot do that.
+    internal bool TryCommitStaged<T>(List<T> entries, Func<bool> authorized,
+        Action change, Func<bool> valid, Action stage, Func<bool> publish, Action discard)
+    {
+        return TryCommit(entries, authorized, change, valid, () =>
+        {
+            bool published = false;
+            try
+            {
+                stage();
+                if (!Current() || !authorized() || IsRevoked || !valid() || !Current()) return false;
+                published = publish();
+                // Do not turn an irreversible successful write into a failed
+                // transaction if authority was lost during or after publication.
+                return published;
+            }
+            finally
+            {
+                if (!published)
+                {
+                    try { discard(); }
+                    catch (Exception error) when (RecoverableFailure.Is(error))
+                    {
+                        // An unconfirmed cleanup blocks further writes in this lifetime.
+                        Revoke();
+                    }
+                }
+            }
+        });
+    }
 }

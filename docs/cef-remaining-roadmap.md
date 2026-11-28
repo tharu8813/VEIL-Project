@@ -343,3 +343,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #294 exact head native compile CI 46179282448 최종 PASS (runtime 아님). #295 exact head `c5fc5cf4f7849cae121ec81f866e91590c1213cf` Windows/Rust CI 46179722555 PASS; native compile CI 46179722552 미완료, 독립 리뷰 없음.
 - CefProtectedLibraryAuthority prospective model: 정확한 unlock generation/retained runtime lease/profile lease identity, authenticated owner, 별도 runtime admission, lease current, lock 요청, 보호 상태와 volume GUID의 일치가 모두 필요. CefLibraryLifetime에 연결하여 전/후 변경 및 writer 진입 시 검사; 불일치 후 재사용 거부. NetworkPolicyCheck에 15개 부정 context의 전/후 변경 검사와 예외/명시 철회/직전 lock/success 추가. 실제 broker IPC·runtime admission·파일 writer·제품 연결 없음. 이 모델은 검증된 로컬 관측을 미래 caller가 제공해야 하며 preflight나 일반 Status로 대체 불가. 실제 writer publish 경합은 broker 수명과 별도 결합 필요. P1/P2/실제 VM 미완료, 새 CI 및 독립 리뷰 미검증, startupEnabled=false 유지.
+
+### P3-02 라이브러리 staged publication 및 철회 경합 준비 (미완료)
+
+- #295 exact native compile 46179722552 최종 PASS (runtime 아님). #296 exact head `81d9c81699be2d1eeacea2deb229d95b5a9fc87a` Windows/Rust CI 46180159555 PASS; native compile CI 46180159559 미완료, 독립 리뷰 없음.
+- CefLibraryLifetime/Authority에 stage → authority/request/data 재검증 → irreversible publish → abort cleanup 경계 추가. cleanup 실패 시 lifetime revoke, 이미 완료된 publish는 이후 revoke로 rollback하지 않는다. NetworkPolicyCheck의 실제 synthetic JSON 파일에서 flush, same-directory rename, lock/lease 교체/요청 거부/예외/충돌/cleanup 실패/commit 후 철회와 디스크·메모리 일치 회귀 작성. 실제 파일 접근은 test harness만 수행, 제품/CEF fixture 연결 및 브로커 IPC/atomic lock-replace는 미구현. 실제 publish와 revocation의 직렬화 및 retained handle 기반 경로 검증이 필요하다. 신규 CI/보호 VM/실제 CEF/독립 리뷰 미검증. startupEnabled=false 유지.

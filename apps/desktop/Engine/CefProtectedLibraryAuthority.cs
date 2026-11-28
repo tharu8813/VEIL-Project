@@ -53,4 +53,8 @@ internal sealed class CefProtectedLibraryAuthority
     internal bool TryCommit<T>(List<T> entries, Func<bool> authorized,
         Action change, Func<bool> valid, Func<bool> save) =>
         lifetime.TryCommit(entries, authorized, change, valid, save);
+
+    internal bool TryCommitStaged<T>(List<T> entries, Func<bool> authorized,
+        Action change, Func<bool> valid, Action stage, Func<bool> publish, Action discard) =>
+        lifetime.TryCommitStaged(entries, authorized, change, valid, stage, publish, discard);
 }

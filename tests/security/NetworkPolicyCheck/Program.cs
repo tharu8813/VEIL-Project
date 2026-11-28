@@ -790,6 +790,108 @@ Console.WriteLine("PASS: exact-volume preflight cleanup, command refusal and det
     Console.WriteLine("PASS: prospective protected CEF library authority binding and revocation (synthetic)");
 }
 
+// Exercise the staging/commit boundary with real files containing synthetic
+// data in a disposable test directory. Never use a product or protected path.
+{
+    string publicationLab = Path.Combine(Path.GetTempPath(), "veil-library-publication-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(publicationLab);
+    try
+    {
+        string destination = Path.Combine(publicationLab, "fixture.json");
+        var entries = new List<string> { "original" };
+        File.WriteAllText(destination, System.Text.Json.JsonSerializer.Serialize(entries));
+        string original = File.ReadAllText(destination);
+        var generation = new object();
+        var runtimeLease = new object();
+        var profileLease = new object();
+        var volume = new VolumeStatus("synthetic-volume", true, true, true, false, true);
+        var baseline = new CefLibraryAuthorityObservation(generation, runtimeLease, profileLease,
+            volume, true, true, true, true, false);
+        CefLibraryAuthorityObservation current = baseline;
+        CefProtectedLibraryAuthority New() => new(generation, runtimeLease, profileLease, volume.VolumeGuid, () => current);
+        int publishes = 0, discards = 0;
+        string staged = Path.Combine(publicationLab, "fixture.stage");
+        bool owned = false;
+        void Stage()
+        {
+            using var stream = new FileStream(staged, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            owned = true;
+            System.Text.Json.JsonSerializer.Serialize(stream, entries);
+            stream.Flush(flushToDisk: true);
+        }
+        bool Publish()
+        {
+            File.Move(staged, destination, overwrite: true);
+            owned = false;
+            publishes++;
+            return true;
+        }
+        void Discard()
+        {
+            discards++;
+            if (owned) { File.Delete(staged); owned = false; }
+        }
+        bool Edit(CefProtectedLibraryAuthority authority, Action stage, Func<bool> publish,
+            Action discard, Func<bool>? authorized = null) =>
+            authority.TryCommitStaged(entries, authorized ?? (() => true), () => entries.Add("new"),
+                () => entries.Count <= 2, stage, publish, discard);
+        void Unchanged(string message) => Check(File.ReadAllText(destination) == original &&
+            entries.SequenceEqual(["original"]) && publishes == 0 && !owned, message);
+
+        var locked = New();
+        Check(!Edit(locked, () => { Stage(); current = baseline with { LockRequested = true }; }, Publish, Discard) &&
+            locked.IsRevoked && discards == 1 && !File.Exists(staged), "lock after staging discards owned candidate");
+        Unchanged("lock preserves committed bytes and memory");
+        current = baseline;
+        var replaced = New();
+        Check(!Edit(replaced, () => { Stage(); current = baseline with { RuntimeLease = new object() }; }, Publish, Discard) &&
+            replaced.IsRevoked && discards == 2 && !File.Exists(staged), "changed runtime lease prevents publication");
+        Unchanged("changed lease preserves committed bytes and memory");
+        current = baseline;
+        var failedStage = New();
+        Check(!Edit(failedStage, () => { Stage(); throw new IOException("synthetic stage failure"); }, Publish, Discard) &&
+            discards == 3 && !File.Exists(staged), "partial staging failure removes owned file");
+        Unchanged("stage failure preserves committed bytes and memory");
+        var refusedPublish = New();
+        Check(!Edit(refusedPublish, Stage, () => false, Discard) && discards == 4 && !File.Exists(staged),
+            "publication refusal discards staged data");
+        Unchanged("publication refusal preserves committed bytes and memory");
+        var failedPublish = New();
+        Check(!Edit(failedPublish, Stage, () => throw new IOException("synthetic publish failure"), Discard) &&
+            discards == 5 && !File.Exists(staged), "publication exception discards staged data");
+        Unchanged("publication exception preserves committed bytes and memory");
+        File.WriteAllText(staged, "unowned");
+        Check(!Edit(New(), Stage, Publish, Discard) && File.ReadAllText(staged) == "unowned" &&
+            discards == 6, "create-new collision never deletes unowned staging file");
+        Unchanged("staging collision preserves committed bytes and memory");
+        File.Delete(staged);
+        bool requestCurrent = true;
+        var denied = New();
+        Check(!Edit(denied, () => { Stage(); requestCurrent = false; }, Publish, Discard, () => requestCurrent) &&
+            !denied.IsRevoked && discards == 7 && !File.Exists(staged), "request revoked after staging is not session loss");
+        Unchanged("request denial preserves committed bytes and memory");
+        var cleanupFailed = New();
+        Check(!Edit(cleanupFailed, Stage, () => false, () => throw new IOException("synthetic cleanup failure")) &&
+            cleanupFailed.IsRevoked && owned && File.Exists(staged) && File.ReadAllText(destination) == original &&
+            entries.SequenceEqual(["original"]), "unconfirmed cleanup retires authority without claiming deletion");
+        Discard(); // test harness cleanup only
+        Check(!Edit(cleanupFailed, Stage, Publish, Discard) && !File.Exists(staged), "retired authority cannot retry");
+        var success = New();
+        Check(Edit(success, Stage, () =>
+        {
+            bool committed = Publish();
+            success.Revoke(); // revocation after the irreversible replacement
+            return committed;
+        }, Discard) && success.IsRevoked && publishes == 1 && discards == 8 &&
+            !File.Exists(staged) && entries.SequenceEqual(["original", "new"]) &&
+            System.Text.Json.JsonSerializer.Deserialize<string[]>(File.ReadAllText(destination))!.SequenceEqual(entries),
+            "successful replacement remains committed even when authority is revoked afterwards");
+        Check(!Edit(success, Stage, Publish, Discard) && publishes == 1, "post-commit revocation prevents later writes");
+        Console.WriteLine("PASS: staged CEF library publication and rollback with synthetic files");
+    }
+    finally { Directory.Delete(publicationLab, recursive: true); }
+}
+
 file sealed class SyntheticRetainedResource : IDisposable
 {
     internal int Disposals { get; private set; }
