@@ -19,10 +19,6 @@ internal static class CefSessionObservationTests
             bool ownerLive = true, bool protectedVolume = true, bool leaseVerified = true) =>
             p.Observe(currentOwner ?? owner, currentGeneration ?? generation, currentLease ?? lease,
                 ownerLive, protectedVolume, leaseVerified, outer, inner, members);
-        void Check(bool value)
-        {
-            if (!value) throw new InvalidOperationException("CEF session observation policy regression.");
-        }
         void Reject(Func<CefSessionObservationPolicy, bool> attempt)
         {
             var p = New();
@@ -210,6 +206,11 @@ internal static class CefSessionObservationTests
         Console.WriteLine("PASS: Windows lock/logoff notification filtering and authenticated owner isolation");
         Console.WriteLine("PASS: diagnostic session pre/post checks, irreversible retirement and retryable drain");
         Console.WriteLine("PASS: pure CEF multi-process observation, generation/lease binding and irreversible revocation");
+    }
+
+    private static void Check(bool value)
+    {
+        if (!value) throw new InvalidOperationException("CEF session observation policy regression.");
     }
 
     private sealed class TrackedSession : ICefDiagnosticLifetime
