@@ -585,8 +585,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
 
     // Disconnected internal probe: create, verify and drain, NEVER resume.
     // No request, service startup or product caller. All operations hold serial.
-    private void RunDiagnosticCreationProbe(object expectedGeneration,
-        ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature)
+    private void RunDiagnosticCreationProbe(object expectedGeneration)
     {
         // Refuse stale or busy requests before acquiring any cleanup
         // obligation. Only an idle, currently authenticated generation
@@ -601,6 +600,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         bool accepted = false;
         try
         {
+            var (baselinePayload, baselineSignature) = CefSignedSystemModuleBaseline.ReadInstalledDiagnosticInputs();
             preparation = PrepareDiagnosticLaunch(expectedGeneration, baselinePayload, baselineSignature);
             outer = CefBrokerOwnedJob.CreateDisabledCandidate();
             inner = CefBrokerOwnedJob.CreateDisabledCandidate();
