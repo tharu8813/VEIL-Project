@@ -329,6 +329,29 @@ try
         File.ReadAllText(libraryPath) == "first-publication-synthetic", "Native handle first publication failed.");
     File.Delete(libraryPath);
     Console.WriteLine("PASS: test-only native CEF first publication, collision and source refusal");
+    // Legacy overwrite is intentionally explored only in the disposable
+    // fixture. The successful unpinned case is NOT proof of race safety.
+    File.WriteAllText(libraryPath, "replacement-original");
+    File.WriteAllText(libraryStage, "replacement-next");
+    bool OriginalPair() => File.ReadAllText(libraryPath) == "replacement-original" &&
+        File.ReadAllText(libraryStage) == "replacement-next";
+    bool ProbeReplacement(bool retainDestination, Func<bool>? current = null) =>
+        CefProtectedDirectoryLease.ProbeLibraryReplacementFixture(profileLayout.EngineRoot, fixtureVolume,
+            () => fixtureStatus, current ?? (() => authority), retainDestination);
+    Check(!ProbeReplacement(true) && OriginalPair(), "Pinned destination was overwritten.");
+    int replacementChecks = 0;
+    Check(!ProbeReplacement(false, () => ++replacementChecks == 1) && OriginalPair(),
+        "Revoked replacement modified data.");
+    Check(CreateHardLinkW(libraryAlias, libraryPath, IntPtr.Zero), "Cannot link replacement destination.");
+    try { Reject(() => ProbeReplacement(false)); }
+    finally { File.Delete(libraryAlias); }
+    Check(OriginalPair(), "Linked destination was overwritten.");
+    using (var busyTarget = new FileStream(libraryPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        Check(!ProbeReplacement(false) && OriginalPair(), "Busy destination was overwritten.");
+    Check(ProbeReplacement(false) && !File.Exists(libraryStage) &&
+        File.ReadAllText(libraryPath) == "replacement-next", "Controlled unpinned replacement failed.");
+    File.Delete(libraryPath);
+    Console.WriteLine("PASS: test-only legacy replacement boundary (pinned refusal, unpinned fixture success)");
     using (var desktopLock = new FileStream(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
     using (var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
         fixtureWindows, () => fixtureStatus, () => authority))
