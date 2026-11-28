@@ -196,3 +196,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - 브로커의 활성 진단 세션 주기 감시와 IPC 실행 권한 확인에 동일한 `RequireMemberRole` 검사를 적용한다. 두 private Job에서 독립 수집한 retained handle이 유지되는 동안 모든 멤버에 Browser-root/Renderer-descendant 잠정 정책을 적용한다. GPU/Utility/Network/Unknown 및 잘못된 역할 또는 token decision은 거부하며, 기존 관측 실패→slot retirement→drain 경로를 사용한다. 역할/결정 조합 및 미정의 enum, GPU 관측 후 slot 정리 합성 시험과 source contract를 추가했다.
 - #265/#266의 직전 정확한 head Windows/native CI는 PASS, 독립 리뷰는 없음. 새 CI와 실제 보호 VM, 연속 admission, 실제 CEF 역할별 sandbox 기준은 NOT RUN. 샘플링은 전체 수명 보안 증명이 아니다. 생산 Job cap=1, borrowed activation 차단 및 WebView2 제품 시작을 변경하지 않는다. P2-03~05 미완료.
+
+### P2-05 런타임 토큰 관측 결합 (미완료)
+
+- 기존 role/token 요약뿐 아니라 Windows kernel TokenId, ModifiedId, AuthenticationId를 포함한 내부 스냅샷을 모듈 관측 전후 비교한다. 각 멤버는 루트와 동일 사용자 SID, 세션 및 인증 LUID를 요구하고 전체 관측 전후 루트 스냅샷을 비교한다. 값은 IPC나 로그로 내보내지 않는다. 합성 변조/다른 logon 거부, 동일 실제 프로세스의 독립 handle 비교 및 종료 후 거부 시험을 추가했다.
+- #267 정확한 head Windows CI PASS, 독립 리뷰 없음. 새 CI 및 실제 CEF sandbox 토큰 호환성/보호 VM 검증 NOT RUN. 같은 LUID는 잠정적 엄격한 요구사항이며 실제 역할별 baseline이 아니다. 샘플 사이 변경/복원 및 스레드 impersonation은 검증하지 않는다. GPU/Utility/Network/Unknown 차단, Job cap=1, borrowed activation 차단 및 WebView2 유지. P2-03~05 미완료.
