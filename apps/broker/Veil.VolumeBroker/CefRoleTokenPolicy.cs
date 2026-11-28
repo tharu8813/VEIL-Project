@@ -49,3 +49,12 @@ internal static class CefRoleTokenPolicy
         };
     }
 }
+
+// Conservative diagnostic eligibility, NOT a reviewed sandbox grant.
+internal static class CefRuntimeRolePolicy
+{
+    internal static bool MatchesProvisionalRole(bool isRoot, CefObservedRole role,
+        CefRoleTokenDecision decision) =>
+        decision == CefRoleTokenDecision.MatchesProvisionalBaseline &&
+        (isRoot ? role == CefObservedRole.Browser : role == CefObservedRole.Renderer);
+}
