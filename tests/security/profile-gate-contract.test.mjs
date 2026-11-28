@@ -728,7 +728,8 @@ test('broker retains diagnostic slot through revocation and refuses unsafe opera
     assert.equal((broker.match(/diagnosticSession\.Occupied &&\s*request\.Command is BrokerCommand\.Lock or BrokerCommand\.Detach or BrokerCommand\.Unlock or BrokerCommand\.StageCefChild/g) ?? []).length, 2);
     assert.match(broker, /RetryUnresolvedCefStops\(\);\s*if \(diagnosticSession\.Occupied\)\s*throw new InvalidOperationException\("CEF diagnostic lifetime remains unconfirmed; service cleanup refused\."\)/);
     assert.match(broker, /RetryUnresolvedCefStops\(\);\s*if \(diagnosticSession\.Occupied\)\s*throw new InvalidOperationException\("CEF diagnostic lifetime remains unconfirmed; crash relock deferred\."\)/);
-    assert.match(broker, /unresolvedCefStops\.Count == 0 && !diagnosticSession\.CleanupPending/);
+    assert.match(broker, /bool pending = unresolvedCefStops\.Count != 0 \|\| diagnosticSession\.CleanupPending \|\| diagnosticRelock\.Pending;\s*continueRetry = CefStopRetryPolicy\.ShouldContinue\(attempt, 30, pending, failure\);/);
+    assert.match(policy, /return attempt < maximumAttempts - 1 && \(pending \|\| failure is not null\);/);
     assert.match(policy, /if \(Occupied \|\| releasing \|\| activating\) return false;[\s\S]*?session = candidate;/);
     assert.match(policy, /retired = true;\s*session\.Revoke\(\);/);
     assert.match(policy, /if \(!session\.RevokeAndRelease\(milliseconds\)\) return false;\s*session = null;/);
