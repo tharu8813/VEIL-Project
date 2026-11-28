@@ -52,6 +52,22 @@ internal static class CefRoleTokenPolicyTests
             catch (UnauthorizedAccessException) { return; }
             throw new InvalidOperationException("Invalid launch token accepted.");
         }
+        var runtimeRoot = new CefRuntimeTokenSnapshot(browser, 11, 12, 13);
+        var runtimeChild = new CefRuntimeTokenSnapshot(renderer with { Identity = root.Token.Identity }, 11, 21, 22);
+        CefRuntimeTokenSnapshot.RequireSame(runtimeRoot, runtimeRoot);
+        CefRuntimeTokenSnapshot.RequireSame(runtimeChild, runtimeChild);
+        CefRuntimeTokenSnapshot.RequireLogon(runtimeRoot, runtimeChild);
+        Refuse(() => CefRuntimeTokenSnapshot.RequireSame(runtimeChild, runtimeChild with { TokenId = 99 }));
+        Refuse(() => CefRuntimeTokenSnapshot.RequireSame(runtimeChild, runtimeChild with { ModifiedId = 99 }));
+        Refuse(() => CefRuntimeTokenSnapshot.RequireSame(runtimeChild, runtimeChild with { AuthenticationId = 99 }));
+        Refuse(() => CefRuntimeTokenSnapshot.RequireSame(runtimeChild, runtimeChild with { Token = runtimeChild.Token with { Restricted = false } }));
+        Refuse(() => CefRuntimeTokenSnapshot.RequireSame(runtimeChild with { TokenId = 0 }, runtimeChild with { TokenId = 0 }));
+        Refuse(() => CefRuntimeTokenSnapshot.RequireLogon(runtimeRoot, runtimeChild with { AuthenticationId = 99 }));
+        Refuse(() => CefRuntimeTokenSnapshot.RequireLogon(runtimeRoot, runtimeChild with { TokenId = 0 }));
+        Refuse(() => CefRuntimeTokenSnapshot.RequireLogon(runtimeRoot, runtimeChild with { Token = runtimeChild.Token with { Identity = root.Token.Identity with { SessionId = 2 } } }));
+        Refuse(() => CefRuntimeTokenSnapshot.RequireLogon(runtimeRoot, runtimeChild with { Token = runtimeChild.Token with { Identity = root.Token.Identity with { UserSid = "other-sid" } } }));
+        Refuse(() => CefRuntimeTokenSnapshot.RequireLogon(runtimeRoot with { AuthenticationId = 0 }, runtimeChild with { AuthenticationId = 0 }));
+        Console.WriteLine("PASS: runtime token object, modification generation and logon binding (synthetic)");
         Refuse(() => CefLaunchTokenPolicy.RequirePair(owner, root with { AuthenticationId = 99 }));
         Refuse(() => CefLaunchTokenPolicy.RequirePair(owner, owner));
         Refuse(() => CefLaunchTokenPolicy.RequirePair(owner, root with { AdministratorGroupPresent = true }));

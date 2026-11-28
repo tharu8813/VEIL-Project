@@ -11,6 +11,30 @@ namespace Veil.VolumeBroker;
 internal sealed record CefProcessTokenObservation(ClientIdentity Identity, uint IntegrityRid,
     bool Restricted, bool AppContainer, bool Elevated, uint ElevationType);
 
+// Include kernel token identity and modification generation in a runtime
+// sample without applying the desktop launch privilege allowlist to children.
+// Keep these identifiers internal; they are not IPC claims or logged data.
+internal sealed record CefRuntimeTokenSnapshot(CefProcessTokenObservation Token,
+    long AuthenticationId, long TokenId, long ModifiedId)
+{
+    internal static void RequireSame(CefRuntimeTokenSnapshot expected, CefRuntimeTokenSnapshot current)
+    {
+        if (expected.AuthenticationId == 0 || expected.TokenId == 0 ||
+            expected != current)
+            throw new UnauthorizedAccessException("CEF runtime token snapshot changed or unavailable.");
+    }
+
+    internal static void RequireLogon(CefRuntimeTokenSnapshot root, CefRuntimeTokenSnapshot member)
+    {
+        if (root.AuthenticationId == 0 || root.TokenId == 0 || member.TokenId == 0 ||
+            root.AuthenticationId != member.AuthenticationId ||
+            root.Token.Identity.SessionId != member.Token.Identity.SessionId ||
+            !string.Equals(root.Token.Identity.UserSid, member.Token.Identity.UserSid,
+                StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("CEF runtime token logon mismatch.");
+    }
+}
+
 // Launch-source policy is stricter than the provisional role diagnostic.
 // The authenticated interactive owner and browser root must be distinct
 // process objects in the same non-elevated logon session. Never treat a
@@ -68,6 +92,12 @@ internal static class CefProcessTokenObserver
 {
     internal static CefProcessTokenObservation Observe(SafeProcessHandle process, ClientIdentity expected) =>
         ReadSnapshot(process, expected, inspectLaunchPrivileges: false).Token;
+
+    internal static CefRuntimeTokenSnapshot ObserveRuntimeToken(SafeProcessHandle process, ClientIdentity expected)
+    {
+        var snapshot = ReadSnapshot(process, expected, inspectLaunchPrivileges: false);
+        return new(snapshot.Token, snapshot.AuthenticationId, snapshot.TokenId, snapshot.ModifiedId);
+    }
 
     internal static CefLaunchTokenSnapshot ObserveLaunchToken(SafeProcessHandle process, ClientIdentity expected) =>
         ReadSnapshot(process, expected, inspectLaunchPrivileges: true);

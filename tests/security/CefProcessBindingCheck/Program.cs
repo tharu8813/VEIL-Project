@@ -567,6 +567,12 @@ try
         tokenObservation.ElevationType is >= 1 and <= 3, "Retained token observation invalid.");
     Check(tokenObservation == CefProcessTokenObserver.Observe(child.SafeHandle, expected),
         "Independent handles to the same process did not observe the same token fields.");
+    var runtimeToken = CefProcessTokenObserver.ObserveRuntimeToken(retained, expected);
+    Check(runtimeToken.Token == tokenObservation, "Runtime token summary differs.");
+    CefRuntimeTokenSnapshot.RequireSame(runtimeToken,
+        CefProcessTokenObserver.ObserveRuntimeToken(child.SafeHandle, expected));
+    CefRuntimeTokenSnapshot.RequireLogon(CefProcessTokenObserver.ObserveRuntimeToken(owner.SafeHandle, identity),
+        runtimeToken);
     Reject(() => CefProcessTokenObserver.Observe(owner.SafeHandle, expected));
     Reject(() => CefProcessTokenObserver.Observe(retained,
         expected with { CreatedFileTime = expected.CreatedFileTime + 1 }));
@@ -627,6 +633,7 @@ try
     Check(!Native.IsRunning(retained), "Signaled retained child still considered live.");
     Reject(() => CefCommandRoleObserver.Observe(retained, expected, identity));
     Reject(() => CefProcessTokenObserver.Observe(retained, expected));
+    Reject(() => CefProcessTokenObserver.ObserveRuntimeToken(retained, expected));
     Check(!Native.SameLiveProcess(retained, child.SafeHandle), "Exited process objects matched as live.");
     Reject(() => Native.SnapshotModulePaths(retained, expected));
     Check(Native.MatchesExitedNomination(identity, owner.SafeHandle, child.SafeHandle.DangerousGetHandle().ToInt64(), retained, 0), "Exited nominated object did not match.");
