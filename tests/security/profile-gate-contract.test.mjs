@@ -1269,3 +1269,13 @@ test('desktop suspended probe is one-shot, broker-owned, and requires exact term
     assert.match(client, /#if VEIL_CEF_PREFLIGHT_ONLY\s*if \(command == "ProbeCefSuspended"\) VerifyServer\(pipe\);\s*#endif/);
     assert.match(wire, /IsSuspendedProbeReply[\s\S]*?ExactObject\(root, "ok", "cefSuspendedProbeVerified", "volumeGuid"\)[\s\S]*?JsonValueKind.True[\s\S]*?JsonValueKind.True[\s\S]*?string.Equals\(guid.GetString\(\), expectedGuid, StringComparison.OrdinalIgnoreCase\)/);
 });
+
+
+test('diagnostic trust enrollment is create-only and binds independent release anchors before writes', async () => {
+    const entry = await readFile('apps/broker/Veil.VolumeBroker/Program.cs', 'utf8');
+    const registry = await readFile('apps/broker/Veil.VolumeBroker/CefSystemBaselineTrustState.cs', 'utf8');
+    const update = await readFile('apps/broker/Veil.VolumeBroker/CefSystemBaselineTrustUpdate.cs', 'utf8');
+    assert.match(entry, /#if VEIL_CEF_DIAGNOSTIC_IPC[\s\S]*?--cef-enroll-diagnostic-trust[\s\S]*?--disposable-vm[\s\S]*?WindowsBuiltInRole.Administrator[\s\S]*?ReadInstalledDiagnosticInputs\(\)[\s\S]*?InstallDiagnosticTrust\(payload, signature,[\s\S]*?DecodeDigest\(payloadSha256\)[\s\S]*?#endif/);
+    assert.match(update, /PrepareDiagnosticEnrollment[\s\S]*?FixedTimeEquals\(SHA256.HashData\(payload\), independentPayloadSha256\)[\s\S]*?PrepareEnrollment\(payload, signature, publicKey, independentKeySha256,[\s\S]*?prepared.next.MinimumSequence != independentSequence[\s\S]*?authority.RequireIndependent\(prepared.next\);\s*return new\(null, prepared.next, host, authority\);/);
+    assert.match(registry, /InstallDiagnosticTrust[\s\S]*?RequireMaintenanceAuthority\(\);[\s\S]*?PrepareDiagnosticEnrollment[\s\S]*?CefSystemBaselineWriterLock.Acquire\(\)[\s\S]*?RequireExpectedAndCopyRecord\(null,[\s\S]*?InstallApprovalAuthority\(approvalKey, approvalAnchor\);\s*authority.RequireSame\(ReadApprovalAuthorityStable\(\)\);\s*Publish\(update\);[\s\S]*?VerifyInstalledTrust\(payload, signature\).RequireBoundTrust\(\);/);
+});

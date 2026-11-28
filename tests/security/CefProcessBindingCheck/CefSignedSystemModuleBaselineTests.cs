@@ -182,6 +182,24 @@ internal static class CefSignedSystemModuleBaselineTests
         byte[] approvalPublic = approvalKey.ExportSubjectPublicKeyInfo();
         byte[] approvalAnchor = SHA256.HashData(approvalPublic);
         var authority = new CefBaselineApprovalAuthority(approvalPublic, approvalAnchor);
+        byte[] payloadAnchor = SHA256.HashData(good);
+        var diagnosticEnrollment = CefSystemBaselineTrustUpdate.PrepareDiagnosticEnrollment(
+            good, signature, publicKey, anchor, payloadAnchor, 7, host, authority);
+        diagnosticEnrollment.RequirePublicationAuthority(authority);
+        diagnosticEnrollment.RequirePublished(enrolled, host);
+        Reject(() => diagnosticEnrollment.RequirePublicationAuthority(
+            new CefBaselineApprovalAuthority(wrongKey.ExportSubjectPublicKeyInfo(),
+                SHA256.HashData(wrongKey.ExportSubjectPublicKeyInfo()))));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareDiagnosticEnrollment(
+            good, signature, publicKey, anchor, new byte[32], 7, host, authority));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareDiagnosticEnrollment(
+            good, signature, publicKey, anchor, payloadAnchor, 6, host, authority));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareDiagnosticEnrollment(
+            good, signature, publicKey, anchor, payloadAnchor, 8, host, authority));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareDiagnosticEnrollment(
+            good, signature, publicKey, anchor, payloadAnchor, 7, host,
+            new CefBaselineApprovalAuthority(publicKey, anchor)));
+        Console.WriteLine("PASS: exact diagnostic enrollment payload, sequence and independent authority binding");
         authority.RequireFreshInstallation(false, false);
         Reject(() => authority.RequireFreshInstallation(true, false));
         Reject(() => authority.RequireFreshInstallation(false, true));
