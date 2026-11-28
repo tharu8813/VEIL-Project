@@ -888,21 +888,33 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         {
             await Task.Delay(TimeSpan.FromSeconds(2));
             await serial.WaitAsync();
+            bool continueRetry = false;
             try
             {
-                RetryUnresolvedCefStops();
-                TryCompleteDiagnosticRelock();
-                if ((unresolvedCefStops.Count == 0 && !diagnosticSession.CleanupPending && !diagnosticRelock.Pending) || attempt == 29)
+                var failure = CefStopRetryPolicy.TryAttempt(RetryUnresolvedCefStops,
+                    () => TryCompleteDiagnosticRelock());
+                if (failure is not null)
+                    log.Write("cef-stop-retry", new { result = "AttemptUnconfirmed", type = failure.GetType().Name });
+                bool pending = unresolvedCefStops.Count != 0 || diagnosticSession.CleanupPending || diagnosticRelock.Pending;
+                continueRetry = CefStopRetryPolicy.ShouldContinue(attempt, 30, pending, failure);
+                if (!continueRetry)
                 {
-                    cefStopRetryRunning = false;
                     if (unresolvedCefStops.Count != 0 || diagnosticSession.CleanupPending)
                         log.Write("cef-child-stop", new { result = "RetryExhausted" });
                     if (diagnosticRelock.Pending)
                         log.Write("cef-diagnostic-relock", new { result = "RetryExhausted" });
+                    if (failure is not null)
+                        log.Write("cef-stop-retry", new { result = "RetryExhaustedUnconfirmed" });
                     return;
                 }
             }
-            finally { serial.Release(); }
+            finally
+            {
+                // Reset while still holding serial. A request must not
+                // observe a finished worker as running or race a new worker.
+                if (!continueRetry) cefStopRetryRunning = false;
+                serial.Release();
+            }
         }
     }
 
