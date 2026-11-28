@@ -45,6 +45,17 @@ internal static class CefLaunchTokenPolicy
             throw new UnauthorizedAccessException("CEF root is outside the authenticated owner's logon.");
     }
 
+    // A duplicate primary token has its own object identity. The owner
+    // identity in this snapshot is attribution, not a newly created process.
+    internal static void RequireDuplicate(CefLaunchTokenSnapshot source, CefLaunchTokenSnapshot duplicate)
+    {
+        RequireStandard(source);
+        RequireStandard(duplicate);
+        if (source.Token != duplicate.Token || source.AuthenticationId != duplicate.AuthenticationId ||
+            source.TokenId == duplicate.TokenId || duplicate.TokenId == 0)
+            throw new UnauthorizedAccessException("CEF primary token duplicate mismatch.");
+    }
+
     internal static void RequireSame(CefLaunchTokenSnapshot expected, CefLaunchTokenSnapshot current)
     {
         RequireStandard(current);
@@ -70,6 +81,19 @@ internal static class CefProcessTokenObserver
             throw new UnauthorizedAccessException("CEF token process identity mismatch.");
 
         using var token = OpenQueryToken(process);
+        var snapshot = ReadTokenSnapshot(token, expected, inspectLaunchPrivileges);
+        using var current = OpenQueryToken(process);
+        var currentStats = ReadFixed<TokenStatistics>(current, 10);
+        if (snapshot.TokenId != currentStats.TokenId || snapshot.ModifiedId != currentStats.ModifiedId ||
+            snapshot.AuthenticationId != currentStats.AuthenticationId || currentStats.TokenType != 1 ||
+            Native.ObserveProcess(process) != expected)
+            throw new UnauthorizedAccessException("CEF token changed during observation.");
+        return snapshot;
+    }
+
+    private static CefLaunchTokenSnapshot ReadTokenSnapshot(SafeAccessTokenHandle token,
+        ClientIdentity expected, bool inspectLaunchPrivileges)
+    {
         var before = ReadFixed<TokenStatistics>(token, 10); // TokenStatistics
         if (before.TokenType != 1)
             throw new UnauthorizedAccessException("Expected a primary process token.");
@@ -89,12 +113,7 @@ internal static class CefProcessTokenObserver
         bool administratorGroup = inspectLaunchPrivileges && HasAdministratorGroup(token);
         bool standardPrivileges = inspectLaunchPrivileges && HasOnlyStandardPrivileges(token);
         var after = ReadFixed<TokenStatistics>(token, 10);
-        // Reopen the token of the same retained process, not a PID. A
-        // replaced or modified token must not be accepted as this snapshot.
-        using var current = OpenQueryToken(process);
-        var currentStats = ReadFixed<TokenStatistics>(current, 10);
-        if (!SameToken(before, after) || !SameToken(after, currentStats) ||
-            Native.ObserveProcess(process) != expected)
+        if (!SameToken(before, after) || before.AuthenticationId != after.AuthenticationId)
             throw new UnauthorizedAccessException("CEF token changed during observation.");
         return new(new(expected, integrity, restricted, appContainer, elevated, elevationType),
             after.AuthenticationId, after.TokenId, after.ModifiedId, administratorGroup, standardPrivileges);
@@ -193,9 +212,78 @@ internal static class CefProcessTokenObserver
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool LookupPrivilegeValueW(string? system, string name, out long luid);
 
-    private static SafeAccessTokenHandle OpenQueryToken(SafeProcessHandle process)
+    // Disconnected preparation primitive. Borrow the authenticated owner's
+    // retained process handle; the caller must keep it alive and serialize
+    // access. No process creation, token adjustment, export or IPC.
+    internal sealed class LaunchTokenLease : IDisposable
     {
-        if (!OpenProcessToken(process, 8, out var token))
+        private readonly SafeProcessHandle owner;
+        private readonly CefLaunchTokenSnapshot sourceSnapshot;
+        private readonly CefLaunchTokenSnapshot duplicateSnapshot;
+        private readonly SafeAccessTokenHandle duplicate;
+        private bool disposed;
+
+        private LaunchTokenLease(SafeProcessHandle owner, CefLaunchTokenSnapshot source,
+            CefLaunchTokenSnapshot snapshot, SafeAccessTokenHandle duplicate)
+        {
+            this.owner = owner;
+            sourceSnapshot = source;
+            duplicateSnapshot = snapshot;
+            this.duplicate = duplicate;
+        }
+
+        internal static LaunchTokenLease Acquire(SafeProcessHandle owner, ClientIdentity expected)
+        {
+            // First reject an unsuitable owner without requesting duplicate
+            // access. Recheck the exact source object after opening it.
+            var observed = ObserveLaunchToken(owner, expected);
+            CefLaunchTokenPolicy.RequireStandard(observed);
+            using var source = OpenQueryToken(owner, 0x0008 | 0x0002); // QUERY | DUPLICATE
+            CefLaunchTokenPolicy.RequireSame(observed, ReadTokenSnapshot(source, expected, true));
+            CefLaunchTokenPolicy.RequireSame(observed, ObserveLaunchToken(owner, expected));
+            // Only QUERY | DUPLICATE | ASSIGN_PRIMARY, non-inheritable default
+            // handle, primary token. Never request adjustment or MAXIMUM_ALLOWED.
+            if (!DuplicateTokenEx(source, 0x000B, IntPtr.Zero, 2, 1, out var copy))
+            {
+                int error = Marshal.GetLastWin32Error();
+                copy?.Dispose();
+                throw new Win32Exception(error);
+            }
+            try
+            {
+                var snapshot = ReadTokenSnapshot(copy, expected, true);
+                CefLaunchTokenPolicy.RequireDuplicate(observed, snapshot);
+                CefLaunchTokenPolicy.RequireSame(observed, ReadTokenSnapshot(source, expected, true));
+                CefLaunchTokenPolicy.RequireSame(observed, ObserveLaunchToken(owner, expected));
+                return new LaunchTokenLease(owner, observed, snapshot, copy);
+            }
+            catch { copy.Dispose(); throw; }
+        }
+
+        internal void RequireCurrent()
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            CefLaunchTokenPolicy.RequireSame(sourceSnapshot, ObserveLaunchToken(owner, sourceSnapshot.Token.Identity));
+            CefLaunchTokenPolicy.RequireSame(duplicateSnapshot,
+                ReadTokenSnapshot(duplicate, sourceSnapshot.Token.Identity, true));
+        }
+
+        public void Dispose()
+        {
+            if (disposed) return;
+            disposed = true;
+            duplicate.Dispose();
+        }
+    }
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DuplicateTokenEx(SafeAccessTokenHandle existing, uint desiredAccess,
+        IntPtr attributes, int impersonationLevel, int tokenType, out SafeAccessTokenHandle duplicate);
+
+    private static SafeAccessTokenHandle OpenQueryToken(SafeProcessHandle process, uint access = 8)
+    {
+        if (!OpenProcessToken(process, access, out var token))
         {
             int error = Marshal.GetLastWin32Error();
             token?.Dispose();

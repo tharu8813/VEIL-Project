@@ -61,6 +61,15 @@ internal static class CefRoleTokenPolicyTests
         Refuse(() => CefLaunchTokenPolicy.RequireStandard(owner with { Token = browser with { Identity = identity with { UserSid = "S-1-5-18" } } }));
         Refuse(() => CefLaunchTokenPolicy.RequireSame(owner, owner with { ModifiedId = 99 }));
         Refuse(() => CefLaunchTokenPolicy.RequireSame(owner, owner with { TokenId = 99 }));
+        var duplicate = owner with { TokenId = 22, ModifiedId = 23 };
+        CefLaunchTokenPolicy.RequireDuplicate(owner, duplicate);
+        Refuse(() => CefLaunchTokenPolicy.RequireDuplicate(owner, owner));
+        Refuse(() => CefLaunchTokenPolicy.RequireDuplicate(owner, duplicate with { TokenId = 0 }));
+        Refuse(() => CefLaunchTokenPolicy.RequireDuplicate(owner, duplicate with { AuthenticationId = 99 }));
+        Refuse(() => CefLaunchTokenPolicy.RequireDuplicate(owner, duplicate with { AdministratorGroupPresent = true }));
+        Refuse(() => CefLaunchTokenPolicy.RequireDuplicate(owner, duplicate with { OnlyStandardPrivileges = false }));
+        Refuse(() => CefLaunchTokenPolicy.RequireDuplicate(owner, duplicate with { Token = root.Token }));
+        Console.WriteLine("PASS: primary token duplication policy (synthetic)");
         Console.WriteLine("PASS: separate standard-user launch token and logon binding policy (synthetic)");
         Console.WriteLine("PASS: conservative CEF role token baselines and unknown/unverified role refusal");
     }

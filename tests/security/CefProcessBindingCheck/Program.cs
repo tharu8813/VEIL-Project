@@ -149,6 +149,26 @@ try
     if (launchToken.Token.Elevated || launchToken.Token.ElevationType != 1 ||
         launchToken.AdministratorGroupPresent || !launchToken.OnlyStandardPrivileges)
         Reject(() => CefLaunchTokenPolicy.RequireStandard(launchToken));
+    Reject(() => CefProcessTokenObserver.LaunchTokenLease.Acquire(owner.SafeHandle, expected).Dispose());
+    bool eligible = true;
+    try { CefLaunchTokenPolicy.RequireStandard(launchToken); }
+    catch (UnauthorizedAccessException) { eligible = false; }
+    if (eligible)
+    {
+        using var tokenLease = CefProcessTokenObserver.LaunchTokenLease.Acquire(retained, expected);
+        tokenLease.RequireCurrent();
+        tokenLease.Dispose();
+        bool disposedRefused = false;
+        try { tokenLease.RequireCurrent(); }
+        catch (ObjectDisposedException) { disposedRefused = true; }
+        Check(disposedRefused, "Disposed primary token lease accepted.");
+        Console.WriteLine("PASS: actual standard-user token duplicate lease (no process creation)");
+    }
+    else
+    {
+        Reject(() => CefProcessTokenObserver.LaunchTokenLease.Acquire(retained, expected).Dispose());
+        Console.WriteLine("SKIP: positive primary token duplicate requires separate standard-user account; refusal tested");
+    }
     Console.WriteLine("PASS: actual retained launch token inventory (not a launch authorization)");
     Console.WriteLine("PASS: retained process token snapshot and wrong-object refusal");
     Check(Native.SameLiveProcess(retained, child.SafeHandle), "Different handles to the same child did not match.");

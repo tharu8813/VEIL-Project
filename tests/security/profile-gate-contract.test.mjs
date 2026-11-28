@@ -782,3 +782,17 @@ test('internal diagnostic root and owner require separate standard-user tokens a
     assert.match(nested, /ObserveLaunchToken\(ownerHandle, owner\);[\s\S]*?ObserveLaunchToken\(rootHandle, root\);[\s\S]*?CefLaunchTokenPolicy\.RequirePair\(ownerToken, rootToken\);[\s\S]*?RequirePrivateNestedBinding/);
     assert.match(nested, /CefLaunchTokenPolicy\.RequireSame\(ownerToken, CefProcessTokenObserver\.ObserveLaunchToken\(ownerHandle, owner\)\);[\s\S]*?CefLaunchTokenPolicy\.RequireSame\(rootToken, CefProcessTokenObserver\.ObserveLaunchToken\(rootHandle, root\)\);/);
 });
+
+
+test('launch token lease duplicates only verified retained standard-user primary token', async () => {
+    const observer = await readFile('apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const lease = observer.slice(observer.indexOf('internal sealed class LaunchTokenLease'),
+        observer.indexOf('private static SafeAccessTokenHandle OpenQueryToken'));
+    assert.match(lease, /ObserveLaunchToken\(owner, expected\);\s*CefLaunchTokenPolicy\.RequireStandard\(observed\);\s*using var source = OpenQueryToken\(owner, 0x0008 \| 0x0002\)/);
+    assert.match(lease, /DuplicateTokenEx\(source, 0x000B, IntPtr.Zero, 2, 1, out var copy\)[\s\S]*?RequireDuplicate\(observed, snapshot\)[\s\S]*?RequireSame\(observed, ObserveLaunchToken\(owner, expected\)\)[\s\S]*?return new LaunchTokenLease/);
+    assert.match(lease, /catch \{ copy\.Dispose\(\); throw; \}/);
+    assert.match(lease, /ObjectDisposedException\.ThrowIf\(disposed, this\);[\s\S]*?RequireSame\(sourceSnapshot, ObserveLaunchToken[\s\S]*?RequireSame\(duplicateSnapshot,/);
+    assert.doesNotMatch(lease, /CreateProcessAsUser|AdjustTokenPrivileges|SetTokenInformation|WindowsIdentity\.GetCurrent|GetLinkedToken/);
+    assert.doesNotMatch(broker, /LaunchTokenLease|DuplicateTokenEx/);
+});
