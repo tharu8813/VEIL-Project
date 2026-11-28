@@ -182,7 +182,12 @@ internal static class CefSignedSystemModuleBaselineTests
             actualPayload, Sign(actualPayload), authorityTestState, () => authorityTestState,
             authority, () => CefBaselineApprovalAuthority.ParseActiveRecord(currentAuthorityRecord));
         authorityBoundVerifier.RequireModules([]);
+        authorityBoundVerifier.RequireBoundTrust();
+        var rawVerifier = new CefSystemModuleVerifier([new CefSystemModulePin("kernel32.dll", 1,
+            new string('A', 64), new string('B', 64))]);
+        Reject(() => rawVerifier.RequireBoundTrust());
         currentAuthorityRecord = stoppedAuthority;
+        Reject(() => authorityBoundVerifier.RequireBoundTrust());
         Reject(() => authorityBoundVerifier.RequireModules([]));
         Reject(() => CefSignedSystemModuleBaseline.VerifyWithApprovalSnapshot(actualPayload,
             Sign(actualPayload), authorityTestState, () => authorityTestState,

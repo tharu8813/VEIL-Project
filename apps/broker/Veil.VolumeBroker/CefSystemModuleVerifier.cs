@@ -41,6 +41,16 @@ internal sealed class CefSystemModuleVerifier
         name.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_') &&
         !name.StartsWith('.') && !name.Contains("..", StringComparison.Ordinal);
 
+    // Broker-bound diagnostics cannot use a verifier constructed from raw
+    // pins with no live host/trust guard. Synthetic raw-pin tests remain
+    // available through RequireModules, not the bound-session path.
+    internal void RequireBoundTrust()
+    {
+        if (requireHostCurrent is null)
+            throw new UnauthorizedAccessException("Live baseline trust guard unavailable.");
+        requireHostCurrent();
+    }
+
     internal void RequireModules(IEnumerable<string> modules)
     {
         ArgumentNullException.ThrowIfNull(modules);

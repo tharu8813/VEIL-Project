@@ -10,7 +10,7 @@ internal static class CefProcessModuleObserver
 {
     internal static CefModuleInventoryObservation Observe(SafeProcessHandle process,
         ClientIdentity expected, CefRuntimeRegistrationLease registration,
-        CefSystemModuleVerifier? systemVerifier = null)
+        CefSystemModuleVerifier systemVerifier)
     {
         ArgumentNullException.ThrowIfNull(process);
         ArgumentNullException.ThrowIfNull(expected);
@@ -19,11 +19,15 @@ internal static class CefProcessModuleObserver
         if (!string.Equals(expected.ImagePath, image, StringComparison.OrdinalIgnoreCase) ||
             Native.ObserveProcess(process) != expected)
             throw new UnauthorizedAccessException("CEF module process identity mismatch.");
-        Action<IEnumerable<string>>? verifySystem = systemVerifier is null ? null : systemVerifier.RequireModules;
+        ArgumentNullException.ThrowIfNull(systemVerifier);
+        systemVerifier.RequireBoundTrust();
         var result = CefModuleInventoryPolicy.Verify(image, Environment.SystemDirectory,
             Native.SnapshotModulePaths(process, expected),
             registration.RequireObservedApplicationModules,
-            () => Native.SnapshotModulePaths(process, expected), verifySystem);
+            () => Native.SnapshotModulePaths(process, expected), systemVerifier.RequireModules);
+        systemVerifier.RequireBoundTrust();
+        if (result.UnverifiedSystemModules != 0)
+            throw new UnauthorizedAccessException("Unverified CEF system modules refused.");
         registration.RequireCurrent();
         if (Native.ObserveProcess(process) != expected)
             throw new UnauthorizedAccessException("CEF module process changed.");
@@ -43,12 +47,14 @@ internal static class CefNestedProcessDiagnostics
         CefBrokerOwnedJob peerJob,
         ClientIdentity root, SafeProcessHandle rootHandle,
         CefRuntimeRegistrationLease registration,
-        CefSystemModuleVerifier? systemVerifier = null)
+        CefSystemModuleVerifier systemVerifier)
     {
         ArgumentNullException.ThrowIfNull(brokerJob);
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(rootHandle);
         ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(systemVerifier);
+        systemVerifier.RequireBoundTrust();
         // Only the independently retained root and trusted jobs are inputs.
         // The broker collects member handles itself, never from IPC.
         registration.RequireCurrent();
@@ -67,6 +73,7 @@ internal static class CefNestedProcessDiagnostics
                     CefRoleTokenPolicy.Evaluate(identity, role.Role, token), modules);
             });
         registration.RequireCurrent();
+        systemVerifier.RequireBoundTrust();
         return result;
     }
 }
@@ -89,9 +96,11 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
         CefBrokerOwnedJob brokerJob, CefBrokerOwnedJob peerJob,
         ClientIdentity root, SafeProcessHandle rootHandle,
         Func<(object Generation, CefRuntimeRegistrationLease RuntimeLease, bool VolumeProtected)> readCurrent,
-        CefSystemModuleVerifier? systemVerifier = null)
+        CefSystemModuleVerifier systemVerifier)
     {
         ArgumentNullException.ThrowIfNull(readCurrent);
+        ArgumentNullException.ThrowIfNull(systemVerifier);
+        systemVerifier.RequireBoundTrust();
         ArgumentNullException.ThrowIfNull(registration);
         ArgumentNullException.ThrowIfNull(brokerJob);
         ArgumentNullException.ThrowIfNull(peerJob);
@@ -110,6 +119,7 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
         guard = new(owner, generation, registration);
         readContext = () =>
         {
+            systemVerifier.RequireBoundTrust();
             var current = readCurrent();
             return new(Native.ObserveProcess(ownerHandle), current.Generation, current.RuntimeLease,
                 Native.IsRunning(ownerHandle), current.VolumeProtected);

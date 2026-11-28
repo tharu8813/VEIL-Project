@@ -557,7 +557,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private bool TryRegisterDiagnosticSession(object expectedGeneration,
         ClientIdentity root, SafeProcessHandle rootHandle,
         CefBrokerOwnedJob brokerJob, CefBrokerOwnedJob peerJob,
-        Veil.Desktop.CefRuntimeRegistrationLease registration)
+        Veil.Desktop.CefRuntimeRegistrationLease registration,
+        ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature)
     {
         if (config.Development || config.CefChildImage is not { } image ||
             config.CefChildSha256 is not { } digest ||
@@ -574,6 +575,12 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         if (!string.Equals(registration.ImagePath, image, StringComparison.OrdinalIgnoreCase) ||
             !CandidateAuthorityCurrent(expectedGeneration))
             return false;
+        // No caller-selected verifier or fallback to unverified System32.
+        // Exact payload digest, signing key, approval authority and actual host
+        // are obtained/checked against the protected installed trust state.
+        var systemVerifier = CefSignedSystemModuleBaseline.VerifyInstalledTrust(baselinePayload, baselineSignature);
+        systemVerifier.RequireBoundTrust();
+        if (!CandidateAuthorityCurrent(expectedGeneration)) return false;
         var session = new CefBoundDiagnosticSession(owner, ownerHandle, expectedGeneration,
             registration, brokerJob, peerJob, root, rootHandle, () =>
             {
@@ -581,7 +588,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     throw new UnauthorizedAccessException("CEF diagnostic generation retired.");
                 registration.RequireCurrent();
                 return (expectedGeneration, registration, true);
-            });
+            }, systemVerifier);
         // All operations are serialized; no IPC or startup enablement.
         return diagnosticSession.TryRegister(expectedGeneration, session);
     }
@@ -795,6 +802,11 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             {
                 if (!ReferenceEquals(authenticatedGeneration, expected)) return;
                 if (!RefreshAuthenticatedOwner(backend.Status())) return;
+                // Only an already registered internal diagnostic session can
+                // reach this path. Observation failure retires the owner and
+                // the session through the existing catch/cleanup path.
+                if (diagnosticSession.Current(unlockOwner) is { } session)
+                    _ = session.Observe();
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             {

@@ -718,3 +718,22 @@ test('broker retains diagnostic slot through revocation and refuses unsafe opera
     assert.match(policy, /retired = true;\s*session\.Revoke\(\);/);
     assert.match(policy, /if \(!session\.RevokeAndRelease\(milliseconds\)\) return false;\s*session = null;/);
 });
+
+
+test('registered diagnostic session requires installed signed baseline and retires on observation failure', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const nested = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    const verifier = await readFile('apps/broker/Veil.VolumeBroker/CefSystemModuleVerifier.cs', 'utf8');
+    const register = broker.slice(broker.indexOf('private bool TryRegisterDiagnosticSession('),
+        broker.indexOf('private void ClearAuthenticatedOwner()'));
+    assert.match(register, /ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature/);
+    assert.match(register, /CefSignedSystemModuleBaseline\.VerifyInstalledTrust\(baselinePayload, baselineSignature\);\s*systemVerifier\.RequireBoundTrust\(\);[\s\S]*?new CefBoundDiagnosticSession[\s\S]*?\}, systemVerifier\);[\s\S]*?diagnosticSession\.TryRegister/);
+    assert.doesNotMatch(nested, /CefSystemModuleVerifier\?|systemVerifier\s+is null/);
+    assert.match(nested, /systemVerifier\.RequireModules\);\s*systemVerifier\.RequireBoundTrust\(\);\s*if \(result\.UnverifiedSystemModules != 0\)/);
+    assert.match(nested, /readContext = \(\) =>\s*\{\s*systemVerifier\.RequireBoundTrust\(\);/);
+    assert.match(verifier, /if \(requireHostCurrent is null\)\s*throw new UnauthorizedAccessException[\s\S]*?requireHostCurrent\(\);/);
+    const monitor = broker.slice(broker.indexOf('private async Task MonitorAuthenticatedGenerationAsync('),
+        broker.indexOf('private async Task MonitorCompletedPreflightAsync('));
+    assert.match(monitor, /if \(diagnosticSession\.Current\(unlockOwner\) is \{ \} session\)\s*_ = session\.Observe\(\);[\s\S]*?catch \(Exception error\)[\s\S]*?ClearAuthenticatedOwner\(\);/);
+    assert.equal((broker.match(/TryRegisterDiagnosticSession\(/g) ?? []).length, 1);
+});
