@@ -873,7 +873,7 @@ test('broker pre-creation preparation independently pins executable, runtime, tr
     assert.match(pin, /var image = OpenVerifiedBeforeCreation\(registeredPath, digest\);[\s\S]*?!Native\.MatchesLiveProcessImage\(process, child\)/);
     const entry = broker.slice(broker.indexOf('private CefBrokerLaunchPreparation PrepareDiagnosticLaunch('), broker.indexOf('private CefDiagnosticActivationOutcome TryRegisterDiagnosticSession('));
     assert.match(entry, /!diagnosticRelock\.Pending && !config\.Development &&[\s\S]*?pendingCefChild is null && completedPreflight is null && unresolvedCefStops\.Count == 0 &&[\s\S]*?CandidateAuthorityCurrent\(expectedGeneration\);[\s\S]*?if \(diagnosticSession\.Occupied \|\| !AuthorityCurrent\(\)/);
-    assert.match(entry, /config\.CefChildImage is not \{ \} image[\s\S]*?config\.CefChildSha256 is not \{ \} digest[\s\S]*?CefBrokerLaunchPreparation\.Open\(image, digest, owner, ownerHandle,\s*AuthorityCurrent, baselinePayload, baselineSignature\)/);
+    assert.match(entry, /config\.CefChildImage is not \{ \} image[\s\S]*?config\.CefChildSha256 is not \{ \} digest[\s\S]*?CefBrokerLaunchPreparation\.Open\(image, digest, owner, ownerHandle,\s*AuthorityCurrent, baselinePayload, baselineSignature,\s*config.VolumeId, config.VolumeGuid, config.PipeName, backend.Status\)/);
     assert.equal((broker.match(/PrepareDiagnosticLaunch\(/g) ?? []).length, 2);
     assert.doesNotMatch(protocol, /PrepareDiagnosticLaunch|CefBrokerLaunchPreparation/);
     assert.doesNotMatch(prep, /CreateProcessAsUser|CreateSuspended|ResumeThread|ResumeRetainedRoot/);
@@ -907,7 +907,7 @@ test('prepared broker candidate creation is single-root, token-bound and remains
     const launch = await readFile('apps/desktop/Engine/CefContainedProcess.cs', 'utf8');
     const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
     const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
-    assert.match(prep, /creationAttempted = true;\s*RequireCurrent\(\);[\s\S]*?\["SystemRoot"\] = windows,\s*\["WINDIR"\] = windows,[\s\S]*?outer\.CreateRetainedDiagnosticPair\(inner, token, path, environment, custody\);\s*custody\.VerifyRetainedRoot\(root =>[\s\S]*?token\.RequireCreatedRoot\(root, path\);[\s\S]*?CefPinnedImage\.OpenVerified\(identity, root, path, digest\);\s*RequireCurrent\(\);/);
+    assert.match(prep, /creationAttempted = true;\s*RequireCurrent\(\);\s*var environment = profile.GetEnvironmentSnapshot\(token\);\s*outer\.CreateRetainedDiagnosticPair\(inner, token, path, environment, custody\);\s*custody\.VerifyRetainedRoot\(root =>[\s\S]*?token\.RequireCreatedRoot\(root, path\);[\s\S]*?CefPinnedImage\.OpenVerified\(identity, root, path, digest\);\s*RequireCurrent\(\);/);
     assert.doesNotMatch(prep, /GetEnvironmentVariables|TakeVerified|ResumeRetainedRoot|ResumeThread/);
     assert.match(job, /#if VEIL_CEF_BROKER[\s\S]*?CreateRetainedDiagnosticPair[\s\S]*?activeLimit != 1 \|\| peer.activeLimit != 1[\s\S]*?assignmentExported \|\| peer.assignmentExported[\s\S]*?RequireContainmentLimits\(job, activeLimit\);[\s\S]*?lease\.RequireCurrent\(\);\s*assignmentIssued = peer.assignmentIssued = true;\s*lease\.CreateRetainedDiagnosticRoot/);
     assert.match(observer, /#if VEIL_CEF_BROKER[\s\S]*?CreateRetainedDiagnosticRoot[\s\S]*?RequireCurrent\(\);\s*Veil\.Desktop\.CefContainedProcess\.CreateRetainedUserRoot\(image, environment, outer, inner,\s*duplicate, custody\);[\s\S]*?RequireCreatedRoot[\s\S]*?ObserveLaunchToken\(root, identity\);\s*CefLaunchTokenPolicy\.RequirePair\(sourceSnapshot, observed\);[\s\S]*?RequireCurrent\(\);/);
@@ -957,7 +957,7 @@ test('prepared creation binds private Jobs to original custody handle before ses
     const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
     const session = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
     const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
-    assert.match(prep, /custody\.VerifyRetainedRoot\(root =>[\s\S]*?token\.RequireCreatedRoot\(root, path\);[\s\S]*?RequireCurrent\(\);[\s\S]*?outer\.BindPreparedPrivatePair\(inner, owner, ownerHandle, identity, root\);\s*RequireCurrent\(\);\s*outer\.RequirePreparedPrivateRoot\(inner, owner, ownerHandle, identity, root\);/);
+    assert.match(prep, /custody\.VerifyRetainedRoot\(root =>[\s\S]*?token\.RequireCreatedRoot\(root, path\);[\s\S]*?RequireCurrent\(\);[\s\S]*?outer\.BindPreparedPrivatePair\(inner, owner, ownerHandle, identity, root\);[\s\S]*?_ = profile.GetEnvironmentSnapshot\(token\);\s*RequireCurrent\(\);\s*outer\.RequirePreparedPrivateRoot\(inner, owner, ownerHandle, identity, root\);/);
     assert.match(job, /internal void BindPreparedPrivatePair[\s\S]*?assignmentExported \|\| peer.assignmentExported \|\| bound \|\| peer.bound[\s\S]*?privatePeer is not null \|\| peer.privatePeer is not null[\s\S]*?RequireContainmentLimits\(job, activeLimit\);\s*RequireContainmentLimits\(peer.job, peer.activeLimit\);\s*BindSingleCandidate\(owner, ownerHandle, root, rootHandle\);\s*peer\.BindSingleCandidate\(owner, ownerHandle, root, rootHandle\);\s*RequirePrivateNestedBinding\(peer, owner, ownerHandle, root, rootHandle\);\s*RequirePreparedPrivateRoot\(peer, owner, ownerHandle, root, rootHandle\);/);
     assert.match(job, /internal void RequireOrBindPreparedPrivatePair[\s\S]*?if \(privatePeer is not null \|\| peer.privatePeer is not null\)\s*RequirePreparedPrivateRoot\(peer, owner, ownerHandle, root, rootHandle\);\s*else\s*RequirePrivateNestedBinding\(peer, owner, ownerHandle, root, rootHandle\);/);
     assert.match(job, /!ReferenceEquals\(privateRoot, rootHandle\) \|\| !ReferenceEquals\(peer.privateRoot, rootHandle\)/);
@@ -1057,8 +1057,10 @@ test('broker profile authority reads fixed installed client registration and pin
     assert.match(registered, /!remaining.Remove\(property.Name\)[\s\S]*?TextEquals\(root.GetProperty\("volumeId"\), volumeId, StringComparison.Ordinal\)[\s\S]*?TextEquals\(root.GetProperty\("pipeName"\), pipeName, StringComparison.Ordinal\)[\s\S]*?TextEquals\(root.GetProperty\("brokerImage"\), expectedBroker, StringComparison.OrdinalIgnoreCase\)[\s\S]*?JsonValueKind.True[\s\S]*?JsonValueKind.False/);
     assert.match(registered, /AdminOnlyFile.RequireProtectedExecutable\(path\);\s*Native.RequireCanonicalSingleLinkImage\(file.SafeFileHandle, path\);[\s\S]*?file.ReadExactly\(bytes\);[\s\S]*?AdminOnlyFile.RequireProtectedExecutable\(path\);\s*Native.RequireCanonicalSingleLinkImage\(file.SafeFileHandle, path\);/);
     assert.match(registered, /ReadPinned\(registration, registrationPath\).AsSpan\(\).SequenceEqual\(original\)[\s\S]*?profile.RequireCurrent\(\);[\s\S]*?ReadPinned\(registration, registrationPath\).AsSpan\(\).SequenceEqual\(original\)[\s\S]*?retired = true;/);
-    assert.match(broker, /private CefRegisteredProfileLease PrepareRegisteredProfile\(object expectedGeneration\)[\s\S]*?CandidateAuthorityCurrent\(expectedGeneration\)[\s\S]*?CefRegisteredProfileLease.OpenInstalled\(config.VolumeId, config.VolumeGuid,\s*config.PipeName, backend.Status, AuthorityCurrent\)/);
-    assert.equal((broker.match(/PrepareRegisteredProfile\(/g) ?? []).length, 1);
+    const preparation = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
+    assert.match(broker, /CandidateAuthorityCurrent\(expectedGeneration\)[\s\S]*?CefBrokerLaunchPreparation.Open\(image, digest, owner, ownerHandle,\s*AuthorityCurrent, baselinePayload, baselineSignature,\s*config.VolumeId, config.VolumeGuid, config.PipeName, backend.Status\)/);
+    assert.match(preparation, /profile = CefRegisteredProfileLease.OpenInstalled\(volumeId, volumeGuid, pipeName,\s*readStatus, authorityCurrent\)/);
+    assert.doesNotMatch(broker, /PrepareRegisteredProfile\(/);
     assert.doesNotMatch(protocol, /PrepareRegisteredProfile|CefRegisteredProfileLease/);
     assert.doesNotMatch(registered, /GetEnvironmentVariable|Process\.Start|CreateSuspended|ResumeRetainedRoot/);
 });
@@ -1107,4 +1109,27 @@ test('registered CEF environment requires actual user-token filesystem access wi
     assert.doesNotMatch(scope, /readStatus|authorityCurrent|RequireCurrent\(|File\.Write|CreateDirectory/);
     assert.match(profile, /RequireUserAccess\(SafeAccessTokenHandle access\)[\s\S]*?RequireCurrent\(\);[\s\S]*?profileLock is null[\s\S]*?WindowsIdentity.RunImpersonated[\s\S]*?RequireCurrent\(\);[\s\S]*?catch\s*\{\s*retired = true;/);
     assert.match(fixture, /FileSystemRights.CreateFiles,\s*AccessControlType.Deny[\s\S]*?scratch.SetAccessControl\(deniedAcl\);\s*Reject\(\(\) => deniedProfile.RequireUserAccess\(fixtureUser.AccessToken\)\);[\s\S]*?scratch.SetAccessControl\(originalAcl\)/);
+});
+
+
+test('suspended broker creation owns the registered profile and uses only its token-verified environment', async () => {
+    const prep = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const lifetime = await readFile('apps/broker/Veil.VolumeBroker/CefPreparedCreationLifetime.cs', 'utf8');
+    const session = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    assert.match(prep, /private readonly CefRegisteredProfileLease profile;/);
+    assert.match(prep, /token = CefProcessTokenObserver.LaunchTokenLease.Acquire\(ownerHandle, owner\);[\s\S]*?profile = CefRegisteredProfileLease.OpenInstalled\(volumeId, volumeGuid, pipeName,\s*readStatus, authorityCurrent\);[\s\S]*?registration, image, token, verifier, owner, ownerHandle, profile\);\s*prepared.RequireCurrent\(\);/);
+    assert.match(prep, /catch\s*\{[\s\S]*?try \{ profile\?\.Dispose\(\); \}[\s\S]*?try \{ token\?\.Dispose\(\); \}[\s\S]*?registration\?\.Dispose\(\)/);
+    assert.match(prep, /token.RequireCurrent\(\);\s*profile.RequireCurrent\(\);\s*token.RequireCurrent\(\);\s*if \(!authorityCurrent\(\)\)/);
+    assert.match(prep, /creationAttempted = true;\s*RequireCurrent\(\);\s*var environment = profile.GetEnvironmentSnapshot\(token\);\s*outer.CreateRetainedDiagnosticPair\(inner, token, path, environment, custody\);/);
+    assert.equal((prep.match(/profile.GetEnvironmentSnapshot\(token\)/g) ?? []).length, 2);
+    assert.doesNotMatch(prep, /GetEnvironmentVariables|new Dictionary<string, string\?>|ResumeThread|ResumeRetainedRoot|TakeVerified/);
+    assert.match(prep, /public void Dispose\(\)[\s\S]*?try \{ profile.Dispose\(\); \}[\s\S]*?try \{ token.Dispose\(\); \}[\s\S]*?registration.Dispose\(\)/);
+    assert.match(broker, /new CefPreparedCreationLifetime\(outer, inner, preparation,\s*preparation.CreateDiagnosticCandidate\);[\s\S]*?diagnosticSession.RegisterAndActivate/);
+    assert.match(lifetime, /lifetime = new CefRetainedLifetime\(prerequisites, inner, outer\)/);
+    assert.match(lifetime, /return lifetime.TryRelease\(\(\) =>[\s\S]*?if \(!custody.TryDrainAndRelease\(Remaining\(\)\)\) return false;[\s\S]*?return outer.HasNoActiveProcesses\(\) && inner.HasNoActiveProcesses\(\);/);
+    assert.match(session, /if \(borrowedCreation is not null\)\s*throw new UnauthorizedAccessException\("CEF prepared successor activation is disabled\."\);/);
+    assert.equal((broker.match(/RunDiagnosticCreationProbe\(/g) ?? []).length, 1);
+    assert.match(fixture, /var retained = new CefRetainedLifetime\(retainedProfile\);\s*Check\(!retained.TryRelease\(\(\) => false\)[\s\S]*?Reject\(\(\) => competing.AcquireExclusiveLock\(\)\);[\s\S]*?retained.TryRelease\(\(\) => true\)[\s\S]*?next.AcquireExclusiveLock\(\);/);
 });

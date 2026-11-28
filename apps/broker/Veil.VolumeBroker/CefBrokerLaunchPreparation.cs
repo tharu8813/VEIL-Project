@@ -18,6 +18,7 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
     private readonly CefRuntimeRegistrationLease registration;
     private readonly FileStream image;
     private readonly CefProcessTokenObserver.LaunchTokenLease token;
+    private readonly CefRegisteredProfileLease profile;
     private readonly CefSystemModuleVerifier verifier;
     private bool disposed;
     private bool creationAttempted;
@@ -25,7 +26,8 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
     private CefBrokerLaunchPreparation(string path, CefImageDigest digest,
         Func<bool> authorityCurrent, CefRuntimeRegistrationLease registration,
         FileStream image, CefProcessTokenObserver.LaunchTokenLease token,
-        CefSystemModuleVerifier verifier, ClientIdentity owner, SafeProcessHandle ownerHandle)
+        CefSystemModuleVerifier verifier, ClientIdentity owner, SafeProcessHandle ownerHandle,
+        CefRegisteredProfileLease profile)
     {
         this.path = path;
         this.owner = owner;
@@ -35,20 +37,24 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
         this.registration = registration;
         this.image = image;
         this.token = token;
+        this.profile = profile;
         this.verifier = verifier;
     }
 
     internal static CefBrokerLaunchPreparation Open(string registeredPath, string sha256,
         ClientIdentity owner, SafeProcessHandle ownerHandle, Func<bool> authorityCurrent,
-        ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature)
+        ReadOnlySpan<byte> baselinePayload, ReadOnlySpan<byte> baselineSignature,
+        string volumeId, string volumeGuid, string pipeName, Func<BackendStatus> readStatus)
     {
         ArgumentNullException.ThrowIfNull(authorityCurrent);
+        ArgumentNullException.ThrowIfNull(readStatus);
         if (!authorityCurrent())
             throw new UnauthorizedAccessException("CEF preparation generation is unavailable.");
         var digest = new CefImageDigest(sha256);
         CefRuntimeRegistrationLease? registration = null;
         FileStream? image = null;
         CefProcessTokenObserver.LaunchTokenLease? token = null;
+        CefRegisteredProfileLease? profile = null;
         try
         {
             registration = CefRuntimeRegistrationLease.OpenInstalled(serializedBrokerAccess: true);
@@ -60,8 +66,13 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
             if (!authorityCurrent())
                 throw new UnauthorizedAccessException("CEF preparation generation retired.");
             token = CefProcessTokenObserver.LaunchTokenLease.Acquire(ownerHandle, owner);
+            // Acquire the independent installed profile and exclusive lock
+            // before registering a native creation lifetime. The same
+            // authority callback remains valid while that slot is occupied.
+            profile = CefRegisteredProfileLease.OpenInstalled(volumeId, volumeGuid, pipeName,
+                readStatus, authorityCurrent);
             var prepared = new CefBrokerLaunchPreparation(registeredPath, digest, authorityCurrent,
-                registration, image, token, verifier, owner, ownerHandle);
+                registration, image, token, verifier, owner, ownerHandle, profile);
             prepared.RequireCurrent();
             return prepared;
         }
@@ -69,11 +80,15 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
         {
             // No process exists at this stage; all partially acquired
             // prerequisite handles can be released immediately.
-            try { token?.Dispose(); }
+            try { profile?.Dispose(); }
             finally
             {
-                try { image?.Dispose(); }
-                finally { registration?.Dispose(); }
+                try { token?.Dispose(); }
+                finally
+                {
+                    try { image?.Dispose(); }
+                    finally { registration?.Dispose(); }
+                }
             }
             throw;
         }
@@ -90,13 +105,15 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
         CefPinnedImage.RequireRetainedBeforeCreation(image, path, digest);
         verifier.RequireBoundTrust();
         token.RequireCurrent();
+        profile.RequireCurrent();
+        token.RequireCurrent();
         if (!authorityCurrent())
             throw new UnauthorizedAccessException("CEF preparation generation retired.");
     }
 
-    // No inherited service/user environment and no profile paths at this
-    // stage. The disabled candidate must not be resumed as a browser.
-    // A future coordinator must own both Jobs and custody before invoking.
+    // Only the installed profile's explicit, token-verified environment.
+    // No inherited variables or system-only fallback. The disabled
+    // candidate must not be resumed. The slot already owns all resources.
     internal void CreateDiagnosticCandidate(CefBrokerOwnedJob outer, CefBrokerOwnedJob inner,
         CefContainedProcess.CreationCustody custody)
     {
@@ -107,16 +124,7 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
             throw new UnauthorizedAccessException("CEF preparation already consumed.");
         creationAttempted = true;
         RequireCurrent();
-        string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-        if (string.IsNullOrWhiteSpace(windows) || !Path.IsPathFullyQualified(windows) ||
-            !string.Equals(Path.Combine(windows, "System32"), Environment.SystemDirectory,
-                StringComparison.OrdinalIgnoreCase))
-            throw new UnauthorizedAccessException("CEF system environment unavailable.");
-        var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["SystemRoot"] = windows,
-            ["WINDIR"] = windows,
-        };
+        var environment = profile.GetEnvironmentSnapshot(token);
         outer.CreateRetainedDiagnosticPair(inner, token, path, environment, custody);
         custody.VerifyRetainedRoot(root =>
         {
@@ -127,6 +135,9 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
             // custody still owns it. A partially bound pair on refusal is
             // terminal and can only be drained by the existing owner.
             outer.BindPreparedPrivatePair(inner, owner, ownerHandle, identity, root);
+            // Recheck access using the retained launch token after native
+            // creation, with the original root still suspended in custody.
+            _ = profile.GetEnvironmentSnapshot(token);
             RequireCurrent();
             outer.RequirePreparedPrivateRoot(inner, owner, ownerHandle, identity, root);
         });
@@ -165,11 +176,17 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
     {
         if (disposed) return;
         disposed = true;
-        try { token.Dispose(); }
+        // The creation slot calls this only after root and all Jobs
+        // are confirmed empty (or before any native creation on refusal).
+        try { profile.Dispose(); }
         finally
         {
-            try { image.Dispose(); }
-            finally { registration.Dispose(); }
+            try { token.Dispose(); }
+            finally
+            {
+                try { image.Dispose(); }
+                finally { registration.Dispose(); }
+            }
         }
     }
 }

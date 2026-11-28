@@ -163,6 +163,25 @@ try
         Reject(() => owned.AcquireExclusiveLock());
         owned.RequireCurrent();
     }
+    // Use the actual profile pin as a prerequisite of the shared drain
+    // lifetime. Failed exit proof must not release the exclusive handle.
+    using (var retainedProfile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        retainedProfile.AcquireExclusiveLock();
+        var retained = new CefRetainedLifetime(retainedProfile);
+        Check(!retained.TryRelease(() => false), "Unconfirmed drain released the profile.");
+        using (var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority))
+            Reject(() => competing.AcquireExclusiveLock());
+        retainedProfile.RequireCurrent();
+        Check(retained.TryRelease(() => true), "Confirmed synthetic drain did not release profile.");
+        using var next = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority);
+        next.AcquireExclusiveLock();
+        next.RequireCurrent();
+    }
+    Console.WriteLine("PASS: exclusive profile retained until synthetic exit proof");
     Check(File.ReadAllText(profileLockPath) == "original-lock",
         "Broker modified the profile lock contents.");
     // Put the alias outside the CEF subtree so the assertion specifically
