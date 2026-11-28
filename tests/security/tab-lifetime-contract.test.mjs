@@ -876,7 +876,18 @@ const libraryMutation = await readFile('apps/desktop/LibraryMutation.cs', 'utf8'
 test('engine-neutral library edit rechecks authorization and restores on failed commit', () => {
     assert.match(libraryMutation, /if \(!authorized\(\)\) return false;[\s\S]*?var previous = entries.ToArray\(\);[\s\S]*?change\(\);[\s\S]*?BookmarkPolicy.Valid\(folders, entries\)\) &&\s*authorized\(\) && save\(\);/);
     assert.match(libraryMutation, /finally\s*\{\s*if \(!committed\)[\s\S]*?entries.AddRange\(previous\);[\s\S]*?folders.AddRange\(previousFolders\);/);
-    assert.match(session, /internal bool TrySaveLibrary\(Func<bool> authorized\)\s*\{\s*libraryDispatcher.VerifyAccess\(\);[\s\S]*?IsPrivate \|\| IsEnding \|\| EngineLost \|\| !EngineHost.IsReady \|\| persistentStatePath is null \|\|\s*!authorized\(\)\) return false;[\s\S]*?Data.Save\(persistentStatePath\);/);
+    assert.match(session, /internal bool TrySaveLibrary\(Func<bool> authorized, bool captureTabs = false\)\s*\{\s*libraryDispatcher.VerifyAccess\(\);[\s\S]*?IsPrivate \|\| IsEnding \|\| EngineLost \|\| !EngineHost.IsReady \|\| persistentStatePath is null \|\|\s*!authorized\(\)\) return false;[\s\S]*?Data.Save\(persistentStatePath\);/);
     assert.match(browser, /bool SaveLibrary\(\) => session.TrySaveLibrary\(CanEditLibrary\);/);
     assert.match(browser, /LibraryMutation.TryCommit\(data.Bookmarks, data.BookmarkFolders, Authorized,[\s\S]*?session.TrySaveLibrary\(Authorized\)/);
+});
+
+
+test('automatic history commits once through the shared session boundary', () => {
+    assert.match(browser, /if \(tab.CompletedNavigationId == args.NavigationId\) return;\s*tab.CompletedNavigationId = args.NavigationId;/);
+    assert.match(browser, /bool historyEligible = !session.IsPrivate && args.IsSuccess && IsWebUrl\(completedUrl\) &&\s*completedUrl == tab.EngineView.Source;/);
+    assert.match(browser, /bool Authorized\(\) => !session.IsPrivate && AcceptTabEvents\(tab\) &&\s*Tabs.Items.Contains\(tab.Item\)[\s\S]*?tab.NavigationEpoch == completedEpoch &&\s*tab.Url == completedUrl && tab.EngineView.Source == completedUrl;/);
+    assert.match(browser, /historySaved = LibraryMutation.TryCommit\(data.History, null, Authorized,[\s\S]*?session.TrySaveLibrary\(Authorized, captureTabs: true\)\);\s*if \(historySaved\) RefreshHistoryLibraries\(\);/);
+    assert.match(browser, /if \(!historyEligible\) SaveTabs\(\);/);
+    assert.match(session, /if \(captureTabs\) CaptureOpenTabs\(\);\s*if \(!authorized\(\) \|\| IsPrivate \|\| IsEnding \|\| EngineLost \|\| !EngineHost.IsReady\) return false;\s*Data.Save\(persistentStatePath\);/);
+    assert.match(session, /private bool CaptureOpenTabs\(\)\s*\{\s*if \(IsPrivate \|\| TabTransferDepth != 0\) return false;[\s\S]*?if \(open.Count == 0 \|\| open.Any\(window => window.IsRestoring\)\) return false;/);
 });
