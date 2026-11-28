@@ -241,3 +241,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #275 최초 Windows CI 46166085021 FAIL: 기존 source contract가 base.Dispose 이후 disposed 설정을 요구했다. 신규 사전 권한 폐기 순서를 검사하도록 수정 head `78af961bea2ca05792b9904cb994ba69891d04d7`. 수정 head CI 대기. #274 Windows/native PASS.
 - CEF WPF fixture OnBeforeBrowse에서 URL username/password 거부, ID overflow 차단, host callback 후 closing/callback/active ID/URL 재확인으로 stale decision 거부, 닫힌/비활성 load completion 무시를 추가한다. 기존 loopback HTTP 제한은 유지한다. 합성 WPF fixture는 non-HTTP redirect를 원래 navigation ID의 canceled completion으로 관측하고 정상 탐색 재개를 요구한다. 소스 계약 추가. 실제 runtime NOT RUN, URL 기반 completion은 동일 URL의 오래된 callback을 완전히 식별하지 못하며 전체 수명/네트워크 보호 증명이 아니다. 신규 CI, 독립 리뷰, 보호 VM 미검증. WebView2 및 startupEnabled=false 유지.
+
+### P3-01 탭별 탐색 상태 및 UI 이벤트 분리 (미완료)
+
+- #275 수정 head `78af961bea2ca05792b9904cb994ba69891d04d7` Windows 46166527119 / Native 46166527123 PASS. #276 exact head Windows 46166617260 PASS, Native 46166617290 실행 중 확인. 독립 리뷰 없음.
+- 개발용 TabbedDevelopmentHost에서 tab별 pending/last navigation ID 및 상태 메시지를 보존한다. 동일 ID의 redirect 및 현재 ID의 completion만 적용하고, 닫히거나 제거된 tab과 shutdown 중 이벤트를 무시한다. 선택된 tab만 전역 상태 표시를 변경하며 전환 시 해당 tab 상태를 복원한다. child failure 및 command error도 tab별로 보존한다. 실제 두 tab 탐색 완료와 합성 background status 변경의 분리 검사를 fixture 및 source contracts에 추가했다. 합성 상태 갱신은 실제 background renderer crash 실측이 아니다. 동일 URL의 오래된 native callback 한계 유지. 신규 CI, WPF runtime, 보호 VM NOT RUN. WebView2 및 startupEnabled=false 유지.
