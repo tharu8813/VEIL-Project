@@ -180,11 +180,52 @@ internal static class CefSessionObservationTests
         Check(runtimePin.Releases == 1 && jobPin.Releases == 2 && rootPin.Releases == 1);
         Check(lifetime.TryRelease(() => throw new InvalidOperationException("Repeated verification.")));
         Check(runtimePin.Releases == 1 && jobPin.Releases == 2 && rootPin.Releases == 1);
+        var slot = new CefDiagnosticSessionSlot<TrackedSession>();
+        var firstSession = new TrackedSession();
+        var secondSession = new TrackedSession();
+        Check(!slot.Occupied && slot.TryReleaseRetired(0));
+        Check(slot.TryRegister(generation, firstSession));
+        Check(slot.Current(generation) == firstSession && slot.Current(nextGeneration) is null);
+        Check(!slot.TryRegister(nextGeneration, secondSession));
+        Check(!slot.TryReleaseRetired(0) && firstSession.ReleaseAttempts == 0);
+        slot.Retire();
+        Check(firstSession.Revoked && slot.CleanupPending && slot.Current(generation) is null);
+        Check(!slot.TryReleaseRetired(0) && slot.Occupied);
+        Check(!slot.TryRegister(nextGeneration, secondSession));
+        firstSession.ThrowOnRelease = true;
+        RefuseGuard(() => slot.TryReleaseRetired(0));
+        Check(slot.CleanupPending && !slot.TryRegister(nextGeneration, secondSession));
+        firstSession.ThrowOnRelease = false;
+        firstSession.ExitConfirmed = true;
+        Check(slot.TryReleaseRetired(0) && !slot.Occupied);
+        Check(slot.TryRegister(nextGeneration, secondSession));
+        Check(slot.Current(generation) is null && slot.Current(nextGeneration) == secondSession);
+        Check(!slot.TryReleaseRetired(0) && secondSession.ReleaseAttempts == 0);
+        slot.Retire();
+        secondSession.ExitConfirmed = true;
+        Check(slot.TryReleaseRetired(0) && !slot.Occupied);
+        Console.WriteLine("PASS: diagnostic owner slot retires before release, preserves failed cleanup and rejects replacement");
         Console.WriteLine("PASS: retained resource cleanup waits for verified exit and resumes failed release");
         Console.WriteLine("PASS: broker unlock generation cannot resurrect after owner or protection failure");
         Console.WriteLine("PASS: Windows lock/logoff notification filtering and authenticated owner isolation");
         Console.WriteLine("PASS: diagnostic session pre/post checks, irreversible retirement and retryable drain");
         Console.WriteLine("PASS: pure CEF multi-process observation, generation/lease binding and irreversible revocation");
+    }
+
+    private sealed class TrackedSession : ICefDiagnosticLifetime
+    {
+        internal bool Revoked { get; private set; }
+        internal int ReleaseAttempts { get; private set; }
+        internal bool ExitConfirmed { get; set; }
+        internal bool ThrowOnRelease { get; set; }
+        public void Revoke() => Revoked = true;
+        public bool RevokeAndRelease(int milliseconds)
+        {
+            Check(Revoked);
+            ReleaseAttempts++;
+            if (ThrowOnRelease) throw new UnauthorizedAccessException("Synthetic session cleanup failure.");
+            return ExitConfirmed;
+        }
     }
 
     private sealed class TrackedResource : IDisposable
