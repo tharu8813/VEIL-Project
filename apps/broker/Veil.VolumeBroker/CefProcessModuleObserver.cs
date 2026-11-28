@@ -47,7 +47,8 @@ internal static class CefNestedProcessDiagnostics
         CefBrokerOwnedJob peerJob,
         ClientIdentity root, SafeProcessHandle rootHandle,
         CefRuntimeRegistrationLease registration,
-        CefSystemModuleVerifier systemVerifier)
+        CefSystemModuleVerifier systemVerifier,
+        Action<ClientIdentity, SafeProcessHandle, CefRetainedProcessDiagnostic>? inspectMember = null)
     {
         ArgumentNullException.ThrowIfNull(brokerJob);
         ArgumentNullException.ThrowIfNull(root);
@@ -69,8 +70,12 @@ internal static class CefNestedProcessDiagnostics
                     token != CefProcessTokenObserver.Observe(handle, identity))
                     throw new UnauthorizedAccessException("CEF role or token fields changed during diagnostics.");
                 registration.RequireCurrent();
-                return new CefRetainedProcessDiagnostic(identity, role.Role,
+                var diagnostic = new CefRetainedProcessDiagnostic(identity, role.Role,
                     CefRoleTokenPolicy.Evaluate(identity, role.Role, token), modules);
+                // Callback runs before independently collected member handles
+                // are released. No success escapes if later accounting fails.
+                inspectMember?.Invoke(identity, handle, diagnostic);
+                return diagnostic;
             });
         registration.RequireCurrent();
         systemVerifier.RequireBoundTrust();
@@ -88,6 +93,8 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
     private readonly CefDiagnosticSessionGuard guard;
     private readonly Func<CefDiagnosticSessionContext> readContext;
     private readonly Func<CefRetainedProcessDiagnostic[]> observe;
+    private readonly Func<ClientIdentity, SafeProcessHandle, bool> matchesMember;
+    private readonly Action<ClientIdentity, SafeProcessHandle> observeMember;
     private readonly Action requirePreparedRoot;
     private readonly CefContainedProcess preparedRoot;
     private readonly SafeProcessHandle retainedRoot;
@@ -144,6 +151,32 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
         requirePreparedRoot = () => brokerJob.RequirePreparedPrivateRoot(peerJob, owner, ownerHandle, root, rootHandle);
         observe = () => CefNestedProcessDiagnostics.Observe(brokerJob, peerJob, root, rootHandle,
             registration, systemVerifier);
+        matchesMember = (identity, pipeClient) =>
+            identity.SessionId == root.SessionId &&
+            string.Equals(identity.UserSid, root.UserSid, StringComparison.OrdinalIgnoreCase) &&
+            identity.CreatedFileTime >= root.CreatedFileTime &&
+            string.Equals(identity.ImagePath, root.ImagePath, StringComparison.OrdinalIgnoreCase) &&
+            (identity.ProcessId != root.ProcessId ||
+                (identity == root && Native.SameLiveProcess(rootHandle, pipeClient))) &&
+            brokerJob.ContainsPrivateRuntimeMember(peerJob, rootHandle, identity, pipeClient);
+        observeMember = (client, pipeClient) =>
+        {
+            int matches = 0;
+            _ = CefNestedProcessDiagnostics.Observe(brokerJob, peerJob, root, rootHandle,
+                registration, systemVerifier, (identity, handle, diagnostic) =>
+                {
+                    // Provisional role checks are deliberately conservative.
+                    // No known-but-unverified GPU/utility/network role passes.
+                    if (!CefRuntimeRolePolicy.MatchesProvisionalRole(identity == root,
+                        diagnostic.Role, diagnostic.TokenDecision))
+                        throw new UnauthorizedAccessException("CEF runtime role policy unavailable.");
+                    if (identity != client) return;
+                    if (!Native.SameLiveProcess(handle, pipeClient) || ++matches != 1)
+                        throw new UnauthorizedAccessException("CEF runtime member object mismatch.");
+                });
+            if (matches != 1)
+                throw new UnauthorizedAccessException("CEF runtime member was not independently observed.");
+        };
         drain = milliseconds =>
         {
             var started = System.Diagnostics.Stopwatch.StartNew();
@@ -191,22 +224,26 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
         activated = true;
     }
 
-    // Root-only transport boundary. No PID nominations, no preflight
-    // receipt reuse, and no acceptance of the old direct launch lifetime.
-    internal bool MatchesRuntimeRoot(ClientIdentity client, SafeProcessHandle pipeClient)
+    // Runtime member transport boundary. No client role, PID nomination,
+    // legacy receipt or acceptance of the old direct launch lifetime.
+    internal bool MatchesRuntimeMember(ClientIdentity client, SafeProcessHandle pipeClient)
     {
         if (borrowedCreation is null || !activated) return false;
-        try { return Native.ObserveProcess(retainedRoot) == client && Native.SameLiveProcess(retainedRoot, pipeClient); }
+        try { return matchesMember(client, pipeClient); }
         catch (Exception error) when (error is not OutOfMemoryException) { return false; }
     }
 
     internal void RequireRuntimeAuthority(ClientIdentity client, SafeProcessHandle pipeClient)
     {
-        if (!MatchesRuntimeRoot(client, pipeClient))
-            throw new UnauthorizedAccessException("CEF runtime root unavailable.");
-        _ = Observe(); // Retained nested Jobs, image, role and system module snapshot.
-        if (!MatchesRuntimeRoot(client, pipeClient))
-            throw new UnauthorizedAccessException("CEF runtime root changed.");
+        _ = guard.Observe(readContext, () =>
+        {
+            if (!MatchesRuntimeMember(client, pipeClient))
+                throw new UnauthorizedAccessException("CEF runtime member unavailable.");
+            observeMember(client, pipeClient);
+            if (!MatchesRuntimeMember(client, pipeClient))
+                throw new UnauthorizedAccessException("CEF runtime member changed.");
+            return true;
+        });
     }
 
     internal CefRetainedProcessDiagnostic[] Observe()
