@@ -292,6 +292,39 @@ try {
     [void](Inspect-Draft $destination)
     if ((Get-FileHash -LiteralPath $journalPath).Hash -ne $journalHash) { throw 'Inspection changed preparation.' }
     Write-Host 'PASS: exact registration reconstruction, independent inputs, forged journal and partial file refusal'
+    # Separate diagnostic publication and interrupted-boundary recovery.
+    $script:diagnosticMarker = $true
+    $diagBin = Join-Path $work 'diagnostic-published-bin'
+    $diagData = Join-Path $work 'diagnostic-published-data'
+    $diagTransaction = Join-Path $work 'diagnostic-publication'
+    $diagPrepared = Join-Path $work 'diagnostic-publish-prepared'
+    $diagPublishDraft = New-VeilPreflightRegistrationDraft $diagnosticPlan $diagBin $image $profile $volumeGuid $primary $recovery $sid 'synthetic' -Diagnostic
+    [void](Write-VeilPreflightRegistrationDraft $diagPrepared $diagPublishDraft $diagnosticPlan -Diagnostic)
+    Reject { Publish-VeilPreflightFiles $diagnosticStage $diagPrepared $diagBin $diagData $diagTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} }
+    if (Test-Path -LiteralPath $diagTransaction) { throw 'Wrong publication mode wrote journal.' }
+    $diagFinal = Publish-VeilPreflightFiles $diagnosticStage $diagPrepared $diagBin $diagData $diagTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} -Diagnostic
+    if ($diagFinal.kind -cne 'cef-diagnostic-publication' -or $diagFinal.state -cne 'files-published-only' -or
+        $diagFinal.startupEnabled -or $diagFinal.serviceCreated) { throw 'Diagnostic publication boundary mismatch.' }
+    function Inspect-DiagnosticPublication {
+        Get-VeilPreflightPublicationState $diagnosticStage $diagPrepared $diagBin $diagData $diagTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} -Diagnostic
+    }
+    Reject { Get-VeilPreflightPublicationState $diagnosticStage $diagPrepared $diagBin $diagData $diagTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} }
+    $diagObserved = Inspect-DiagnosticPublication
+    if ($diagObserved.kind -cne 'cef-diagnostic-publication' -or $diagObserved.state -cne 'files-published-only') { throw 'Diagnostic inspection failed.' }
+    # Simulate interruption before registration rename; preserve verified copies.
+    Remove-Item -LiteralPath (Join-Path $diagTransaction '04-files-published.json')
+    [IO.Directory]::Move($diagData,($diagData + '.cef-diagnostic-pending'))
+    if ((Inspect-DiagnosticPublication).state -cne 'publish-registration') { throw 'Diagnostic interruption not recognized.' }
+    $pendingBaseline = Join-Path $diagBin 'Broker/cef-system-baseline.sig'
+    $baselineBytes = [IO.File]::ReadAllBytes($pendingBaseline)
+    [IO.File]::AppendAllText($pendingBaseline,'changed')
+    Reject { Resume-VeilPreflightPublication $diagnosticStage $diagPrepared $diagBin $diagData $diagTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} -Diagnostic }
+    if (Test-Path -LiteralPath $diagData) { throw 'Tampered diagnostic publication resumed.' }
+    [IO.File]::WriteAllBytes($pendingBaseline,$baselineBytes)
+    $diagResumed = Resume-VeilPreflightPublication $diagnosticStage $diagPrepared $diagBin $diagData $diagTransaction $cert.Thumbprint $commit $image $profile $volumeGuid $primary $recovery $sid {} -Diagnostic
+    if ($diagResumed.state -cne 'files-published-only' -or $diagResumed.kind -cne 'cef-diagnostic-publication') { throw 'Diagnostic recovery failed.' }
+    $script:diagnosticMarker = $false
+    Write-Host 'PASS: diagnostic publication, mode separation, tamper refusal and verified recovery'
     # Real temporary-directory copies and same-parent renames; no OS service
     # or BitLocker. The registration binds to the temporary destination.
     $publishedBin = Join-Path $work 'published-bin'

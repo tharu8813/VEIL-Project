@@ -10,9 +10,11 @@ function Assert-VeilPreflightPublicationEqual($Actual,$Expected) {
 
 function Publish-VeilPreflightFiles([string]$Stage,[string]$Prepared,[string]$BinRoot,[string]$DataRoot,
     [string]$TransactionRoot,[string]$Thumbprint,[string]$Commit,[string]$ImagePath,[string]$ProfilePath,
-    [guid]$VolumeGuid,[guid]$ProtectorId,[guid]$RecoveryProtectorId,[string]$UserSid,[scriptblock]$RequireSafeState) {
-    $binPending = $BinRoot + '.cef-preflight-pending'
-    $dataPending = $DataRoot + '.cef-preflight-pending'
+    [guid]$VolumeGuid,[guid]$ProtectorId,[guid]$RecoveryProtectorId,[string]$UserSid,[scriptblock]$RequireSafeState,[switch]$Diagnostic) {
+    $kind = if ($Diagnostic) { 'cef-diagnostic-publication' } else { 'cef-preflight-publication' }
+    $suffix = if ($Diagnostic) { '.cef-diagnostic-pending' } else { '.cef-preflight-pending' }
+    $binPending = $BinRoot + $suffix
+    $dataPending = $DataRoot + $suffix
     $targets = @($BinRoot,$DataRoot,$TransactionRoot,$binPending,$dataPending)
     foreach ($target in $targets) {
         if (Test-Path -LiteralPath $target) { throw 'Existing or interrupted publication refused. Preserve all files.' }
@@ -20,23 +22,27 @@ function Publish-VeilPreflightFiles([string]$Stage,[string]$Prepared,[string]$Bi
     # The production caller checks the fixed roots, absent service, and
     # detached VHDX at every publication boundary.
     & $RequireSafeState
-    $plan = Get-VeilPreflightStagePlan $Stage $Thumbprint $Commit
-    $journal = Read-VeilPreflightRegistrationDraft $Prepared $plan $BinRoot $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid
+    $plan = Get-VeilPreflightStagePlan $Stage $Thumbprint $Commit -Diagnostic:$Diagnostic
+    $journal = Read-VeilPreflightRegistrationDraft $Prepared $plan $BinRoot $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid -Diagnostic:$Diagnostic
     $payload = Join-Path $Stage 'payload'
     $cefEvidence = Join-Path $Stage 'cef-evidence'
     $proof = Join-Path $Stage 'package-evidence'
-    $manifest = Read-VeilPreflightPackageEvidence $payload $cefEvidence $proof $Thumbprint $Commit
+    $manifest = Read-VeilPreflightPackageEvidence $payload $cefEvidence $proof $Thumbprint $Commit -Diagnostic:$Diagnostic
     $proofHash = (Get-FileHash -LiteralPath (Join-Path $proof 'preflight-package.json') -Algorithm SHA256).Hash.ToLowerInvariant()
     $prepHash = (Get-FileHash -LiteralPath (Join-Path $Prepared 'preparation.json') -Algorithm SHA256).Hash.ToLowerInvariant()
     # Claim a fresh journal directory before creating either pending tree.
     # Never delete or reuse a partial transaction automatically.
     New-VeilRestrictedDirectory $TransactionRoot
-    Assert-VeilPreflightPublicationEqual (Get-VeilPreflightStagePlan $Stage $Thumbprint $Commit) $plan
+    Assert-VeilPreflightPublicationEqual (Get-VeilPreflightStagePlan $Stage $Thumbprint $Commit -Diagnostic:$Diagnostic) $plan
     $intent = [ordered]@{
-        kind='cef-preflight-publication';format=2;state='intent-only';sourceCommit=$Commit
+        kind=$kind;format=2;state='intent-only';sourceCommit=$Commit
         packageManifestSha256=$proofHash;preparationSha256=$prepHash
         signerThumbprint=$plan.signerThumbprint;proofHashes=$plan.proofHashes
         startupEnabled=$false;serviceCreated=$false
+    }
+    if ($Diagnostic) {
+        $intent.Add('baselinePayloadSha256',$plan.baselinePayloadSha256)
+        $intent.Add('baselineSignatureSha256',$plan.baselineSignatureSha256)
     }
     $intentHash = Write-VeilPreflightDraftFile (Join-Path $TransactionRoot '01-intent.json') $intent
     New-VeilRestrictedDirectory $binPending
@@ -57,9 +63,9 @@ function Publish-VeilPreflightFiles([string]$Stage,[string]$Prepared,[string]$Bi
         [IO.File]::Copy($from,(Join-Path $dataPending $name),$false)
     }
     function Assert-VerifiedPair([string]$Binaries,[string]$Registration) {
-        Assert-VeilPreflightPublicationEqual (Get-VeilPreflightStagePlan $Stage $Thumbprint $Commit) $plan
-        Assert-VeilPreflightPublicationEqual (Read-VeilPreflightPackageEvidence $Binaries $cefEvidence $proof $Thumbprint $Commit) $manifest
-        Assert-VeilPreflightPublicationEqual (Read-VeilPreflightRegistrationDraft $Registration $plan $BinRoot $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid) $journal
+        Assert-VeilPreflightPublicationEqual (Get-VeilPreflightStagePlan $Stage $Thumbprint $Commit -Diagnostic:$Diagnostic) $plan
+        Assert-VeilPreflightPublicationEqual (Read-VeilPreflightPackageEvidence $Binaries $cefEvidence $proof $Thumbprint $Commit -Diagnostic:$Diagnostic) $manifest
+        Assert-VeilPreflightPublicationEqual (Read-VeilPreflightRegistrationDraft $Registration $plan $BinRoot $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid -Diagnostic:$Diagnostic) $journal
         if ((Get-FileHash -LiteralPath (Join-Path $proof 'preflight-package.json') -Algorithm SHA256).Hash -ne $proofHash -or
             (Get-FileHash -LiteralPath (Join-Path $Registration 'preparation.json') -Algorithm SHA256).Hash -ne $prepHash) {
             throw 'Publication source binding changed.'
@@ -85,7 +91,7 @@ function Publish-VeilPreflightFiles([string]$Stage,[string]$Prepared,[string]$Bi
     Assert-VerifiedPair $BinRoot $DataRoot
     & $RequireSafeState
     $final = [ordered]@{
-        kind='cef-preflight-publication';format=1;state='files-published-only';sourceCommit=$Commit
+        kind=$kind;format=1;state='files-published-only';sourceCommit=$Commit
         intentSha256=$intentHash;startupEnabled=$false;serviceCreated=$false
     }
     [void](Write-VeilPreflightDraftFile (Join-Path $TransactionRoot '04-files-published.json') $final)
@@ -97,7 +103,9 @@ function Publish-VeilPreflightFiles([string]$Stage,[string]$Prepared,[string]$Bi
 # Missing records after a rename are distinguishable from an incomplete copy.
 function Get-VeilPreflightPublicationState([string]$Stage,[string]$Prepared,[string]$BinRoot,[string]$DataRoot,
     [string]$TransactionRoot,[string]$Thumbprint,[string]$Commit,[string]$ImagePath,[string]$ProfilePath,
-    [guid]$VolumeGuid,[guid]$ProtectorId,[guid]$RecoveryProtectorId,[string]$UserSid,[scriptblock]$RequireSafeState) {
+    [guid]$VolumeGuid,[guid]$ProtectorId,[guid]$RecoveryProtectorId,[string]$UserSid,[scriptblock]$RequireSafeState,[switch]$Diagnostic) {
+    $kind = if ($Diagnostic) { 'cef-diagnostic-publication' } else { 'cef-preflight-publication' }
+    $suffix = if ($Diagnostic) { '.cef-diagnostic-pending' } else { '.cef-preflight-pending' }
     & $RequireSafeState
     Assert-VeilAdminPath $TransactionRoot
     $records = @('01-intent.json','02-copies-verified.json','03-binaries-published.json','04-files-published.json')
@@ -106,31 +114,35 @@ function Get-VeilPreflightPublicationState([string]$Stage,[string]$Prepared,[str
         $_.PSIsContainer -or $_.Name -cnotin $records[0..($items.Count-1)]
     }).Count -ne 0) { throw 'Missing, unexpected or out-of-order publication record.' }
     $count = $items.Count
-    $plan = Get-VeilPreflightStagePlan $Stage $Thumbprint $Commit
-    $journal = Read-VeilPreflightRegistrationDraft $Prepared $plan $BinRoot $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid
+    $plan = Get-VeilPreflightStagePlan $Stage $Thumbprint $Commit -Diagnostic:$Diagnostic
+    $journal = Read-VeilPreflightRegistrationDraft $Prepared $plan $BinRoot $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid -Diagnostic:$Diagnostic
     $payload = Join-Path $Stage 'payload'
     $cefEvidence = Join-Path $Stage 'cef-evidence'
     $proof = Join-Path $Stage 'package-evidence'
-    $manifest = Read-VeilPreflightPackageEvidence $payload $cefEvidence $proof $Thumbprint $Commit
+    $manifest = Read-VeilPreflightPackageEvidence $payload $cefEvidence $proof $Thumbprint $Commit -Diagnostic:$Diagnostic
     $proofHash = (Get-FileHash -LiteralPath (Join-Path $proof 'preflight-package.json') -Algorithm SHA256).Hash.ToLowerInvariant()
     $prepHash = (Get-FileHash -LiteralPath (Join-Path $Prepared 'preparation.json') -Algorithm SHA256).Hash.ToLowerInvariant()
-    Assert-VeilPreflightPublicationEqual (Get-VeilPreflightStagePlan $Stage $Thumbprint $Commit) $plan
+    Assert-VeilPreflightPublicationEqual (Get-VeilPreflightStagePlan $Stage $Thumbprint $Commit -Diagnostic:$Diagnostic) $plan
     $intent = [ordered]@{
-        kind='cef-preflight-publication';format=2;state='intent-only';sourceCommit=$Commit
+        kind=$kind;format=2;state='intent-only';sourceCommit=$Commit
         packageManifestSha256=$proofHash;preparationSha256=$prepHash
         signerThumbprint=$plan.signerThumbprint;proofHashes=$plan.proofHashes
         startupEnabled=$false;serviceCreated=$false
+    }
+    if ($Diagnostic) {
+        $intent.Add('baselinePayloadSha256',$plan.baselinePayloadSha256)
+        $intent.Add('baselineSignatureSha256',$plan.baselineSignatureSha256)
     }
     $intentHash = Assert-VeilPreflightDraftBytes (Read-VeilPreflightDraftBytes (Join-Path $TransactionRoot $records[0])) $intent
     $expected = @($intent,
         [ordered]@{state='copies-verified';intentSha256=$intentHash;startupEnabled=$false},
         [ordered]@{state='binaries-published';intentSha256=$intentHash;startupEnabled=$false},
-        [ordered]@{kind='cef-preflight-publication';format=1;state='files-published-only';sourceCommit=$Commit;intentSha256=$intentHash;startupEnabled=$false;serviceCreated=$false})
+        [ordered]@{kind=$kind;format=1;state='files-published-only';sourceCommit=$Commit;intentSha256=$intentHash;startupEnabled=$false;serviceCreated=$false})
     for ($i=1; $i -lt $count; $i++) {
         [void](Assert-VeilPreflightDraftBytes (Read-VeilPreflightDraftBytes (Join-Path $TransactionRoot $records[$i])) $expected[$i])
     }
-    $binPending = $BinRoot + '.cef-preflight-pending'
-    $dataPending = $DataRoot + '.cef-preflight-pending'
+    $binPending = $BinRoot + $suffix
+    $dataPending = $DataRoot + $suffix
     $b = Test-Path -LiteralPath $BinRoot
     $d = Test-Path -LiteralPath $DataRoot
     $bp = Test-Path -LiteralPath $binPending
@@ -151,8 +163,8 @@ function Get-VeilPreflightPublicationState([string]$Stage,[string]$Prepared,[str
         else { throw 'Journal does not match current publication boundary.' }
         $actualBin = if ($b) { $BinRoot } else { $binPending }
         $actualData = if ($d) { $DataRoot } else { $dataPending }
-        Assert-VeilPreflightPublicationEqual (Read-VeilPreflightPackageEvidence $actualBin $cefEvidence $proof $Thumbprint $Commit) $manifest
-        Assert-VeilPreflightPublicationEqual (Read-VeilPreflightRegistrationDraft $actualData $plan $BinRoot $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid) $journal
+        Assert-VeilPreflightPublicationEqual (Read-VeilPreflightPackageEvidence $actualBin $cefEvidence $proof $Thumbprint $Commit -Diagnostic:$Diagnostic) $manifest
+        Assert-VeilPreflightPublicationEqual (Read-VeilPreflightRegistrationDraft $actualData $plan $BinRoot $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid -Diagnostic:$Diagnostic) $journal
         if ((Get-FileHash -LiteralPath (Join-Path $actualData 'preparation.json') -Algorithm SHA256).Hash -ne $prepHash) {
             throw 'Published registration differs from prepared evidence.'
         }
@@ -161,30 +173,34 @@ function Get-VeilPreflightPublicationState([string]$Stage,[string]$Prepared,[str
     if (@(Get-ChildItem -LiteralPath $TransactionRoot -Force).Count -ne $count -or
         (Test-Path -LiteralPath $BinRoot) -ne $b -or (Test-Path -LiteralPath $DataRoot) -ne $d -or
         (Test-Path -LiteralPath $binPending) -ne $bp -or (Test-Path -LiteralPath $dataPending) -ne $dp) { throw 'Publication boundary changed during inspection.' }
-    Assert-VeilPreflightPublicationEqual (Get-VeilPreflightStagePlan $Stage $Thumbprint $Commit) $plan
-    return [pscustomobject]@{state=$state;intentSha256=$intentHash;sourceCommit=$Commit;startupEnabled=$false;serviceCreated=$false}
+    Assert-VeilPreflightPublicationEqual (Get-VeilPreflightStagePlan $Stage $Thumbprint $Commit -Diagnostic:$Diagnostic) $plan
+    $result = [ordered]@{state=$state;intentSha256=$intentHash;sourceCommit=$Commit;startupEnabled=$false;serviceCreated=$false}
+    if ($Diagnostic) { $result.Add('kind',$kind) }
+    return [pscustomobject]$result
 }
 
 function Resume-VeilPreflightPublication([string]$Stage,[string]$Prepared,[string]$BinRoot,[string]$DataRoot,
     [string]$TransactionRoot,[string]$Thumbprint,[string]$Commit,[string]$ImagePath,[string]$ProfilePath,
-    [guid]$VolumeGuid,[guid]$ProtectorId,[guid]$RecoveryProtectorId,[string]$UserSid,[scriptblock]$RequireSafeState) {
+    [guid]$VolumeGuid,[guid]$ProtectorId,[guid]$RecoveryProtectorId,[string]$UserSid,[scriptblock]$RequireSafeState,[switch]$Diagnostic) {
+    $kind = if ($Diagnostic) { 'cef-diagnostic-publication' } else { 'cef-preflight-publication' }
+    $suffix = if ($Diagnostic) { '.cef-diagnostic-pending' } else { '.cef-preflight-pending' }
     # Recheck all authenticated evidence before each single move or marker.
     # No deletion, replacement, or service operations are permitted here.
     for ($i=0; $i -lt 5; $i++) {
-        $observed = Get-VeilPreflightPublicationState $Stage $Prepared $BinRoot $DataRoot $TransactionRoot $Thumbprint $Commit $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid $RequireSafeState
+        $observed = Get-VeilPreflightPublicationState $Stage $Prepared $BinRoot $DataRoot $TransactionRoot $Thumbprint $Commit $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid $RequireSafeState -Diagnostic:$Diagnostic
         if ($observed.state -eq 'files-published-only') { return $observed }
         & $RequireSafeState
         switch ($observed.state) {
-            'publish-binaries' { [IO.Directory]::Move(($BinRoot + '.cef-preflight-pending'),$BinRoot) }
+            'publish-binaries' { [IO.Directory]::Move(($BinRoot + $suffix),$BinRoot) }
             'record-binaries' {
                 [void](Write-VeilPreflightDraftFile (Join-Path $TransactionRoot '03-binaries-published.json') ([ordered]@{
                     state='binaries-published';intentSha256=$observed.intentSha256;startupEnabled=$false
                 }))
             }
-            'publish-registration' { [IO.Directory]::Move(($DataRoot + '.cef-preflight-pending'),$DataRoot) }
+            'publish-registration' { [IO.Directory]::Move(($DataRoot + $suffix),$DataRoot) }
             'record-completion' {
                 [void](Write-VeilPreflightDraftFile (Join-Path $TransactionRoot '04-files-published.json') ([ordered]@{
-                    kind='cef-preflight-publication';format=1;state='files-published-only';sourceCommit=$Commit
+                    kind=$kind;format=1;state='files-published-only';sourceCommit=$Commit
                     intentSha256=$observed.intentSha256;startupEnabled=$false;serviceCreated=$false
                 }))
             }

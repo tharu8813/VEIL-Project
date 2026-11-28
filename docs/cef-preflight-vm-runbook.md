@@ -177,3 +177,7 @@ $diagnosticPlan = .\scripts\stage-cef-preflight-package.ps1 -Diagnostic -Disposa
 ### 진단 전용 등록 초안 및 읽기 전용 확인 (준비만)
 
 기존 준비·검사 스크립트에 `-Diagnostic -DisposableVm`을 추가하고 동일한 독립 입력을 사용한다. 고정 `Program Files\VEIL.cef-diagnostic-registration`에만 초안을 생성한다. 일반 준비/스테이징 또는 설치 흔적은 거부한다. 기존 복구 자격 증명 확인과 시험 볼륨 분리 후 서명된 스테이징을 재검증하고, 세 등록 JSON 및 별도 `cef-diagnostic-registration-journal`을 생성한다. 기준 파일 두 SHA-256과 CMS 증거 해시를 기록하며 원본 등록 JSON 스키마는 변경하지 않는다. 확인 스크립트는 독립 입력과 재검증된 스테이지로 정확한 원본 바이트를 재구성한다. 일반 게시/등록 도구는 진단 계획을 받아들이지 않는다. 이 단계는 레지스트리/서비스/설치 게시를 수행하지 않으며 시스템 기준 신뢰 레지스트리 준비도 별도이다. 실제 VM 복구/ACL/등록 검증 NOT RUN.
+
+### 진단 파일 게시 및 중단 상태 복구 (서비스 미등록)
+
+`publish-cef-preflight-package.ps1 -Diagnostic -DisposableVm` 및 `recover-cef-preflight-publication.ps1 -Diagnostic -DisposableVm`을 동일한 독립 입력으로 사용한다. 복구는 기본적으로 읽기 전용이며 `-Resume`을 명시해야 검증된 경계부터 진행한다. 별도 `VEIL.cef-diagnostic-publication` 기록과 `.cef-diagnostic-pending` 경로를 사용하며, 일반 모드의 준비/게시 흔적을 거부한다. 최종 파일 위치는 기존 고정 설치 경로이므로 폐기용 VM 전용이다. 서명된 패키지·등록 초안 및 두 기준 파일 해시를 의도 기록에 바인딩한다. 복사 미검증 상태는 자동 재개하지 않는다. 실제 VM/전원 손실/ACL/BitLocker NOT RUN. 서비스/신뢰 등록 및 exit 31 실행 도구는 별도 후속 작업이다.
