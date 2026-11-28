@@ -88,8 +88,29 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
     public event EventHandler? FullScreenChanged;
     public bool? IsPageFullScreen => hwnd == 0 || CefNative.VeilCefClosed(NativeHandle) != 0
         ? null : CefNative.VeilCefIsPageFullScreen(NativeHandle) != 0;
-    // Native fullscreen-exit behavior is not yet verified; never inject arbitrary script.
-    public Task<bool> TryExitPageFullScreenAsync() => Task.FromResult(false);
+    private bool fullscreenExitPending;
+    public async Task<bool> TryExitPageFullScreenAsync()
+    {
+        Dispatcher.VerifyAccess();
+        if (disposed || fullscreenExitPending || IsPageFullScreen != true) return false;
+        RequireView();
+        ulong id = NativeHandle, epoch = loginContextEpoch;
+        fullscreenExitPending = true;
+        try
+        {
+            if (CefNative.VeilCefExitPageFullscreen(id) == 0) return false;
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (!disposed && NativeHandle == id && loginContextEpoch == epoch &&
+                   CefNative.VeilCefClosed(id) == 0)
+            {
+                if (IsPageFullScreen == false) return true;
+                if (deadline.Elapsed > TimeSpan.FromSeconds(3)) return false;
+                await Task.Delay(10);
+            }
+            return false;
+        }
+        finally { fullscreenExitPending = false; }
+    }
     public event EventHandler? SourceChanged;
     public event EventHandler? TitleChanged;
     public event EventHandler? HistoryChanged;
@@ -652,6 +673,7 @@ internal static class CefNative
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void RenderProcessFailed(int code);
     [DllImport(Module)] internal static extern int VeilCefIsPageFullScreen(ulong id);
+    [DllImport(Module)] internal static extern int VeilCefExitPageFullscreen(ulong id);
     [DllImport(Module)] internal static extern nint VeilCefSource(ulong id);
     [DllImport(Module)] internal static extern nint VeilCefTitle(ulong id);
     [DllImport(Module)] internal static extern nint VeilCefProfile();
