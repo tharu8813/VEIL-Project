@@ -309,8 +309,27 @@ try
             (isRoot ? role == CefObservedRole.Browser : role == CefObservedRole.Renderer);
         Check(CefRuntimeRolePolicy.MatchesProvisionalRole(isRoot, role, decision) == expectedRole,
             "Runtime provisional role policy mismatch.");
+        if (expectedRole)
+            CefRuntimeRolePolicy.RequireProvisionalRole(isRoot, role, decision);
+        else
+            RejectAuthority(() => CefRuntimeRolePolicy.RequireProvisionalRole(isRoot, role, decision));
     }
-    Console.WriteLine("PASS: runtime member role boundary refuses unknown/unverified roles and role substitution");
+    RejectAuthority(() => CefRuntimeRolePolicy.RequireProvisionalRole(false,
+        (CefObservedRole)int.MaxValue, CefRoleTokenDecision.MatchesProvisionalBaseline));
+    RejectAuthority(() => CefRuntimeRolePolicy.RequireProvisionalRole(true,
+        CefObservedRole.Browser, (CefRoleTokenDecision)int.MaxValue));
+    var refusedRoleLifetime = new RevocationFaultFixture(null) { AllowRelease = true };
+    Check(observedSlot.TryRegister(observedGeneration, refusedRoleLifetime), "Role monitor fixture registration failed.");
+    RejectAuthority(() => observedSlot.ObserveCurrent(observedGeneration, _ =>
+    {
+        CefRuntimeRolePolicy.RequireProvisionalRole(true, CefObservedRole.Browser,
+            CefRoleTokenDecision.MatchesProvisionalBaseline);
+        CefRuntimeRolePolicy.RequireProvisionalRole(false, CefObservedRole.Gpu,
+            CefRoleTokenDecision.UnverifiedRole);
+    }));
+    Check(observedSlot.CleanupPending && observedSlot.TryReleaseRetired(0) && !observedSlot.Occupied,
+        "Unverified member role did not retire and release the monitored slot.");
+    Console.WriteLine("PASS: runtime member and monitor role boundary refuses unknown/unverified roles and role substitution");
     // Fault injection exercises the same drain orchestration, without
     // pretending that a synthetic refusal is a real Windows Job failure.
     foreach (int failedStage in new[] { 0, 1, 2, 3 })
