@@ -962,3 +962,21 @@ test('prepared creation binds private Jobs to original custody handle before ses
     assert.match(fixture, /outer\.BindPreparedPrivatePair\(inner, ownerIdentity,[\s\S]*?outer\.RequireOrBindPreparedPrivatePair\(inner, ownerIdentity, owner.SafeHandle, identity, root\);[\s\S]*?aliasRefused[\s\S]*?custody\.TryDrainAndRelease\(5000\)/);
     assert.doesNotMatch(prep, /TakeVerified|ResumeRetainedRoot/);
 });
+
+
+test('prepared successor replaces occupied slot without transferring raw resource disposal ownership', async () => {
+    const slot = await readFile('apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs', 'utf8');
+    const prep = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
+    const life = await readFile('apps/broker/Veil.VolumeBroker/CefPreparedCreationLifetime.cs', 'utf8');
+    const session = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    assert.match(slot, /internal bool ReplacePrepared[\s\S]*?!ReferenceEquals\(generation, expectedGeneration\) \|\| !ReferenceEquals\(session, expected\)[\s\S]*?activating = true;[\s\S]*?var successor = build\(\);[\s\S]*?successor is null \|\| ReferenceEquals\(successor, expected\) \|\| retired[\s\S]*?session = successor;\s*committed = true;[\s\S]*?finally\s*\{\s*try \{ if \(!committed\) Retire\(\); \}\s*finally \{ activating = false; \}/);
+    assert.match(life, /if \(!created \|\| retired \|\| creating \|\| handoffAttempted\)[\s\S]*?handoffAttempted = true;\s*creating = true;[\s\S]*?custody\.BuildRetainedSession[\s\S]*?if \(retired\)[\s\S]*?return successor;[\s\S]*?catch\s*\{\s*retired = true;/);
+    assert.match(prep, /creation\.PrepareSuccessor[\s\S]*?outer\.RequirePreparedPrivateRoot[\s\S]*?new CefBoundDiagnosticSession[\s\S]*?borrowedCreation: creation\);\s*session\.RequirePreparedForHandoff\(\);/);
+    assert.match(session, /if \(borrowedCreation is null\)\s*lifetime = new CefRetainedLifetime/);
+    assert.match(session, /if \(borrowedCreation is not null\)\s*return guard\.RevokeAndCheckDrain\(\(\) => borrowedCreation\.RevokeAndRelease\(milliseconds\)\);/);
+    assert.match(session, /if \(borrowedCreation is not null\)\s*throw new UnauthorizedAccessException\("CEF prepared successor activation is disabled\."\);/);
+    assert.match(broker, /diagnosticSession\.ReplacePrepared\(expectedGeneration, probe,\s*\(\) => preparation\.PrepareBoundSession\(expectedGeneration, probe\), out var handoffFailure\)/);
+    assert.match(fixture, /slot\.ReplacePrepared\(generation, probe,[\s\S]*?Synthetic successor construction refusal[\s\S]*?BorrowingFixtureSuccessor\(probe\)[\s\S]*?slot\.TryReleaseRetired\(5000\)/);
+});

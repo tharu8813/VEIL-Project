@@ -273,6 +273,47 @@ try
             "Relock policy did not complete after creation drain.");
     }
     Console.WriteLine("PASS: owned suspended creation probe retires, drains, and gates relock");
+    // Exercise in-place ownership handoff using the actual synthetic root.
+    // No apphost execution and no second native handle owner.
+    foreach (int mode in new[] { 0, 1, 2 })
+    {
+        using var outer = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var inner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var prerequisites = new MemoryStream();
+        var slot = new CefDiagnosticSessionSlot<ICefDiagnosticLifetime>();
+        var generation = new object();
+        var probe = new CefPreparedCreationLifetime(outer, inner, prerequisites, (a, b, custody) =>
+            a.CreateAtomicRetainedPairFixture(b, image, environment, custody, false));
+        Check(slot.RegisterAndActivate(generation, probe, probe.Create, out _) ==
+            CefDiagnosticActivationOutcome.Activated, "Handoff fixture creation refused.");
+        Check(!slot.ReplacePrepared(new object(), probe, () => throw new InvalidOperationException("Stale factory executed."), out var staleFailure) &&
+            staleFailure is null && ReferenceEquals(slot.Current(generation), probe), "Stale handoff changed slot.");
+        bool switched = slot.ReplacePrepared(generation, probe, () =>
+            probe.PrepareSuccessor((a, b, child, root) =>
+            {
+                Check(slot.Occupied && slot.Current(generation) is null &&
+                    child.IsAlive && Native.IsRunning(root) && prerequisites.CanRead &&
+                    !File.Exists(markerPath), "Handoff lost original ownership.");
+                Check(!slot.TryReleaseRetired(0), "Handoff allowed early release.");
+                if (mode == 1) throw new UnauthorizedAccessException("Synthetic successor construction refusal.");
+                if (mode == 2)
+                {
+                    slot.Retire();
+                    Check(!slot.TryReleaseRetired(0), "Retired handoff released during construction.");
+                }
+                return new BorrowingFixtureSuccessor(probe);
+            }), out var handoffFailure);
+        Check(switched == (mode == 0) && (handoffFailure is null) == switched &&
+            slot.Occupied && prerequisites.CanRead && !File.Exists(markerPath), "Handoff result mismatch.");
+        if (switched)
+            Check(slot.Current(generation) is BorrowingFixtureSuccessor, "Successor was not published.");
+        else
+            Check(slot.CleanupPending && slot.Current(generation) is null, "Failed handoff was not retired.");
+        slot.Retire();
+        Check(slot.TryReleaseRetired(5000) && !slot.Occupied && !prerequisites.CanRead &&
+            !File.Exists(markerPath), "Handoff lifetime did not drain and release.");
+    }
+    Console.WriteLine("PASS: in-place suspended lifetime handoff, construction refusal and reentrant retirement");
     // Same-user synthetic atomic Job pair: handoff before resume, including
     // a failure after resume actually ran. No product or BitLocker access.
     using (var owner = Process.GetCurrentProcess())
@@ -821,4 +862,11 @@ internal sealed class HandoffFixtureLifetime(CefContainedProcess child,
         return outer.TerminateAndVerifyPrivateDrain(inner, root, milliseconds) &&
             child.WaitForNaturalJobExit(milliseconds);
     }
+}
+
+// The new slot owner delegates cleanup to the original custody owner.
+internal sealed class BorrowingFixtureSuccessor(CefPreparedCreationLifetime owner) : ICefDiagnosticLifetime
+{
+    public void Revoke() => owner.Revoke();
+    public bool RevokeAndRelease(int milliseconds) => owner.RevokeAndRelease(milliseconds);
 }

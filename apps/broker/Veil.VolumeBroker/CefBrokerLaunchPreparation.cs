@@ -134,6 +134,33 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
         // activation or cleanup/relock authorization occurs here.
     }
 
+    // Build a bound diagnostic session without transferring raw ownership.
+    // The existing creation lifetime retains all pins, Jobs and handles;
+    // the successor delegates drain and release to it.
+    internal CefBoundDiagnosticSession PrepareBoundSession(object generation,
+        CefPreparedCreationLifetime creation)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        ArgumentNullException.ThrowIfNull(creation);
+        RequireCurrent();
+        return creation.PrepareSuccessor((outer, inner, child, root) =>
+        {
+            RequireCurrent();
+            var identity = token.RequireCreatedRoot(root, path);
+            using var verified = CefPinnedImage.OpenVerified(identity, root, path, digest);
+            outer.RequirePreparedPrivateRoot(inner, owner, ownerHandle, identity, root);
+            var session = new CefBoundDiagnosticSession(owner, ownerHandle, generation,
+                registration, outer, inner, identity, root, () =>
+                {
+                    RequireCurrent();
+                    return (generation, registration, true);
+                }, verifier, child, borrowedCreation: creation);
+            session.RequirePreparedForHandoff();
+            RequireCurrent();
+            return session;
+        });
+    }
+
     public void Dispose()
     {
         if (disposed) return;

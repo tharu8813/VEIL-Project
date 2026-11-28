@@ -301,6 +301,44 @@ internal sealed class CefDiagnosticSessionSlot<T> where T : class, ICefDiagnosti
         }
     }
 
+    // Construct a borrowing successor while the old slot remains occupied.
+    // Only the exact current owner/generation may replace it. The successor
+    // must delegate resource release to the old owner; no release on swap.
+    // A refusal before the factory leaves the old slot untouched. A failure
+    // during construction retires the original slot, not a partial successor.
+    internal bool ReplacePrepared(object expectedGeneration, T expected,
+        Func<T> build, out Exception? failure)
+    {
+        ArgumentNullException.ThrowIfNull(expectedGeneration);
+        ArgumentNullException.ThrowIfNull(expected);
+        ArgumentNullException.ThrowIfNull(build);
+        failure = null;
+        if (retired || releasing || activating ||
+            !ReferenceEquals(generation, expectedGeneration) || !ReferenceEquals(session, expected))
+            return false;
+        activating = true;
+        bool committed = false;
+        try
+        {
+            var successor = build();
+            if (successor is null || ReferenceEquals(successor, expected) || retired)
+                throw new UnauthorizedAccessException("CEF successor refused.");
+            session = successor;
+            committed = true;
+            return true;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            failure = error;
+            return false;
+        }
+        finally
+        {
+            try { if (!committed) Retire(); }
+            finally { activating = false; }
+        }
+    }
+
     internal T? Current(object? expectedGeneration) =>
         !retired && !activating && ReferenceEquals(generation, expectedGeneration) ? session : null;
 

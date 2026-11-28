@@ -94,15 +94,18 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
     private bool activationAttempted;
     private bool activated;
     private readonly Func<int, bool> drain;
-    private readonly CefRetainedLifetime lifetime;
+    private readonly CefRetainedLifetime? lifetime;
+    private readonly CefPreparedCreationLifetime? borrowedCreation;
 
     internal CefBoundDiagnosticSession(ClientIdentity owner, SafeProcessHandle ownerHandle,
         object generation, CefRuntimeRegistrationLease registration,
         CefBrokerOwnedJob brokerJob, CefBrokerOwnedJob peerJob,
         ClientIdentity root, SafeProcessHandle rootHandle,
         Func<(object Generation, CefRuntimeRegistrationLease RuntimeLease, bool VolumeProtected)> readCurrent,
-        CefSystemModuleVerifier systemVerifier, CefContainedProcess preparedRoot)
+        CefSystemModuleVerifier systemVerifier, CefContainedProcess preparedRoot,
+        CefPreparedCreationLifetime? borrowedCreation = null)
     {
+        this.borrowedCreation = borrowedCreation;
         ArgumentNullException.ThrowIfNull(readCurrent);
         ArgumentNullException.ThrowIfNull(preparedRoot);
         preparedRoot.RequireRetainedPreparedRoot(rootHandle);
@@ -148,7 +151,22 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
             int remaining = (int)Math.Max(0L, milliseconds - started.ElapsedMilliseconds);
             return preparedRoot.WaitForNaturalJobExit(remaining);
         };
-        lifetime = new CefRetainedLifetime(registration, preparedRoot, peerJob, brokerJob, rootHandle);
+        // A prepared successor borrows the custody-owned original handle.
+        // Never create a second disposal owner for that same resource set.
+        if (borrowedCreation is null)
+            lifetime = new CefRetainedLifetime(registration, preparedRoot, peerJob, brokerJob, rootHandle);
+    }
+
+    internal void RequirePreparedForHandoff()
+    {
+        if (borrowedCreation is null || activationAttempted)
+            throw new UnauthorizedAccessException("CEF prepared successor unavailable.");
+        _ = guard.Observe(readContext, () =>
+        {
+            requirePreparedRoot();
+            preparedRoot.RequireRetainedPreparedRoot(retainedRoot);
+            return true;
+        });
     }
 
     // The slot owns this lifetime before invoking this method. No module
@@ -156,6 +174,11 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
     // regular post-resume monitor checks it independently.
     internal void ActivatePreparedRoot()
     {
+        // The new broker-created path has no reviewed protected-profile
+        // launch environment or real CEF admission yet. Handoff is not
+        // permission to run the image.
+        if (borrowedCreation is not null)
+            throw new UnauthorizedAccessException("CEF prepared successor activation is disabled.");
         if (activationAttempted)
             throw new UnauthorizedAccessException("CEF activation already attempted.");
         activationAttempted = true;
@@ -174,13 +197,19 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
             throw new UnauthorizedAccessException("CEF diagnostic session has not activated.");
         return guard.Observe(readContext, observe);
     }
-    public void Revoke() => guard.Revoke();
+    public void Revoke()
+    {
+        guard.Revoke();
+        borrowedCreation?.Revoke();
+    }
     // Keep this session in the owning broker until true; false or an exception
     // leaves all unconfirmed/unreleased resources retained for retry.
     public bool RevokeAndRelease(int milliseconds)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
         guard.Revoke();
-        return lifetime.TryRelease(() => guard.RevokeAndCheckDrain(() => drain(milliseconds)));
+        if (borrowedCreation is not null)
+            return guard.RevokeAndCheckDrain(() => borrowedCreation.RevokeAndRelease(milliseconds));
+        return lifetime!.TryRelease(() => guard.RevokeAndCheckDrain(() => drain(milliseconds)));
     }
 }

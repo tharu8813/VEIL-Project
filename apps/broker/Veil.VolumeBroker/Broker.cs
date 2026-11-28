@@ -605,7 +605,13 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             if (outcome == CefDiagnosticActivationOutcome.Refused)
                 throw new UnauthorizedAccessException("CEF creation probe slot unavailable.");
             if (failure is not null) throw new UnauthorizedAccessException("CEF creation probe refused.", failure);
-            log.Write("cef-creation-probe", new { result = "SuspendedVerified" });
+            // Replace the occupied slot in place. The successor borrows
+            // the probe's resource lifetime; the probe never releases on
+            // successful handoff. Failure retains the original slot.
+            if (!diagnosticSession.ReplacePrepared(expectedGeneration, probe,
+                () => preparation.PrepareBoundSession(expectedGeneration, probe), out var handoffFailure))
+                throw new UnauthorizedAccessException("CEF prepared session handoff refused.", handoffFailure);
+            log.Write("cef-creation-probe", new { result = "BoundSuspendedVerified" });
         }
         finally
         {

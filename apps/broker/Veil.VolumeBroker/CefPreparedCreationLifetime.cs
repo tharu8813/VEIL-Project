@@ -15,6 +15,8 @@ internal sealed class CefPreparedCreationLifetime : ICefDiagnosticLifetime
     private readonly CefContainedProcess.CreationCustody custody = new();
     private readonly CefRetainedLifetime lifetime;
     private bool attempted;
+    private bool created;
+    private bool handoffAttempted;
     private bool creating;
     private bool retired;
 
@@ -45,6 +47,33 @@ internal sealed class CefPreparedCreationLifetime : ICefDiagnosticLifetime
             create(outer, inner, custody);
             if (retired || !custody.HasRetainedProcess)
                 throw new UnauthorizedAccessException("CEF creation was retired or unconfirmed.");
+            created = true;
+        }
+        finally { creating = false; }
+    }
+
+    // A successor borrows our retained resources and delegates cleanup to
+    // us. The original slot must remain occupied throughout construction.
+    internal T PrepareSuccessor<T>(
+        Func<CefBrokerOwnedJob, CefBrokerOwnedJob, CefContainedProcess, Microsoft.Win32.SafeHandles.SafeProcessHandle, T> build)
+        where T : class, ICefDiagnosticLifetime
+    {
+        ArgumentNullException.ThrowIfNull(build);
+        if (!created || retired || creating || handoffAttempted)
+            throw new UnauthorizedAccessException("CEF creation handoff unavailable.");
+        handoffAttempted = true;
+        creating = true;
+        try
+        {
+            var successor = custody.BuildRetainedSession((child, root) => build(outer, inner, child, root));
+            if (retired)
+                throw new UnauthorizedAccessException("CEF creation handoff retired.");
+            return successor;
+        }
+        catch
+        {
+            retired = true;
+            throw;
         }
         finally { creating = false; }
     }

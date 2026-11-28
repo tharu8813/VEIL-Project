@@ -142,6 +142,21 @@ internal sealed class CefContainedProcess : IDisposable
             finally { validating = false; }
         }
 
+        // Construct a successor that borrows the original child and handle.
+        // Custody remains the sole native resource owner. The factory must
+        // not resume, dispose, or retain anything on refusal.
+        internal T BuildRetainedSession<T>(Func<CefContainedProcess, SafeProcessHandle, T> build) where T : class
+        {
+            ArgumentNullException.ThrowIfNull(build);
+            T? result = null;
+            VerifyRetainedRoot(root =>
+            {
+                result = build(retained!, root) ??
+                    throw new InvalidOperationException("CEF successor unavailable.");
+            });
+            return result!;
+        }
+
         internal CefContainedProcess TakeVerified()
         {
             if (rejected || transferred || validating || retained is not { creationVerified: true } child)
