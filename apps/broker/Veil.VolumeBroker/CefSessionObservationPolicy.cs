@@ -154,3 +154,24 @@ internal sealed class CefDiagnosticSessionGuard
         finally { draining = false; }
     }
 }
+
+// Pure SCM notification filtering shared by service and broker tests.
+// Neither a notification nor a session number grants authentication.
+internal static class CefWindowsSessionRevocation
+{
+    internal static bool IsRevocationEvent(uint eventType) => eventType is 6 or 7; // LOGOFF, LOCK
+
+    internal static bool TryDecode(uint eventType, int notificationSize, uint sessionId,
+        out uint revokeSession)
+    {
+        revokeSession = 0;
+        if (!IsRevocationEvent(eventType) || notificationSize != 8 ||
+            sessionId == 0 || sessionId > int.MaxValue)
+            return false;
+        revokeSession = sessionId;
+        return true;
+    }
+
+    internal static bool MatchesOwner(ClientIdentity? owner, uint sessionId) =>
+        owner is { SessionId: > 0 } && (uint)owner.SessionId == sessionId;
+}
