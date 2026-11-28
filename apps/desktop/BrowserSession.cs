@@ -165,7 +165,7 @@ internal sealed class BrowserSession
 
     // The existing mounted profile owns the path. An engine or library UI
     // cannot choose a destination or borrow the main session's private data.
-    internal bool TrySaveLibrary(Func<bool> authorized)
+    internal bool TrySaveLibrary(Func<bool> authorized, bool captureTabs = false)
     {
         libraryDispatcher.VerifyAccess();
         if (IsPrivate || IsEnding || EngineLost || !EngineHost.IsReady || persistentStatePath is null ||
@@ -173,6 +173,10 @@ internal sealed class BrowserSession
         if (IsPrivate || IsEnding || EngineLost || !EngineHost.IsReady) return false;
         try
         {
+            // History and tab layout share one state file. During restoration
+            // or transfer retain the last complete layout, not a partial snapshot.
+            if (captureTabs) CaptureOpenTabs();
+            if (!authorized() || IsPrivate || IsEnding || EngineLost || !EngineHost.IsReady) return false;
             Data.Save(persistentStatePath);
             return true;
         }
@@ -209,8 +213,15 @@ internal sealed class BrowserSession
     internal void Save()
     {
         if (IsPrivate || TabTransferDepth != 0) return;
+        if (!CaptureOpenTabs()) return;
+        Data.Save(StatePath);
+    }
+
+    private bool CaptureOpenTabs()
+    {
+        if (IsPrivate || TabTransferDepth != 0) return false;
         var open = Windows.Where(window => !window.IsClosing).ToList();
-        if (open.Count == 0 || open.Any(window => window.IsRestoring)) return;
+        if (open.Count == 0 || open.Any(window => window.IsRestoring)) return false;
         var (tabs, selected) = open[0].Snapshot();
         Data.Tabs = tabs;
         Data.Selected = selected;
@@ -221,6 +232,6 @@ internal sealed class BrowserSession
                 var snapshot = window.Snapshot();
                 return new WindowTabs(snapshot.Tabs, snapshot.Selected, window.PinnedTabCount);
             }).ToList();
-        Data.Save(StatePath);
+        return true;
     }
 }
