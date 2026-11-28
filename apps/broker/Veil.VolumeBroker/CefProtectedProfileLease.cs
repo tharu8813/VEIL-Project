@@ -228,6 +228,78 @@ internal sealed class CefProtectedProfileLease : IDisposable
         }
     }
 
+    // Read-only inspection of two EXISTING fixed files. The caller must
+    // retain this profile and its exclusive lock; no path comes from IPC.
+    // These no-delete-sharing pins are intentionally incompatible with
+    // replacement. Never drop them and treat an old inspection as a permit.
+    internal LibraryFileInspection InspectLibraryFiles()
+    {
+        RequireCurrent();
+        if (profileLock is null)
+            throw new UnauthorizedAccessException("CEF exclusive profile ownership required.");
+        CefProtectedDirectoryLease.RegularFilePin? committed = null;
+        CefProtectedDirectoryLease.RegularFilePin? staged = null;
+        try
+        {
+            committed = CefProtectedDirectoryLease.OpenRegularFile(layout.LibraryFile, volume, readStatus);
+            staged = CefProtectedDirectoryLease.OpenRegularFile(layout.LibraryStageFile, volume, readStatus);
+            var inspection = new LibraryFileInspection(this, committed, staged);
+            inspection.RequireCurrent();
+            return inspection;
+        }
+        catch
+        {
+            retired = true;
+            try { staged?.Dispose(); }
+            finally { committed?.Dispose(); }
+            throw;
+        }
+    }
+
+    internal sealed class LibraryFileInspection : IDisposable
+    {
+        private readonly CefProtectedProfileLease owner;
+        private readonly CefProtectedDirectoryLease.RegularFilePin committed;
+        private readonly CefProtectedDirectoryLease.RegularFilePin staged;
+        private bool disposed;
+
+        internal LibraryFileInspection(CefProtectedProfileLease owner,
+            CefProtectedDirectoryLease.RegularFilePin committed,
+            CefProtectedDirectoryLease.RegularFilePin staged)
+        {
+            this.owner = owner;
+            this.committed = committed;
+            this.staged = staged;
+        }
+
+        internal void RequireCurrent()
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            try
+            {
+                owner.RequireCurrent();
+                if (owner.profileLock is null)
+                    throw new UnauthorizedAccessException("CEF exclusive profile ownership required.");
+                committed.RequireCurrent(owner.readStatus);
+                staged.RequireCurrent(owner.readStatus);
+                owner.RequireCurrent();
+            }
+            catch
+            {
+                owner.retired = true;
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (disposed) return;
+            disposed = true;
+            try { staged.Dispose(); }
+            finally { committed.Dispose(); }
+        }
+    }
+
     // Read-only snapshot, not a permit. No native creation path consumes
     // this plan yet; the future caller must retain this lease through drain.
     internal IReadOnlyDictionary<string, string?> VerifiedEnvironment()

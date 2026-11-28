@@ -353,3 +353,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #296 exact native compile 46180159559 최종 PASS (runtime 아님). #297 exact head `7ac765e528b2cf236812d90511eb6787af7265c2` Windows/Rust CI 46180598778 PASS; native compile CI 46180598781 미완료, 독립 리뷰 없음.
 - 기존 Broker.serial의 SemaphoreSlim(1,1)을 동등한 WaitAsync/Release를 제공하는 CefBrokerOperationGate로 감싼다. 기존 lock/detach/SCM revoke/crash/monitor와 동일 gate 아래 미래의 synchronous trusted publisher를 위한 TryPublishAsync 추가. 획득 후 current 재검증 및 cancellation 확인, 예외에도 release, publish 이후 cancellation으로 commit 결과 뒤집지 않음. NetworkPolicyCheck에 lock-first/old generation/cancelled waiter/cancel during observation/refusal/exception/publish-first 동시성 회귀 작성. 실제 publisher/IPC/파일 경로 권한 부여 없음; 기존 broker 명령에서 신규 publish 호출 금지. future caller는 retained handle/current generation 및 별도 runtime admission 검증, bounded publication, non-reentrant 규칙 및 OS lock race 검증 필요. 신규 CI/실제 보호 VM/독립 리뷰 미검증, startupEnabled=false 유지.
+
+### P3-02 고정 CEF 라이브러리 파일 핸들 검사 (미완료)
+
+- #297 exact native compile 46180598781 최종 PASS (runtime 아님). #298 exact head `e4598c6018925e7eeac315fdb45809281e675a6b` Windows/Rust CI 46181058474 PASS, 독립 리뷰 없음.
+- CefProfileLayout에 CEF 전용 library-state.json/library-state.stage 고정 경로 정의. 기존 broker-owned exclusive profile lease 하에서 두 기존 파일의 실제 핸들, 단일 링크, no-follow, DOS/GUID 위치, 파일 identity 및 보호 상태 검사 재사용. no-delete-sharing 유지, 권한 변경 후 lease 재사용 금지. 기존 파일 모두 있어야 하며 첫 생성/rename/실제 writer 권한은 제공하지 않는다. 실제 Windows synthetic 파일 핸들 검사 추가 (읽기 전용 profile 거부, 교체 거부, hardlink, authority loss, missing stage); 실제 BitLocker 상태는 합성. 보존된 핸들을 버린 뒤 경로 기반 교체하는 방식 금지. 최종 handle-relative replace, 파일 내용 변경 방지 및 token/ACL, broker generation/runtime admission 및 cleanup coupling 미완료. 신규 CI/실제 보호 VM/독립 리뷰 미검증. startupEnabled=false 유지.

@@ -13,6 +13,10 @@ internal sealed class CefProfileLayout
     internal string Scratch { get; }
     internal string Logs { get; }
     internal string LogFile { get; }
+    // CEF-only state: never accept a client-supplied filename or reuse
+    // the WebView2 browser-state.json. No file is created by this layout.
+    internal string LibraryFile { get; }
+    internal string LibraryStageFile { get; }
 
     internal CefProfileLayout(string productRoot)
     {
@@ -24,6 +28,8 @@ internal sealed class CefProfileLayout
         Scratch = Path.Combine(EngineRoot, "temp");
         Logs = Path.Combine(EngineRoot, "logs");
         LogFile = Path.Combine(Logs, "cef.log");
+        LibraryFile = Path.Combine(EngineRoot, "library-state.json");
+        LibraryStageFile = Path.Combine(EngineRoot, "library-state.stage");
     }
 
     internal IEnumerable<string> Directories => [EngineRoot, Cache, Scratch, Logs];
