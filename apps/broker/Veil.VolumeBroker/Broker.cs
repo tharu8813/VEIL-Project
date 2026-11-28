@@ -1021,8 +1021,14 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                 // Only an already registered internal diagnostic session can
                 // reach this path. Observation failure retires the owner and
                 // the session through the existing catch/cleanup path.
-                if (diagnosticSession.Current(unlockOwner) is CefBoundDiagnosticSession session)
+                diagnosticSession.ObserveCurrent(unlockOwner, candidate =>
+                {
+                    if (candidate is not CefBoundDiagnosticSession session)
+                        throw new UnauthorizedAccessException("CEF monitor cannot observe an unbound lifetime.");
                     _ = session.Observe();
+                    if (!ReferenceEquals(authenticatedGeneration, expected))
+                        throw new UnauthorizedAccessException("CEF monitor owner changed.");
+                });
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             {

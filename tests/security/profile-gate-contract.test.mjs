@@ -750,7 +750,7 @@ test('registered diagnostic session requires installed signed baseline and retir
     assert.match(verifier, /if \(requireHostCurrent is null\)\s*throw new UnauthorizedAccessException[\s\S]*?requireHostCurrent\(\);/);
     const monitor = broker.slice(broker.indexOf('private async Task MonitorAuthenticatedGenerationAsync('),
         broker.indexOf('private async Task MonitorCompletedPreflightAsync('));
-    assert.match(monitor, /if \(diagnosticSession\.Current\(unlockOwner\) is CefBoundDiagnosticSession session\)\s*_ = session\.Observe\(\);[\s\S]*?catch \(Exception error\)[\s\S]*?ClearAuthenticatedOwner\(\);/);
+    assert.match(monitor, /diagnosticSession\.ObserveCurrent\(unlockOwner, candidate =>[\s\S]*?candidate is not CefBoundDiagnosticSession session[\s\S]*?_ = session\.Observe\(\);[\s\S]*?catch \(Exception error\)[\s\S]*?ClearAuthenticatedOwner\(\);/);
     assert.equal((broker.match(/TryRegisterDiagnosticSession\(/g) ?? []).length, 1);
 });
 
@@ -826,8 +826,8 @@ test('prepared diagnostic lifetime is retained before activation and retired on 
     const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
     assert.match(policy, /if \(!TryRegister\(expectedGeneration, candidate\)\)\s*return CefDiagnosticActivationOutcome\.Refused;\s*activating = true;[\s\S]*?activate\(\);[\s\S]*?if \(retired\)[\s\S]*?committed = true/);
     assert.match(policy, /failure = error;\s*return CefDiagnosticActivationOutcome\.Retired;[\s\S]*?try \{ if \(!committed\) Retire\(\); \}\s*finally \{ activating = false; \}/);
-    assert.match(policy, /!retired && !activating && ReferenceEquals\(generation, expectedGeneration\)/);
-    assert.match(policy, /if \(!retired \|\| releasing \|\| activating\) return false/);
+    assert.match(policy, /!retired && !activating && !observing && ReferenceEquals\(generation, expectedGeneration\)/);
+    assert.match(policy, /if \(!retired \|\| releasing \|\| activating \|\| observing\) return false/);
     assert.match(fixture, /slot\.RegisterAndActivate\(generation, session,[\s\S]*?candidate\.ResumeRetainedRoot\(retained\)[\s\S]*?Synthetic lost resume confirmation[\s\S]*?slot\.TryReleaseRetired\(5000\)/);
     assert.equal((broker.match(/diagnosticSession\.RegisterAndActivate\(/g) ?? []).length, 2);
 });
@@ -1288,6 +1288,15 @@ test('protected lifecycle adapter remains disconnected from product startup', as
     const lifecycle = await readFile('apps/cef-smoke/protected_lifecycle.h', 'utf8');
     assert.match(cmake, /target_sources\(veil-cef-product PRIVATE protected_cef_lifecycle\.cc\)/);
     assert.doesNotMatch(product, /RunProtectedCefLifecycle|CefInitialize\s*\(|CefExecuteProcess\s*\(|CefShutdown\s*\(/);
-    assert.match(adapter, /CefExecuteProcess\(args, nullptr, sandbox_info\)[\s\S]*?PrepareProtectedInitializationSettings\(registration\)[\s\S]*?CefInitialize\(args, \*settings, nullptr, sandbox_info\)[\s\S]*?run_fixture\(kProtectedSyntheticPage\)[\s\S]*?CefShutdown\(\)/);
+    assert.match(adapter, /CefExecuteProcess\(args, nullptr, sandbox_info\)[\s\S]*?PrepareProtectedInitializationSettings\(registration\)[\s\S]*?CefInitialize\(args, \*settings, nullptr, sandbox_info\)[\s\S]*?run_fixture\(kProtectedSyntheticPage, current\)[\s\S]*?CefShutdown\(\)/);
     assert.match(lifecycle, /if \(!outcome\.browsers_closed\) return \{Status::kCleanupUnconfirmed\};[\s\S]*?try \{ shutdown\(\); \}/);
+});
+
+
+test('protected execution authority is sticky and broker monitoring retains the exact slot', async () => {
+    const lifecycle = await readFile('apps/cef-smoke/protected_lifecycle.h', 'utf8');
+    const slot = await readFile('apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs', 'utf8');
+    assert.match(lifecycle, /bool retired = false;[\s\S]*?if \(retired\) return false;[\s\S]*?require_current\(\)[\s\S]*?retired = true;[\s\S]*?fixture\(current\)/);
+    assert.match(slot, /ObserveCurrent\(object\? expectedGeneration, Action<T> observe\)[\s\S]*?!ReferenceEquals\(generation, expectedGeneration\)[\s\S]*?observing = true;[\s\S]*?observe\(candidate\);[\s\S]*?Retire\(\);[\s\S]*?finally \{ observing = false; \}/);
+    assert.match(slot, /if \(!retired \|\| releasing \|\| activating \|\| observing\) return false;/);
 });

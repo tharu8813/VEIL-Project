@@ -6,7 +6,7 @@ ProtectedLifecycleResult RunProtectedCefLifecycle(HINSTANCE instance,
     void* sandbox_info, ProtectedProcessRole role,
     const RegisteredBootstrap& registration,
     const std::function<bool()>& require_current,
-    const std::function<ProtectedFixtureResult(const char*)>& run_fixture) {
+    const std::function<ProtectedFixtureResult(const char*, const std::function<bool()>&)>& run_fixture) {
   if (!instance || !sandbox_info || !require_current ||
       (role == ProtectedProcessRole::kBrowser && !run_fixture))
     return {ProtectedLifecycleStatus::kAuthorityRefused};
@@ -21,7 +21,7 @@ ProtectedLifecycleResult RunProtectedCefLifecycle(HINSTANCE instance,
         return settings != nullptr;
       },
       [&] { return CefInitialize(args, *settings, nullptr, sandbox_info); },
-      [&] { return run_fixture(kProtectedSyntheticPage); },
+      [&](const auto& current) { return run_fixture(kProtectedSyntheticPage, current); },
       [] { CefShutdown(); });
 }
 }  // namespace veil_cef

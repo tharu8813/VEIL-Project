@@ -251,6 +251,7 @@ internal sealed class CefDiagnosticSessionSlot<T> where T : class, ICefDiagnosti
     private bool retired;
     private bool releasing;
     private bool activating;
+    private bool observing;
     internal bool Occupied => session is not null;
     internal bool CleanupPending => Occupied && retired;
 
@@ -313,7 +314,7 @@ internal sealed class CefDiagnosticSessionSlot<T> where T : class, ICefDiagnosti
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(build);
         failure = null;
-        if (retired || releasing || activating ||
+        if (retired || releasing || activating || observing ||
             !ReferenceEquals(generation, expectedGeneration) || !ReferenceEquals(session, expected))
             return false;
         activating = true;
@@ -340,7 +341,35 @@ internal sealed class CefDiagnosticSessionSlot<T> where T : class, ICefDiagnosti
     }
 
     internal T? Current(object? expectedGeneration) =>
-        !retired && !activating && ReferenceEquals(generation, expectedGeneration) ? session : null;
+        !retired && !activating && !observing && ReferenceEquals(generation, expectedGeneration) ? session : null;
+
+    // An occupied slot must never be silently skipped by the monitor.
+    // Hold the slot through the observation, including reentrant revocation.
+    // A stale monitor cannot retire a different generation.
+    internal void ObserveCurrent(object? expectedGeneration, Action<T> observe)
+    {
+        ArgumentNullException.ThrowIfNull(observe);
+        if (!Occupied) return;
+        if (!ReferenceEquals(generation, expectedGeneration))
+            throw new UnauthorizedAccessException("CEF monitor generation mismatch.");
+        if (retired || releasing || activating || observing)
+            throw new UnauthorizedAccessException("CEF monitor slot unavailable.");
+        T candidate = session!;
+        observing = true;
+        try
+        {
+            observe(candidate);
+            if (retired || !ReferenceEquals(session, candidate) ||
+                !ReferenceEquals(generation, expectedGeneration))
+                throw new UnauthorizedAccessException("CEF monitor session changed.");
+        }
+        catch
+        {
+            Retire();
+            throw;
+        }
+        finally { observing = false; }
+    }
 
     internal void Retire()
     {
@@ -353,7 +382,7 @@ internal sealed class CefDiagnosticSessionSlot<T> where T : class, ICefDiagnosti
     {
         ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
         if (session is null) return true;
-        if (!retired || releasing || activating) return false;
+        if (!retired || releasing || activating || observing) return false;
         releasing = true;
         try
         {
