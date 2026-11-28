@@ -59,19 +59,23 @@ internal static class CefNestedProcessDiagnostics
         // Only the independently retained root and trusted jobs are inputs.
         // The broker collects member handles itself, never from IPC.
         registration.RequireCurrent();
+        var rootToken = CefProcessTokenObserver.ObserveRuntimeToken(rootHandle, root);
         var result = brokerJob.ObservePrivateNestedDiagnostics(peerJob, root, rootHandle,
             (identity, handle) =>
             {
                 var role = CefCommandRoleObserver.Observe(handle, identity, root);
-                var token = CefProcessTokenObserver.Observe(handle, identity);
+                var token = CefProcessTokenObserver.ObserveRuntimeToken(handle, identity);
+                CefRuntimeTokenSnapshot.RequireLogon(rootToken, token);
+                if (identity == root) CefRuntimeTokenSnapshot.RequireSame(rootToken, token);
                 var modules = CefProcessModuleObserver.Observe(handle, identity,
                     registration, systemVerifier);
-                if (role != CefCommandRoleObserver.Observe(handle, identity, root) ||
-                    token != CefProcessTokenObserver.Observe(handle, identity))
-                    throw new UnauthorizedAccessException("CEF role or token fields changed during diagnostics.");
+                if (role != CefCommandRoleObserver.Observe(handle, identity, root))
+                    throw new UnauthorizedAccessException("CEF role changed during diagnostics.");
+                CefRuntimeTokenSnapshot.RequireSame(token,
+                    CefProcessTokenObserver.ObserveRuntimeToken(handle, identity));
                 registration.RequireCurrent();
                 var diagnostic = new CefRetainedProcessDiagnostic(identity, role.Role,
-                    CefRoleTokenPolicy.Evaluate(identity, role.Role, token), modules);
+                    CefRoleTokenPolicy.Evaluate(identity, role.Role, token.Token), modules);
                 // Callback runs before independently collected member handles
                 // are released. No success escapes if later accounting fails.
                 inspectMember?.Invoke(identity, handle, diagnostic);
@@ -79,6 +83,8 @@ internal static class CefNestedProcessDiagnostics
             });
         registration.RequireCurrent();
         systemVerifier.RequireBoundTrust();
+        CefRuntimeTokenSnapshot.RequireSame(rootToken,
+            CefProcessTokenObserver.ObserveRuntimeToken(rootHandle, root));
         return result;
     }
 }
