@@ -9,6 +9,7 @@ enum class ProtectedLifecycleStatus {
   kAuthorityRefused,
   kDispatchRejected,
   kSubprocessExited,
+  kAuthorityLostAfterDispatch,
   kSettingsRejected,
   kInitializationFailed,
   kCleanupUnconfirmed,
@@ -36,8 +37,14 @@ ProtectedLifecycleResult RunProtectedLifecycle(ProtectedProcessRole role,
     Require require_current, Execute execute, Prepare prepare,
     Initialize initialize, Fixture fixture, Shutdown shutdown) {
   using Status = ProtectedLifecycleStatus;
+  // A denial or exception is permanent for this invocation, including
+  // checks made inside the fixture. Never refresh authority after refusal.
+  bool retired = false;
   const auto current = [&]() {
-    try { return require_current(); } catch (...) { return false; }
+    if (retired) return false;
+    try { if (require_current()) return true; } catch (...) {}
+    retired = true;
+    return false;
   };
   if ((role != ProtectedProcessRole::kBrowser &&
        role != ProtectedProcessRole::kSubprocess) || !current())
@@ -45,9 +52,11 @@ ProtectedLifecycleResult RunProtectedLifecycle(ProtectedProcessRole role,
   int dispatch;
   try { dispatch = execute(); }
   catch (...) { return {Status::kCleanupUnconfirmed}; }
-  if (role == ProtectedProcessRole::kSubprocess)
-    return dispatch >= 0 ? ProtectedLifecycleResult{Status::kSubprocessExited, dispatch}
-                         : ProtectedLifecycleResult{Status::kDispatchRejected};
+  if (role == ProtectedProcessRole::kSubprocess) {
+    if (dispatch < 0) return {Status::kDispatchRejected};
+    if (!current()) return {Status::kAuthorityLostAfterDispatch};
+    return {Status::kSubprocessExited, dispatch};
+  }
   if (dispatch != -1) return {Status::kDispatchRejected};
   if (!current()) return {Status::kAuthorityRefused};
   try { if (!prepare()) return {Status::kSettingsRejected}; }
@@ -59,7 +68,7 @@ ProtectedLifecycleResult RunProtectedLifecycle(ProtectedProcessRole role,
   bool authorized = current();
   ProtectedFixtureResult outcome{false, true};
   if (authorized) {
-    try { outcome = fixture(); }
+    try { outcome = fixture(current); }
     catch (...) { return {Status::kCleanupUnconfirmed}; }
   }
   if (!outcome.browsers_closed) return {Status::kCleanupUnconfirmed};
