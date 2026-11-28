@@ -120,13 +120,24 @@ function Assert-VeilPreflightServiceIdentity($Service,[string]$Command) {
     }
 }
 
+function Assert-VeilProbeRegistrationMode($Evidence,[switch]$Diagnostic) {
+    $kind = $Evidence.PSObject.Properties['kind']
+    if ($Diagnostic) {
+        if ($null -eq $kind -or $kind.Value -cne 'cef-diagnostic-service') { throw 'Verified diagnostic registration required.' }
+    } elseif ($null -ne $kind) { throw 'Diagnostic registration refused in ordinary probe.' }
+}
+
 function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
     [scriptblock]$VerifyRegistration,[scriptblock]$ReadService,[scriptblock]$ReadDacl,
     [scriptblock]$SetManual,[scriptblock]$Start,[scriptblock]$Disable,[scriptblock]$Stop,[scriptblock]$RequireDetached,
-    [scriptblock]$Exercise) {
+    [scriptblock]$Exercise,[switch]$Diagnostic) {
+    $kind = if ($Diagnostic) { 'cef-diagnostic-session-probe' } else { 'cef-preflight-service-probe' }
+    $exitCode = if ($Diagnostic) { 31 } else { 29 }
+    $observationState = if ($Diagnostic) { 'diagnostic-suspended-exit-observed' } else { 'protected-preflight-exit-observed' }
+    if ($Diagnostic -and $null -eq $Exercise) { throw 'Diagnostic exercise required.' }
     if (Test-Path -LiteralPath $ProbeRoot) { throw 'Existing or interrupted probe must be preserved.' }
     $registrationEvidence = & $VerifyRegistration
-    if ($null -ne $registrationEvidence.PSObject.Properties['kind']) { throw 'Diagnostic registration requires a separate lifecycle probe.' }
+    Assert-VeilProbeRegistrationMode $registrationEvidence -Diagnostic:$Diagnostic
     if ($registrationEvidence.state -cne 'registered-disabled' -or $registrationEvidence.startupEnabled -isnot [bool] -or
         $registrationEvidence.startupEnabled -or $registrationEvidence.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or
         $registrationEvidence.registrationSha256 -cnotmatch '\A[0-9a-f]{64}\z') { throw 'Verified disabled registration required.' }
@@ -134,7 +145,7 @@ function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
     Assert-VeilAdminPath (Split-Path -Parent $ProbeRoot)
     New-VeilRestrictedDirectory $ProbeRoot
     $intent = [ordered]@{
-        kind='cef-preflight-service-probe';format=1;state='probe-intent'
+        kind=$kind;format=1;state='probe-intent'
         sourceCommit=$registrationEvidence.sourceCommit;registrationSha256=$registrationEvidence.registrationSha256
         startupEnabled=$false
     }
@@ -167,8 +178,8 @@ function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
         if ($null -ne $Exercise) {
             $observation = & $Exercise
             if ($observation.kind -cne 'standard-user-exit-observation' -or
-                $observation.exitCode -isnot [int] -or $observation.exitCode -ne 29 -or
-                $observation.processId -isnot [int] -or $observation.processId -le 0 -or
+                $observation.exitCode -isnot [int] -or $observation.exitCode -ne $exitCode -or
+                $observation.processId -isnot [int] -or $observation.processId -le 0 -or $observation.processId -eq $runningPid -or
                 $observation.sessionId -isnot [int] -or $observation.sessionId -le 0 -or
                 $observation.tokenVerified -isnot [bool] -or -not $observation.tokenVerified) {
                 throw 'Protected preflight lacks verified standard-user exit observation.'
@@ -181,7 +192,7 @@ function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
             }
             & $RequireDetached
             $exerciseHash = Write-VeilPreflightDraftFile (Join-Path $ProbeRoot '02a-protected-preflight.json') ([ordered]@{
-                state='protected-preflight-exit-observed';intentSha256=$intentHash;exitCode=29;startupEnabled=$false
+                state=$observationState;intentSha256=$intentHash;exitCode=$exitCode;startupEnabled=$false
                 processId=$observation.processId;sessionId=$observation.sessionId;tokenVerified=$true;brokerProcessId=$runningPid
             })
         }
@@ -203,7 +214,7 @@ function Invoke-VeilPreflightServiceProbe([string]$ProbeRoot,[string]$Command,
     }
     Assert-VeilPreflightPublicationEqual (& $VerifyRegistration) $registrationEvidence
     $final = [ordered]@{
-        kind='cef-preflight-service-probe';format=1;state='running-then-stopped'
+        kind=$kind;format=1;state='running-then-stopped'
         intentSha256=$intentHash;sourceCommit=$registrationEvidence.sourceCommit;startupEnabled=$false
     }
     if ($null -ne $Exercise) {
@@ -240,8 +251,12 @@ function Assert-VeilCompletedServiceProbe([string]$ProbeRoot,$RegistrationEviden
 # Reconstruct every byte and bind the observation to the final cleanup marker.
 # This inspects trusted administrator records; it cannot prove historical
 # runtime behavior independently of the administrator who collected them.
-function Read-VeilCompletedProtectedSession([string]$ProbeRoot,$RegistrationEvidence) {
-    if ($null -ne $RegistrationEvidence.PSObject.Properties['kind']) { throw 'Diagnostic registration cannot authorize ordinary probe evidence.' }
+function Read-VeilCompletedProtectedSession([string]$ProbeRoot,$RegistrationEvidence,[switch]$Diagnostic) {
+    Assert-VeilProbeRegistrationMode $RegistrationEvidence -Diagnostic:$Diagnostic
+    $kind = if ($Diagnostic) { 'cef-diagnostic-session-probe' } else { 'cef-preflight-service-probe' }
+    $exitCode = if ($Diagnostic) { 31 } else { 29 }
+    $observationState = if ($Diagnostic) { 'diagnostic-suspended-exit-observed' } else { 'protected-preflight-exit-observed' }
+    $verifiedState = if ($Diagnostic) { 'verified-diagnostic-suspended-records' } else { 'verified-protected-preflight-records' }
     if ($RegistrationEvidence.state -cne 'registered-disabled' -or
         $RegistrationEvidence.startupEnabled -isnot [bool] -or $RegistrationEvidence.startupEnabled -or
         $RegistrationEvidence.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or
@@ -257,7 +272,7 @@ function Read-VeilCompletedProtectedSession([string]$ProbeRoot,$RegistrationEvid
     $bytes = @{}
     foreach ($name in $names) { $bytes[$name] = Read-VeilPreflightDraftBytes (Join-Path $ProbeRoot $name) }
     $intent = [ordered]@{
-        kind='cef-preflight-service-probe';format=1;state='probe-intent'
+        kind=$kind;format=1;state='probe-intent'
         sourceCommit=$RegistrationEvidence.sourceCommit;registrationSha256=$RegistrationEvidence.registrationSha256;startupEnabled=$false
     }
     $digest = Assert-VeilPreflightDraftBytes $bytes['01-probe-intent.json'] $intent
@@ -269,15 +284,15 @@ function Read-VeilCompletedProtectedSession([string]$ProbeRoot,$RegistrationEvid
         if ($value -isnot [int] -or $value -le 0) { throw 'Invalid process/session observation.' }
     }
     if ($observation.processId -eq $observation.brokerProcessId -or $observation.exitCode -isnot [int] -or
-        $observation.exitCode -ne 29 -or $observation.tokenVerified -isnot [bool] -or -not $observation.tokenVerified) {
+        $observation.exitCode -ne $exitCode -or $observation.tokenVerified -isnot [bool] -or -not $observation.tokenVerified) {
         throw 'Invalid standard-user observation.'
     }
     $observationHash = Assert-VeilPreflightDraftBytes $bytes['02a-protected-preflight.json'] ([ordered]@{
-        state='protected-preflight-exit-observed';intentSha256=$digest;exitCode=29;startupEnabled=$false
+        state=$observationState;intentSha256=$digest;exitCode=$exitCode;startupEnabled=$false
         processId=$observation.processId;sessionId=$observation.sessionId;tokenVerified=$true;brokerProcessId=$observation.brokerProcessId
     })
     $finalHash = Assert-VeilPreflightDraftBytes $bytes['03-stopped-verified.json'] ([ordered]@{
-        kind='cef-preflight-service-probe';format=1;state='running-then-stopped'
+        kind=$kind;format=1;state='running-then-stopped'
         intentSha256=$digest;sourceCommit=$RegistrationEvidence.sourceCommit;startupEnabled=$false
         protectedObservationSha256=$observationHash
     })
@@ -286,7 +301,7 @@ function Read-VeilCompletedProtectedSession([string]$ProbeRoot,$RegistrationEvid
             [Convert]::ToBase64String($bytes[$name])) { throw 'Protected session evidence changed.' }
     }
     return [pscustomobject]@{
-        state='verified-protected-preflight-records';sourceCommit=$RegistrationEvidence.sourceCommit
+        state=$verifiedState;sourceCommit=$RegistrationEvidence.sourceCommit
         registrationSha256=$RegistrationEvidence.registrationSha256;sessionSha256=$finalHash
         startupEnabled=$false
     }
