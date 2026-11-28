@@ -1380,3 +1380,14 @@ test('CEF mitigation observations use read-only exact process binding and repeat
     assert.match(mitigation, /var before = CefMitigationSnapshot.Read\(Read\);\s*RequireIdentity\(\);\s*CefMitigationSnapshot.RequireSame\(before, CefMitigationSnapshot.Read\(Read\)\);\s*RequireIdentity\(\);/);
     assert.match(nested, /var mitigations = CefProcessMitigationObserver.Observe\(handle, identity\);\s*var modules = CefProcessModuleObserver.Observe[\s\S]*?CefMitigationSnapshot.RequireSame\(mitigations,\s*CefProcessMitigationObserver.Observe\(handle, identity\)\);/);
 });
+
+
+test('nested Win32 smoke records mitigation evidence without treating missing data as zero', async () => {
+    const source = await readFile('tests/cef/CefNestedSmoke/Program.cs', 'utf8');
+    assert.match(source, /MitigationSample\(string Status, MitigationFlags\? Flags, int\? Win32Error\)/);
+    assert.match(source, /using var query = OpenProcess\(0x0400 \| 0x1000 \| 0x00100000, false, pid\);[\s\S]*?CompareObjectHandles\(original, query\)[\s\S]*?Contains\(original\) && Contains\(query\)[\s\S]*?outerJob.ContainsFixtureMember\(original\) && outerJob.ContainsFixtureMember\(query\)/);
+    assert.match(source, /MitigationFlags Snapshot\(\) => new\(Read\(1\), Read\(2\), Read\(4\), Read\(7\), Read\(10\), Read\(13\)\);/);
+    assert.match(source, /return first == second\s*\? new\("observed", first, null\)\s*: new\("policy-changed", null, null\);/);
+    assert.match(source, /return new\("query-unavailable", null, error.NativeErrorCode\);/);
+    assert.match(source, /scope = "last-live-sample-per-process"/);
+});
