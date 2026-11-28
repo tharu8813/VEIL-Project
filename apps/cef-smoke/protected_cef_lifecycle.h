@@ -12,5 +12,5 @@ ProtectedLifecycleResult RunProtectedCefLifecycle(HINSTANCE instance,
     void* sandbox_info, ProtectedProcessRole role,
     const RegisteredBootstrap& registration,
     const std::function<bool()>& require_current,
-    const std::function<ProtectedFixtureResult(const char*)>& run_fixture);
+    const std::function<ProtectedFixtureResult(const char*, const std::function<bool()>&)>& run_fixture);
 }  // namespace veil_cef
