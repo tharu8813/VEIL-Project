@@ -254,7 +254,7 @@ test('CEF staged child is bounded to one pending slot and retired on lock and ti
     assert.match(stage, /pendingCefChild = candidate;\s*_ = MonitorPendingCefChildAsync\(candidate, generation\);/);
     assert.match(stage, /if \(!ReferenceEquals\(pendingCefChild, candidate\)\)\s*\{\s*try \{ StopPendingChild\(candidate\); \}\s*finally \{ candidate\.Dispose\(\); \}/);
     assert.match(broker, /request\.Command is BrokerCommand\.Lock or BrokerCommand\.Detach\)\s*ClearAuthenticatedOwner\(\)/);
-    assert.match(broker, /private void ClearAuthenticatedOwner\(\)\s*\{[\s\S]*?authenticatedOwner = null;\s*authenticatedOwnerHandle = null;\s*diagnosticSession\.Retire\(\);\s*try \{ RevokePendingCefChild\(\); \}/);
+    assert.match(broker, /private void ClearAuthenticatedOwner\(\)\s*\{[\s\S]*?authenticatedOwner = null;\s*authenticatedOwnerHandle = null;\s*CefOwnerRevocationCleanup.Run\(diagnosticSession\.Retire, RevokePendingCefChild,\s*RetryDiagnosticSession,/);
     const clearOwner = broker.slice(broker.indexOf('private void ClearAuthenticatedOwner()'), broker.indexOf('private void RevokePendingCefChild()'));
     assert.doesNotMatch(clearOwner, /unlockOwner\s*=/);
     const secure = broker.slice(broker.indexOf('internal async Task SecureVolumeAsync()'), broker.indexOf('private async Task ServeAsync'));
@@ -724,7 +724,7 @@ test('broker retains diagnostic slot through revocation and refuses unsafe opera
     assert.match(register, /CefPinnedImage\.OpenVerified[\s\S]*?registration\.RequireCurrent\(\);[\s\S]*?!CandidateAuthorityCurrent\(expectedGeneration\)[\s\S]*?new CefBoundDiagnosticSession[\s\S]*?diagnosticSession\.RegisterAndActivate\(expectedGeneration, session,/);
     assert.equal((broker.match(/TryRegisterDiagnosticSession\(/g) ?? []).length, 1, 'registration must remain disconnected from requests');
     assert.doesNotMatch(startup, /CefBoundDiagnosticSession|TryRegisterDiagnosticSession/);
-    assert.match(broker, /diagnosticSession\.Retire\(\);\s*try \{ RevokePendingCefChild\(\); \}[\s\S]*?RetryDiagnosticSession\(\);[\s\S]*?EnsureCefStopRetry\(\)/);
+    assert.match(broker, /CefOwnerRevocationCleanup.Run\(diagnosticSession\.Retire, RevokePendingCefChild,\s*RetryDiagnosticSession,[\s\S]*?EnsureCefStopRetry\(\)/);
     assert.equal((broker.match(/diagnosticSession\.Occupied &&\s*request\.Command is BrokerCommand\.Lock or BrokerCommand\.Detach or BrokerCommand\.Unlock or BrokerCommand\.StageCefChild/g) ?? []).length, 2);
     assert.match(broker, /RetryUnresolvedCefStops\(\);\s*if \(diagnosticSession\.Occupied\)\s*throw new InvalidOperationException\("CEF diagnostic lifetime remains unconfirmed; service cleanup refused\."\)/);
     assert.match(broker, /RetryUnresolvedCefStops\(\);\s*if \(diagnosticSession\.Occupied\)\s*throw new InvalidOperationException\("CEF diagnostic lifetime remains unconfirmed; crash relock deferred\."\)/);
@@ -759,8 +759,8 @@ test('diagnostic retirement latches relock until drain and exact non-forced lock
     const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
     const policy = await readFile('apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs', 'utf8');
     const clear = broker.slice(broker.indexOf('private void ClearAuthenticatedOwner()'), broker.indexOf('private void RevokePendingCefChild()'));
-    assert.match(clear, /if \(diagnosticSession\.Occupied\)\s*diagnosticRelock\.Request\(unlockOwner\);[\s\S]*?diagnosticSession\.Retire\(\);/);
-    assert.match(clear, /diagnosticSession\.CleanupPending \|\| diagnosticRelock\.Pending\) EnsureCefStopRetry/);
+    assert.match(clear, /if \(diagnosticSession\.Occupied\)\s*diagnosticRelock\.Request\(unlockOwner\);[\s\S]*?CefOwnerRevocationCleanup.Run\(diagnosticSession\.Retire,/);
+    assert.match(clear, /unresolvedCefStops\.Count != 0 \|\| diagnosticSession\.CleanupPending \|\| diagnosticRelock\.Pending\)\s*EnsureCefStopRetry/);
     const relock = broker.slice(broker.indexOf('private bool TryCompleteDiagnosticRelock()'), broker.indexOf('private async Task RetryCefStopsAsync()'));
     assert.match(relock, /authenticatedGeneration is null && !diagnosticSession\.Occupied &&\s*unresolvedCefStops\.Count == 0 && pendingCefChild is null && completedPreflight is null/);
     assert.match(relock, /if \(!Registered\(status\)\) return false;\s*if \(status\.Unlocked && backend\.Lock\(\) != LockResult\.Locked\) return false;\s*status = backend\.Status\(\);\s*return Registered\(status\) && !status\.Unlocked && status\.ReadyToUnlock/);
@@ -1157,4 +1157,16 @@ test('broker retry worker preserves relock obligations and resets its flag under
     assert.match(policy, /internal static Exception\? TryAttempt\(Action cleanup, Action relock\)[\s\S]*?try\s*\{\s*cleanup\(\);\s*relock\(\);\s*return null;\s*\}\s*catch \(Exception error\) when \(error is not OutOfMemoryException\)\s*\{\s*return error;/);
     assert.match(policy, /return attempt < maximumAttempts - 1 && \(pending \|\| failure is not null\);/);
     assert.match(fixture, /foreach \(int failedPhase in new\[\] \{ 0, 1 \}\)[\s\S]*?ReferenceEquals\(failure, injected\) && obligation.Pending[\s\S]*?CefStopRetryPolicy.ShouldContinue\(29, 30, obligation.Pending, failure\)[\s\S]*?retried = true;[\s\S]*?!obligation.Pending/);
+});
+
+
+test('owner revocation attempts all independent cleanup phases and preserves the first recoverable failure', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const policy = await readFile('apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    const clear = broker.slice(broker.indexOf('private void ClearAuthenticatedOwner()'), broker.indexOf('private void RevokePendingCefChild()'));
+    assert.match(clear, /diagnosticRelock\.Request\(unlockOwner\);[\s\S]*?authenticatedGeneration = null;\s*authenticatedOwner = null;\s*authenticatedOwnerHandle = null;\s*CefOwnerRevocationCleanup.Run\(diagnosticSession\.Retire, RevokePendingCefChild,\s*RetryDiagnosticSession,/);
+    assert.match(clear, /if \(unresolvedCefStops\.Count != 0 \|\| diagnosticSession\.CleanupPending \|\| diagnosticRelock\.Pending\)\s*EnsureCefStopRetry\(\);/);
+    assert.match(policy, /internal static class CefOwnerRevocationCleanup[\s\S]*?catch \(Exception error\) when \(error is not OutOfMemoryException\)[\s\S]*?failure \?\?= error;[\s\S]*?Attempt\(retire\);\s*Attempt\(revokePending\);\s*Attempt\(retry\);\s*Attempt\(schedule\);\s*if \(failure is not null\)\s*System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture\(failure\).Throw\(\);/);
+    assert.match(fixture, /foreach \(int failedPhase in new\[\] \{ 0, 1, 2, 3, 4 \}\)[\s\S]*?phases.SequenceEqual\(new\[\] \{ 0, 1, 2, 3 \}\)[\s\S]*?slot.CleanupPending && slot.Current\(generation\) is null[\s\S]*?candidate.AllowRelease = true;[\s\S]*?slot.TryReleaseRetired\(0\) && obligation.TryComplete/);
 });
