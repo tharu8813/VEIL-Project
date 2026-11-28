@@ -884,7 +884,7 @@ test('retained creation captures original handles before verification and never 
     const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
     assert.match(project, /<DefineConstants>\$\(DefineConstants\);VEIL_CEF_BROKER<\/DefineConstants>/);
     assert.match(launch, /#if VEIL_CEF_BROKER[\s\S]*?CreateRetainedUserRoot[\s\S]*?token\.IsInvalid \|\| token\.IsClosed[\s\S]*?CreateSuspendedCore\(image, environment, \[outer, inner\], token, custody\);[\s\S]*?#endif/);
-    assert.match(launch, /captured = new CefContainedProcess\(job, process, thread, custody is null \? null : additionalJobs\);\s*custody\?\.Capture\(captured\);[\s\S]*?IsProcessInJob\(process, job[\s\S]*?captured\.creationVerified = true;/);
+    assert.match(launch, /process = new SafeProcessHandle\(IntPtr.Zero, ownsHandle: true\);\s*thread = new SafeFileHandle\(IntPtr.Zero, ownsHandle: true\);\s*var prepared = new CefContainedProcess\(job, process, thread, custody is null \? null : additionalJobs\);[\s\S]*?CreateProcessW\(image, command,[\s\S]*?Marshal\.InitHandle\(process, info.Process\);\s*Marshal\.InitHandle\(thread, info.Thread\);\s*captured = prepared;\s*custody\?\.Capture\(captured\);[\s\S]*?IsProcessInJob\(process, job[\s\S]*?captured\.creationVerified = true;/);
     assert.match(launch, /custody\.Reject\(\);[\s\S]*?if \(captured is not null\) throw;[\s\S]*?TerminateProcess\(process, ForcedTerminationExit\)/);
     assert.match(launch, /if \(rejected \|\| transferred \|\| validating \|\| retained is not \{ creationVerified: true \} child\)/);
     assert.match(launch, /if \(transferred \|\| validating\) return false;[\s\S]*?rejected = true;[\s\S]*?if \(!child\.TryDrainRejectedCreation\(milliseconds\)\) return false;\s*child\.Dispose\(\);\s*retained = null;/);
@@ -929,4 +929,21 @@ test('disconnected creation probe owns the slot before native creation and alway
     assert.doesNotMatch(probe, /ResumeRetainedRoot|TryRegisterDiagnosticSession\(/);
     assert.equal((broker.match(/RunDiagnosticCreationProbe\(/g) ?? []).length, 1);
     assert.doesNotMatch(protocol, /RunDiagnosticCreationProbe|CefPreparedCreationLifetime/);
+});
+
+
+test('native creation adopts handles into preallocated owners before allocating or freeing environment', async () => {
+    const launch = await readFile('apps/desktop/Engine/CefContainedProcess.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    const core = launch.slice(launch.indexOf('private static CefContainedProcess CreateSuspendedCore('),
+        launch.indexOf('internal static string BuildEnvironmentBlock('));
+    const allocated = core.indexOf('var prepared = new CefContainedProcess(');
+    const create = core.indexOf('if (!CreateProcessW(');
+    const adopt = core.indexOf('Marshal.InitHandle(process, info.Process);');
+    const publish = core.indexOf('custody?.Capture(captured);');
+    const free = core.indexOf('finally { Marshal.FreeHGlobal(env); }');
+    assert.ok(allocated >= 0 && create > allocated && adopt > create && publish > adopt && free > publish);
+    assert.doesNotMatch(core.slice(adopt, publish), /\bnew\s+|Dispose\(|FreeHGlobal\(/);
+    assert.match(core, /custody\?\.Capture\(captured\);\s*#if VEIL_CEF_CONTAINMENT_TEST\s*if \(injectAllocationFailure\)\s*throw new OutOfMemoryException/);
+    assert.match(fixture, /injectFailure: false, injectAllocationFailure: true\);[\s\S]*?catch \(OutOfMemoryException error\)[\s\S]*?custody\.HasRetainedProcess[\s\S]*?Reject\(\(\) => custody\.TakeVerified\(\)\);[\s\S]*?custody\.TryDrainAndRelease\(5000\)/);
 });

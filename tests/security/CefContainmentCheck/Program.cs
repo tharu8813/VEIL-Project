@@ -150,6 +150,30 @@ try
             "Reused custody created a process.");
     }
     Console.WriteLine("PASS: post-create failure retains handles until verified exit; successful transfer is one-shot");
+    // Simulate allocation failure at the earliest managed point after the
+    // original handles have been attached to their preallocated wrappers.
+    // No process reopening by PID and no actual memory exhaustion.
+    using (var outer = CefBrokerOwnedJob.CreateMultiprocessFixture())
+    using (var inner = CefBrokerOwnedJob.CreateMultiprocessFixture())
+    {
+        var custody = new CefContainedProcess.CreationCustody();
+        bool refused = false;
+        try
+        {
+            outer.CreateAtomicRetainedPairFixture(inner, image, environment, custody,
+                injectFailure: false, injectAllocationFailure: true);
+        }
+        catch (OutOfMemoryException error) when (error.Message == "Synthetic allocation failure immediately after capture.")
+        { refused = true; }
+        Check(refused && custody.HasRetainedProcess &&
+            !outer.HasNoActiveProcesses() && !inner.HasNoActiveProcesses() && !File.Exists(markerPath),
+            "Allocation refusal lost original suspended root.");
+        Reject(() => custody.TakeVerified());
+        Check(custody.TryDrainAndRelease(5000) && !custody.HasRetainedProcess &&
+            outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses() && !File.Exists(markerPath),
+            "Allocation refusal did not confirm root and three-Job exit.");
+    }
+    Console.WriteLine("PASS: preallocated creation handles survive synthetic post-create allocation failure");
     // A second-stage validation refusal must retain the actual created
     // process, not permit a transfer or reentrant cleanup.
     using (var outer = CefBrokerOwnedJob.CreateMultiprocessFixture())

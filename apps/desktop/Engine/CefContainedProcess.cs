@@ -69,13 +69,13 @@ internal sealed class CefContainedProcess : IDisposable
 
     internal static void CreateRetainedFixture(string image,
         IReadOnlyDictionary<string, string?> environment, SafeFileHandle outer, SafeFileHandle inner,
-        CreationCustody custody, bool injectFailure)
+        CreationCustody custody, bool injectFailure, bool injectAllocationFailure = false)
     {
         ArgumentNullException.ThrowIfNull(custody);
         if (!string.Equals(image, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException("Invalid retained fixture image.");
         _ = CreateSuspendedCore(image, environment, [outer, inner], custody: custody,
-            injectFailure: injectFailure);
+            injectFailure: injectFailure, injectAllocationFailure: injectAllocationFailure);
     }
 #endif
 
@@ -167,7 +167,7 @@ internal sealed class CefContainedProcess : IDisposable
     private static CefContainedProcess CreateSuspendedCore(string image,
         IReadOnlyDictionary<string, string?> environment, SafeFileHandle[]? additionalJobs,
         SafeAccessTokenHandle? userToken = null, CreationCustody? custody = null,
-        bool injectFailure = false)
+        bool injectFailure = false, bool injectAllocationFailure = false)
     {
         custody?.Begin();
         if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess)
@@ -185,6 +185,12 @@ internal sealed class CefContainedProcess : IDisposable
         CefContainedProcess? captured = null;
         try
         {
+            // Allocate the owning SafeHandles and complete managed child
+            // object BEFORE the native process exists. InitHandle assigns
+            // an existing native handle without allocating a new wrapper.
+            process = new SafeProcessHandle(IntPtr.Zero, ownsHandle: true);
+            thread = new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+            var prepared = new CefContainedProcess(job, process, thread, custody is null ? null : additionalJobs);
             var limits = new ExtendedLimitInformation();
             limits.Basic.LimitFlags = 0x00002000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf<ExtendedLimitInformation>()))
@@ -217,12 +223,21 @@ internal sealed class CefContainedProcess : IDisposable
                 if (!CreateProcessW(image, command, IntPtr.Zero, IntPtr.Zero, false, flags,
                     env, Path.GetDirectoryName(image)!, ref startup, out info))
                     throw Failure("CreateProcess");
+                // Native success: publish the preallocated child to the
+                // caller's existing escrow before any post-create checks,
+                // environment cleanup or exception construction.
+                Marshal.InitHandle(process, info.Process);
+                Marshal.InitHandle(thread, info.Thread);
+                captured = prepared;
+                custody?.Capture(captured);
+#if VEIL_CEF_CONTAINMENT_TEST
+                if (injectAllocationFailure)
+                    throw new OutOfMemoryException("Synthetic allocation failure immediately after capture.");
+#endif
             }
             finally { Marshal.FreeHGlobal(env); }
-            process = new SafeProcessHandle(info.Process, ownsHandle: true);
-            thread = new SafeFileHandle(info.Thread, ownsHandle: true);
-            captured = new CefContainedProcess(job, process, thread, custody is null ? null : additionalJobs);
-            custody?.Capture(captured);
+            if (process.IsInvalid || thread.IsInvalid)
+                throw new InvalidOperationException("CEF native creation returned invalid handles.");
 #if VEIL_CEF_CONTAINMENT_TEST
             if (injectFailure)
                 throw new InvalidOperationException("Synthetic post-create verification failure.");

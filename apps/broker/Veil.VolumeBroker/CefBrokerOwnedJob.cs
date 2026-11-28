@@ -82,7 +82,8 @@ internal sealed class CefBrokerOwnedJob : IDisposable
 
     internal void CreateAtomicRetainedPairFixture(CefBrokerOwnedJob peer,
         string image, IReadOnlyDictionary<string, string?> environment,
-        Veil.Desktop.CefContainedProcess.CreationCustody custody, bool injectFailure)
+        Veil.Desktop.CefContainedProcess.CreationCustody custody, bool injectFailure,
+        bool injectAllocationFailure = false)
     {
         ArgumentNullException.ThrowIfNull(peer);
         ArgumentNullException.ThrowIfNull(custody);
@@ -96,7 +97,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         RequireContainmentLimits(peer.job, peer.activeLimit);
         assignmentIssued = peer.assignmentIssued = true;
         Veil.Desktop.CefContainedProcess.CreateRetainedFixture(image, environment, job, peer.job,
-            custody, injectFailure);
+            custody, injectFailure, injectAllocationFailure);
     }
 
     internal Veil.Desktop.CefContainedProcess CreateAtomicUserPairFixture(CefBrokerOwnedJob peer,
