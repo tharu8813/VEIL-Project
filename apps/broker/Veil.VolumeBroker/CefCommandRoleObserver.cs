@@ -7,7 +7,16 @@ namespace Veil.VolumeBroker;
 
 // Diagnostic role observation only. Command lines are mutable process data;
 // a recognized role is neither a sandbox verdict nor a launch grant.
-internal sealed record CefCommandRoleObservation(ClientIdentity Identity, CefObservedRole Role);
+// Closed categories retain no arbitrary service name or command-line value.
+// A matching claim is only diagnostic evidence, never a sandbox verdict.
+internal enum CefUtilityService { None, Network, Audio, Other }
+internal enum CefSandboxClaim { Missing, Network, Audio, Other }
+internal readonly record struct CefRoleDetails(CefObservedRole Role,
+    CefUtilityService UtilityService, CefSandboxClaim SandboxClaim);
+internal sealed record CefCommandRoleObservation(ClientIdentity Identity, CefRoleDetails Details)
+{
+    internal CefObservedRole Role => Details.Role;
+}
 
 internal static class CefCommandRoleObserver
 {
@@ -21,47 +30,50 @@ internal static class CefCommandRoleObserver
         "allow-no-sandbox-job", "renderer-cmd-prefix", "gpu-launcher", "utility-cmd-prefix"
     };
 
-    internal static CefObservedRole Classify(IReadOnlyList<string> args, bool isRoot)
+    internal static CefObservedRole Classify(IReadOnlyList<string> args, bool isRoot) =>
+        ClassifyDetailed(args, isRoot).Role;
+
+    internal static CefRoleDetails ClassifyDetailed(IReadOnlyList<string> args, bool isRoot)
     {
         if (args.Count is < 1 or > 1024 || string.IsNullOrWhiteSpace(args[0]))
-            return CefObservedRole.Unknown;
+            return default;
         string? type = null, subtype = null, sandboxType = null;
         for (int i = 1; i < args.Count; i++)
         {
             var arg = args[i];
             if (string.IsNullOrWhiteSpace(arg) || arg.Contains('\0') || arg == "--")
-                return CefObservedRole.Unknown;
+                return default;
             // Chromium accepts Windows slash and single-dash switches as
             // well. Inspect all prefixes for disallowed options, and require
             // canonical syntax for role-bearing switches.
             int prefix = arg.StartsWith("--", StringComparison.Ordinal) ? 2 :
                 arg[0] is '-' or '/' ? 1 : 0;
-            if (prefix == 0) return CefObservedRole.Unknown;
+            if (prefix == 0) return default;
             string body = arg[prefix..];
             int equal = body.IndexOf('=');
             string name = equal < 0 ? body : body[..equal];
             string? value = equal < 0 ? null : body[(equal + 1)..];
             if (name.Length == 0 || name[0] is '-' or '/' || Disallowed.Contains(name))
-                return CefObservedRole.Unknown;
+                return default;
             // Reject common security-sensitive feature overrides; this is
             // deliberately not an exhaustive Chromium switch allowlist.
             if (name.Equals("disable-features", StringComparison.OrdinalIgnoreCase) &&
                 (string.IsNullOrEmpty(value) || value.Contains("sandbox", StringComparison.OrdinalIgnoreCase) ||
                     value.Contains("appcontainer", StringComparison.OrdinalIgnoreCase) ||
                     value.Contains("win32k", StringComparison.OrdinalIgnoreCase)))
-                return CefObservedRole.Unknown;
+                return default;
             if (name.Equals("type", StringComparison.OrdinalIgnoreCase) ||
                 name.Equals("utility-sub-type", StringComparison.OrdinalIgnoreCase) ||
                 name.Equals("service-sandbox-type", StringComparison.OrdinalIgnoreCase))
             {
                 if (prefix != 2 || string.IsNullOrWhiteSpace(value) || value.Any(char.IsWhiteSpace))
-                    return CefObservedRole.Unknown;
+                    return default;
                 switch (name)
                 {
                     case "type" when type is null: type = value; break;
                     case "utility-sub-type" when subtype is null: subtype = value; break;
                     case "service-sandbox-type" when sandboxType is null: sandboxType = value; break;
-                    default: return CefObservedRole.Unknown;
+                    default: return default;
                 }
             }
         }
@@ -69,20 +81,45 @@ internal static class CefCommandRoleObserver
             sandboxType.Equals("no-sandbox", StringComparison.OrdinalIgnoreCase) ||
             sandboxType.Equals("unsandboxed", StringComparison.OrdinalIgnoreCase) ||
             sandboxType.Equals("none_and_elevated", StringComparison.OrdinalIgnoreCase)))
-            return CefObservedRole.Unknown;
+            return default;
         if (isRoot)
             return type is null && subtype is null && sandboxType is null
-                ? CefObservedRole.Browser : CefObservedRole.Unknown;
-        if (type != "utility" && (subtype is not null || sandboxType is not null))
-            return CefObservedRole.Unknown;
-        return type switch
+                ? new(CefObservedRole.Browser, CefUtilityService.None, CefSandboxClaim.Missing)
+                : default;
+        if (type != "utility")
         {
-            "renderer" => CefObservedRole.Renderer,
-            "gpu-process" => CefObservedRole.Gpu,
-            "utility" when subtype == "network.mojom.NetworkService" => CefObservedRole.Network,
-            "utility" when subtype is not null => CefObservedRole.Utility,
-            _ => CefObservedRole.Unknown
+            if (subtype is not null || sandboxType is not null) return default;
+            return type switch
+            {
+                "renderer" => new(CefObservedRole.Renderer, CefUtilityService.None, CefSandboxClaim.Missing),
+                "gpu-process" => new(CefObservedRole.Gpu, CefUtilityService.None, CefSandboxClaim.Missing),
+                _ => default
+            };
+        }
+        if (subtype is null) return default;
+        var service = subtype switch
+        {
+            "network.mojom.NetworkService" => CefUtilityService.Network,
+            "audio.mojom.AudioService" => CefUtilityService.Audio,
+            _ => CefUtilityService.Other
         };
+        var claim = sandboxType switch
+        {
+            null => CefSandboxClaim.Missing,
+            "network" => CefSandboxClaim.Network,
+            "audio" => CefSandboxClaim.Audio,
+            _ => CefSandboxClaim.Other
+        };
+        // Do not attribute a network sandbox claim to another service, or
+        // recognize a network service lacking the exact matching claim.
+        if (service == CefUtilityService.Network)
+            return claim == CefSandboxClaim.Network
+                ? new(CefObservedRole.Network, service, claim) : default;
+        if (claim == CefSandboxClaim.Network ||
+            (claim == CefSandboxClaim.Audio && service != CefUtilityService.Audio) ||
+            (service == CefUtilityService.Audio && claim == CefSandboxClaim.Other))
+            return default;
+        return new(CefObservedRole.Utility, service, claim);
     }
 
     internal static CefCommandRoleObservation Observe(SafeProcessHandle process,
@@ -96,13 +133,13 @@ internal static class CefCommandRoleObserver
             throw new UnauthorizedAccessException("CEF role process identity mismatch.");
         string first = ReadCommandLine(process);
         var args = Split(first);
-        var role = string.Equals(args[0], expected.ImagePath, StringComparison.OrdinalIgnoreCase)
-            ? Classify(args, expected == root) : CefObservedRole.Unknown;
+        var details = string.Equals(args[0], expected.ImagePath, StringComparison.OrdinalIgnoreCase)
+            ? ClassifyDetailed(args, expected == root) : default;
         if (!string.Equals(first, ReadCommandLine(process), StringComparison.Ordinal) ||
             Native.ObserveProcess(process) != expected)
             throw new UnauthorizedAccessException("CEF role observation changed.");
         // Never return or log the command line, argument values or paths.
-        return new(expected, role);
+        return new(expected, details);
     }
 
     private static string ReadCommandLine(SafeProcessHandle process)
