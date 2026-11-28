@@ -206,3 +206,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - 기존 role 관측을 닫힌 enum 조합으로 세분화한다. Network/Audio/Other service 및 Missing/Network/Audio/Other sandbox claim을 구분하되 원문 인수는 내보내지 않는다. Network는 정확한 subtype 및 network claim 조합을 요구하며 알려진 claim과 다른 service 조합은 거부한다. Audio의 누락 claim 및 기타 서비스는 여전히 미검증 Utility로만 관측한다. GPU와 Renderer에 Utility claim을 허용하지 않는다. 모듈 관측 전후 role record 비교에 세부 정보가 포함되고 진단 결과에도 유지된다. 합성 분류 및 불일치 회귀 추가.
 - #268 정확한 head Windows CI PASS, 독립 리뷰 없음. 이 분류는 명령행 주장일 뿐 실제 sandbox 정책 증명이 아니며 기타 값의 동일 범주 내 변경도 구분하지 못한다. 실제 pinned CEF GPU/Audio/Network 샌드박스 호환성, OS 권한/mitigation 검증 및 보호 VM NOT RUN. 기존 역할 차단, Job cap=1, startupEnabled=false 유지.
+
+### P2-05 Windows 프로세스 완화 정책 관측 (미완료)
+
+- `GetProcessMitigationPolicy`의 6개 DWORD 정책(ASLR, DynamicCode, SystemCallDisable, CFG, ImageLoad, ChildProcess)을 읽기 전용으로 조회한다. 원본 retained handle과 동일한 live object의 query/synchronize handle만 사용하고 두 차례 스냅샷 및 모듈 관측 전후를 비교한다. 0은 관측된 실제 값이며 실패는 예외로 구분한다. 원본 비트를 보존하되 허용 정책으로 해석하지 않는다. 합성 조회 실패/정책 변경 및 실제 합성 프로세스 handle/종료 검사, 소스 계약을 추가했다.
+- API 기준: https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocessmitigationpolicy 및 https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-process_mitigation_policy. #269 정확한 head Windows CI PASS, 독립 리뷰 없음. 새 CI 및 실제 CEF GPU/Utility/Network 정책 실측은 NOT RUN. 다른 정책, thread opt-out, 변경 후 복원 및 전체 sandbox 동작은 미검증. 조회 권한 거부도 실패로 처리하며 실제 CEF 제한 token 호환성은 별도 확인 필요. 역할 허용 범위, Job cap=1, borrowed activation 차단 및 WebView2 유지.
