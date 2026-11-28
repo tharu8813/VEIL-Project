@@ -47,6 +47,10 @@ internal sealed class TabbedDevelopmentHost
     private readonly Button forward = new() { Content = "Forward" };
     private readonly Button reload = new() { Content = "Reload" };
     private readonly Button go = new() { Content = "Go" };
+    private readonly Button zoomOut = new() { Content = "-" };
+    private readonly Button zoomIn = new() { Content = "+" };
+    private readonly Button zoomReset = new() { Content = "100%" };
+    private readonly TextBlock zoomLabel = new() { MinWidth = 48, VerticalAlignment = VerticalAlignment.Center };
     private readonly List<Tab> tabs = new();
     private readonly List<ulong> retired = new();
     private readonly CefDevelopmentEngine engine = new();
@@ -99,6 +103,11 @@ internal sealed class TabbedDevelopmentHost
         }
         DockPanel.SetDock(go, Dock.Right);
         toolbar.Children.Add(go);
+        foreach (var element in new FrameworkElement[] { zoomReset, zoomIn, zoomLabel, zoomOut })
+        {
+            DockPanel.SetDock(element, Dock.Right);
+            toolbar.Children.Add(element);
+        }
         DockPanel.SetDock(findOpen, Dock.Right);
         toolbar.Children.Add(findOpen);
         findOpen.Visibility = fixture is null ? Visibility.Collapsed : Visibility.Visible;
@@ -124,6 +133,9 @@ internal sealed class TabbedDevelopmentHost
         forward.Click += (_, _) => WithActive(view => view.GoForward());
         reload.Click += (_, _) => WithActive(view => view.Reload());
         go.Click += (_, _) => NavigateAddress();
+        zoomOut.Click += (_, _) => ChangeZoom(-0.25);
+        zoomIn.Click += (_, _) => ChangeZoom(0.25);
+        zoomReset.Click += (_, _) => ChangeZoom(0, reset: true);
         findOpen.Click += (_, _) => ShowFindBar(true);
         findClose.Click += (_, _) => ShowFindBar(false);
         findSearch.Click += async (_, _) => await SearchPageAsync(false);
@@ -141,6 +153,13 @@ internal sealed class TabbedDevelopmentHost
             if (fixture is not null && e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 ShowFindBar(true);
+                e.Handled = true;
+            }
+            else if (Keyboard.Modifiers == ModifierKeys.Control &&
+                e.Key is Key.OemPlus or Key.Add or Key.OemMinus or Key.Subtract or Key.D0 or Key.NumPad0)
+            {
+                ChangeZoom(e.Key is Key.OemMinus or Key.Subtract ? -0.25 : 0.25,
+                    reset: e.Key is Key.D0 or Key.NumPad0);
                 e.Handled = true;
             }
             else if (e.Key == Key.Escape && findBar.Visibility == Visibility.Visible)
@@ -350,6 +369,25 @@ internal sealed class TabbedDevelopmentHost
         { SetTabStatus(tab, error.Message); }
     }
 
+    private void ChangeZoom(double delta, bool reset = false)
+    {
+        if (shuttingDown || active is not { } tab || !AcceptTabEvent(tab) ||
+            tab.View.NativeHandle == 0 || CefNative.VeilCefClosed(tab.View.NativeHandle) != 0) return;
+        try
+        {
+            double factor = tab.View.ZoomFactor;
+            if (!double.IsFinite(factor) || factor <= 0) return;
+            tab.View.ZoomFactor = reset ? 1.0 : Math.Clamp(factor + delta, 0.5, 3.0);
+        }
+        catch (InvalidOperationException)
+        {
+            SetTabStatus(tab, "Zoom unavailable.");
+        }
+        // Display actual native readback, not the requested value. Chromium
+        // may share zoom within an origin; never pretend it is tab-private.
+        RefreshToolbar();
+    }
+
     private void NavigateAddress() => WithActive(view => view.Navigate(address.Text));
 
     private void RequestClose(Tab tab)
@@ -384,6 +422,12 @@ internal sealed class TabbedDevelopmentHost
         back.IsEnabled = live && !shuttingDown && active!.View.CanGoBack;
         forward.IsEnabled = live && !shuttingDown && active!.View.CanGoForward;
         close.IsEnabled = active is { Closing: false } && !shuttingDown;
+        double zoom = live && !shuttingDown ? active!.View.ZoomFactor : double.NaN;
+        bool zoomKnown = double.IsFinite(zoom) && zoom > 0;
+        zoomLabel.Text = zoomKnown ? $"{Math.Round(zoom * 100)}%" : "";
+        zoomOut.IsEnabled = zoomKnown && zoom > 0.5 + 1e-6;
+        zoomIn.IsEnabled = zoomKnown && zoom < 3.0 - 1e-6;
+        zoomReset.IsEnabled = zoomKnown;
         add.IsEnabled = !shuttingDown && tabs.Count + retired.Count < CefNative.VeilCefViewLimit();
         // Read the selected live view only. A denial is informational, not
         // a deferred popup request or a permission to replay the target URL.
@@ -548,6 +592,30 @@ internal sealed class TabbedDevelopmentHost
             PublishFindResult(oldRequest, true);
             if (findResult.Text != "" || findBar.Visibility != Visibility.Collapsed) { Fail(); return; }
             Log("Find UI showed per-tab match results and discarded stale publication on switch, edit and close");
+            Select(first);
+            if (zoomLabel.Text != "100%" || Math.Abs(first.View.ZoomFactor - 1) > 1e-6 ||
+                Math.Abs(second.View.ZoomFactor - 1) > 1e-6) { Fail(); return; }
+            ChangeZoom(0.25);
+            phase = 92;
+        }
+        else if (phase == 92 && first is not null && second is not null &&
+                 Math.Abs(first.View.ZoomFactor - 1.25) < 1e-6)
+        {
+            if (zoomLabel.Text != "125%") { Fail(); return; }
+            Select(second);
+            if (zoomLabel.Text != "100%" || Math.Abs(second.View.ZoomFactor - 1) > 1e-6)
+            { Fail(); return; }
+            Select(first);
+            if (zoomLabel.Text != "125%") { Fail(); return; }
+            ChangeZoom(0, reset: true);
+            phase = 93;
+        }
+        else if (phase == 93 && first is not null && second is not null &&
+                 Math.Abs(first.View.ZoomFactor - 1) < 1e-6)
+        {
+            if (zoomLabel.Text != "100%") { Fail(); return; }
+            Select(second);
+            Log("Zoom readback followed selected distinct-origin view and reset to 100 percent");
             firstDomains = ((IEngineSiteDataReader)first.View).GetCookieDomainsAsync();
             secondDomains = ((IEngineSiteDataReader)second.View).GetCookieDomainsAsync();
             phase = 11;
