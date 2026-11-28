@@ -1133,6 +1133,84 @@ Console.WriteLine("PASS: exact-volume preflight cleanup, command refusal and det
     Console.WriteLine("PASS: authenticated JSON library envelope, strict schema and truncation refusal");
 }
 
+// Key custody tests use synthetic high-entropy-sized input only.
+{
+    var store = Guid.NewGuid();
+    byte[] root = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+    byte[] genesis = new byte[32];
+    bool current = true;
+    void Refused(Action action)
+    {
+        bool refused = false;
+        try { action(); }
+        catch (UnauthorizedAccessException) { refused = true; }
+        Check(refused, "revoked library key operation accepted");
+    }
+    try
+    {
+        Refused(() => Veil.VolumeBroker.CefLibraryKeyLease.Open(store, root, () => false));
+        int openingChecks = 0;
+        Refused(() => Veil.VolumeBroker.CefLibraryKeyLease.Open(store, root, () => ++openingChecks == 1));
+        using var owner = Veil.VolumeBroker.CefLibraryKeyLease.Open(store, root, () => current);
+        using var same = Veil.VolumeBroker.CefLibraryKeyLease.Open(store, root, () => current);
+        using var other = Veil.VolumeBroker.CefLibraryKeyLease.Open(Guid.NewGuid(), root, () => true);
+        byte[] envelope = owner.Encode(1, genesis, "key-custody"u8);
+        Check(same.Decode(1, genesis, envelope).Payload.AsSpan().SequenceEqual("key-custody"u8),
+            "same protected root and store derive same key");
+        bool wrongStore = false;
+        try { _ = other.Decode(1, genesis, envelope); }
+        catch (InvalidDataException) { wrongStore = true; }
+        Check(wrongStore, "other store accepted key envelope");
+        // Compare direct HMAC using the root: the derived key must differ.
+        bool rawRoot = false;
+        try { _ = Veil.VolumeBroker.CefLibraryGenerationEnvelope.Decode(store, root, 1, genesis, envelope); }
+        catch (InvalidDataException) { rawRoot = true; }
+        Check(rawRoot, "library used root key directly");
+        current = false;
+        Refused(() => owner.Encode(2, genesis, "denied"u8));
+        current = true;
+        Check(owner.IsRevoked, "authority loss did not latch");
+        Refused(() => owner.Decode(1, genesis, envelope));
+        same.Dispose();
+        Refused(() => same.Encode(1, genesis, "denied"u8));
+        // Authority fails on the post-crypto check, not just before entry.
+        int checks = 0;
+        using var postEncode = Veil.VolumeBroker.CefLibraryKeyLease.Open(store, root, () => ++checks < 4);
+        Refused(() => postEncode.Encode(1, genesis, "post-check"u8));
+        Check(postEncode.IsRevoked, "post-encode loss did not revoke");
+        checks = 0;
+        using var postDecode = Veil.VolumeBroker.CefLibraryKeyLease.Open(store, root, () => ++checks < 4);
+        Refused(() => postDecode.Decode(1, genesis, envelope));
+        Check(postDecode.IsRevoked, "post-decode loss did not revoke");
+        bool throwAuthority = false;
+        using var broken = Veil.VolumeBroker.CefLibraryKeyLease.Open(store, root,
+            () => throwAuthority ? throw new IOException("synthetic observation") : true);
+        throwAuthority = true;
+        bool observed = false;
+        try { _ = broken.Encode(1, genesis, "denied"u8); }
+        catch (IOException) { observed = true; }
+        Check(observed && broken.IsRevoked, "authority exception did not retire key");
+        throwAuthority = false;
+        Refused(() => broken.Encode(1, genesis, "denied"u8));
+
+        Veil.VolumeBroker.CefLibraryKeyLease? reentrant = null;
+        bool reenter = false;
+        using var guarded = Veil.VolumeBroker.CefLibraryKeyLease.Open(store, root, () =>
+        {
+            if (reenter) Refused(() => reentrant!.Encode(1, genesis, "reentry"u8));
+            return true;
+        });
+        reentrant = guarded;
+        reenter = true;
+        Check(guarded.Encode(1, genesis, "outer"u8).Length > 0, "outer operation failed after refused reentry");
+        guarded.Revoke();
+        Refused(() => guarded.Decode(1, genesis, envelope));
+        System.Security.Cryptography.CryptographicOperations.ZeroMemory(envelope);
+    }
+    finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(root); }
+    Console.WriteLine("PASS: library key derivation, authority revocation and typed custody");
+}
+
 file sealed class SyntheticRetainedResource : IDisposable
 {
     internal int Disposals { get; private set; }

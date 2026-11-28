@@ -1560,3 +1560,22 @@ test('versioned library envelope enforces bounded strict JSON and authentication
     assert.doesNotMatch(broker, /CefLibraryGenerationEnvelope/);
 });
 
+
+
+test('library key lease derives a dedicated key and refuses revoked or reentrant typed operations', async () => {
+    const lease = await readFile('apps/broker/Veil.VolumeBroker/CefLibraryKeyLease.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const fixture = await readFile('tests/security/NetworkPolicyCheck/Program.cs', 'utf8');
+    assert.match(lease, /rootKey.Length != CefLibraryGenerationChain.TagSize[\s\S]*?if \(!authorityCurrent\(\)\)[\s\S]*?storeId.TryWriteBytes\(salt\)[\s\S]*?HKDF.DeriveKey\(HashAlgorithmName.SHA256, rootKey, lease.key, salt,\s*"VEIL-CEF-LIBRARY-HMAC-v1"u8\)/);
+    assert.match(lease, /private readonly byte\[\] key = new byte\[CefLibraryGenerationChain.TagSize\];/);
+    assert.match(lease, /if \(authorityCurrent\(\) && !IsRevoked\) return;[\s\S]*?catch\s*\{\s*RetireLocked\(\);\s*throw;\s*\}\s*RetireLocked\(\);/);
+    assert.match(lease, /if \(busy \|\| IsRevoked\)[\s\S]*?busy = true;/);
+    assert.match(lease, /lock \(sync\)[\s\S]*?Begin\(\);[\s\S]*?RequireCurrent\(\);\s*encoded = CefLibraryGenerationEnvelope.Encode\(storeId, key, generation, previous, payload\);\s*RequireCurrent\(\);\s*accepted = true;\s*return encoded;[\s\S]*?if \(!accepted && encoded is not null\) CryptographicOperations.ZeroMemory\(encoded\);/);
+    assert.match(lease, /RequireCurrent\(\);\s*record = CefLibraryGenerationEnvelope.Decode\(storeId, key, generation, previous, encoded\);\s*RequireCurrent\(\);\s*accepted = true;\s*return record;[\s\S]*?if \(!accepted && record is not null\) CryptographicOperations.ZeroMemory\(record.Payload\);/);
+    assert.match(lease, /Interlocked.Exchange\(ref revoked, 1\);\s*CryptographicOperations.ZeroMemory\(key\);/);
+    assert.match(lease, /internal void Revoke\(\)\s*\{\s*Interlocked.Exchange\(ref revoked, 1\);\s*lock \(sync\) RetireLocked\(\);\s*\}/);
+    assert.doesNotMatch(lease, /return key\b|Func<[^>]*byte\[\]|\b(?:File|Directory|Path|Native|Protocol)\./);
+    assert.match(fixture, /library used root key directly[\s\S]*?authority loss did not latch[\s\S]*?post-encode loss did not revoke[\s\S]*?post-decode loss did not revoke[\s\S]*?authority exception did not retire key[\s\S]*?outer operation failed after refused reentry/);
+    assert.doesNotMatch(broker, /CefLibraryKeyLease/);
+});
+
