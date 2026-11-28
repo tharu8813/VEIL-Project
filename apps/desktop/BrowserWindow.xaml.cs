@@ -30,6 +30,7 @@ public partial class BrowserWindow : Window
         internal long NavigationEpoch { get; set; }
         internal long FaviconRequest { get; set; }
         internal ulong? NavigationId { get; set; }
+        internal ulong? CompletedNavigationId { get; set; }
         internal Uri? ExpectedUpgrade { get; set; }
         internal bool Closing { get; set; }
         internal (string Method, string Uri, long Epoch)? LastDownloadRequest { get; set; }
@@ -433,6 +434,8 @@ public partial class BrowserWindow : Window
     private void OnNavigationCompleted(BrowserTab tab, EngineNavigationCompletedEventArgs args)
     {
         if (!AcceptTabEvents(tab) || tab.NavigationId != args.NavigationId) return;
+        if (tab.CompletedNavigationId == args.NavigationId) return;
+        tab.CompletedNavigationId = args.NavigationId;
         SetTabLoading(tab, false);
         if (args.IsCanceled) return;
         var errorStatus = args.Error;
@@ -446,19 +449,34 @@ public partial class BrowserWindow : Window
                 return;
             }
         }
-        if (!session.IsPrivate && args.IsSuccess && IsWebUrl(tab.Url))
+        string completedUrl = tab.Url;
+        long completedEpoch = tab.NavigationEpoch;
+        bool historyEligible = !session.IsPrivate && args.IsSuccess && IsWebUrl(completedUrl) &&
+            completedUrl == tab.EngineView.Source;
+        bool historySaved = false;
+        if (historyEligible)
         {
-            data.History.Insert(0, new PageEntry(tab.Title, tab.Url, DateTimeOffset.Now));
-            RefreshHistoryLibraries();
+            bool Authorized() => !session.IsPrivate && AcceptTabEvents(tab) &&
+                Tabs.Items.Contains(tab.Item) && tab.NavigationId == args.NavigationId &&
+                tab.CompletedNavigationId == args.NavigationId && tab.NavigationEpoch == completedEpoch &&
+                tab.Url == completedUrl && tab.EngineView.Source == completedUrl;
+            var entry = new PageEntry(tab.Title, completedUrl, DateTimeOffset.Now);
+            historySaved = LibraryMutation.TryCommit(data.History, null, Authorized,
+                () => data.History.Insert(0, entry),
+                () => session.TrySaveLibrary(Authorized, captureTabs: true));
+            if (historySaved) RefreshHistoryLibraries();
         }
         if (Active == tab)
         {
-            Status.Text = args.IsSuccess ? "준비" : $"페이지를 불러오지 못했습니다 ({errorStatus}).";
+            Status.Text = historyEligible && !historySaved ? "방문 기록을 저장하지 못했습니다." :
+                args.IsSuccess ? "준비" : $"페이지를 불러오지 못했습니다 ({errorStatus}).";
             UpdateNavigationButtons();
         }
         if (args.IsSuccess)
         {
-            SaveTabs();
+            // A history commit already saved the available complete tab snapshot.
+            // Do not retry the failed transaction implicitly through SaveTabs.
+            if (!historyEligible) SaveTabs();
             if (Active == tab) _ = ProbeLoginFormAsync(tab);
         }
     }

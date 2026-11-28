@@ -291,3 +291,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #285 exact Windows 46172371655 / Native 46172371697 PASS, 독립 리뷰 없음.
 - 기존 PageEntry/BrowserData JSON schema 및 mounted profile 경로를 유지한다. 엔진 독립 LibraryMutation 동기 transaction을 추출해 기존 제품 북마크 버튼/라이브러리 편집에서 사용하고 변경 전/저장 직전 권한 재검사, 실패/예외 시 entry/folder rollback, 성공 후 UI publish 분리를 유지했다. BrowserSession.TrySaveLibrary는 소유 dispatcher, private/ending/engine lost/not ready 및 호출자 권한을 확인하며 기존 session 소유 경로만 사용한다. 이는 세션 수명 검사이며 물리 볼륨 잠금/ACL/암호화 권한의 독립 증명은 아니다. 기존 WebView2에도 편집 저장 경계 변경이 적용된다. 기존 desktop smoke에 합성 revoke/save-fail/success 케이스와 source contract 추가. CEF fixture 메모리 데이터는 제품 저장소에 연결하지 않으며 방문 기록 자동 저장 경로/보호 볼륨 실측/새 CI/실제 runtime/독립 리뷰 미검증. startupEnabled=false 유지.
+
+### P3-02 자동 방문 기록 공통 저장 경계 (미완료)
+
+- #286 exact Windows 46174176704 PASS; native workflow not triggered. 독립 리뷰 없음.
+- 기존 제품 완료 이벤트에서 동일 navigation ID 중복 방지, live owner/session/tab/navigation epoch/current source 검증과 LibraryMutation history rollback, 저장 성공 후 history UI publish를 연결했다. TrySaveLibrary 선택적 captureTabs로 기존 완료 시 tab+history 한 번의 저장을 유지하며 복원/이동 중에는 마지막 완전한 layout을 보존한다. 실패 시 history를 복구하고 자동 중복 저장을 피한다(메모리 tab layout snapshot은 기존 방식처럼 이후 저장 대상). 기존 JSON schema 및 저장 경로 유지. 기존 WebView2 동작에 적용되며 CEF fixture 영구 저장은 여전히 비활성. Desktop smoke에 합성 실패/성공 및 중복 완료와 실제 state readback 검사를 작성. 신규 CI/desktop runtime/보호 VM/독립 리뷰 미검증. 실제 물리 volume lock/relock 증거 아님. startupEnabled=false 유지.
