@@ -27,7 +27,7 @@ const string probeRequest = """{"command":"ProbeCefSuspended","volumeId":"synthe
 using (var probe = Protocol.Parse(System.Text.Encoding.UTF8.GetBytes(probeRequest)))
     Check(probe.Command == BrokerCommand.ProbeCefSuspended && probe.Secret is null &&
         probe.ChildHandle is null, "Diagnostic command rejected.");
-var lockedProbe = new BackendStatus(true, "synthetic-guid", true, true, false, true);
+var lockedProbe = new BackendStatus(true, "synthetic-guid", true, true, false, true, ReadyToUnlock: true);
 using (var receipt = JsonDocument.Parse(Protocol.CefSuspendedProbeVerified(lockedProbe)))
     Check(receipt.RootElement.GetProperty("cefSuspendedProbeVerified").GetBoolean() &&
         receipt.RootElement.GetProperty("volumeGuid").GetString() == "synthetic-guid",
