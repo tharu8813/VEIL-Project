@@ -635,11 +635,11 @@ test('isolated CEF preflight entry is compile-time exclusive and never falls bac
     assert.match(project, /<PropertyGroup Condition="'\$\(Configuration\)' == 'CefPreflight'">[\s\S]*?VEIL_CEF_PREFLIGHT_ONLY/);
     assert.match(program, /#if VEIL_CEF_PREFLIGHT_ONLY[\s\S]*?return CefProtectedPreflightEntry\.Run\(args\);\s*#else/);
     assert.match(entry, /#if VEIL_CEF_PREFLIGHT_ONLY/);
-    assert.match(entry, /args is not \["--cef-protected-preflight"\] \|\| !ExternalAddress\.Installed/);
+    assert.match(entry, /bool prepareOnly = args is \["--cef-prepare-profile"\];\s*if \(\(!prepareOnly && args is not \["--cef-protected-preflight"\]\) \|\| !ExternalAddress\.Installed\)/);
     assert.match(entry, /ProfileGate\.RejectElevated\(\);[\s\S]*?new BrowserActivation\(\);[\s\S]*?!activation\.Primary/);
     assert.match(entry, /BrokerClientConfig\.Load\(BrokerClientConfig\.ProductPath, development: false\)/);
     assert.match(entry, /ProtectedProfileSession\.TryOpen[\s\S]*?ClearPassword\(password\);[\s\S]*?CefDisabledLaunchCoordinator\.RunPreflight/);
-    assert.match(entry, /result = CefDisabledLaunchCoordinator\.RunPreflight\(session\);[\s\S]*?session\.CompleteCefPreflightCleanup\(\);[\s\S]*?session\?\.Dispose\(\);[\s\S]*?VerifiedButDisabled/);
+    assert.match(entry, /result = CefDisabledLaunchCoordinator\.RunPreflight\(session\);\s*\}\s*if \(result != expected \|\| notifications\.LockRequested\) return 1;\s*session\.CompleteCefPreflightCleanup\(\);[\s\S]*?session\?\.Dispose\(\);[\s\S]*?return !notifications\.LockRequested && result == expected\s*\? \(int\)expected : 1;/);
     assert.doesNotMatch(entry, /new BrowserWindow|CreateEngine\(|UnmanagedDevelopmentVolume|activation\.Forward|activation\.Start|GetEnvironmentVariable/);
 });
 
@@ -1182,4 +1182,18 @@ test('installed broker takes existing exclusive profile lock before inspecting C
     assert.match(registration, /profile = CefProtectedProfileLease.OpenExclusive\(root, volumeGuid, windows, readStatus, authorityCurrent\);/);
     assert.doesNotMatch(registration, /profile.AcquireExclusiveLock\(\)/);
     assert.match(fixture, /Directory.Delete\(profileLayout.Cache\);\s*using \(var busy = new FileStream[\s\S]*?error.NativeErrorCode == 32[\s\S]*?Check\(incompleteRefused && !Directory.Exists\(profileLayout.Cache\)[\s\S]*?using \(var recovered = new FileStream[\s\S]*?Directory.CreateDirectory\(profileLayout.Cache\);[\s\S]*?first.VerifiedExclusiveEnvironment\(\).Count == 7/);
+});
+
+
+test('isolated profile provisioning is terminal and cannot count as candidate verification', async () => {
+    const entry = await readFile('apps/desktop/Engine/CefProtectedPreflightEntry.cs', 'utf8');
+    const session = await readFile('apps/desktop/ProtectedProfileSession.cs', 'utf8');
+    const program = await readFile('apps/desktop/Program.cs', 'utf8');
+    const provision = session.slice(session.indexOf('internal void PrepareLayoutOnly()'), session.indexOf('internal IReadOnlyDictionary<string, string?> PrepareChildEnvironment()'));
+    assert.match(session, /#if VEIL_CEF_PREFLIGHT_ONLY\s*\/\/[^\n]*\s*\/\/[^\n]*\s*internal void PrepareLayoutOnly\(\)\s*\{\s*RequireCurrentPreparation\(\);\s*_ = CefProtectedProfilePreparation\.Prepare\(ProductRoot, session\.broker, StillAuthorized\);\s*RequireCurrentPreparation\(\);\s*\}\s*#endif/);
+    assert.doesNotMatch(provision, /PrepareRegisteredRuntime|StageSuspendedChild|GetEnvironmentVariables|CreateSuspended|Resume/);
+    assert.match(entry, /internal const uint ProfilePreparedOnly = 30;[\s\S]*?uint expected = prepareOnly \? ProfilePreparedOnly : CefDisabledPreflight\.VerifiedButDisabled;/);
+    assert.match(entry, /if \(prepareOnly\)\s*\{[\s\S]*?using \(var profile = session\.AcquireCefPreparationLease\(\)\)\s*profile\.PrepareLayoutOnly\(\);\s*result = ProfilePreparedOnly;\s*\}\s*else\s*\{\s*result = CefDisabledLaunchCoordinator\.RunPreflight\(session\);\s*\}/);
+    assert.match(entry, /if \(result != expected \|\| notifications\.LockRequested\) return 1;\s*session\.CompleteCefPreflightCleanup\(\);[\s\S]*?return !notifications\.LockRequested && result == expected\s*\? \(int\)expected : 1;/);
+    assert.doesNotMatch(program, /--cef-prepare-profile|PrepareLayoutOnly|ProfilePreparedOnly/);
 });
