@@ -167,32 +167,57 @@ try
     using (var owner = Process.GetCurrentProcess())
     {
         var identity = Native.ObserveProcess(owner.SafeHandle);
-        foreach (int mode in new[] { 0, 1, 2, 3, 4, 5 })
+        foreach (int mode in new[] { 0, 1, 2, 3, 4, 5, 6 })
         {
-            using var candidate = CefContainedProcess.CreateSuspended(image, environment);
             using var brokerJob = mode == 0 ? CefBrokerOwnedJob.CreateDisabledCandidate() :
                 CefBrokerOwnedJob.CreateMultiprocessFixture();
+            using var privatePeer = mode is 5 or 6 ? CefBrokerOwnedJob.CreateMultiprocessFixture() : null;
+            if (mode == 6)
+            {
+                bool duplicateRefused = false;
+                try { using var invalid = brokerJob.CreateAtomicPairFixture(brokerJob, image, environment); }
+                catch (UnauthorizedAccessException) { duplicateRefused = true; }
+                Check(duplicateRefused && !File.Exists(markerPath), "Duplicate atomic Jobs accepted.");
+            }
+            using var candidate = mode == 6
+                ? brokerJob.CreateAtomicPairFixture(privatePeer!, image, environment)
+                : CefContainedProcess.CreateSuspended(image, environment);
             var binding = Native.DuplicateNominatedChild(identity, owner.SafeHandle,
                 new IntPtr(candidate.NominatedHandle));
             using var retained = binding.Handle;
             using var rootObserver = Process.GetProcessById(checked((int)binding.Identity.ProcessId));
             _ = rootObserver.SafeHandle;
-            brokerJob.AssignVerifiedCandidate(identity, owner.SafeHandle, binding.Identity, retained);
-            // Only mode 5 adds a third, independently broker-created Job.
-            // Production still has a one-process limit and no launch path.
-            using var privatePeer = mode == 5 ? CefBrokerOwnedJob.CreateMultiprocessFixture() : null;
-            if (privatePeer is not null)
+            if (mode == 6)
             {
-                privatePeer.AssignVerifiedCandidate(identity, owner.SafeHandle, binding.Identity, retained);
-                brokerJob.RequirePrivateNestedBinding(privatePeer, identity, owner.SafeHandle, binding.Identity, retained);
+                Check(!File.Exists(markerPath) && candidate.IsAlive && candidate.ImageLoadMitigationsActive,
+                    "Atomic pair was not suspended with mitigations.");
+                brokerJob.BindSingleCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+                privatePeer!.BindSingleCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+                Check(brokerJob.ContainsFixtureRoot(binding.Identity, retained) &&
+                    privatePeer.ContainsFixtureRoot(binding.Identity, retained),
+                    "Creation-time Job pair did not retain the original root.");
+                bool reuseRefused = false;
+                try { using var invalid = brokerJob.CreateAtomicPairFixture(privatePeer, image, environment); }
+                catch (UnauthorizedAccessException) { reuseRefused = true; }
+                Check(reuseRefused && !File.Exists(markerPath), "Atomic pair reused before resume.");
             }
+            else
+            {
+                brokerJob.AssignVerifiedCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+                privatePeer?.AssignVerifiedCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+            }
+            // Mode 6 adds both private Jobs at CreateProcess time; mode 5
+            // retains the previous post-creation assignment fixture.
+            if (privatePeer is not null)
+                brokerJob.RequirePrivateNestedBinding(privatePeer, identity, owner.SafeHandle, binding.Identity, retained);
             brokerJob.RequireInitialNestedBinding(candidate.FixtureJobHandle,
                 identity, owner.SafeHandle, binding.Identity, retained);
             Check(brokerJob.ContainsVerifiedCandidate(binding.Identity, retained) == (mode == 0),
                 "Fixture job was mistaken for disabled preflight admission.");
             candidate.ResumeAfterVerification(() => mode == 0
                 ? brokerJob.ContainsVerifiedCandidate(binding.Identity, retained)
-                : brokerJob.ContainsFixtureRoot(binding.Identity, retained));
+                : brokerJob.ContainsFixtureRoot(binding.Identity, retained) &&
+                    (privatePeer is null || privatePeer.ContainsFixtureRoot(binding.Identity, retained)));
             Check(SpinWait.SpinUntil(() => File.Exists(markerPath) &&
                 new FileInfo(markerPath).Length > 0, TimeSpan.FromSeconds(15)), "Missing synthetic spawn result.");
             // The root is alive and writes the result only after observing
@@ -331,6 +356,7 @@ try
                         break;
                     case 4: candidate.TerminateAndDrain(5000); break;
                     case 5:
+                    case 6:
                         if (privatePeer is null) throw new InvalidOperationException("Missing private peer.");
                         var privateMembers = brokerJob.ObservePrivateNestedDiagnostics(privatePeer,
                             binding.Identity, retained, (expected, handle) =>

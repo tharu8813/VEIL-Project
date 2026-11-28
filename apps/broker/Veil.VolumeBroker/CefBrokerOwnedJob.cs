@@ -34,6 +34,27 @@ internal sealed class CefBrokerOwnedJob : IDisposable
     // production build can select this two-process limit.
     internal static CefBrokerOwnedJob CreateMultiprocessFixture() => Create(2);
 
+    // Same-user synthetic apphost only. Both privately created broker Jobs
+    // enter the creation attribute before the root thread can execute.
+    // No handle export, IPC, elevated-token launch or product call exists.
+    internal Veil.Desktop.CefContainedProcess CreateAtomicPairFixture(CefBrokerOwnedJob peer,
+        string image, IReadOnlyDictionary<string, string?> environment)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        if (ReferenceEquals(this, peer) || disposed || peer.disposed ||
+            activeLimit != 2 || peer.activeLimit != 2 ||
+            assignmentIssued || peer.assignmentIssued || bound || peer.bound ||
+            CompareJobObjects(job, peer.job) ||
+            Accounting().TotalProcesses != 0 || peer.Accounting().TotalProcesses != 0)
+            throw new UnauthorizedAccessException("Atomic fixture Jobs must be fresh and distinct.");
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peer.job, peer.activeLimit);
+        // Mark both consumed even if creation fails; no alternate assignment
+        // or retry with the same objects. The caller retains both Jobs.
+        assignmentIssued = peer.assignmentIssued = true;
+        return Veil.Desktop.CefContainedProcess.CreateSuspendedWithFixtureJobs(image, environment, job, peer.job);
+    }
+
     internal ClientIdentity[] ObserveSameJobFixture(
         IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members) =>
         ObserveNestedRetainedMembers(job, members);

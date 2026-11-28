@@ -39,7 +39,19 @@ internal sealed class CefContainedProcess : IDisposable
 #endif
 
     internal static CefContainedProcess CreateSuspended(string image,
-        IReadOnlyDictionary<string, string?> environment)
+        IReadOnlyDictionary<string, string?> environment) =>
+        CreateSuspendedCore(image, environment, null);
+
+#if VEIL_CEF_CONTAINMENT_TEST
+    // Only the isolated test build can supply additional Job handles.
+    // The product path still creates exactly its original desktop Job.
+    internal static CefContainedProcess CreateSuspendedWithFixtureJobs(string image,
+        IReadOnlyDictionary<string, string?> environment, SafeFileHandle outer, SafeFileHandle inner) =>
+        CreateSuspendedCore(image, environment, [outer, inner]);
+#endif
+
+    private static CefContainedProcess CreateSuspendedCore(string image,
+        IReadOnlyDictionary<string, string?> environment, SafeFileHandle[]? additionalJobs)
     {
         if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess)
             throw new PlatformNotSupportedException("CEF containment requires Windows x64.");
@@ -62,7 +74,7 @@ internal sealed class CefContainedProcess : IDisposable
             // PROC_THREAD_ATTRIBUTE_JOB_LIST assigns the job during creation,
             // rather than leaving an orphan window before a separate assignment.
             // Windows 10+ supports this attribute; failure has no legacy fallback.
-            using var attributes = new JobAttributeList(job);
+            using var attributes = new JobAttributeList(job, additionalJobs);
             var startup = new StartupInfoEx
             {
                 Startup = new StartupInfo { Size = (uint)Marshal.SizeOf<StartupInfoEx>() },
@@ -84,6 +96,10 @@ internal sealed class CefContainedProcess : IDisposable
             thread = new SafeFileHandle(info.Thread, ownsHandle: true);
             if (!IsProcessInJob(process, job, out bool contained) || !contained)
                 throw new InvalidOperationException("CEF child containment could not be confirmed.");
+            if (additionalJobs is not null)
+                foreach (var extra in additionalJobs)
+                    if (!IsProcessInJob(process, extra, out bool nested) || !nested)
+                        throw new InvalidOperationException("CEF atomic nested containment could not be confirmed.");
             if (!HasImageLoadMitigations(process))
                 throw new InvalidOperationException("CEF image loading policy could not be confirmed.");
             return new CefContainedProcess(job, process, thread);
@@ -289,16 +305,28 @@ internal sealed class CefContainedProcess : IDisposable
     {
         private IntPtr list, value, mitigation;
         private bool initialized;
-        private readonly SafeFileHandle job;
-        private bool retained;
+        private readonly SafeFileHandle[] jobs;
+        private int retainedCount;
         internal IntPtr Pointer => list;
 
-        internal JobAttributeList(SafeFileHandle job)
+        internal JobAttributeList(SafeFileHandle job, SafeFileHandle[]? additionalJobs)
         {
-            this.job = job;
+            if (additionalJobs is not null && additionalJobs.Length != 2)
+                throw new ArgumentException("Expected exactly two additional fixture Jobs.");
+            jobs = additionalJobs is null ? [job] : [job, .. additionalJobs];
             try
             {
-                job.DangerousAddRef(ref retained);
+                var seen = new HashSet<IntPtr>();
+                foreach (var item in jobs)
+                {
+                    if (item is null || item.IsInvalid || item.IsClosed)
+                        throw new ArgumentException("Invalid Job handle.");
+                    bool held = false;
+                    try { item.DangerousAddRef(ref held); }
+                    finally { if (held) retainedCount++; }
+                    if (!seen.Add(item.DangerousGetHandle()))
+                        throw new ArgumentException("Duplicate Job handle.");
+                }
                 UIntPtr size = UIntPtr.Zero;
                 bool unexpected = InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref size);
                 if (unexpected || Marshal.GetLastWin32Error() != 122 ||
@@ -308,11 +336,13 @@ internal sealed class CefContainedProcess : IDisposable
                 if (!InitializeProcThreadAttributeList(list, 2, 0, ref size))
                     throw Failure("InitializeProcThreadAttributeList");
                 initialized = true;
-                value = Marshal.AllocHGlobal(IntPtr.Size);
-                Marshal.WriteIntPtr(value, job.DangerousGetHandle());
+                int bytes = checked(IntPtr.Size * jobs.Length);
+                value = Marshal.AllocHGlobal(bytes);
+                for (int i = 0; i < jobs.Length; i++)
+                    Marshal.WriteIntPtr(value, i * IntPtr.Size, jobs[i].DangerousGetHandle());
                 // Attribute 13, input flag (0x20000): JOB_LIST.
                 if (!UpdateProcThreadAttribute(list, 0, new UIntPtr(0x0002000D),
-                    value, new UIntPtr((uint)IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
+                    value, new UIntPtr((uint)bytes), IntPtr.Zero, IntPtr.Zero))
                     throw Failure("UpdateProcThreadAttribute JOB_LIST");
                 // PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY (7 | INPUT).
                 // IMAGE_LOAD_NO_REMOTE, NO_LOW_LABEL and PREFER_SYSTEM32,
@@ -333,7 +363,7 @@ internal sealed class CefContainedProcess : IDisposable
             if (list != IntPtr.Zero) { Marshal.FreeHGlobal(list); list = IntPtr.Zero; }
             if (value != IntPtr.Zero) { Marshal.FreeHGlobal(value); value = IntPtr.Zero; }
             if (mitigation != IntPtr.Zero) { Marshal.FreeHGlobal(mitigation); mitigation = IntPtr.Zero; }
-            if (retained) { job.DangerousRelease(); retained = false; }
+            while (retainedCount > 0) jobs[--retainedCount].DangerousRelease();
         }
     }
 

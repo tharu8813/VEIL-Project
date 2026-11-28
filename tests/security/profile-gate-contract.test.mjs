@@ -370,7 +370,7 @@ test('CEF containment primitive starts suspended and assigns a kill-on-close job
     const startup = await readFile('apps/desktop/Program.cs', 'utf8');
     assert.match(launch, /limits\.Basic\.LimitFlags = 0x00002000/);
     assert.match(launch, /const uint flags = 0x00000004 \| 0x00000400 \| 0x00080000/);
-    assert.match(launch, /using var attributes = new JobAttributeList\(job\)[\s\S]*?CreateProcessW\(image, command, IntPtr\.Zero, IntPtr\.Zero, false, flags[\s\S]*?IsProcessInJob\(process, job/);
+    assert.match(launch, /using var attributes = new JobAttributeList\(job, additionalJobs\)[\s\S]*?CreateProcessW\(image, command, IntPtr\.Zero, IntPtr\.Zero, false, flags[\s\S]*?IsProcessInJob\(process, job/);
     assert.match(launch, /UpdateProcThreadAttribute\(list, 0, new UIntPtr\(0x0002000D\)/);
     assert.doesNotMatch(launch, /AssignProcessToJobObject/);
     assert.match(launch, /!verified\(\) \|\| !IsProcessInJob\(process, job, out bool contained\) \|\| !contained \|\|\s*!HasImageLoadMitigations\(process\) \|\| ResumeThread\(thread\) != 1/);
@@ -757,4 +757,16 @@ test('diagnostic retirement latches relock until drain and exact non-forced lock
     assert.match(broker, /RetryUnresolvedCefStops\(\);\s*TryCompleteDiagnosticRelock\(\);[\s\S]*?!diagnosticRelock\.Pending/);
     assert.match(broker, /diagnosticRelock\.Pending && request\.Command != BrokerCommand\.Status\)\s*return Protocol\.Error\("LockRefused"\);/);
     assert.match(policy, /!ReferenceEquals\(generation, currentGeneration\) \|\| !cleanupConfirmed\)\s*return false;\s*if \(!lockAndVerify\(\)\) return false;\s*Pending = false/);
+});
+
+
+test('atomic private Job pair is fixture-only and both handles are retained at creation', async () => {
+    const launch = await readFile('apps/desktop/Engine/CefContainedProcess.cs', 'utf8');
+    const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    assert.match(launch, /CreateSuspendedCore\(image, environment, null\);[\s\S]*?#if VEIL_CEF_CONTAINMENT_TEST[\s\S]*?CreateSuspendedWithFixtureJobs[\s\S]*?CreateSuspendedCore\(image, environment, \[outer, inner\]\);[\s\S]*?#endif/);
+    assert.match(launch, /jobs = additionalJobs is null \? \[job\] : \[job, \.\. additionalJobs\];[\s\S]*?item\.DangerousAddRef[\s\S]*?Marshal\.WriteIntPtr\(value, i \* IntPtr\.Size, jobs\[i\]\.DangerousGetHandle\(\)\)/);
+    assert.match(launch, /foreach \(var extra in additionalJobs\)\s*if \(!IsProcessInJob\(process, extra, out bool nested\) \|\| !nested\)/);
+    assert.match(job, /#if VEIL_CEF_CONTAINMENT_TEST[\s\S]*?CreateAtomicPairFixture[\s\S]*?assignmentIssued = peer\.assignmentIssued = true;\s*return Veil\.Desktop\.CefContainedProcess\.CreateSuspendedWithFixtureJobs\(image, environment, job, peer\.job\);[\s\S]*?#endif/);
+    assert.match(fixture, /mode == 6[\s\S]*?CreateAtomicPairFixture\(privatePeer!, image, environment\)[\s\S]*?brokerJob\.BindSingleCandidate[\s\S]*?privatePeer!\.BindSingleCandidate[\s\S]*?RequirePrivateNestedBinding[\s\S]*?candidate\.ResumeAfterVerification/);
 });
