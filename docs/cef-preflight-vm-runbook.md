@@ -199,3 +199,7 @@ $diagnosticPlan = .\scripts\stage-cef-preflight-package.ps1 -Diagnostic -Disposa
 ### 진단 세션 통합 실행 도구
 
 기존 `test-cef-protected-session.ps1`에 `-Diagnostic -DisposableVm -RunProtectedSession`과 독립 `-BaselineSpkiBase64`, `-BaselineKeySha256`, `-BaselinePayloadSha256`, `-BaselineSequence`, `-ApprovalSpkiBase64`, `-ApprovalKeySha256`을 함께 지정한다. 동일 설치/볼륨 입력 및 독립 승인 자료를 사용한다. 서명된 설치 및 Disabled/Stopped SCM 등록과 독립 신뢰를 읽기 전용으로 재검증한 뒤 별도 표준 사용자로 `--cef-broker-suspended-probe`를 실행한다. 코드 31만 허용하며 재잠금 확인은 데스크톱의 엄격한 응답 검증에 의존한다. 최종 VHDX 분리 및 Disabled/Stopped 상태를 관찰하고 별도 기록을 재구성한다. 사용자 암호 입력은 대화형으로 필요하다. 일반 코드 29 기록과 혼용 금지. 실제 Windows VM, 키 등록, BitLocker 및 CEF 초기화 NOT RUN. 준비 레이아웃은 별도로 미리 존재해야 하며 실제 시험이 실패할 경우 성공 처리하지 않는다.
+
+### 필수 보호 프로필 준비 세션 (코드 30)
+
+동일한 진단 runner 및 독립 승인 입력에 `-Diagnostic -PrepareProfile -DisposableVm -RunProtectedSession`을 먼저 사용한다. 등록된 보호 프로필 루트와 표준 사용자 ACL은 시험 VHDX에 사전에 존재해야 한다. `--cef-prepare-profile`로 고정 CEF 하위 디렉터리/프로필 잠금을 준비하고 코드 30, 서비스 Disabled/Stopped 및 VHDX 분리를 검증한다. 별도 `VEIL.cef-diagnostic-profile-preparation` 기록을 생성한다. 그 다음 별도 호출에서 `-PrepareProfile`을 제외하고 다시 인증한다. 코드 31 실행은 동일 등록 증거의 완전한 코드 30 기록을 필수로 재구성하고 그 해시를 진단 의도 기록에 바인딩한다. 기존/변조/누락/부분 준비는 자동으로 복구하거나 성공으로 취급하지 않는다. 이는 관리자 수집 기록이지 독립 OS 증명이 아니다. 실제 VM/ACL/BitLocker NOT RUN; P2-05 초기화 비활성 유지.

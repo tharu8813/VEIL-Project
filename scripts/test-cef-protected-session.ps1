@@ -13,6 +13,7 @@ param(
     [Parameter(Mandatory)][switch]$DisposableVm,
     [Parameter(Mandatory)][switch]$RunProtectedSession,
     [switch]$Diagnostic,
+    [switch]$PrepareProfile,
     [string]$BaselineSpkiBase64,
     [string]$BaselineKeySha256,
     [string]$BaselinePayloadSha256,
@@ -21,6 +22,7 @@ param(
     [string]$ApprovalKeySha256
 )
 $ErrorActionPreference = 'Stop'
+if ($PrepareProfile -and -not $Diagnostic) { throw 'Profile preparation requires diagnostic mode.' }
 if (-not $DisposableVm -or -not $RunProtectedSession -or -not [Environment]::Is64BitProcess -or $PSVersionTable.PSEdition -ne 'Desktop') {
     throw 'Explicit disposable VM confirmation and elevated Windows PowerShell 5.1 x64 required.'
 }
@@ -42,11 +44,18 @@ $transaction = Join-Path $program ($prefix + '-publication')
 $serviceJournal = Join-Path $program ($prefix + '-service')
 $probe = Join-Path $program ($prefix + '-service-probe')
 $sessionProbe = Join-Path $program ($prefix + '-protected-session')
+$profilePreparation = Join-Path $program 'VEIL.cef-diagnostic-profile-preparation'
+$preparationRoot = if ($Diagnostic -and -not $PrepareProfile) { $profilePreparation } else { '' }
+if ($PrepareProfile) {
+    if (Test-Path -LiteralPath $sessionProbe) { throw 'Existing or interrupted suspended session refused.' }
+    $sessionProbe = $profilePreparation
+}
 $otherPaths = @((Join-Path $program ($other + '-staging')),(Join-Path $program ($other + '-registration')),
     (Join-Path $program ($other + '-publication')),(Join-Path $program ($other + '-service')),
     (Join-Path $program ($other + '-service-probe')),(Join-Path $program ($other + '-protected-session')),
     ($bin + $otherSuffix),($registration + $otherSuffix))
-$desktopArgument = if ($Diagnostic) { '--cef-broker-suspended-probe' } else { '--cef-protected-preflight' }
+if (-not $Diagnostic) { $otherPaths += $profilePreparation }
+$desktopArgument = if ($PrepareProfile) { '--cef-prepare-profile' } elseif ($Diagnostic) { '--cef-broker-suspended-probe' } else { '--cef-protected-preflight' }
 if ($Diagnostic) {
     if ($BaselineSequence -le 0 -or $BaselineKeySha256 -notmatch '\A[0-9a-fA-F]{64}\z' -or
         $BaselinePayloadSha256 -notmatch '\A[0-9a-fA-F]{64}\z' -or $ApprovalKeySha256 -notmatch '\A[0-9a-fA-F]{64}\z' -or
@@ -58,7 +67,7 @@ $command = '"{0}" --service' -f (Join-Path $bin 'Broker\Veil.VolumeBroker.exe')
 $image = (Get-Item -LiteralPath $ImagePath -Force).FullName
 $parent = Split-Path -Parent $image
 if ((Split-Path -Parent $parent) -ne $program -or
-    $parent -in @($bin,$stage,$prepared,$transaction,$serviceJournal,$probe,$sessionProbe,($bin + $suffix),(Join-Path $program 'VEIL.cef-candidate-staging')) -or
+    $parent -in @($bin,$stage,$prepared,$transaction,$serviceJournal,$probe,$sessionProbe,$profilePreparation,($bin + $suffix),(Join-Path $program 'VEIL.cef-candidate-staging')) -or
     (Get-Item -LiteralPath $image -Force).PSIsContainer) { throw 'Expected separate administrator-owned test VHDX directory.' }
 Assert-VeilAdminPath $program
 if ((Get-Item -LiteralPath $data -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirected ProgramData refused.' }
@@ -101,6 +110,7 @@ $verifyRegistration = {
 }
 $initial = & $verifyRegistration
 if (-not $Diagnostic) { Assert-VeilCompletedServiceProbe $probe $initial }
+[void](Get-VeilDiagnosticPreparationHash $preparationRoot $initial -Diagnostic:$Diagnostic -PrepareProfile:$PrepareProfile)
 if (Test-Path -LiteralPath $sessionProbe) { throw 'Existing or interrupted protected session refused.' }
 if (-not [Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) { throw 'Interactive administrator desktop required.' }
 $admin = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -175,10 +185,12 @@ $exercise = {
     } finally { $child.Dispose(); $start.Password = $null }
 }
 try {
-    [void](Invoke-VeilPreflightServiceProbe $sessionProbe $command $verifyRegistration $readService $readDacl $setManual $startService $disable $stopService $requireDetached $exercise -Diagnostic:$Diagnostic)
-    [void](Read-VeilCompletedProtectedSession $sessionProbe (& $verifyRegistration) -Diagnostic:$Diagnostic)
+    [void](Invoke-VeilPreflightServiceProbe $sessionProbe $command $verifyRegistration $readService $readDacl $setManual $startService $disable $stopService $requireDetached $exercise -Diagnostic:$Diagnostic -PrepareProfile:$PrepareProfile -PreparationRoot $preparationRoot)
+    [void](Read-VeilCompletedProtectedSession $sessionProbe (& $verifyRegistration) -Diagnostic:$Diagnostic -PrepareProfile:$PrepareProfile -PreparationRoot $preparationRoot)
 } finally { $credential = $null }
-if ($Diagnostic) {
+if ($PrepareProfile) {
+    Write-Host 'PASS: profile preparation exit 30 observed; broker disabled/stopped and volume detached. CEF diagnostic creation NOT RUN.'
+} elseif ($Diagnostic) {
     Write-Host 'PASS: diagnostic suspended probe exit 31 observed; broker disabled/stopped and volume detached. CEF initialization NOT RUN.'
 } else {
     Write-Host 'PASS: protected preflight exit 29 observed; broker disabled/stopped and volume detached. CEF browsing NOT RUN.'
