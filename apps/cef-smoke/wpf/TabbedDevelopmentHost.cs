@@ -38,6 +38,19 @@ internal sealed class TabbedDevelopmentHost
     private readonly DockPanel layout = new();
     private readonly StackPanel strip = new() { Orientation = Orientation.Horizontal };
     private readonly Grid pages = new();
+    // Development fixture metadata only. Never write to a product profile,
+    // plaintext file, or a CEF bookmark database.
+    private sealed record FixtureBookmark(string Title, string Url)
+    {
+        public string Label => $"{Title} ({Url})";
+    }
+    private const int FixtureBookmarkLimit = 64;
+    private readonly List<FixtureBookmark> bookmarks = new();
+    private readonly Button bookmarkAdd = new() { Content = "Bookmark" };
+    private readonly ComboBox bookmarkList = new() { MinWidth = 180, MaxWidth = 350, DisplayMemberPath = "Label" };
+    private readonly Button bookmarkOpen = new() { Content = "Open bookmark" };
+    private readonly Button bookmarkRemove = new() { Content = "Remove bookmark" };
+    private readonly StackPanel bookmarkBar = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(6) };
     private readonly DockPanel toolbar = new() { Margin = new Thickness(6) };
     private readonly Button fullscreenToggle = new() { Content = "Full screen (F11)" };
     private readonly Button pageFullscreenExit = new() { Content = "Exit page full screen", Visibility = Visibility.Collapsed };
@@ -119,6 +132,11 @@ internal sealed class TabbedDevelopmentHost
         toolbar.Children.Add(findOpen);
         findOpen.Visibility = fixture is null ? Visibility.Collapsed : Visibility.Visible;
         toolbar.Children.Add(address);
+        DockPanel.SetDock(bookmarkBar, Dock.Top);
+        bookmarkBar.Visibility = fixture is null ? Visibility.Collapsed : Visibility.Visible;
+        foreach (var element in new FrameworkElement[] { bookmarkAdd, bookmarkList, bookmarkOpen, bookmarkRemove })
+            bookmarkBar.Children.Add(element);
+        layout.Children.Add(bookmarkBar);
         DockPanel.SetDock(findBar, Dock.Top);
         layout.Children.Add(findBar);
         foreach (var element in new FrameworkElement[] { findClose, findSearch, findResult })
@@ -148,6 +166,10 @@ internal sealed class TabbedDevelopmentHost
         forward.Click += (_, _) => WithActive(view => view.GoForward());
         reload.Click += (_, _) => WithActive(view => view.Reload());
         go.Click += (_, _) => NavigateAddress();
+        bookmarkAdd.Click += (_, _) => AddActiveBookmark();
+        bookmarkOpen.Click += (_, _) => OpenSelectedBookmark();
+        bookmarkRemove.Click += (_, _) => RemoveSelectedBookmark();
+        bookmarkList.SelectionChanged += (_, _) => RefreshBookmarkControls();
         zoomOut.Click += (_, _) => ChangeZoom(-0.25);
         zoomIn.Click += (_, _) => ChangeZoom(0.25);
         zoomReset.Click += (_, _) => ChangeZoom(0, reset: true);
@@ -424,6 +446,7 @@ internal sealed class TabbedDevelopmentHost
         }
         browserFullscreen = enabled;
         strip.Visibility = toolbar.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
+        bookmarkBar.Visibility = enabled || fixture is null ? Visibility.Collapsed : Visibility.Visible;
         fullscreenToggle.Content = enabled ? "Exit full screen (F11)" : "Full screen (F11)";
     }
 
@@ -468,6 +491,61 @@ internal sealed class TabbedDevelopmentHost
         RefreshToolbar();
     }
 
+    private bool IsFixtureBookmarkUrl(string source)
+    {
+        if (fixture is null || !Uri.TryCreate(fixture, UriKind.Absolute, out var root) ||
+            !Uri.TryCreate(source, UriKind.Absolute, out var url)) return false;
+        return url.Scheme == Uri.UriSchemeHttp && url.UserInfo.Length == 0 &&
+            url.Port == root.Port && (url.Host == "127.0.0.1" || url.Host == "localhost") &&
+            source.Length <= 2048;
+    }
+
+    private bool CanBookmark(Tab tab) =>
+        fixture is not null && AcceptTabEvent(tab) && ReferenceEquals(active, tab) &&
+        tab.View.NativeHandle != 0 && CefNative.VeilCefClosed(tab.View.NativeHandle) == 0 &&
+        tab.PendingNavigationId == 0 && tab.Status == "Page loaded." &&
+        IsFixtureBookmarkUrl(tab.View.Source);
+
+    private void RefreshBookmarkControls()
+    {
+        bool live = fixture is not null && !shuttingDown && active is { } tab && CanBookmark(tab);
+        bookmarkAdd.IsEnabled = live && bookmarks.Count < FixtureBookmarkLimit &&
+            bookmarks.All(entry => entry.Url != active!.View.Source);
+        bookmarkOpen.IsEnabled = live && bookmarkList.SelectedItem is FixtureBookmark entry &&
+            bookmarks.Contains(entry) && IsFixtureBookmarkUrl(entry.Url);
+        bookmarkRemove.IsEnabled = !shuttingDown && fixture is not null &&
+            bookmarkList.SelectedItem is FixtureBookmark selected && bookmarks.Contains(selected);
+    }
+
+    private void AddActiveBookmark()
+    {
+        if (active is not { } tab || !CanBookmark(tab) || bookmarks.Count >= FixtureBookmarkLimit) return;
+        string source = tab.View.Source;
+        if (bookmarks.Any(entry => entry.Url == source)) return;
+        string title = new string(tab.View.DocumentTitle.Where(c => !char.IsControl(c)).Take(120).ToArray());
+        var entry = new FixtureBookmark(title.Length == 0 ? source : title, source);
+        bookmarks.Add(entry);
+        bookmarkList.Items.Add(entry);
+        bookmarkList.SelectedItem = entry;
+        RefreshBookmarkControls();
+    }
+
+    private void OpenSelectedBookmark()
+    {
+        if (active is not { } tab || !CanBookmark(tab) ||
+            bookmarkList.SelectedItem is not FixtureBookmark entry ||
+            !bookmarks.Contains(entry) || !IsFixtureBookmarkUrl(entry.Url)) return;
+        WithActive(view => view.Navigate(entry.Url));
+    }
+
+    private void RemoveSelectedBookmark()
+    {
+        if (fixture is null || shuttingDown || bookmarkList.SelectedItem is not FixtureBookmark entry ||
+            !bookmarks.Remove(entry)) return;
+        bookmarkList.Items.Remove(entry);
+        RefreshBookmarkControls();
+    }
+
     private void NavigateAddress() => WithActive(view => view.Navigate(address.Text));
 
     private void RequestClose(Tab tab)
@@ -488,6 +566,8 @@ internal sealed class TabbedDevelopmentHost
     {
         if (shuttingDown) return;
         shuttingDown = true;
+        bookmarks.Clear();
+        bookmarkList.Items.Clear();
         SetBrowserFullscreen(false);
         ShowFindBar(false);
         foreach (var tab in tabs.ToArray()) RequestClose(tab);
@@ -514,6 +594,7 @@ internal sealed class TabbedDevelopmentHost
         pageFullscreenExit.IsEnabled = pageFullscreen && !pageExitPending;
         fullscreenNotice.Text = pageFullscreen ? "Page requested full screen; host controls remain available." : "";
         fullscreenToggle.IsEnabled = !shuttingDown;
+        RefreshBookmarkControls();
         add.IsEnabled = !shuttingDown && tabs.Count + retired.Count < CefNative.VeilCefViewLimit();
         // Read the selected live view only. A denial is informational, not
         // a deferred popup request or a permission to replay the target URL.
@@ -715,6 +796,24 @@ internal sealed class TabbedDevelopmentHost
                 window.ResizeMode != resize || toolbar.Visibility != Visibility.Visible ||
                 strip.Visibility != Visibility.Visible || active != second) { Fail(); return; }
             Log("Browser full screen restored host state without changing page full screen");
+            Select(first);
+            AddActiveBookmark();
+            AddActiveBookmark();
+            if (bookmarks.Count != 1 || bookmarks[0].Url != Url("/tabs-first") ||
+                bookmarks[0].Title != "TAB_FIRST" || bookmarkAdd.IsEnabled ||
+                IsFixtureBookmarkUrl("https://example.invalid/") ||
+                IsFixtureBookmarkUrl("http://user@localhost:" + new Uri(fixture!).Port + "/"))
+            { Fail(); return; }
+            Select(second);
+            AddActiveBookmark();
+            if (bookmarks.Count != 2 || bookmarks[1].Url != Url("/tabs-second")) { Fail(); return; }
+            bookmarkList.SelectedItem = bookmarks[0];
+            RemoveSelectedBookmark();
+            if (bookmarks.Count != 1 || bookmarks[0].Url != Url("/tabs-second")) { Fail(); return; }
+            bookmarkList.SelectedItem = bookmarks[0];
+            RemoveSelectedBookmark();
+            if (bookmarks.Count != 0 || bookmarkList.Items.Count != 0) { Fail(); return; }
+            Log("Fixture bookmarks used live committed sources, deduplicated and removed exact entries");
             firstDomains = ((IEngineSiteDataReader)first.View).GetCookieDomainsAsync();
             secondDomains = ((IEngineSiteDataReader)second.View).GetCookieDomainsAsync();
             phase = 11;
