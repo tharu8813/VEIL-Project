@@ -309,6 +309,29 @@ internal static class CefSystemBaselineTrustRegistry
     // Explicit bootstrap only, with a SHA-256 anchor supplied independently
     // by the trusted installer/release policy. No TOFU or automatic repair.
     // All baseline and authority maintenance must use the same writer lock.
+    // Create-only pair under the cooperative writer mutex. The existing
+    // per-record writers recursively acquire the same Windows mutex.
+    // A crash between writes leaves partial state for manual review.
+    internal static void InstallDiagnosticTrust(ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature,
+        ReadOnlySpan<byte> baselineKey, ReadOnlySpan<byte> baselineAnchor,
+        ReadOnlySpan<byte> payloadAnchor, long sequence,
+        ReadOnlySpan<byte> approvalKey, ReadOnlySpan<byte> approvalAnchor)
+    {
+        RequireMaintenanceAuthority();
+        var authority = new CefBaselineApprovalAuthority(approvalKey, approvalAnchor);
+        var update = CefSystemBaselineTrustUpdate.PrepareDiagnosticEnrollment(payload, signature,
+            baselineKey, baselineAnchor, payloadAnchor, sequence, CefSystemBaselineHostObserver.Observe(), authority);
+        using var mutex = CefSystemBaselineWriterLock.Acquire();
+        // Validate both keys, host and signed payload before any write.
+        _ = update.RequireExpectedAndCopyRecord(null, CefSystemBaselineHostObserver.Observe());
+        InstallApprovalAuthority(approvalKey, approvalAnchor);
+        authority.RequireSame(ReadApprovalAuthorityStable());
+        Publish(update);
+        update.RequirePublished(ReadStable(), CefSystemBaselineHostObserver.Observe());
+        authority.RequireSame(ReadApprovalAuthorityStable());
+        CefSignedSystemModuleBaseline.VerifyInstalledTrust(payload, signature).RequireBoundTrust();
+    }
+
     internal static void InstallApprovalAuthority(ReadOnlySpan<byte> publicKey,
         ReadOnlySpan<byte> independentlyTrustedSpkiSha256)
     {
