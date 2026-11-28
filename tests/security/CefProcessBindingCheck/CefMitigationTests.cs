@@ -29,7 +29,7 @@ internal static class CefMitigationTests
             try
             {
                 _ = CefMitigationSnapshot.Read(policy => policy == failed
-                    ? throw new IOException("Synthetic query refusal.") : 0);
+                    ? throw new IOException("Synthetic query refusal.") : 0u);
             }
             catch (IOException) { continue; }
             throw new InvalidOperationException("Mitigation query refusal became evidence.");
