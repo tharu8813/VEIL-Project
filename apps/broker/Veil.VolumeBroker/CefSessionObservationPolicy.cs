@@ -84,3 +84,73 @@ internal sealed class CefSessionObservationPolicy
 
     internal void Revoke() => retired = true;
 }
+
+// Broker-internal context, never a wire message or client assertion.
+// The actual service must derive it from retained owner/volume/lease state.
+internal sealed record CefDiagnosticSessionContext(ClientIdentity Owner, object Generation,
+    object RuntimeLease, bool OwnerObjectVerified, bool VolumeProtected);
+
+internal sealed class CefDiagnosticSessionGuard
+{
+    private readonly ClientIdentity owner;
+    private readonly object generation;
+    private readonly object runtimeLease;
+    private bool retired;
+    private bool observing;
+    private bool draining;
+
+    internal CefDiagnosticSessionGuard(ClientIdentity owner, object generation, object runtimeLease)
+    {
+        this.owner = owner ?? throw new ArgumentNullException(nameof(owner));
+        this.generation = generation ?? throw new ArgumentNullException(nameof(generation));
+        this.runtimeLease = runtimeLease ?? throw new ArgumentNullException(nameof(runtimeLease));
+    }
+
+    private void RequireContext(CefDiagnosticSessionContext current)
+    {
+        if (retired || current is null || current.Owner != owner ||
+            !ReferenceEquals(current.Generation, generation) ||
+            !ReferenceEquals(current.RuntimeLease, runtimeLease) ||
+            !current.OwnerObjectVerified || !current.VolumeProtected)
+            throw new UnauthorizedAccessException("CEF diagnostic session is unavailable.");
+    }
+
+    // Serialized broker access required. Results are diagnostics only, not
+    // an admission verdict. No partial result escapes an invalidated session.
+    internal T Observe<T>(Func<CefDiagnosticSessionContext> readContext, Func<T> observe)
+    {
+        if (retired || observing || draining)
+        {
+            retired = true;
+            throw new UnauthorizedAccessException("CEF diagnostic session is retired or busy.");
+        }
+        observing = true;
+        try
+        {
+            RequireContext(readContext());
+            T result = observe();
+            RequireContext(readContext());
+            return result;
+        }
+        catch
+        {
+            retired = true;
+            throw;
+        }
+        finally { observing = false; }
+    }
+
+    internal void Revoke() => retired = true;
+
+    // Revoke BEFORE attempting cleanup; a failure/exception never permits
+    // observation again. Keep ownership and retry until the caller verifies
+    // actual exit. Even true is not permission to relock the volume by itself.
+    internal bool RevokeAndCheckDrain(Func<bool> terminateAndVerify)
+    {
+        retired = true;
+        if (observing || draining) return false;
+        draining = true;
+        try { return terminateAndVerify(); }
+        finally { draining = false; }
+    }
+}
