@@ -1000,3 +1000,17 @@ test('broker protected environment plan is explicit and disconnected from native
     assert.match(project, /CefProfileLayout\.cs[\s\S]*?CefChildEnvironmentPlan\.cs/);
     assert.doesNotMatch(preparation + broker, /BuildBrokerProtected\(/);
 });
+
+
+test('disconnected broker directory pin verifies handle-derived volume and live protected state', async () => {
+    const pin = await readFile('apps/broker/Veil.VolumeBroker/CefProtectedDirectoryLease.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const prep = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
+    assert.match(pin, /!status.Attached \|\| !status.Unlocked \|\|[\s\S]*?!status.FullyEncrypted \|\| !status.ProtectionOn \|\| !status.ProtectorPresent/);
+    assert.match(pin, /RequireRegisteredProtection\(registeredVolume, readStatus\(\)\);\s*var handle = OpenDirectory\(registeredPath\);[\s\S]*?RequireDirectory\(handle, registeredPath, registeredVolume\);\s*RequireRegisteredProtection\(registeredVolume, readStatus\(\)\);/);
+    assert.match(pin, /CreateFileW\(path, 0x80, FileShare.ReadWrite, IntPtr.Zero,\s*FileMode.Open, 0x02000000 \| 0x00200000/);
+    assert.match(pin, /FileAttributes.ReparsePoint[\s\S]*?FinalPath\(handle, 0\)[\s\S]*?FinalPath\(handle, 1\)[\s\S]*?string.Equals\(guid, volume \+ relative, StringComparison.OrdinalIgnoreCase\)/);
+    assert.match(pin, /RequireRegisteredProtection\(volume, readStatus\(\)\);\s*RequireDirectory\(handle, path, volume\);\s*using var current = OpenDirectory\(path\);[\s\S]*?original.IndexHigh != observed.IndexHigh \|\| original.IndexLow != observed.IndexLow[\s\S]*?RequireRegisteredProtection\(volume, readStatus\(\)\);/);
+    assert.doesNotMatch(pin, /Directory\.CreateDirectory|File\.Delete|Process\.Start/);
+    assert.doesNotMatch(broker + prep, /CefProtectedDirectoryLease/);
+});

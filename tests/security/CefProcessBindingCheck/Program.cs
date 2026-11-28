@@ -26,6 +26,33 @@ foreach (string invalidPath in new[] { "", "relative.exe", @"\\server\share\cef.
 }
 Console.WriteLine("PASS: invalid pre-creation executable paths refused");
 
+// Synthetic protection snapshots; never claim that the CI disk is
+// encrypted. Use a deliberately unrelated volume GUID for actual refusal.
+string expectedVolume = @"\\?\Volume{" + Guid.NewGuid().ToString("D") + @"}\";
+var protectedState = new BackendStatus(true, expectedVolume, true, true, true, true);
+CefProtectedDirectoryLease.RequireRegisteredProtection(expectedVolume, protectedState);
+foreach (var bad in new[] { protectedState with { Attached = false },
+    protectedState with { Unlocked = false }, protectedState with { FullyEncrypted = false },
+    protectedState with { ProtectionOn = false }, protectedState with { ProtectorPresent = false },
+    protectedState with { VolumeGuid = @"\\?\Volume{" + Guid.NewGuid().ToString("D") + @"}\" } })
+{
+    bool rejected = false;
+    try { CefProtectedDirectoryLease.RequireRegisteredProtection(expectedVolume, bad); }
+    catch (UnauthorizedAccessException) { rejected = true; }
+    Check(rejected, "Unprotected or unrelated volume snapshot accepted.");
+}
+string directoryFixture = Path.Combine(Path.GetTempPath(), "veil-cef-directory-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(directoryFixture);
+try
+{
+    bool rejected = false;
+    try { using var pin = CefProtectedDirectoryLease.Open(directoryFixture, expectedVolume, () => protectedState); }
+    catch (UnauthorizedAccessException) { rejected = true; }
+    Check(rejected, "Unrelated actual directory volume accepted.");
+}
+finally { Directory.Delete(directoryFixture); }
+Console.WriteLine("PASS: synthetic protection state and actual wrong-volume directory refusal");
+
 // Exercise the actual production parser with no broker or volume access.
 using (var parsed = Protocol.Parse("""{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"123"}"""u8))
 {

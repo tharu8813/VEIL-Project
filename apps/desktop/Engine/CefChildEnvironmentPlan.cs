@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 using System.Collections.ObjectModel;
+using System.IO;
 
 namespace Veil.Desktop;
 

@@ -26,6 +26,7 @@
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/ClientIdentity.cs" Link="ClientIdentity.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/Protocol.cs" Link="Protocol.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/BackendStatus.cs" Link="BackendStatus.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefProtectedDirectoryLease.cs" Link="CefProtectedDirectoryLease.cs" />
     <Compile Include="../../../apps/desktop/Engine/CefStageWire.cs" Link="CefStageWire.cs" />
   </ItemGroup>
 </Project>
