@@ -1359,3 +1359,13 @@ test('nested diagnostics bind kernel token snapshots across module observation',
     assert.match(observer, /ObserveRuntimeToken\(SafeProcessHandle process, ClientIdentity expected\)[\s\S]*?ReadSnapshot\(process, expected, inspectLaunchPrivileges: false\);\s*return new\(snapshot.Token, snapshot.AuthenticationId, snapshot.TokenId, snapshot.ModifiedId\);/);
     assert.match(nested, /var rootToken = CefProcessTokenObserver.ObserveRuntimeToken\(rootHandle, root\);[\s\S]*?var token = CefProcessTokenObserver.ObserveRuntimeToken\(handle, identity\);\s*CefRuntimeTokenSnapshot.RequireLogon\(rootToken, token\);[\s\S]*?CefProcessModuleObserver.Observe\(handle, identity,[\s\S]*?CefRuntimeTokenSnapshot.RequireSame\(token,\s*CefProcessTokenObserver.ObserveRuntimeToken\(handle, identity\)\);[\s\S]*?CefRuntimeTokenSnapshot.RequireSame\(rootToken,\s*CefProcessTokenObserver.ObserveRuntimeToken\(rootHandle, root\)\);/);
 });
+
+
+test('CEF role diagnostics retain closed utility claim categories without admission expansion', async () => {
+    const role = await readFile('apps/broker/Veil.VolumeBroker/CefCommandRoleObserver.cs', 'utf8');
+    const nested = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    assert.match(role, /record struct CefRoleDetails\(CefObservedRole Role,\s*CefUtilityService UtilityService, CefSandboxClaim SandboxClaim\)/);
+    assert.match(role, /if \(service == CefUtilityService.Network\)\s*return claim == CefSandboxClaim.Network\s*\? new\(CefObservedRole.Network, service, claim\) : default;/);
+    assert.match(role, /return new\(expected, details\);/);
+    assert.match(nested, /if \(role != CefCommandRoleObserver.Observe\(handle, identity, root\)\)[\s\S]*?modules, role.Details\);/);
+});

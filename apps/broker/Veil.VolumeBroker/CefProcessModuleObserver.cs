@@ -39,7 +39,7 @@ internal static class CefProcessModuleObserver
 // pinned disk files are NOT sufficient for a sandbox or product admission.
 internal sealed record CefRetainedProcessDiagnostic(ClientIdentity Identity,
     CefObservedRole Role, CefRoleTokenDecision TokenDecision,
-    CefModuleInventoryObservation Modules);
+    CefModuleInventoryObservation Modules, CefRoleDetails RoleDetails);
 
 internal static class CefNestedProcessDiagnostics
 {
@@ -75,7 +75,7 @@ internal static class CefNestedProcessDiagnostics
                     CefProcessTokenObserver.ObserveRuntimeToken(handle, identity));
                 registration.RequireCurrent();
                 var diagnostic = new CefRetainedProcessDiagnostic(identity, role.Role,
-                    CefRoleTokenPolicy.Evaluate(identity, role.Role, token.Token), modules);
+                    CefRoleTokenPolicy.Evaluate(identity, role.Role, token.Token), modules, role.Details);
                 // Callback runs before independently collected member handles
                 // are released. No success escapes if later accounting fails.
                 inspectMember?.Invoke(identity, handle, diagnostic);

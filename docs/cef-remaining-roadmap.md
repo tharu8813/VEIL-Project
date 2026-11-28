@@ -201,3 +201,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - 기존 role/token 요약뿐 아니라 Windows kernel TokenId, ModifiedId, AuthenticationId를 포함한 내부 스냅샷을 모듈 관측 전후 비교한다. 각 멤버는 루트와 동일 사용자 SID, 세션 및 인증 LUID를 요구하고 전체 관측 전후 루트 스냅샷을 비교한다. 값은 IPC나 로그로 내보내지 않는다. 합성 변조/다른 logon 거부, 동일 실제 프로세스의 독립 handle 비교 및 종료 후 거부 시험을 추가했다.
 - #267 정확한 head Windows CI PASS, 독립 리뷰 없음. 새 CI 및 실제 CEF sandbox 토큰 호환성/보호 VM 검증 NOT RUN. 같은 LUID는 잠정적 엄격한 요구사항이며 실제 역할별 baseline이 아니다. 샘플 사이 변경/복원 및 스레드 impersonation은 검증하지 않는다. GPU/Utility/Network/Unknown 차단, Job cap=1, borrowed activation 차단 및 WebView2 유지. P2-03~05 미완료.
+
+### P2-05 Utility 역할 및 sandbox claim 관측 (미완료)
+
+- 기존 role 관측을 닫힌 enum 조합으로 세분화한다. Network/Audio/Other service 및 Missing/Network/Audio/Other sandbox claim을 구분하되 원문 인수는 내보내지 않는다. Network는 정확한 subtype 및 network claim 조합을 요구하며 알려진 claim과 다른 service 조합은 거부한다. Audio의 누락 claim 및 기타 서비스는 여전히 미검증 Utility로만 관측한다. GPU와 Renderer에 Utility claim을 허용하지 않는다. 모듈 관측 전후 role record 비교에 세부 정보가 포함되고 진단 결과에도 유지된다. 합성 분류 및 불일치 회귀 추가.
+- #268 정확한 head Windows CI PASS, 독립 리뷰 없음. 이 분류는 명령행 주장일 뿐 실제 sandbox 정책 증명이 아니며 기타 값의 동일 범주 내 변경도 구분하지 못한다. 실제 pinned CEF GPU/Audio/Network 샌드박스 호환성, OS 권한/mitigation 검증 및 보호 VM NOT RUN. 기존 역할 차단, Job cap=1, startupEnabled=false 유지.
