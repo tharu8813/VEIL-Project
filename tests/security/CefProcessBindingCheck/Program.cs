@@ -71,6 +71,7 @@ if (args is ["--diagnostic-wire-only"]) return 0;
 
 CefRoleTokenPolicyTests.Run();
 CefCommandRoleTests.Run();
+CefMitigationTests.Run();
 CefSystemModuleVerifierTests.Run();
 
 // Refusal before any file open or process creation. The test is independent
@@ -573,6 +574,13 @@ try
         CefProcessTokenObserver.ObserveRuntimeToken(child.SafeHandle, expected));
     CefRuntimeTokenSnapshot.RequireLogon(CefProcessTokenObserver.ObserveRuntimeToken(owner.SafeHandle, identity),
         runtimeToken);
+    var mitigations = CefProcessMitigationObserver.Observe(retained, expected);
+    CefMitigationSnapshot.RequireSame(mitigations,
+        CefProcessMitigationObserver.Observe(child.SafeHandle, expected));
+    Reject(() => CefProcessMitigationObserver.Observe(owner.SafeHandle, expected));
+    Reject(() => CefProcessMitigationObserver.Observe(retained,
+        expected with { CreatedFileTime = expected.CreatedFileTime + 1 }));
+    Console.WriteLine("PASS: live retained mitigation policy observation");
     Reject(() => CefProcessTokenObserver.Observe(owner.SafeHandle, expected));
     Reject(() => CefProcessTokenObserver.Observe(retained,
         expected with { CreatedFileTime = expected.CreatedFileTime + 1 }));
@@ -634,6 +642,7 @@ try
     Reject(() => CefCommandRoleObserver.Observe(retained, expected, identity));
     Reject(() => CefProcessTokenObserver.Observe(retained, expected));
     Reject(() => CefProcessTokenObserver.ObserveRuntimeToken(retained, expected));
+    Reject(() => CefProcessMitigationObserver.Observe(retained, expected));
     Check(!Native.SameLiveProcess(retained, child.SafeHandle), "Exited process objects matched as live.");
     Reject(() => Native.SnapshotModulePaths(retained, expected));
     Check(Native.MatchesExitedNomination(identity, owner.SafeHandle, child.SafeHandle.DangerousGetHandle().ToInt64(), retained, 0), "Exited nominated object did not match.");
