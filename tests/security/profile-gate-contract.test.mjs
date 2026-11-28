@@ -264,7 +264,14 @@ test('CEF redemption has a dedicated route and never reaches ordinary broker com
     assert.match(broker, /bool redemptionCandidate = reason == "image" && !config\.Development/);
     assert.match(broker, /if \(redemptionCandidate\)\s*response = request\.Command == BrokerCommand\.RedeemCefChild\s*\? RedeemCefChild\(request, client, pipeClient\) : Protocol\.Error\("ClientRejected"\);\s*else if \(request\.Command == BrokerCommand\.RedeemCefChild\)\s*response = Protocol\.Error\("ClientRejected"\);\s*else\s*response = await Execute/);
     assert.match(redeem, /!pending\.MatchesChild\(client\)[\s\S]*?pendingCefChild = null;\s*using \(pending\)/);
-    assert.match(redeem, /!Protected\(backend\.Status\(\)\) \|\|\s*!CefChildPreflight\.VerifyRedemption[\s\S]*?!Protected\(backend\.Status\(\)\)[\s\S]*?!pending\.TryRedeem/);
+    assert.match(redeem, /!CandidateAuthorityCurrent\(generation\) \|\|\s*!CefChildPreflight\.VerifyRedemption[\s\S]*?!CandidateAuthorityCurrent\(generation\)[\s\S]*?!pending\.TryRedeem/);
+    const refresh = broker.slice(broker.indexOf('private bool RefreshAuthenticatedOwner('), broker.indexOf('private bool CandidateAuthorityCurrent('));
+    const current = broker.slice(broker.indexOf('private bool CandidateAuthorityCurrent('), broker.indexOf('private async Task MonitorCompletedPreflightAsync('));
+    assert.match(refresh, /state\.Attached && state\.Unlocked && state\.FullyEncrypted &&\s*state\.ProtectionOn && state\.ProtectorPresent &&\s*string\.Equals\(state\.VolumeGuid, config\.VolumeGuid, StringComparison\.OrdinalIgnoreCase\)/);
+    assert.match(refresh, /Native\.IsRunning\(owner\) &&\s*Native\.ObserveProcess\(owner\) == expected/);
+    assert.match(refresh, /authority\.Observe\(authenticatedOwner, unlockOwner, verified, protectedVolume\)[\s\S]*?ClearAuthenticatedOwner\(\);\s*return false;/);
+    assert.match(current, /!ReferenceEquals\(unlockOwner, generation\) \|\| authenticatedGeneration is null[\s\S]*?RefreshAuthenticatedOwner\(backend\.Status\(\)\)/);
+    assert.match(current, /catch \(Exception error\)[\s\S]*?ClearAuthenticatedOwner\(\);\s*throw;/);
     assert.doesNotMatch(redeem, /backend\.(Attach|Unlock|Lock|Detach)\(|Protocol\.Ok\(/);
     assert.match(preflight, /using var rechecked = CefPinnedImage\.OpenVerified\(child, process,/);
     assert.match(pending, /!disposed && admission\.TryRedeem/);
