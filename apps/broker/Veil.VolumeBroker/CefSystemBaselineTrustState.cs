@@ -17,61 +17,133 @@ internal sealed class CefSystemBaselineTrustState
     private readonly byte[] record;
     private readonly byte[] digest;
     private readonly byte[] publicKey;
+    private readonly string[] retired;
+    private const int MaxRetired = 128;
     internal long MinimumSequence { get; }
     internal bool Revoked { get; }
-    private CefSystemBaselineTrustState(byte[] record, byte[] digest, byte[] publicKey, long floor, bool revoked)
+    private CefSystemBaselineTrustState(byte[] record, byte[] digest, byte[] publicKey, long floor, bool revoked, string[] retired)
     {
         this.record = record;
         this.digest = digest;
         this.publicKey = publicKey;
         MinimumSequence = floor;
         Revoked = revoked;
+        this.retired = retired;
     }
 
     internal byte[] CopyPublicKey() => (byte[])publicKey.Clone();
     internal byte[] CopyRecord() => (byte[])record.Clone();
+    internal string[] CopyRetiredKeyIds() => (string[])retired.Clone();
 
-    internal static CefSystemBaselineTrustState CreateVerifiedRecord(
-        ReadOnlySpan<byte> payload, ReadOnlySpan<byte> publicKey, long sequence)
+    // Identity is SHA-256 of the unsigned RSA modulus, not the SPKI
+    // encoding or exponent. Re-encoding a retired key cannot revive it.
+    internal static string KeyId(ReadOnlySpan<byte> key)
     {
-        if (payload.Length is 0 or > 1048576 || publicKey.Length is 0 or > 4096 || sequence <= 0)
-            throw new UnauthorizedAccessException("Invalid baseline trust record inputs.");
-        byte[] data = new byte[52 + publicKey.Length];
-        "VEILBST1"u8.CopyTo(data);
-        BinaryPrimitives.WriteInt64LittleEndian(data.AsSpan(8), sequence);
-        SHA256.HashData(payload).CopyTo(data, 16);
-        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(48), publicKey.Length);
-        publicKey.CopyTo(data.AsSpan(52));
-        return Parse(data);
-    }
-
-    internal static CefSystemBaselineTrustState Parse(ReadOnlySpan<byte> bytes)
-    {
-        // Magic (8), sequence LE64, exact payload SHA256 (32), SPKI length LE32, SPKI.
-        if (bytes.Length is < 53 or > 4148)
-            throw new UnauthorizedAccessException("Invalid baseline trust record size.");
-        byte[] copy = bytes.ToArray();
-        var data = copy.AsSpan();
-        bool revoked = data[..8].SequenceEqual("VEILBSR1"u8);
-        if (!revoked && !data[..8].SequenceEqual("VEILBST1"u8))
-            throw new UnauthorizedAccessException("Invalid baseline trust record schema.");
-        long floor = BinaryPrimitives.ReadInt64LittleEndian(data[8..16]);
-        int keyLength = BinaryPrimitives.ReadInt32LittleEndian(data[48..52]);
-        if (floor <= 0 || keyLength <= 0 || keyLength != data.Length - 52)
-            throw new UnauthorizedAccessException("Invalid baseline trust record fields.");
-        byte[] key = data[52..].ToArray();
         using var rsa = RSA.Create();
         try
         {
             rsa.ImportSubjectPublicKeyInfo(key, out int consumed);
             if (consumed != key.Length || rsa.KeySize is not (3072 or 4096))
                 throw new UnauthorizedAccessException("Invalid baseline trust key.");
+            return Convert.ToHexString(SHA256.HashData(rsa.ExportParameters(false).Modulus!));
         }
         catch (CryptographicException e)
         {
             throw new UnauthorizedAccessException("Invalid baseline trust key.", e);
         }
-        return new(copy, data[16..48].ToArray(), key, floor, revoked);
+    }
+
+    internal CefSystemBaselineTrustState CreateSuccessor(
+        ReadOnlySpan<byte> payload, ReadOnlySpan<byte> key, long sequence)
+    {
+        string oldId = KeyId(publicKey);
+        string newId = KeyId(key);
+        if (sequence <= MinimumSequence || retired.Contains(newId, StringComparer.Ordinal))
+            throw new UnauthorizedAccessException("Retired key or non-increasing sequence refused.");
+        var history = retired;
+        if (oldId != newId)
+        {
+            if (history.Length >= MaxRetired)
+                throw new UnauthorizedAccessException("Retired key history exhausted.");
+            history = [.. history.Append(oldId).OrderBy(id => id, StringComparer.Ordinal)];
+        }
+        else
+        {
+            RequireActive();
+            if (!key.SequenceEqual(publicKey))
+                throw new UnauthorizedAccessException("Ordinary update changed public key encoding.");
+        }
+        return CreateVerifiedRecord(payload, key, sequence, history);
+    }
+
+    internal static CefSystemBaselineTrustState CreateVerifiedRecord(
+        ReadOnlySpan<byte> payload, ReadOnlySpan<byte> publicKey, long sequence,
+        IReadOnlyList<string>? retiredIds = null)
+    {
+        if (payload.Length is 0 or > 1048576 || publicKey.Length is 0 or > 4096 || sequence <= 0)
+            throw new UnauthorizedAccessException("Invalid baseline trust record inputs.");
+        string[] history = retiredIds?.ToArray() ?? [];
+        if (history.Length > MaxRetired)
+            throw new UnauthorizedAccessException("Retired key history exhausted.");
+        int keyEnd = 52 + publicKey.Length;
+        byte[] data = new byte[keyEnd + (history.Length == 0 ? 0 : 4 + 32 * history.Length)];
+        if (history.Length == 0) "VEILBST1"u8.CopyTo(data);
+        else "VEILBST2"u8.CopyTo(data);
+        BinaryPrimitives.WriteInt64LittleEndian(data.AsSpan(8), sequence);
+        SHA256.HashData(payload).CopyTo(data, 16);
+        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(48), publicKey.Length);
+        publicKey.CopyTo(data.AsSpan(52));
+        if (history.Length != 0)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(keyEnd), history.Length);
+            for (int i = 0; i < history.Length; i++)
+            {
+                if (history[i] is not { Length: 64 } || !history[i].All(Uri.IsHexDigit))
+                    throw new UnauthorizedAccessException("Invalid retired key identity.");
+                Convert.FromHexString(history[i]).CopyTo(data, keyEnd + 4 + i * 32);
+            }
+        }
+        return Parse(data);
+    }
+
+    internal static CefSystemBaselineTrustState Parse(ReadOnlySpan<byte> bytes)
+    {
+        // Magic (8), sequence LE64, exact payload SHA256 (32), SPKI length LE32, SPKI.
+        if (bytes.Length is < 53 or > 8250)
+            throw new UnauthorizedAccessException("Invalid baseline trust record size.");
+        byte[] copy = bytes.ToArray();
+        var data = copy.AsSpan();
+        bool v2 = data[..8].SequenceEqual("VEILBST2"u8) || data[..8].SequenceEqual("VEILBSR2"u8);
+        bool revoked = data[..8].SequenceEqual("VEILBSR1"u8) || data[..8].SequenceEqual("VEILBSR2"u8);
+        if (!v2 && !revoked && !data[..8].SequenceEqual("VEILBST1"u8))
+            throw new UnauthorizedAccessException("Invalid baseline trust record schema.");
+        long floor = BinaryPrimitives.ReadInt64LittleEndian(data[8..16]);
+        int keyLength = BinaryPrimitives.ReadInt32LittleEndian(data[48..52]);
+        if (floor <= 0 || keyLength is <= 0 or > 4096 || keyLength > data.Length - 52)
+            throw new UnauthorizedAccessException("Invalid baseline trust record fields.");
+        int keyEnd = 52 + keyLength;
+        byte[] key = data[52..keyEnd].ToArray();
+        string currentId = KeyId(key);
+        string[] history = [];
+        if (v2)
+        {
+            if (data.Length - keyEnd < 4)
+                throw new UnauthorizedAccessException("Missing retired key history.");
+            int count = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(keyEnd, 4));
+            if (count is <= 0 or > MaxRetired || data.Length - keyEnd != 4 + count * 32)
+                throw new UnauthorizedAccessException("Invalid retired key history size.");
+            history = new string[count];
+            for (int i = 0; i < count; i++)
+            {
+                string id = Convert.ToHexString(data.Slice(keyEnd + 4 + i * 32, 32));
+                if (id == currentId || (i > 0 && StringComparer.Ordinal.Compare(history[i - 1], id) >= 0))
+                    throw new UnauthorizedAccessException("Current, duplicate or unordered retired key.");
+                history[i] = id;
+            }
+        }
+        else if (keyEnd != data.Length)
+            throw new UnauthorizedAccessException("Unexpected legacy trust record suffix.");
+        return new(copy, data[16..48].ToArray(), key, floor, revoked, history);
     }
 
     internal void RequireActive()
@@ -86,7 +158,8 @@ internal sealed class CefSystemBaselineTrustState
     {
         RequireActive();
         byte[] copy = CopyRecord();
-        "VEILBSR1"u8.CopyTo(copy);
+        if (retired.Length == 0) "VEILBSR1"u8.CopyTo(copy);
+        else "VEILBSR2"u8.CopyTo(copy);
         return Parse(copy);
     }
 

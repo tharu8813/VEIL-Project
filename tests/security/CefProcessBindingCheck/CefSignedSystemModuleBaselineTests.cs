@@ -161,7 +161,8 @@ internal static class CefSignedSystemModuleBaselineTests
         byte[] Approval(CefSystemBaselineTrustState from, CefSystemBaselineTrustState to) =>
             SHA256.HashData([.. "VEIL-CEF-BASELINE-KEY-ROTATION-V1"u8,
                 .. SHA256.HashData(from.CopyRecord()), .. SHA256.HashData(to.CopyRecord())]);
-        var proposed = CefSystemBaselineTrustState.CreateVerifiedRecord(rotationPayload, rotatedPublicKey, 10);
+        string retiredId = Convert.ToHexString(SHA256.HashData(signing.ExportParameters(false).Modulus!));
+        var proposed = CefSystemBaselineTrustState.CreateVerifiedRecord(rotationPayload, rotatedPublicKey, 10, [retiredId]);
         byte[] approval = Approval(nextState, proposed);
         var rotation = CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
             rotationSignature, rotatedPublicKey, approval, host);
@@ -192,8 +193,44 @@ internal static class CefSignedSystemModuleBaselineTests
             Sign(otherRotationPayload), host));
         var afterRotation = CefSystemBaselineTrustUpdate.PrepareReplacement(rotated, otherRotationPayload,
             rotatedKey.SignData(otherRotationPayload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss), host);
-        if (CefSystemBaselineTrustState.Parse(afterRotation.RequireExpectedAndCopyRecord(rotated, host)).MinimumSequence != 11)
-            throw new InvalidOperationException("New signing key update regression.");
+        var afterRotationState = CefSystemBaselineTrustState.Parse(afterRotation.RequireExpectedAndCopyRecord(rotated, host));
+        if (afterRotationState.MinimumSequence != 11 || !afterRotationState.CopyRetiredKeyIds().SequenceEqual(new[] { retiredId }))
+            throw new InvalidOperationException("New signing key or retained history regression.");
+        // Even a separately approved rotation cannot reintroduce a retired modulus.
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(rotated, otherRotationPayload,
+            Sign(otherRotationPayload), publicKey, new byte[32], host));
+        Reject(() => rotated.CreateSuccessor(otherRotationPayload, publicKey, 11));
+        var historyCopy = rotated.CopyRetiredKeyIds();
+        historyCopy[0] = new string('0', 64);
+        if (rotated.CopyRetiredKeyIds()[0] != retiredId)
+            throw new InvalidOperationException("Mutable history escaped.");
+        using var thirdKey = RSA.Create(3072);
+        byte[] thirdPublic = thirdKey.ExportSubjectPublicKeyInfo();
+        byte[] thirdPayload = Payload(sequence: 12);
+        string secondId = Convert.ToHexString(SHA256.HashData(rotatedKey.ExportParameters(false).Modulus!));
+        string[] expectedHistory = new[] { retiredId, secondId }.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        var thirdProposed = CefSystemBaselineTrustState.CreateVerifiedRecord(thirdPayload, thirdPublic, 12, expectedHistory);
+        var thirdUpdate = CefSystemBaselineTrustUpdate.PrepareKeyRotation(afterRotationState, thirdPayload,
+            thirdKey.SignData(thirdPayload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss),
+            thirdPublic, Approval(afterRotationState, thirdProposed), host);
+        var thirdState = CefSystemBaselineTrustState.Parse(thirdUpdate.RequireExpectedAndCopyRecord(afterRotationState, host));
+        thirdProposed.RequireSame(thirdState);
+        Reject(() => thirdState.CreateSuccessor(Payload(sequence: 13), publicKey, 13));
+        Reject(() => thirdState.CreateSuccessor(Payload(sequence: 13), rotatedPublicKey, 13));
+        if (!thirdState.CreateRevokedRecord().CopyRetiredKeyIds().SequenceEqual(expectedHistory))
+            throw new InvalidOperationException("Revocation lost retired history.");
+        Reject(() => CefSystemBaselineTrustState.CreateVerifiedRecord(thirdPayload, thirdPublic, 12, [retiredId, retiredId]));
+        Reject(() => CefSystemBaselineTrustState.CreateVerifiedRecord(thirdPayload, thirdPublic, 12, expectedHistory.Reverse().ToArray()));
+        Reject(() => CefSystemBaselineTrustState.CreateVerifiedRecord(thirdPayload, thirdPublic, 12,
+            [CefSystemBaselineTrustState.KeyId(thirdPublic)]));
+        byte[] v2Record = thirdState.CopyRecord();
+        Reject(() => CefSystemBaselineTrustState.Parse(v2Record[..^1]));
+        Reject(() => CefSystemBaselineTrustState.Parse([.. v2Record, 0]));
+        var oversizedHistory = Enumerable.Range(0, 129).Select(i => i.ToString("X64")).ToArray();
+        Reject(() => CefSystemBaselineTrustState.CreateVerifiedRecord(thirdPayload, thirdPublic, 12, oversizedHistory));
+        var fullHistory = CefSystemBaselineTrustState.CreateVerifiedRecord(thirdPayload, thirdPublic, 12, oversizedHistory[..128]);
+        Reject(() => fullHistory.CreateSuccessor(Payload(sequence: 13), rotatedPublicKey, 13));
+        Console.WriteLine("PASS: retained RSA modulus history, rotation reuse and malformed history refusal");
         byte[] revocationApproval = SHA256.HashData([.. "VEIL-CEF-BASELINE-KEY-REVOCATION-V1"u8,
             .. SHA256.HashData(nextState.CopyRecord())]);
         var revoke = CefSystemBaselineTrustUpdate.PrepareRevocation(nextState, revocationApproval, host);

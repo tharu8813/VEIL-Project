@@ -136,7 +136,9 @@ internal sealed class CefSystemBaselineTrustUpdate
             throw new UnauthorizedAccessException("Invalid baseline update payload size.");
         byte[] document = payload.ToArray();
         var validated = CefSignedSystemModuleBaseline.VerifyWithSequence(document, signature, key, host, floor);
-        var next = CefSystemBaselineTrustState.CreateVerifiedRecord(document, key, validated.Sequence);
+        var next = previous is null
+            ? CefSystemBaselineTrustState.CreateVerifiedRecord(document, key, validated.Sequence)
+            : previous.CreateSuccessor(document, key, validated.Sequence);
         return new(previous, next, host);
     }
 
