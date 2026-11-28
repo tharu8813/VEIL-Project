@@ -51,6 +51,22 @@ static void RejectProbe(string json)
     Check(rejected, "Unexpected diagnostic wire request accepted.");
 }
 Console.WriteLine("PASS: diagnostic IPC configuration boundary and strict request fields");
+const string runtimeRequest = """{"command":"CheckCefRuntimeAuthority","volumeId":"synthetic"}""";
+#if VEIL_CEF_DIAGNOSTIC_IPC
+using (var runtime = Protocol.Parse(System.Text.Encoding.UTF8.GetBytes(runtimeRequest)))
+    Check(runtime.Command == BrokerCommand.CheckCefRuntimeAuthority && runtime.Secret is null &&
+        runtime.ChildHandle is null, "Invalid runtime authority request.");
+Check(System.Text.Encoding.UTF8.GetString(Protocol.CefRuntimeAuthorityCurrent()) ==
+    """{"ok":true,"cefRuntimeAuthorityCurrent":true}""", "Runtime authority receipt mismatch.");
+#else
+RejectProbe(runtimeRequest);
+#endif
+foreach (string malformed in new[] {
+    """{"command":"CheckCefRuntimeAuthority","volumeId":"synthetic","childHandle":"1"}""",
+    """{"command":"CheckCefRuntimeAuthority","volumeId":"synthetic","secret":"synthetic"}""",
+    """{"command":"CheckCefRuntimeAuthority","volumeId":"synthetic","role":"browser"}""",
+    """{"command":"CheckCefRuntimeAuthority","volumeId":"synthetic","pid":"1"}"""
+}) RejectProbe(malformed);
 if (args is ["--diagnostic-wire-only"]) return 0;
 
 CefRoleTokenPolicyTests.Run();
