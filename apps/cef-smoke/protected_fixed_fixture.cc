@@ -81,11 +81,19 @@ ProtectedFixtureResult RunProtectedFixedFixture(const char* fixed_page,
     browser->GetHost()->CloseBrowser(true);
   }
   const auto closing = GetTickCount64();
+  last_sample = closing;
   while (!observation.Result().browsers_closed &&
          GetTickCount64() - closing < kCloseBudgetMs) {
+    // Keep attempting cleanup after authority loss, but never report
+    // successful fixture evidence from a revoked session.
+    if (GetTickCount64() - last_sample >= kSampleMs) {
+      if (!require_current()) observation.Fail();
+      last_sample = GetTickCount64();
+    }
     CefDoMessageLoopWork();
     Sleep(10);
   }
+  if (!require_current()) observation.Fail();
   auto result = observation.Result();
   if (!result.browsers_closed) return {false, false};
   browser = nullptr;
