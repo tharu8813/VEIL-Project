@@ -19,10 +19,6 @@ internal static class CefSessionObservationTests
             bool ownerLive = true, bool protectedVolume = true, bool leaseVerified = true) =>
             p.Observe(currentOwner ?? owner, currentGeneration ?? generation, currentLease ?? lease,
                 ownerLive, protectedVolume, leaseVerified, outer, inner, members);
-        void Check(bool value)
-        {
-            if (!value) throw new InvalidOperationException("CEF session observation policy regression.");
-        }
         void Reject(Func<CefSessionObservationPolicy, bool> attempt)
         {
             var p = New();
@@ -64,6 +60,247 @@ internal static class CefSessionObservationTests
         Check(Observe(active, [browser, child]));
         Check(!Observe(active, [browser, child], protectedVolume: false));
         Check(!Observe(active, [browser, child]));
+        var context = new CefDiagnosticSessionContext(owner, generation, lease, true, true);
+        CefDiagnosticSessionGuard NewGuard() => new(owner, generation, lease);
+        void RefuseGuard(Action attempt)
+        {
+            try { attempt(); }
+            catch (UnauthorizedAccessException) { return; }
+            throw new InvalidOperationException("Invalid diagnostic session accepted.");
+        }
+        var valid = NewGuard();
+        Check(valid.Observe(() => context, () => 42) == 42);
+        Check(valid.Observe(() => context, () => 43) == 43);
+        foreach (var invalid in new[] {
+            context with { Owner = owner with { CreatedFileTime = 101 } },
+            context with { Generation = new object() },
+            context with { RuntimeLease = new object() },
+            context with { OwnerObjectVerified = false },
+            context with { VolumeProtected = false } })
+        {
+            var before = NewGuard();
+            bool called = false;
+            RefuseGuard(() => before.Observe(() => invalid, () => { called = true; return 1; }));
+            Check(!called);
+            RefuseGuard(() => before.Observe(() => context, () => 1));
+            var after = NewGuard();
+            var current = context;
+            RefuseGuard(() => after.Observe(() => current, () => { current = invalid; return 1; }));
+            RefuseGuard(() => after.Observe(() => context, () => 1));
+        }
+        var failed = NewGuard();
+        RefuseGuard(() => failed.Observe<int>(() => context, () => throw new UnauthorizedAccessException()));
+        RefuseGuard(() => failed.Observe(() => context, () => 1));
+        var revoked = NewGuard();
+        RefuseGuard(() => revoked.Observe(() => context, () => { revoked.Revoke(); return 1; }));
+        Check(!revoked.RevokeAndCheckDrain(() => false));
+        RefuseGuard(() => revoked.Observe(() => context, () => 1));
+        RefuseGuard(() => revoked.RevokeAndCheckDrain(() => throw new UnauthorizedAccessException()));
+        Check(revoked.RevokeAndCheckDrain(() => true));
+        RefuseGuard(() => revoked.Observe(() => context, () => 1));
+        var reentrant = NewGuard();
+        RefuseGuard(() => reentrant.Observe(() => context, () =>
+        {
+            Check(!reentrant.RevokeAndCheckDrain(() => throw new InvalidOperationException("Drain ran during observation.")));
+            return 1;
+        }));
+        Check(reentrant.RevokeAndCheckDrain(() => true));
+        foreach (uint eventType in new uint[] { 6, 7 })
+        {
+            Check(CefWindowsSessionRevocation.IsRevocationEvent(eventType));
+            Check(CefWindowsSessionRevocation.TryDecode(eventType, 8, 1, out uint session));
+            Check(session == 1 && CefWindowsSessionRevocation.MatchesOwner(owner, session));
+            Check(!CefWindowsSessionRevocation.MatchesOwner(owner with { SessionId = 2 }, session));
+            Check(!CefWindowsSessionRevocation.MatchesOwner(null, session));
+            Check(!CefWindowsSessionRevocation.MatchesOwner(owner with { SessionId = 0 }, session));
+            Check(!CefWindowsSessionRevocation.MatchesOwner(owner with { SessionId = -1 }, session));
+        }
+        foreach (uint eventType in new uint[] { 0, 1, 2, 3, 4, 5, 8, 9, uint.MaxValue })
+        {
+            Check(!CefWindowsSessionRevocation.IsRevocationEvent(eventType));
+            Check(!CefWindowsSessionRevocation.TryDecode(eventType, 8, 1, out uint ignored) && ignored == 0);
+        }
+        foreach (int size in new[] { -1, 0, 4, 7, 9, 16 })
+            Check(!CefWindowsSessionRevocation.TryDecode(7, size, 1, out uint ignored) && ignored == 0);
+        foreach (uint sessionId in new uint[] { 0, 0x80000000, uint.MaxValue })
+            Check(!CefWindowsSessionRevocation.TryDecode(7, 8, sessionId, out uint ignored) && ignored == 0);
+        Check(CefWindowsSessionRevocation.TryDecode(6, 8, int.MaxValue, out uint lastSession) &&
+            lastSession == int.MaxValue);
+        CefAuthenticatedGeneration NewAuthority() => new(owner, generation);
+        var authority = NewAuthority();
+        Check(authority.Observe(owner, generation, true, true));
+        Check(authority.Observe(owner, generation, true, true));
+        authority.Revoke();
+        Check(!authority.Observe(owner, generation, true, true));
+        foreach (var invalid in new (ClientIdentity? Owner, object? Generation, bool Live, bool Protected)[]
+        {
+            (null, generation, true, true),
+            (owner with { CreatedFileTime = 101 }, generation, true, true),
+            (owner, null, true, true),
+            (owner, new object(), true, true),
+            (owner, generation, false, true),
+            (owner, generation, true, false)
+        })
+        {
+            var stale = NewAuthority();
+            Check(stale.Observe(owner, generation, true, true));
+            Check(!stale.Observe(invalid.Owner, invalid.Generation, invalid.Live, invalid.Protected));
+            Check(!stale.Observe(owner, generation, true, true));
+        }
+        // Only a newly authenticated generation can establish new authority.
+        var nextGeneration = new object();
+        var next = new CefAuthenticatedGeneration(owner, nextGeneration);
+        Check(next.Observe(owner, nextGeneration, true, true));
+        Check(!authority.Observe(owner, nextGeneration, true, true));
+        // Relock remains pending through drain failure, stale generation,
+        // backend refusal and exceptions; no lock call before exit proof.
+        var relock = new CefDiagnosticRelock();
+        int lockCalls = 0;
+        bool LockVerified() { lockCalls++; return true; }
+        Check(relock.TryComplete(generation, false, LockVerified) && lockCalls == 0);
+        relock.Request(generation);
+        relock.Request(nextGeneration);
+        Check(relock.Pending);
+        Check(!relock.TryComplete(nextGeneration, true, LockVerified) && lockCalls == 0);
+        Check(!relock.TryComplete(generation, false, LockVerified) && lockCalls == 0);
+        Check(!relock.TryComplete(generation, true, () => { lockCalls++; return false; }));
+        Check(relock.Pending && lockCalls == 1);
+        RefuseGuard(() => relock.TryComplete(generation, true, () => throw new UnauthorizedAccessException()));
+        Check(relock.Pending);
+        Check(relock.TryComplete(generation, true, LockVerified) && !relock.Pending && lockCalls == 2);
+        Check(relock.TryComplete(generation, true, LockVerified) && lockCalls == 2);
+        var unknownRelock = new CefDiagnosticRelock();
+        unknownRelock.Request(null);
+        Check(!unknownRelock.TryComplete(null, true, LockVerified) && unknownRelock.Pending && lockCalls == 2);
+        var runtimePin = new TrackedResource();
+        var jobPin = new TrackedResource { FailNextRelease = true };
+        var rootPin = new TrackedResource();
+        var lifetime = new CefRetainedLifetime(runtimePin, null, jobPin, rootPin);
+        int verificationCalls = 0;
+        Check(!lifetime.TryRelease(() => { verificationCalls++; return false; }));
+        Check(runtimePin.Releases == 0 && jobPin.Releases == 0 && rootPin.Releases == 0);
+        RefuseGuard(() => lifetime.TryRelease(() =>
+        {
+            verificationCalls++;
+            throw new UnauthorizedAccessException();
+        }));
+        Check(runtimePin.Releases == 0 && jobPin.Releases == 0 && rootPin.Releases == 0);
+        RefuseGuard(() => lifetime.TryRelease(() =>
+        {
+            verificationCalls++;
+            Check(!lifetime.TryRelease(() => throw new InvalidOperationException("Reentrant verification.")));
+            return true;
+        }));
+        Check(verificationCalls == 3 && runtimePin.Releases == 1 && jobPin.Releases == 1 && rootPin.Releases == 0);
+        Check(lifetime.TryRelease(() => throw new InvalidOperationException("Rechecked already released handles.")));
+        Check(runtimePin.Releases == 1 && jobPin.Releases == 2 && rootPin.Releases == 1);
+        Check(lifetime.TryRelease(() => throw new InvalidOperationException("Repeated verification.")));
+        Check(runtimePin.Releases == 1 && jobPin.Releases == 2 && rootPin.Releases == 1);
+        var slot = new CefDiagnosticSessionSlot<TrackedSession>();
+        var firstSession = new TrackedSession();
+        var secondSession = new TrackedSession();
+        Check(!slot.Occupied && slot.TryReleaseRetired(0));
+        Check(slot.TryRegister(generation, firstSession));
+        Check(slot.Current(generation) == firstSession && slot.Current(nextGeneration) is null);
+        Check(!slot.TryRegister(nextGeneration, secondSession));
+        Check(!slot.TryReleaseRetired(0) && firstSession.ReleaseAttempts == 0);
+        slot.Retire();
+        Check(firstSession.Revoked && slot.CleanupPending && slot.Current(generation) is null);
+        Check(!slot.TryReleaseRetired(0) && slot.Occupied);
+        Check(!slot.TryRegister(nextGeneration, secondSession));
+        firstSession.ThrowOnRelease = true;
+        RefuseGuard(() => slot.TryReleaseRetired(0));
+        Check(slot.CleanupPending && !slot.TryRegister(nextGeneration, secondSession));
+        firstSession.ThrowOnRelease = false;
+        firstSession.ExitConfirmed = true;
+        Check(slot.TryReleaseRetired(0) && !slot.Occupied);
+        Check(slot.TryRegister(nextGeneration, secondSession));
+        Check(slot.Current(generation) is null && slot.Current(nextGeneration) == secondSession);
+        Check(!slot.TryReleaseRetired(0) && secondSession.ReleaseAttempts == 0);
+        slot.Retire();
+        secondSession.ExitConfirmed = true;
+        Check(slot.TryReleaseRetired(0) && !slot.Occupied);
+        var activationSlot = new CefDiagnosticSessionSlot<TrackedSession>();
+        var prepared = new TrackedSession();
+        var replacement = new TrackedSession();
+        int activations = 0;
+        var activated = activationSlot.RegisterAndActivate(generation, prepared, () =>
+        {
+            activations++;
+            Check(activationSlot.Occupied && activationSlot.Current(generation) is null);
+            Check(!activationSlot.TryRegister(nextGeneration, replacement));
+            Check(!activationSlot.TryReleaseRetired(0));
+        }, out var activationFailure);
+        Check(activated == CefDiagnosticActivationOutcome.Activated && activationFailure is null &&
+            activationSlot.Current(generation) == prepared && activations == 1);
+        Check(activationSlot.RegisterAndActivate(nextGeneration, replacement, () => activations++,
+            out activationFailure) == CefDiagnosticActivationOutcome.Refused && activationFailure is null && activations == 1);
+        Check(!replacement.Revoked && replacement.ReleaseAttempts == 0);
+        activationSlot.Retire();
+        prepared.ExitConfirmed = true;
+        Check(activationSlot.TryReleaseRetired(0));
+        var failedActivation = new TrackedSession();
+        var outcome = activationSlot.RegisterAndActivate(generation, failedActivation, () =>
+        {
+            activations++;
+            throw new UnauthorizedAccessException("Synthetic ambiguous resume.");
+        }, out activationFailure);
+        Check(outcome == CefDiagnosticActivationOutcome.Retired && activationFailure is UnauthorizedAccessException &&
+            failedActivation.Revoked && activationSlot.CleanupPending && activationSlot.Current(generation) is null);
+        Check(!activationSlot.TryReleaseRetired(0) && !activationSlot.TryRegister(nextGeneration, replacement));
+        failedActivation.ExitConfirmed = true;
+        Check(activationSlot.TryReleaseRetired(0) && !activationSlot.Occupied);
+        outcome = activationSlot.RegisterAndActivate(generation, replacement, () =>
+        {
+            activationSlot.Retire();
+            replacement.ExitConfirmed = true;
+            Check(!activationSlot.TryReleaseRetired(0) && !activationSlot.TryRegister(nextGeneration, prepared));
+        }, out activationFailure);
+        Check(outcome == CefDiagnosticActivationOutcome.Retired && activationFailure is UnauthorizedAccessException &&
+            activationSlot.CleanupPending && replacement.ReleaseAttempts == 0);
+        Check(activationSlot.TryReleaseRetired(0) && !activationSlot.Occupied);
+        Console.WriteLine("PASS: pre-resume lifetime handoff, ambiguous activation retirement and reentrant cleanup refusal");
+        Console.WriteLine("PASS: diagnostic owner slot retires before release, preserves failed cleanup and rejects replacement");
+        Console.WriteLine("PASS: retained resource cleanup waits for verified exit and resumes failed release");
+        Console.WriteLine("PASS: broker unlock generation cannot resurrect after owner or protection failure");
+        Console.WriteLine("PASS: Windows lock/logoff notification filtering and authenticated owner isolation");
+        Console.WriteLine("PASS: diagnostic session pre/post checks, irreversible retirement and retryable drain");
         Console.WriteLine("PASS: pure CEF multi-process observation, generation/lease binding and irreversible revocation");
+    }
+
+    private static void Check(bool value)
+    {
+        if (!value) throw new InvalidOperationException("CEF session observation policy regression.");
+    }
+
+    private sealed class TrackedSession : ICefDiagnosticLifetime
+    {
+        internal bool Revoked { get; private set; }
+        internal int ReleaseAttempts { get; private set; }
+        internal bool ExitConfirmed { get; set; }
+        internal bool ThrowOnRelease { get; set; }
+        public void Revoke() => Revoked = true;
+        public bool RevokeAndRelease(int milliseconds)
+        {
+            Check(Revoked);
+            ReleaseAttempts++;
+            if (ThrowOnRelease) throw new UnauthorizedAccessException("Synthetic session cleanup failure.");
+            return ExitConfirmed;
+        }
+    }
+
+    private sealed class TrackedResource : IDisposable
+    {
+        internal int Releases { get; private set; }
+        internal bool FailNextRelease { get; set; }
+        public void Dispose()
+        {
+            Releases++;
+            if (FailNextRelease)
+            {
+                FailNextRelease = false;
+                throw new UnauthorizedAccessException("Synthetic release failure.");
+            }
+        }
     }
 }

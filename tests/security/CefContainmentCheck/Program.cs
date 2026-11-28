@@ -101,6 +101,301 @@ try
         Check(observer.WaitForExit(10000), "Child survived job close.");
     }
     File.Delete(markerPath);
+    // Inject a failure AFTER native creation but BEFORE verification.
+    // The escrow, not a guessed PID, retains the original process handles.
+    foreach (bool injectFailure in new[] { true, false })
+    {
+        using var outer = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var inner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        var custody = new CefContainedProcess.CreationCustody();
+        bool refused = false;
+        try
+        {
+            outer.CreateAtomicRetainedPairFixture(inner, image, environment, custody, injectFailure);
+        }
+        catch (InvalidOperationException error) when (error.Message == "Synthetic post-create verification failure.")
+        { refused = true; }
+        Check(refused == injectFailure && custody.HasRetainedProcess && !File.Exists(markerPath),
+            "Creation custody did not retain the original suspended child.");
+        if (injectFailure)
+        {
+            Check(!outer.HasNoActiveProcesses() && !inner.HasNoActiveProcesses(),
+                "Injected refusal did not retain both live Job members.");
+            Reject(() => custody.TakeVerified());
+            bool drained = custody.TryDrainAndRelease(5000);
+            Check(drained, "Rejected creation did not confirm root and three-Job exit.");
+            Check(!custody.HasRetainedProcess, "Drained custody retained child.");
+            Check(outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses(), "Rejected creation peer accounting not empty.");
+            Check(!File.Exists(markerPath), "Rejected creation executed.");
+            Check(custody.TryDrainAndRelease(0), "Repeated cleanup refused.");
+            Reject(() => custody.TakeVerified());
+        }
+        else
+        {
+            using var created = custody.TakeVerified();
+            Check(created.IsAlive && !custody.HasRetainedProcess && !custody.TryDrainAndRelease(0),
+                "Custody retained cleanup authority after verified transfer.");
+            Reject(() => custody.TakeVerified());
+            var deadline = Stopwatch.StartNew();
+            created.TerminateAndDrain(5000);
+            int remaining = (int)Math.Max(0L, 5000 - deadline.ElapsedMilliseconds);
+            Check(created.WaitForRetainedCreationExit(remaining) &&
+                outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses(),
+                "Transferred child did not drain all three Jobs.");
+        }
+        using var freshOuter = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var freshInner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        Reject(() => freshOuter.CreateAtomicRetainedPairFixture(freshInner, image, environment, custody, false));
+        Check(freshOuter.HasNoActiveProcesses() && freshInner.HasNoActiveProcesses() && !File.Exists(markerPath),
+            "Reused custody created a process.");
+    }
+    Console.WriteLine("PASS: post-create failure retains handles until verified exit; successful transfer is one-shot");
+    // Simulate allocation failure at the earliest managed point after the
+    // original handles have been attached to their preallocated wrappers.
+    // No process reopening by PID and no actual memory exhaustion.
+    using (var outer = CefBrokerOwnedJob.CreateMultiprocessFixture())
+    using (var inner = CefBrokerOwnedJob.CreateMultiprocessFixture())
+    {
+        var custody = new CefContainedProcess.CreationCustody();
+        bool refused = false;
+        try
+        {
+            outer.CreateAtomicRetainedPairFixture(inner, image, environment, custody,
+                injectFailure: false, injectAllocationFailure: true);
+        }
+        catch (OutOfMemoryException error) when (error.Message == "Synthetic allocation failure immediately after capture.")
+        { refused = true; }
+        Check(refused && custody.HasRetainedProcess &&
+            !outer.HasNoActiveProcesses() && !inner.HasNoActiveProcesses() && !File.Exists(markerPath),
+            "Allocation refusal lost original suspended root.");
+        Reject(() => custody.TakeVerified());
+        Check(custody.TryDrainAndRelease(5000) && !custody.HasRetainedProcess &&
+            outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses() && !File.Exists(markerPath),
+            "Allocation refusal did not confirm root and three-Job exit.");
+    }
+    Console.WriteLine("PASS: preallocated creation handles survive synthetic post-create allocation failure");
+    // A second-stage validation refusal must retain the actual created
+    // process, not permit a transfer or reentrant cleanup.
+    using (var outer = CefBrokerOwnedJob.CreateMultiprocessFixture())
+    using (var inner = CefBrokerOwnedJob.CreateMultiprocessFixture())
+    {
+        var custody = new CefContainedProcess.CreationCustody();
+        outer.CreateAtomicRetainedPairFixture(inner, image, environment, custody, false);
+        bool refused = false;
+        try
+        {
+            custody.VerifyRetainedRoot(root =>
+            {
+                Check(Native.IsRunning(root) && !File.Exists(markerPath), "Post-create root not suspended/live.");
+                Reject(() => custody.TakeVerified());
+                Check(!custody.TryDrainAndRelease(0), "Reentrant cleanup accepted.");
+                throw new UnauthorizedAccessException("Synthetic post-create token refusal.");
+            });
+        }
+        catch (UnauthorizedAccessException error) when (error.Message == "Synthetic post-create token refusal.")
+        { refused = true; }
+        Check(refused && custody.HasRetainedProcess, "Post-create refusal lost custody.");
+        Reject(() => custody.TakeVerified());
+        Check(custody.TryDrainAndRelease(5000) && outer.HasNoActiveProcesses() &&
+            inner.HasNoActiveProcesses() && !File.Exists(markerPath), "Post-create refusal did not drain.");
+    }
+    Console.WriteLine("PASS: second-stage validation refusal retains original root and blocks transfer");
+    // The creation custody owns the original root while both Jobs are
+    // bound. Revalidation may use the same handle wrapper only, never a
+    // second wrapper even if it points to the same kernel process object.
+    foreach (bool wrongOwner in new[] { false, true })
+    {
+        using var owner = Process.GetCurrentProcess();
+        var ownerIdentity = Native.ObserveProcess(owner.SafeHandle);
+        using var outer = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var inner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        var custody = new CefContainedProcess.CreationCustody();
+        outer.CreateAtomicRetainedPairFixture(inner, image, environment, custody, false);
+        bool refused = false;
+        try
+        {
+            custody.VerifyRetainedRoot(root =>
+            {
+                var identity = Native.ObserveProcess(root);
+                outer.BindPreparedPrivatePair(inner, ownerIdentity,
+                    wrongOwner ? root : owner.SafeHandle, identity, root);
+                outer.RequireOrBindPreparedPrivatePair(inner, ownerIdentity, owner.SafeHandle, identity, root);
+                using var alias = new Microsoft.Win32.SafeHandles.SafeProcessHandle(root.DangerousGetHandle(), ownsHandle: false);
+                bool aliasRefused = false;
+                try { outer.RequireOrBindPreparedPrivatePair(inner, ownerIdentity, owner.SafeHandle, identity, alias); }
+                catch (UnauthorizedAccessException) { aliasRefused = true; }
+                Check(aliasRefused, "Prepared pair accepted a different root handle wrapper.");
+                outer.RequirePreparedPrivateRoot(inner, ownerIdentity, owner.SafeHandle, identity, root);
+                Check(!File.Exists(markerPath), "Binding unexpectedly executed the root.");
+            });
+        }
+        catch (UnauthorizedAccessException) when (wrongOwner) { refused = true; }
+        Check(refused == wrongOwner && custody.HasRetainedProcess && !File.Exists(markerPath),
+            "Prepared pair binding lost root or accepted invalid owner.");
+        if (wrongOwner) Reject(() => custody.TakeVerified());
+        Check(custody.TryDrainAndRelease(5000) && outer.HasNoActiveProcesses() &&
+            inner.HasNoActiveProcesses() && !File.Exists(markerPath), "Bound creation did not drain.");
+    }
+    Console.WriteLine("PASS: creation custody binds and revalidates exact private Job pair without resume");
+    // Exercise the production-shaped lifetime with the isolated apphost,
+    // not the installed product, service token or real encrypted volume.
+    foreach (bool injectFailure in new[] { false, true })
+    {
+        using var outer = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var inner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var prerequisites = new MemoryStream();
+        var slot = new CefDiagnosticSessionSlot<ICefDiagnosticLifetime>();
+        var generation = new object();
+        var relock = new CefDiagnosticRelock();
+        var probe = new CefPreparedCreationLifetime(outer, inner, prerequisites, (a, b, custody) =>
+        {
+            Check(slot.Occupied && slot.Current(generation) is null,
+                "Creation ran before slot ownership.");
+            a.CreateAtomicRetainedPairFixture(b, image, environment, custody, injectFailure);
+            Check(!File.Exists(markerPath), "Creation probe unexpectedly executed.");
+            // Simulate reentrant owner revocation while creating.
+            relock.Request(generation);
+            slot.Retire();
+            Check(!slot.TryReleaseRetired(0) && prerequisites.CanRead,
+                "Creating slot released prerequisites.");
+        });
+        var outcome = slot.RegisterAndActivate(generation, probe, probe.Create, out var failure);
+        Check(outcome == CefDiagnosticActivationOutcome.Retired && failure is not null &&
+            slot.CleanupPending && prerequisites.CanRead && !File.Exists(markerPath),
+            "Creation probe did not retain the retired lifetime.");
+        relock.Request(generation);
+        bool locked = false;
+        Check(!relock.TryComplete(generation, !slot.Occupied, () => { locked = true; return true; }) && !locked,
+            "Relock accepted before creation drain.");
+        Check(slot.TryReleaseRetired(5000) && !slot.Occupied && !prerequisites.CanRead &&
+            !File.Exists(markerPath), "Creation probe did not release after drain.");
+        Check(relock.TryComplete(generation, !slot.Occupied, () => { locked = true; return true; }) && locked,
+            "Relock policy did not complete after creation drain.");
+    }
+    Console.WriteLine("PASS: owned suspended creation probe retires, drains, and gates relock");
+    // Exercise in-place ownership handoff using the actual synthetic root.
+    // No apphost execution and no second native handle owner.
+    foreach (int mode in new[] { 0, 1, 2 })
+    {
+        using var outer = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var inner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var prerequisites = new MemoryStream();
+        var slot = new CefDiagnosticSessionSlot<ICefDiagnosticLifetime>();
+        var generation = new object();
+        var probe = new CefPreparedCreationLifetime(outer, inner, prerequisites, (a, b, custody) =>
+            a.CreateAtomicRetainedPairFixture(b, image, environment, custody, false));
+        Check(slot.RegisterAndActivate(generation, probe, probe.Create, out _) ==
+            CefDiagnosticActivationOutcome.Activated, "Handoff fixture creation refused.");
+        Check(!slot.ReplacePrepared(new object(), probe, () => throw new InvalidOperationException("Stale factory executed."), out var staleFailure) &&
+            staleFailure is null && ReferenceEquals(slot.Current(generation), probe), "Stale handoff changed slot.");
+        bool switched = slot.ReplacePrepared(generation, probe, () =>
+            probe.PrepareSuccessor((a, b, child, root) =>
+            {
+                Check(slot.Occupied && slot.Current(generation) is null &&
+                    child.IsAlive && Native.IsRunning(root) && prerequisites.CanRead &&
+                    !File.Exists(markerPath), "Handoff lost original ownership.");
+                Check(!slot.TryReleaseRetired(0), "Handoff allowed early release.");
+                if (mode == 1) throw new UnauthorizedAccessException("Synthetic successor construction refusal.");
+                if (mode == 2)
+                {
+                    slot.Retire();
+                    Check(!slot.TryReleaseRetired(0), "Retired handoff released during construction.");
+                }
+                return new BorrowingFixtureSuccessor(probe);
+            }), out var handoffFailure);
+        Check(switched == (mode == 0) && (handoffFailure is null) == switched &&
+            slot.Occupied && prerequisites.CanRead && !File.Exists(markerPath), "Handoff result mismatch.");
+        if (switched)
+            Check(slot.Current(generation) is BorrowingFixtureSuccessor, "Successor was not published.");
+        else
+            Check(slot.CleanupPending && slot.Current(generation) is null, "Failed handoff was not retired.");
+        slot.Retire();
+        Check(slot.TryReleaseRetired(5000) && !slot.Occupied && !prerequisites.CanRead &&
+            !File.Exists(markerPath), "Handoff lifetime did not drain and release.");
+    }
+    Console.WriteLine("PASS: in-place suspended lifetime handoff, construction refusal and reentrant retirement");
+    // Same-user synthetic atomic Job pair: handoff before resume, including
+    // a failure after resume actually ran. No product or BitLocker access.
+    using (var owner = Process.GetCurrentProcess())
+    {
+        var ownerIdentity = Native.ObserveProcess(owner.SafeHandle);
+        foreach (bool failAfterResume in new[] { false, true })
+        {
+            using var outer = CefBrokerOwnedJob.CreateMultiprocessFixture();
+            using var inner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+            using var candidate = outer.CreateAtomicPairFixture(inner, image, environment);
+            var binding = Native.DuplicateNominatedChild(ownerIdentity, owner.SafeHandle,
+                new IntPtr(candidate.NominatedHandle));
+            using var retained = binding.Handle;
+            outer.BindSingleCandidate(ownerIdentity, owner.SafeHandle, binding.Identity, retained);
+            inner.BindSingleCandidate(ownerIdentity, owner.SafeHandle, binding.Identity, retained);
+            outer.RequirePrivateNestedBinding(inner, ownerIdentity, owner.SafeHandle, binding.Identity, retained);
+            var session = new HandoffFixtureLifetime(candidate, outer, inner, retained);
+            var slot = new CefDiagnosticSessionSlot<HandoffFixtureLifetime>();
+            var generation = new object();
+            Check(!File.Exists(markerPath), "Fixture ran before ownership handoff.");
+            var outcome = slot.RegisterAndActivate(generation, session, () =>
+            {
+                Check(slot.Occupied && slot.Current(generation) is null, "Resume before handoff.");
+                Check(outer.ContainsFixtureRoot(binding.Identity, retained) &&
+                    inner.ContainsFixtureRoot(binding.Identity, retained), "Prepared pair changed.");
+                bool wrongRootRefused = false;
+                try { candidate.RequireRetainedPreparedRoot(owner.SafeHandle); }
+                catch (UnauthorizedAccessException) { wrongRootRefused = true; }
+                Check(wrongRootRefused && candidate.IsAlive && !File.Exists(markerPath),
+                    "Wrong retained root accepted or handles lost.");
+                candidate.ResumeRetainedRoot(retained);
+                bool repeatedResumeRefused = false;
+                try { candidate.ResumeRetainedRoot(retained); }
+                catch (UnauthorizedAccessException) { repeatedResumeRefused = true; }
+                Check(repeatedResumeRefused, "Retained root resumed twice.");
+                Check(SpinWait.SpinUntil(() => File.Exists(markerPath), TimeSpan.FromSeconds(10)),
+                    "Handoff fixture did not start.");
+                if (failAfterResume) throw new UnauthorizedAccessException("Synthetic lost resume confirmation.");
+            }, out var failure);
+            Check(failAfterResume
+                ? outcome == CefDiagnosticActivationOutcome.Retired && failure is UnauthorizedAccessException &&
+                    slot.CleanupPending && slot.Current(generation) is null
+                : outcome == CefDiagnosticActivationOutcome.Activated && failure is null &&
+                    slot.Current(generation) == session, "Handoff result mismatch.");
+            Check(!slot.TryRegister(new object(), session), "Occupied handoff replaced.");
+            slot.Retire();
+            Check(slot.TryReleaseRetired(5000) && !slot.Occupied &&
+                candidate.WaitForExit(0) && outer.HasNoActiveProcesses() && inner.HasNoActiveProcesses(),
+                "Handoff cleanup did not verify all exits.");
+            File.Delete(markerPath);
+        }
+    }
+    Console.WriteLine("PASS: actual synthetic atomic Job pair handoff and ambiguous resume drain");
+    // Explicit VM test, never silently claim positive user-token creation
+    // on an elevated CI account. The runner must have the required OS rights.
+    if (Environment.GetEnvironmentVariable("VEIL_TEST_STANDARD_USER_CREATION") == "1")
+    {
+        using var owner = Process.GetCurrentProcess();
+        var ownerIdentity = Native.ObserveProcess(owner.SafeHandle);
+        using var lease = CefProcessTokenObserver.LaunchTokenLease.Acquire(owner.SafeHandle, ownerIdentity);
+        using var outer = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var inner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var candidate = outer.CreateAtomicUserPairFixture(inner, lease, image, environment);
+        var binding = Native.DuplicateNominatedChild(ownerIdentity, owner.SafeHandle, new IntPtr(candidate.NominatedHandle));
+        using var retained = binding.Handle;
+        Check(candidate.IsAlive && !File.Exists(markerPath), "User fixture executed before verification.");
+        outer.BindSingleCandidate(ownerIdentity, owner.SafeHandle, binding.Identity, retained);
+        inner.BindSingleCandidate(ownerIdentity, owner.SafeHandle, binding.Identity, retained);
+        outer.RequirePrivateNestedBinding(inner, ownerIdentity, owner.SafeHandle, binding.Identity, retained);
+        candidate.ResumeAfterVerification(() =>
+        {
+            lease.RequireFixtureRoot(retained, binding.Identity);
+            return outer.ContainsFixtureRoot(binding.Identity, retained) &&
+                inner.ContainsFixtureRoot(binding.Identity, retained);
+        });
+        Check(SpinWait.SpinUntil(() => File.Exists(markerPath), TimeSpan.FromSeconds(10)),
+            "User fixture did not execute.");
+        Check(outer.TerminateAndVerifyPrivateDrain(inner, retained, 5000), "User fixture did not drain.");
+        File.Delete(markerPath);
+        Console.WriteLine("PASS: explicit standard-user atomic creation fixture");
+    }
+    else Console.WriteLine("SKIP: positive user-token process creation requires explicitly configured Windows VM");
     // Actual nested-job integration: desktop atomically creates a suspended
     // child, then broker retains a second job without exporting its handle.
     // Test both independent containment owners; no CEF or BitLocker.
@@ -121,6 +416,19 @@ try
             brokerJob.AssignVerifiedCandidate(ownerIdentity, owner.SafeHandle, nomination.Identity, observed);
             Check(brokerJob.ContainsVerifiedCandidate(nomination.Identity, observed) &&
                 !File.Exists(markerPath), "Broker did not bind suspended candidate.");
+            brokerJob.RequireInitialNestedBinding(candidate.FixtureJobHandle,
+                ownerIdentity, owner.SafeHandle, nomination.Identity, observed);
+            void RefuseInitialBinding(Action action)
+            {
+                try { action(); }
+                catch (UnauthorizedAccessException) { return; }
+                throw new InvalidOperationException("Invalid initial nested binding accepted.");
+            }
+            RefuseInitialBinding(() => brokerJob.RequireInitialNestedBinding(candidate.FixtureJobHandle,
+                ownerIdentity, owner.SafeHandle, nomination.Identity, owner.SafeHandle));
+            RefuseInitialBinding(() => brokerJob.RequireInitialNestedBinding(candidate.FixtureJobHandle,
+                ownerIdentity with { CreatedFileTime = ownerIdentity.CreatedFileTime + 1 },
+                owner.SafeHandle, nomination.Identity, observed));
             var nested = brokerJob.ObserveNestedRetainedMembers(candidate.FixtureJobHandle,
                 [(nomination.Identity, observed)]);
             Check(nested.Length == 1 && nested[0] == nomination.Identity,
@@ -134,6 +442,8 @@ try
                     [(nomination.Identity, observed)]); }
                 catch (UnauthorizedAccessException) { rejected = true; }
                 Check(rejected, "Unrelated Job with the same count accepted.");
+                RefuseInitialBinding(() => brokerJob.RequireInitialNestedBinding(unrelated.FixtureJobHandle,
+                    ownerIdentity, owner.SafeHandle, nomination.Identity, observed));
             }
             candidate.ResumeAfterVerification(() => brokerJob.ContainsVerifiedCandidate(nomination.Identity, observed));
             Check(SpinWait.SpinUntil(() => File.Exists(markerPath), TimeSpan.FromSeconds(10)),
@@ -152,22 +462,57 @@ try
     using (var owner = Process.GetCurrentProcess())
     {
         var identity = Native.ObserveProcess(owner.SafeHandle);
-        foreach (int mode in new[] { 0, 1, 2, 3, 4 })
+        foreach (int mode in new[] { 0, 1, 2, 3, 4, 5, 6 })
         {
-            using var candidate = CefContainedProcess.CreateSuspended(image, environment);
             using var brokerJob = mode == 0 ? CefBrokerOwnedJob.CreateDisabledCandidate() :
                 CefBrokerOwnedJob.CreateMultiprocessFixture();
+            using var privatePeer = mode is 5 or 6 ? CefBrokerOwnedJob.CreateMultiprocessFixture() : null;
+            if (mode == 6)
+            {
+                bool duplicateRefused = false;
+                try { using var invalid = brokerJob.CreateAtomicPairFixture(brokerJob, image, environment); }
+                catch (UnauthorizedAccessException) { duplicateRefused = true; }
+                Check(duplicateRefused && !File.Exists(markerPath), "Duplicate atomic Jobs accepted.");
+            }
+            using var candidate = mode == 6
+                ? brokerJob.CreateAtomicPairFixture(privatePeer!, image, environment)
+                : CefContainedProcess.CreateSuspended(image, environment);
             var binding = Native.DuplicateNominatedChild(identity, owner.SafeHandle,
                 new IntPtr(candidate.NominatedHandle));
             using var retained = binding.Handle;
             using var rootObserver = Process.GetProcessById(checked((int)binding.Identity.ProcessId));
             _ = rootObserver.SafeHandle;
-            brokerJob.AssignVerifiedCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+            if (mode == 6)
+            {
+                Check(!File.Exists(markerPath) && candidate.IsAlive && candidate.ImageLoadMitigationsActive,
+                    "Atomic pair was not suspended with mitigations.");
+                brokerJob.BindSingleCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+                privatePeer!.BindSingleCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+                Check(brokerJob.ContainsFixtureRoot(binding.Identity, retained) &&
+                    privatePeer.ContainsFixtureRoot(binding.Identity, retained),
+                    "Creation-time Job pair did not retain the original root.");
+                bool reuseRefused = false;
+                try { using var invalid = brokerJob.CreateAtomicPairFixture(privatePeer, image, environment); }
+                catch (UnauthorizedAccessException) { reuseRefused = true; }
+                Check(reuseRefused && !File.Exists(markerPath), "Atomic pair reused before resume.");
+            }
+            else
+            {
+                brokerJob.AssignVerifiedCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+                privatePeer?.AssignVerifiedCandidate(identity, owner.SafeHandle, binding.Identity, retained);
+            }
+            // Mode 6 adds both private Jobs at CreateProcess time; mode 5
+            // retains the previous post-creation assignment fixture.
+            if (privatePeer is not null)
+                brokerJob.RequirePrivateNestedBinding(privatePeer, identity, owner.SafeHandle, binding.Identity, retained);
+            brokerJob.RequireInitialNestedBinding(candidate.FixtureJobHandle,
+                identity, owner.SafeHandle, binding.Identity, retained);
             Check(brokerJob.ContainsVerifiedCandidate(binding.Identity, retained) == (mode == 0),
                 "Fixture job was mistaken for disabled preflight admission.");
             candidate.ResumeAfterVerification(() => mode == 0
                 ? brokerJob.ContainsVerifiedCandidate(binding.Identity, retained)
-                : brokerJob.ContainsFixtureRoot(binding.Identity, retained));
+                : brokerJob.ContainsFixtureRoot(binding.Identity, retained) &&
+                    (privatePeer is null || privatePeer.ContainsFixtureRoot(binding.Identity, retained)));
             Check(SpinWait.SpinUntil(() => File.Exists(markerPath) &&
                 new FileInfo(markerPath).Length > 0, TimeSpan.FromSeconds(15)), "Missing synthetic spawn result.");
             // The root is alive and writes the result only after observing
@@ -208,6 +553,8 @@ try
                     catch (UnauthorizedAccessException) { return; }
                     throw new InvalidOperationException("Invalid retained job observation accepted.");
                 }
+                RefuseObservation(() => brokerJob.RequireInitialNestedBinding(candidate.FixtureJobHandle,
+                    identity, owner.SafeHandle, binding.Identity, retained));
                 RefuseObservation(() => brokerJob.ObserveRetainedMembers([(binding.Identity, retained)]));
                 RefuseObservation(() => brokerJob.ObserveRetainedMembers([
                     (binding.Identity, retained), (binding.Identity, retained)]));
@@ -222,6 +569,46 @@ try
                 var nestedSnapshot = brokerJob.ObserveNestedRetainedMembers(candidate.FixtureJobHandle,
                     [(binding.Identity, retained), (descendantIdentity, descendantHandle)]);
                 Check(nestedSnapshot.SequenceEqual(snapshot), "Nested Job snapshot differs.");
+                int diagnosticCalls = 0;
+                var diagnosticPids = brokerJob.ObserveNestedRetainedDiagnostics(candidate.FixtureJobHandle,
+                    [(binding.Identity, retained), (descendantIdentity, descendantHandle)],
+                    (expected, handle) =>
+                    {
+                        Check(Native.ObserveProcess(handle) == expected, "Diagnostic got wrong retained object.");
+                        diagnosticCalls++;
+                        return expected.ProcessId;
+                    });
+                Check(diagnosticCalls == 2 && diagnosticPids.SequenceEqual(snapshot.Select(item => item.ProcessId)),
+                    "Nested diagnostics did not cover both original members.");
+                RefuseObservation(() => brokerJob.ObserveNestedRetainedDiagnostics(candidate.FixtureJobHandle,
+                    [(binding.Identity, retained)],
+                    (expected, _) => { diagnosticCalls++; return expected.ProcessId; }));
+                Check(diagnosticCalls == 2, "Incomplete membership reached diagnostic callback.");
+                var openedByCollector = new List<Microsoft.Win32.SafeHandles.SafeProcessHandle>();
+                var collected = brokerJob.ObserveCollectedNestedDiagnostics(candidate.FixtureJobHandle,
+                    binding.Identity, retained, (expected, handle) =>
+                    {
+                        Check(Native.ObserveProcess(handle) == expected, "Collected handle identity mismatch.");
+                        Check(Native.SameLiveProcess(handle, expected == binding.Identity ? retained : descendantHandle),
+                            "Collected handle was not the original member object.");
+                        openedByCollector.Add(handle);
+                        return expected.ProcessId;
+                    });
+                Check(collected.OrderBy(pid => pid).SequenceEqual(snapshot.Select(item => item.ProcessId).OrderBy(pid => pid)),
+                    "Collector did not enumerate the complete nested membership.");
+                Check(openedByCollector.Count == 2 && openedByCollector.All(handle => handle.IsClosed) &&
+                    Native.IsRunning(retained) && Native.IsRunning(descendantHandle),
+                    "Collection did not release only its own handles.");
+                RefuseObservation(() => brokerJob.ObserveCollectedNestedDiagnostics(candidate.FixtureJobHandle,
+                    binding.Identity, descendantHandle, (expected, _) => expected.ProcessId));
+                RefuseObservation(() => brokerJob.ObserveCollectedNestedDiagnostics(candidate.FixtureJobHandle,
+                    binding.Identity with { CreatedFileTime = binding.Identity.CreatedFileTime + 1 },
+                    retained, (expected, _) => expected.ProcessId));
+                using (var unrelated = CefContainedProcess.CreateSuspended(image, environment))
+                {
+                    RefuseObservation(() => brokerJob.ObserveCollectedNestedDiagnostics(unrelated.FixtureJobHandle,
+                        binding.Identity, retained, (expected, _) => expected.ProcessId));
+                }
                 RefuseObservation(() => brokerJob.ObserveNestedRetainedMembers(candidate.FixtureJobHandle,
                     [(binding.Identity, retained)]));
                 RefuseObservation(() => brokerJob.ObserveSameJobFixture(
@@ -241,8 +628,68 @@ try
                 {
                     case 1: brokerJob.Dispose(); break;
                     case 2: candidate.Dispose(); break;
-                    case 3: Check(brokerJob.TerminateAndDrain(5000), "Broker fixture termination did not drain."); break;
+                    case 3:
+                        // Force both members to exit DURING the diagnostic.
+                        // No result may escape the post-observation checks.
+                        var failedCollectionHandles = new List<Microsoft.Win32.SafeHandles.SafeProcessHandle>();
+                        RefuseObservation(() => brokerJob.ObserveCollectedNestedDiagnostics(candidate.FixtureJobHandle,
+                            binding.Identity, retained, (expected, handle) =>
+                            {
+                                failedCollectionHandles.Add(handle);
+                                Check(brokerJob.TerminateAndDrain(5000), "Broker fixture termination did not drain.");
+                                // Zero active accounting is not the same as a signaled
+                                // process object. Force both exits to be observable
+                                // before allowing the diagnostic to advance.
+                                Check(rootObserver.WaitForExit(5000), "Root did not signal during diagnostic.");
+                                Check(descendant.WaitForExit(5000), "Descendant did not signal during diagnostic.");
+                                return expected.ProcessId;
+                            }));
+                        Check(failedCollectionHandles.Count == 1,
+                            "Diagnostic did not stop after both retained members exited.");
+                        Check(failedCollectionHandles.All(handle => handle.IsClosed),
+                            "Failed collection leaked its observed process handle.");
+                        break;
                     case 4: candidate.TerminateAndDrain(5000); break;
+                    case 5:
+                    case 6:
+                        if (privatePeer is null) throw new InvalidOperationException("Missing private peer.");
+                        var privateMembers = brokerJob.ObservePrivateNestedDiagnostics(privatePeer,
+                            binding.Identity, retained, (expected, handle) =>
+                            {
+                                Check(Native.ObserveProcess(handle) == expected, "Private diagnostic identity mismatch.");
+                                return expected.ProcessId;
+                            });
+                        Check(privateMembers.SequenceEqual(snapshot.Select(item => item.ProcessId).Order()),
+                            "Private Job pair did not observe both members.");
+                        RefuseObservation(() => brokerJob.RequirePrivateNestedBinding(privatePeer,
+                            identity, owner.SafeHandle, binding.Identity, retained));
+                        RefuseObservation(() => brokerJob.ObservePrivateNestedDiagnostics(brokerJob,
+                            binding.Identity, retained, (expected, _) => expected.ProcessId));
+                        RefuseObservation(() => brokerJob.ObservePrivateNestedDiagnostics(privatePeer,
+                            binding.Identity, rootObserver.SafeHandle, (expected, _) => expected.ProcessId));
+                        RefuseObservation(() => brokerJob.TerminateAndVerifyPrivateDrain(privatePeer, owner.SafeHandle, 0));
+                        using (var substitute = CefBrokerOwnedJob.CreateMultiprocessFixture())
+                        {
+                            RefuseObservation(() => brokerJob.TerminateAndVerifyPrivateDrain(substitute, retained, 0));
+                        }
+                        Check(!rootObserver.HasExited && !descendant.HasExited, "Rejected private drain stopped members.");
+                        Check(brokerJob.TerminateAndVerifyPrivateDrain(privatePeer, retained, 5000),
+                            "Private Job pair did not drain.");
+                        Check(brokerJob.TerminateAndVerifyPrivateDrain(privatePeer, retained, 5000),
+                            "Private Job pair did not verify repeated drain.");
+                        Check(brokerJob.TerminateAndVerifyNestedDrain(candidate.FixtureJobHandle, retained, 5000),
+                            "Nested drain did not verify both jobs and retained root exit.");
+                        Check(brokerJob.TerminateAndVerifyNestedDrain(candidate.FixtureJobHandle, retained, 5000),
+                            "Repeated nested drain did not verify.");
+                        Check(!brokerJob.TerminateAndVerifyNestedDrain(candidate.FixtureJobHandle, owner.SafeHandle, 0),
+                            "Live unrelated owner was accepted as exited root.");
+                        using (var unrelated = CefContainedProcess.CreateSuspended(image, environment))
+                        {
+                            Check(!brokerJob.TerminateAndVerifyNestedDrain(unrelated.FixtureJobHandle, retained, 0),
+                                "Nonempty unrelated desktop job was accepted.");
+                            Check(unrelated.IsAlive, "Drain terminated an unrelated desktop job.");
+                        }
+                        break;
                 }
                 Check(descendant.WaitForExit(10000), $"Descendant survived fixture cleanup (mode {mode}).");
                 Check(rootObserver.WaitForExit(10000), $"Root survived fixture cleanup (mode {mode}).");
@@ -398,3 +845,28 @@ finally { Directory.Delete(work, recursive: true); }
 
 [System.Runtime.InteropServices.DllImport("kernel32.dll")]
 static extern int GetProcessId(IntPtr process);
+
+
+// Fixture wrapper borrows handles from the surrounding using scope; the slot
+// controls retirement/drain, while the fixture scope disposes after exit proof.
+// This does not claim production resource ownership transfer or CEF admission.
+internal sealed class HandoffFixtureLifetime(CefContainedProcess child,
+    CefBrokerOwnedJob outer, CefBrokerOwnedJob inner,
+    Microsoft.Win32.SafeHandles.SafeProcessHandle root) : ICefDiagnosticLifetime
+{
+    private bool retired;
+    public void Revoke() => retired = true;
+    public bool RevokeAndRelease(int milliseconds)
+    {
+        if (!retired) throw new InvalidOperationException("Fixture not retired.");
+        return outer.TerminateAndVerifyPrivateDrain(inner, root, milliseconds) &&
+            child.WaitForNaturalJobExit(milliseconds);
+    }
+}
+
+// The new slot owner delegates cleanup to the original custody owner.
+internal sealed class BorrowingFixtureSuccessor(CefPreparedCreationLifetime owner) : ICefDiagnosticLifetime
+{
+    public void Revoke() => owner.Revoke();
+    public bool RevokeAndRelease(int milliseconds) => owner.RevokeAndRelease(milliseconds);
+}

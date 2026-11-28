@@ -5,11 +5,20 @@
     <PlatformTarget>x64</PlatformTarget>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <DefineConstants>$(DefineConstants);VEIL_CEF_PROFILE_ACCESS_TEST</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/Native.cs" Link="Native.cs" />
     <Compile Include="../../../apps/shared/AdminOnlyFile.cs" Link="AdminOnlyFile.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSystemModuleVerifier.cs" Link="CefSystemModuleVerifier.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSystemSignatureTrust.cs" Link="CefSystemSignatureTrust.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSignedSystemModuleBaseline.cs" Link="CefSignedSystemModuleBaseline.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSystemBaselineHostObserver.cs" Link="CefSystemBaselineHostObserver.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSystemBaselineTrustState.cs" Link="CefSystemBaselineTrustState.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSystemBaselineTrustUpdate.cs" Link="CefSystemBaselineTrustUpdate.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSystemBaselineWriterLock.cs" Link="CefSystemBaselineWriterLock.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefPinnedImage.cs" Link="CefPinnedImage.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefImageDigest.cs" Link="CefImageDigest.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs" Link="CefProcessTokenObserver.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs" Link="CefSessionObservationPolicy.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefRoleTokenPolicy.cs" Link="CefRoleTokenPolicy.cs" />
@@ -18,6 +27,11 @@
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/ClientIdentity.cs" Link="ClientIdentity.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/Protocol.cs" Link="Protocol.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/BackendStatus.cs" Link="BackendStatus.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefProtectedDirectoryLease.cs" Link="CefProtectedDirectoryLease.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefProtectedProfileLease.cs" Link="CefProtectedProfileLease.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefRegisteredProfileLease.cs" Link="CefRegisteredProfileLease.cs" />
+    <Compile Include="../../../apps/desktop/Engine/CefProfileLayout.cs" Link="CefProfileLayout.cs" />
+    <Compile Include="../../../apps/desktop/Engine/CefChildEnvironmentPlan.cs" Link="CefChildEnvironmentPlan.cs" />
     <Compile Include="../../../apps/desktop/Engine/CefStageWire.cs" Link="CefStageWire.cs" />
   </ItemGroup>
 </Project>

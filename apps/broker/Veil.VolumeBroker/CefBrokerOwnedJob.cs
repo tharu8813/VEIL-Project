@@ -14,6 +14,10 @@ internal sealed class CefBrokerOwnedJob : IDisposable
     private readonly SafeFileHandle job;
     private readonly uint activeLimit;
     private bool assignmentIssued;
+    private bool assignmentExported;
+    private CefBrokerOwnedJob? privatePeer;
+    private SafeProcessHandle? privateRoot;
+    private ClientIdentity? privateRootIdentity;
     private bool bound;
     private bool disposed;
 
@@ -25,10 +29,94 @@ internal sealed class CefBrokerOwnedJob : IDisposable
 
     internal static CefBrokerOwnedJob CreateDisabledCandidate() => Create(1);
 
+#if VEIL_CEF_BROKER
+    // The internal preparation path remains restricted to single-root
+    // diagnostics; multiprocess product limits require separate approval.
+    internal void CreateRetainedDiagnosticPair(CefBrokerOwnedJob peer,
+        CefProcessTokenObserver.LaunchTokenLease lease, string image,
+        IReadOnlyDictionary<string, string?> environment,
+        Veil.Desktop.CefContainedProcess.CreationCustody custody)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(custody);
+        if (ReferenceEquals(this, peer) || disposed || peer.disposed ||
+            activeLimit != 1 || peer.activeLimit != 1 ||
+            assignmentIssued || peer.assignmentIssued || bound || peer.bound ||
+            assignmentExported || peer.assignmentExported || CompareJobObjects(job, peer.job) ||
+            Accounting().TotalProcesses != 0 || peer.Accounting().TotalProcesses != 0)
+            throw new UnauthorizedAccessException("CEF diagnostic creation Jobs must be fresh and private.");
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peer.job, peer.activeLimit);
+        lease.RequireCurrent();
+        assignmentIssued = peer.assignmentIssued = true;
+        lease.CreateRetainedDiagnosticRoot(image, environment, job, peer.job, custody);
+    }
+#endif
+
 #if VEIL_CEF_CONTAINMENT_TEST
     // Linked into the isolated test app only. No IPC, product option or
     // production build can select this two-process limit.
     internal static CefBrokerOwnedJob CreateMultiprocessFixture() => Create(2);
+
+    // Same-user synthetic apphost only. Both privately created broker Jobs
+    // enter the creation attribute before the root thread can execute.
+    // No handle export, IPC, elevated-token launch or product call exists.
+    internal Veil.Desktop.CefContainedProcess CreateAtomicPairFixture(CefBrokerOwnedJob peer,
+        string image, IReadOnlyDictionary<string, string?> environment)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        if (ReferenceEquals(this, peer) || disposed || peer.disposed ||
+            activeLimit != 2 || peer.activeLimit != 2 ||
+            assignmentIssued || peer.assignmentIssued || bound || peer.bound ||
+            CompareJobObjects(job, peer.job) ||
+            Accounting().TotalProcesses != 0 || peer.Accounting().TotalProcesses != 0)
+            throw new UnauthorizedAccessException("Atomic fixture Jobs must be fresh and distinct.");
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peer.job, peer.activeLimit);
+        // Mark both consumed even if creation fails; no alternate assignment
+        // or retry with the same objects. The caller retains both Jobs.
+        assignmentIssued = peer.assignmentIssued = true;
+        return Veil.Desktop.CefContainedProcess.CreateSuspendedWithFixtureJobs(image, environment, job, peer.job);
+    }
+
+    internal void CreateAtomicRetainedPairFixture(CefBrokerOwnedJob peer,
+        string image, IReadOnlyDictionary<string, string?> environment,
+        Veil.Desktop.CefContainedProcess.CreationCustody custody, bool injectFailure,
+        bool injectAllocationFailure = false)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        ArgumentNullException.ThrowIfNull(custody);
+        if (ReferenceEquals(this, peer) || disposed || peer.disposed ||
+            activeLimit != 2 || peer.activeLimit != 2 ||
+            assignmentIssued || peer.assignmentIssued || bound || peer.bound ||
+            CompareJobObjects(job, peer.job) ||
+            Accounting().TotalProcesses != 0 || peer.Accounting().TotalProcesses != 0)
+            throw new UnauthorizedAccessException("Retained fixture Jobs must be fresh and distinct.");
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peer.job, peer.activeLimit);
+        assignmentIssued = peer.assignmentIssued = true;
+        Veil.Desktop.CefContainedProcess.CreateRetainedFixture(image, environment, job, peer.job,
+            custody, injectFailure, injectAllocationFailure);
+    }
+
+    internal Veil.Desktop.CefContainedProcess CreateAtomicUserPairFixture(CefBrokerOwnedJob peer,
+        CefProcessTokenObserver.LaunchTokenLease lease, string image, IReadOnlyDictionary<string, string?> environment)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(peer);
+        if (ReferenceEquals(this, peer) || disposed || peer.disposed ||
+            activeLimit != 2 || peer.activeLimit != 2 ||
+            assignmentIssued || peer.assignmentIssued || bound || peer.bound ||
+            CompareJobObjects(job, peer.job) ||
+            Accounting().TotalProcesses != 0 || peer.Accounting().TotalProcesses != 0)
+            throw new UnauthorizedAccessException("Atomic user fixture Jobs must be fresh and distinct.");
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peer.job, peer.activeLimit);
+        lease.RequireCurrent();
+        assignmentIssued = peer.assignmentIssued = true;
+        return lease.CreateUserFixture(image, environment, job, peer.job);
+    }
 
     internal ClientIdentity[] ObserveSameJobFixture(
         IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members) =>
@@ -113,6 +201,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         if (assignmentIssued || Accounting().TotalProcesses != 0)
             throw new InvalidOperationException("CEF job assignment already issued.");
         assignmentIssued = true; // Never retry even if the reply is ambiguous.
+        assignmentExported = true; // Even a failed duplication disqualifies private ownership.
         return Native.DuplicateCefJobAssignment(job, owner, observedOwner);
     }
 
@@ -160,6 +249,172 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         return state.TotalProcesses == 1 && state.ActiveProcesses == 1;
     }
 
+    // Production-shaped diagnostics accept only another privately created
+    // broker Job object, never a caller-supplied native handle. The original
+    // desktop containment remains separate and is not attested by this pair.
+    private SafeFileHandle RequirePrivatePeer(CefBrokerOwnedJob peer)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(peer);
+        if (ReferenceEquals(this, peer) || peer.disposed || !bound || !peer.bound ||
+            assignmentExported || peer.assignmentExported || activeLimit != peer.activeLimit ||
+            CompareJobObjects(job, peer.job))
+            throw new UnauthorizedAccessException("CEF private Job pair refused.");
+        return peer.job;
+    }
+
+    internal void RequirePrivateNestedBinding(CefBrokerOwnedJob peer,
+        ClientIdentity owner, SafeProcessHandle ownerHandle,
+        ClientIdentity root, SafeProcessHandle rootHandle)
+    {
+        var peerHandle = RequirePrivatePeer(peer);
+        if (privatePeer is not null || peer.privatePeer is not null)
+            throw new UnauthorizedAccessException("CEF private Job pair already bound.");
+        RequireContainmentLimits(peerHandle, peer.activeLimit);
+        RequireInitialNestedBinding(peerHandle, owner, ownerHandle, root, rootHandle);
+        RequireContainmentLimits(peerHandle, peer.activeLimit);
+        // Bind once to the exact retained objects. Neither a different peer
+        // nor a reused PID can subsequently authorize a diagnostic or drain.
+        privatePeer = peer;
+        peer.privatePeer = this;
+        privateRoot = peer.privateRoot = rootHandle;
+        privateRootIdentity = peer.privateRootIdentity = root;
+    }
+
+    // Called while the original creation custody still owns the exact
+    // root handle. No new nomination, PID reopening or handle export.
+    // If either binding fails the pair is consumed, not reusable.
+    internal void BindPreparedPrivatePair(CefBrokerOwnedJob peer,
+        ClientIdentity owner, SafeProcessHandle ownerHandle,
+        ClientIdentity root, SafeProcessHandle rootHandle)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        if (ReferenceEquals(this, peer) || disposed || peer.disposed ||
+            !assignmentIssued || !peer.assignmentIssued ||
+            assignmentExported || peer.assignmentExported || bound || peer.bound ||
+            privatePeer is not null || peer.privatePeer is not null ||
+            activeLimit != peer.activeLimit || CompareJobObjects(job, peer.job))
+            throw new UnauthorizedAccessException("CEF prepared Job pair unavailable.");
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peer.job, peer.activeLimit);
+        BindSingleCandidate(owner, ownerHandle, root, rootHandle);
+        peer.BindSingleCandidate(owner, ownerHandle, root, rootHandle);
+        RequirePrivateNestedBinding(peer, owner, ownerHandle, root, rootHandle);
+        RequirePreparedPrivateRoot(peer, owner, ownerHandle, root, rootHandle);
+    }
+
+    // A later session constructor may validate an already bound pair, but
+    // cannot rebind it to a different peer, identity or handle wrapper.
+    // The existing unbound-private-pair path still requires fresh binding.
+    internal void RequireOrBindPreparedPrivatePair(CefBrokerOwnedJob peer,
+        ClientIdentity owner, SafeProcessHandle ownerHandle,
+        ClientIdentity root, SafeProcessHandle rootHandle)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        if (privatePeer is not null || peer.privatePeer is not null)
+            RequirePreparedPrivateRoot(peer, owner, ownerHandle, root, rootHandle);
+        else
+            RequirePrivateNestedBinding(peer, owner, ownerHandle, root, rootHandle);
+    }
+
+    private SafeFileHandle RequireBoundPrivatePeer(CefBrokerOwnedJob peer, SafeProcessHandle rootHandle)
+    {
+        var peerHandle = RequirePrivatePeer(peer);
+        if (!ReferenceEquals(privatePeer, peer) || !ReferenceEquals(peer.privatePeer, this) ||
+            !ReferenceEquals(privateRoot, rootHandle) || !ReferenceEquals(peer.privateRoot, rootHandle))
+            throw new UnauthorizedAccessException("CEF private Job lifetime binding mismatch.");
+        return peerHandle;
+    }
+
+    // Recheck the exact bound root-only Job pair just before resume.
+    // This does not attest thread suspension or a sandbox.
+    internal void RequirePreparedPrivateRoot(CefBrokerOwnedJob peer,
+        ClientIdentity owner, SafeProcessHandle ownerHandle,
+        ClientIdentity root, SafeProcessHandle rootHandle)
+    {
+        var peerHandle = RequireBoundPrivatePeer(peer, rootHandle);
+        if (privateRootIdentity != root)
+            throw new UnauthorizedAccessException("CEF prepared root identity changed.");
+        RequireContainmentLimits(peerHandle, peer.activeLimit);
+        RequireInitialNestedBinding(peerHandle, owner, ownerHandle, root, rootHandle);
+        RequireContainmentLimits(peerHandle, peer.activeLimit);
+    }
+
+    internal T[] ObservePrivateNestedDiagnostics<T>(CefBrokerOwnedJob peer,
+        ClientIdentity root, SafeProcessHandle rootHandle, Func<ClientIdentity, SafeProcessHandle, T> observe)
+    {
+        var peerHandle = RequireBoundPrivatePeer(peer, rootHandle);
+        if (privateRootIdentity != root)
+            throw new UnauthorizedAccessException("CEF private Job root identity mismatch.");
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peerHandle, peer.activeLimit);
+        var result = ObserveCollectedNestedDiagnostics(peerHandle, root, rootHandle, observe);
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peerHandle, peer.activeLimit);
+        return result;
+    }
+
+    internal bool TerminateAndVerifyPrivateDrain(CefBrokerOwnedJob peer,
+        SafeProcessHandle rootHandle, int milliseconds) =>
+        TerminateAndVerifyNestedDrain(RequireBoundPrivatePeer(peer, rootHandle), rootHandle, milliseconds);
+
+    // Validate the initial containment pair before ownership is transferred.
+    // The desktop Job must already come from a separately trusted source.
+    // Membership and limits alone cannot establish who created that Job.
+    internal void RequireInitialNestedBinding(SafeFileHandle desktopJob,
+        ClientIdentity owner, SafeProcessHandle ownerHandle,
+        ClientIdentity root, SafeProcessHandle rootHandle)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(desktopJob);
+        if (!bound || desktopJob.IsClosed || desktopJob.IsInvalid ||
+            CompareJobObjects(job, desktopJob) || owner.ProcessId == root.ProcessId ||
+            owner.SessionId != root.SessionId ||
+            !string.Equals(owner.UserSid, root.UserSid, StringComparison.OrdinalIgnoreCase) ||
+            root.CreatedFileTime < owner.CreatedFileTime ||
+            ObserveLiveMember(ownerHandle) != owner || ObserveLiveMember(rootHandle) != root)
+            throw new UnauthorizedAccessException("CEF initial nested binding identity refused.");
+
+        void RequireInitialState()
+        {
+            if (!IsProcessInJob(ownerHandle, job, out bool inBroker) || inBroker ||
+                !IsProcessInJob(ownerHandle, desktopJob, out bool inDesktop) || inDesktop)
+                throw new UnauthorizedAccessException("CEF owner is not outside both jobs.");
+            var brokerState = Accounting();
+            var desktopState = Accounting(desktopJob);
+            if (brokerState.ActiveProcesses != 1 || brokerState.TotalProcesses != 1 ||
+                brokerState.TotalTerminatedProcesses != 0 ||
+                desktopState.ActiveProcesses != 1 || desktopState.TotalProcesses != 1 ||
+                desktopState.TotalTerminatedProcesses != 0)
+                throw new UnauthorizedAccessException("CEF initial nested jobs must contain only the original root.");
+            RequireContainmentLimits(job, activeLimit);
+            RequireContainmentLimits(desktopJob, null);
+        }
+
+        RequireInitialState();
+        _ = ObserveNestedRetainedMembers(desktopJob, [(root, rootHandle)]);
+        RequireInitialState();
+        if (ObserveLiveMember(ownerHandle) != owner || ObserveLiveMember(rootHandle) != root)
+            throw new UnauthorizedAccessException("CEF initial nested binding changed.");
+    }
+
+    private static void RequireContainmentLimits(SafeFileHandle observedJob, uint? expectedCap)
+    {
+        if (!QueryJobLimits(observedJob, 9, out var limits,
+            (uint)Marshal.SizeOf<ExtendedLimits>(), IntPtr.Zero))
+            throw new UnauthorizedAccessException("CEF job limits unavailable.", new Win32Exception());
+        const uint killOnClose = 0x00002000, breakaway = 0x00000800 | 0x00001000;
+        uint flags = limits.Basic.Flags;
+        if ((flags & killOnClose) == 0 || (flags & breakaway) != 0 ||
+            (expectedCap is uint cap && ((flags & 0x00000008) == 0 || limits.Basic.ActiveLimit != cap)))
+            throw new UnauthorizedAccessException("CEF job containment limits refused.");
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "QueryInformationJobObject", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryJobLimits(SafeFileHandle job, int infoClass, out ExtendedLimits limits,
+        uint length, IntPtr returned);
+
     // P2-03 observation primitive, not a launch grant. The serialized broker
     // must supply retained process handles obtained from its own observations.
     // This verifies one job only, not the second job, module pins, role
@@ -202,11 +457,21 @@ internal sealed class CefBrokerOwnedJob : IDisposable
     // independently owned desktop Job retained by the serialized observer.
     // Never obtain it from a client message or expose this as launch authority.
     internal ClientIdentity[] ObserveNestedRetainedMembers(SafeFileHandle desktopJob,
-        IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members)
+        IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members) =>
+        ObserveNestedRetainedDiagnostics(desktopJob, members, (identity, _) => identity);
+
+    // Run broker-internal read-only diagnostics inside the SAME two-job
+    // accounting bracket. The caller must serialize and retain both jobs and
+    // the original process handles. Results are observations, not admission.
+    // The callback must not be supplied by a client or publish partial results.
+    internal T[] ObserveNestedRetainedDiagnostics<T>(SafeFileHandle desktopJob,
+        IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members,
+        Func<ClientIdentity, SafeProcessHandle, T> observe)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(desktopJob);
         ArgumentNullException.ThrowIfNull(members);
+        ArgumentNullException.ThrowIfNull(observe);
         if (desktopJob.IsInvalid || desktopJob.IsClosed || CompareJobObjects(job, desktopJob))
             throw new UnauthorizedAccessException("Expected two distinct retained CEF jobs.");
         var retained = members.ToArray();
@@ -214,14 +479,25 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         var desktopBefore = Accounting(desktopJob);
         if (desktopBefore.ActiveProcesses != (uint)retained.Length)
             throw new UnauthorizedAccessException("Incomplete desktop CEF job membership.");
-        var snapshot = ObserveRetainedMembers(retained);
-        foreach (var member in retained)
+        _ = ObserveRetainedMembers(retained);
+        void RequireNestedMembers()
         {
-            CheckRetainedMember(member.Identity, member.Handle);
-            if (!IsProcessInJob(member.Handle, desktopJob, out bool inside) || !inside ||
-                Native.ObserveProcess(member.Handle) != member.Identity)
-                throw new UnauthorizedAccessException("CEF member missing from desktop job.");
+            foreach (var member in retained)
+            {
+                CheckRetainedMember(member.Identity, member.Handle);
+                if (!IsProcessInJob(member.Handle, desktopJob, out bool inside) || !inside ||
+                    ObserveLiveMember(member.Handle) != member.Identity)
+                    throw new UnauthorizedAccessException("CEF member missing from desktop job.");
+            }
         }
+        RequireNestedMembers();
+        var diagnostics = new T[retained.Length];
+        for (int i = 0; i < retained.Length; i++)
+        {
+            CheckRetainedMember(retained[i].Identity, retained[i].Handle);
+            diagnostics[i] = observe(retained[i].Identity, retained[i].Handle);
+        }
+        RequireNestedMembers();
         // Bracket both jobs, including historical counters so equal active
         // counts cannot hide observed member creation/termination churn.
         var desktopAfter = Accounting(desktopJob);
@@ -229,8 +505,112 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         if (!SameMembershipAccounting(desktopBefore, desktopAfter) ||
             !SameMembershipAccounting(brokerBefore, brokerAfter))
             throw new UnauthorizedAccessException("Nested CEF membership changed during observation.");
-        return snapshot;
+        return diagnostics;
     }
+
+    // Collect only from the two trusted Job objects, never client-supplied
+    // PIDs. A PID is a lookup hint; retained live identity, membership and
+    // unchanged accounting/list observations are required before returning.
+    // The original browser root handle remains an independent anchor.
+    internal T[] ObserveCollectedNestedDiagnostics<T>(SafeFileHandle desktopJob,
+        ClientIdentity root, SafeProcessHandle rootHandle,
+        Func<ClientIdentity, SafeProcessHandle, T> observe)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(desktopJob);
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(rootHandle);
+        ArgumentNullException.ThrowIfNull(observe);
+        if (!bound || desktopJob.IsInvalid || desktopJob.IsClosed ||
+            CompareJobObjects(job, desktopJob) || ObserveLiveMember(rootHandle) != root)
+            throw new UnauthorizedAccessException("CEF collection root or jobs unavailable.");
+
+        var brokerBefore = Accounting();
+        var desktopBefore = Accounting(desktopJob);
+        var pids = QueryMemberPids(job, brokerBefore.ActiveProcesses);
+        if (!pids.Contains(root.ProcessId) ||
+            !pids.SequenceEqual(QueryMemberPids(desktopJob, desktopBefore.ActiveProcesses)))
+            throw new UnauthorizedAccessException("CEF job process lists differ.");
+
+        var retained = new List<(ClientIdentity Identity, SafeProcessHandle Handle)>();
+        try
+        {
+            foreach (int pid in pids)
+            {
+                // PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE only.
+                var handle = OpenObservedProcess(0x00101000, false, (uint)pid);
+                try
+                {
+                    if (handle.IsInvalid) throw new Win32Exception();
+                    var identity = ObserveLiveMember(handle);
+                    if (identity.ProcessId != pid || identity.SessionId != root.SessionId ||
+                        !string.Equals(identity.UserSid, root.UserSid, StringComparison.OrdinalIgnoreCase) ||
+                        identity.CreatedFileTime < root.CreatedFileTime ||
+                        !string.Equals(identity.ImagePath, root.ImagePath, StringComparison.OrdinalIgnoreCase) ||
+                        (pid == root.ProcessId && (identity != root || !Native.SameLiveProcess(rootHandle, handle))))
+                        throw new UnauthorizedAccessException("CEF collected member identity mismatch.");
+                    CheckRetainedMember(identity, handle);
+                    retained.Add((identity, handle));
+                }
+                catch { handle.Dispose(); throw; }
+            }
+
+            var result = ObserveNestedRetainedDiagnostics(desktopJob, retained, observe);
+            if (!pids.SequenceEqual(QueryMemberPids(job, brokerBefore.ActiveProcesses)) ||
+                !pids.SequenceEqual(QueryMemberPids(desktopJob, desktopBefore.ActiveProcesses)) ||
+                !SameMembershipAccounting(brokerBefore, Accounting()) ||
+                !SameMembershipAccounting(desktopBefore, Accounting(desktopJob)) ||
+                ObserveLiveMember(rootHandle) != root)
+                throw new UnauthorizedAccessException("CEF membership changed during collection.");
+            foreach (var member in retained)
+                CheckRetainedMember(member.Identity, member.Handle);
+            return result;
+        }
+        finally
+        {
+            foreach (var member in retained) member.Handle.Dispose();
+        }
+    }
+
+    private int[] QueryMemberPids(SafeFileHandle observedJob, uint expected)
+    {
+        if (!Environment.Is64BitProcess || expected == 0 || expected > activeLimit)
+            throw new UnauthorizedAccessException("Invalid CEF collection size.");
+        // JOBOBJECT_BASIC_PROCESS_ID_LIST: two DWORD counts, then ULONG_PTRs.
+        // Fixed capacity follows the existing broker cap; never retry with a
+        // larger buffer or relax the production one-process limit.
+        int bytes = checked(8 + (int)activeLimit * IntPtr.Size);
+        IntPtr buffer = Marshal.AllocHGlobal(bytes);
+        try
+        {
+            if (!QueryJobProcessList(observedJob, 3, buffer, (uint)bytes, IntPtr.Zero))
+                throw new Win32Exception();
+            uint assigned = unchecked((uint)Marshal.ReadInt32(buffer));
+            uint listed = unchecked((uint)Marshal.ReadInt32(buffer, 4));
+            if (assigned != expected || listed != expected)
+                throw new UnauthorizedAccessException("Incomplete CEF job process list.");
+            var result = new int[(int)listed];
+            var seen = new HashSet<int>();
+            for (int i = 0; i < result.Length; i++)
+            {
+                long pid = Marshal.ReadInt64(buffer, 8 + i * IntPtr.Size);
+                if (pid <= 0 || pid > int.MaxValue || !seen.Add((int)pid))
+                    throw new UnauthorizedAccessException("Invalid or duplicate CEF member PID.");
+                result[i] = (int)pid;
+            }
+            Array.Sort(result);
+            return result;
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "QueryInformationJobObject", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryJobProcessList(SafeFileHandle job, int infoClass, IntPtr info, uint length, IntPtr returned);
+
+    [DllImport("kernel32.dll", EntryPoint = "OpenProcess", SetLastError = true)]
+    private static extern SafeProcessHandle OpenObservedProcess(uint access,
+        [MarshalAs(UnmanagedType.Bool)] bool inherit, uint pid);
 
     private static bool SameMembershipAccounting(AccountingInfo before, AccountingInfo after) =>
         before.ActiveProcesses == after.ActiveProcesses && before.TotalProcesses == after.TotalProcesses &&
@@ -242,10 +622,22 @@ internal sealed class CefBrokerOwnedJob : IDisposable
 
     private void CheckRetainedMember(ClientIdentity identity, SafeProcessHandle handle)
     {
-        if (!Native.IsRunning(handle) || Native.ObserveProcess(handle) != identity ||
+        if (!Native.IsRunning(handle) || ObserveLiveMember(handle) != identity ||
             !IsProcessInJob(handle, job, out bool inside) || !inside ||
-            Native.ObserveProcess(handle) != identity)
+            ObserveLiveMember(handle) != identity)
             throw new UnauthorizedAccessException("CEF retained job member did not match.");
+    }
+
+    // The process can enter termination between a successful wait check and
+    // an identity query. Native errors are observation refusals, never proof
+    // that a process exited. Preserve the native exception for diagnostics.
+    private static ClientIdentity ObserveLiveMember(SafeProcessHandle handle)
+    {
+        try { return Native.ObserveProcess(handle); }
+        catch (Win32Exception error)
+        {
+            throw new UnauthorizedAccessException("CEF live member identity could not be verified.", error);
+        }
     }
 
     internal bool HasNoActiveProcesses()
@@ -270,6 +662,42 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         }
         return true;
     }
+
+    // Disconnected drain primitive. Both Job handles must already be
+    // authenticated, distinct and retained for the same session. No client
+    // supplied handles and no volume unlock/relock authority here.
+    internal bool TerminateAndVerifyNestedDrain(SafeFileHandle desktopJob,
+        SafeProcessHandle rootHandle, int milliseconds)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(desktopJob);
+        ArgumentNullException.ThrowIfNull(rootHandle);
+        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        if (!bound || desktopJob.IsInvalid || desktopJob.IsClosed ||
+            rootHandle.IsInvalid || rootHandle.IsClosed || CompareJobObjects(job, desktopJob))
+            return false;
+        // Terminate only the broker-owned Job. A live member outside it
+        // must not be killed by trusting an arbitrary desktop Job handle.
+        var elapsed = Stopwatch.StartNew();
+        if (!TerminateAndDrain(milliseconds)) return false;
+        // Job accounting can reach zero before the retained process object
+        // is signaled. Use only the remaining shared timeout, not a second
+        // full timeout, and never interpret WAIT_FAILED as process exit.
+        int remaining = (int)Math.Max(0L, milliseconds - elapsed.ElapsedMilliseconds);
+        if (WaitForObservedRoot(rootHandle, (uint)remaining) != 0) return false;
+        while (true)
+        {
+            if (Accounting(desktopJob).ActiveProcesses == 0 &&
+                Accounting().ActiveProcesses == 0 && WaitForObservedRoot(rootHandle, 0) == 0)
+                return true;
+            remaining = (int)Math.Max(0L, milliseconds - elapsed.ElapsedMilliseconds);
+            if (remaining == 0) return false;
+            Thread.Sleep(Math.Min(20, remaining));
+        }
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "WaitForSingleObject", SetLastError = true)]
+    private static extern uint WaitForObservedRoot(SafeProcessHandle handle, uint milliseconds);
 
     private AccountingInfo Accounting() => Accounting(job);
 

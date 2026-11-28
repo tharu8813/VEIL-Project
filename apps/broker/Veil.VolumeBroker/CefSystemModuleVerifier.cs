@@ -7,7 +7,7 @@ using Veil.Shared;
 
 namespace Veil.VolumeBroker;
 
-internal sealed record CefSystemModulePin(string Name, long Bytes, string Sha256);
+internal sealed record CefSystemModulePin(string Name, long Bytes, string Sha256, string SignerSha256);
 
 // Provisional direct System32 disk-file verification. The caller must supply
 // an independently authenticated, OS-build-specific baseline, never hashes
@@ -17,13 +17,18 @@ internal sealed class CefSystemModuleVerifier
     private readonly Dictionary<string, CefSystemModulePin> pins = new(StringComparer.OrdinalIgnoreCase);
     private readonly string root = Environment.SystemDirectory;
 
-    internal CefSystemModuleVerifier(IEnumerable<CefSystemModulePin> authenticatedPins)
+    private readonly Action? requireHostCurrent;
+
+    internal CefSystemModuleVerifier(IEnumerable<CefSystemModulePin> authenticatedPins,
+        Action? requireHostCurrent = null)
     {
         ArgumentNullException.ThrowIfNull(authenticatedPins);
+        this.requireHostCurrent = requireHostCurrent;
         foreach (var pin in authenticatedPins)
         {
             if (pin is null || !ValidName(pin.Name) || pin.Bytes <= 0 ||
                 pin.Sha256 is not { Length: 64 } || !pin.Sha256.All(Uri.IsHexDigit) ||
+                !CefSystemSignatureTrust.ValidSignerPin(pin.SignerSha256) ||
                 !pins.TryAdd(pin.Name, pin) || pins.Count > 1024)
                 throw new ArgumentException("Invalid or duplicate system module pin.");
         }
@@ -36,11 +41,22 @@ internal sealed class CefSystemModuleVerifier
         name.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_') &&
         !name.StartsWith('.') && !name.Contains("..", StringComparison.Ordinal);
 
+    // Broker-bound diagnostics cannot use a verifier constructed from raw
+    // pins with no live host/trust guard. Synthetic raw-pin tests remain
+    // available through RequireModules, not the bound-session path.
+    internal void RequireBoundTrust()
+    {
+        if (requireHostCurrent is null)
+            throw new UnauthorizedAccessException("Live baseline trust guard unavailable.");
+        requireHostCurrent();
+    }
+
     internal void RequireModules(IEnumerable<string> modules)
     {
         ArgumentNullException.ThrowIfNull(modules);
         if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess)
             throw new PlatformNotSupportedException("Expected Windows x64 module verification.");
+        requireHostCurrent?.Invoke();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (string path in modules)
         {
@@ -56,11 +72,12 @@ internal sealed class CefSystemModuleVerifier
                 !CryptographicOperations.FixedTimeEquals(SHA256.HashData(retained), Convert.FromHexString(pin.Sha256)))
                 throw new UnauthorizedAccessException("System module digest mismatch.");
 
-            // Existing offline Authenticode file verification, while holding a
-            // read-only handle denying write/delete. A generic valid signature
-            // is NOT a Microsoft publisher or catalog membership assertion.
-            if (!Native.IsSigned(path))
-                throw new UnauthorizedAccessException("System module signature unavailable or invalid.");
+            // Require offline Authenticode (embedded or SHA-256 catalog member)
+            // plus Microsoft production root policy and the authenticated
+            // leaf certificate pin. No live revocation or provenance claim.
+            retained.Position = 0;
+            if (!CefSystemSignatureTrust.Verify(path, retained.SafeFileHandle, pin.SignerSha256))
+                throw new UnauthorizedAccessException("System module signature or authenticated signer pin mismatch.");
             AdminOnlyFile.RequireProtectedExecutable(path);
             using var again = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             var current = RequireCanonical(again.SafeFileHandle, path);
@@ -68,6 +85,7 @@ internal sealed class CefSystemModuleVerifier
                 original.IndexLow != current.IndexLow || again.Length != pin.Bytes)
                 throw new UnauthorizedAccessException("System module disk object changed.");
         }
+        requireHostCurrent?.Invoke();
     }
 
     private static FileInformation RequireCanonical(SafeFileHandle file, string path)

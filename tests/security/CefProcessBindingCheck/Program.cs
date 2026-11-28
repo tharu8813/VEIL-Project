@@ -3,6 +3,8 @@ using System.Diagnostics;
 using Veil.VolumeBroker;
 using Veil.Desktop;
 using System.Text.Json;
+using System.Security.AccessControl;
+using System.Security.Principal;
 
 if (args is ["--child"] or ["--child", "--type=renderer"])
 {
@@ -10,9 +12,307 @@ if (args is ["--child"] or ["--child", "--type=renderer"])
     return Console.ReadLine() == "exit" ? 0 : 1;
 }
 
+// Isolated process for the cross-process sharing fixture. No real
+// installed profile, broker command or CEF launch is involved.
+if (args is ["--profile-lock-fixture", var lockPath])
+{
+    using var exclusive = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+    Console.WriteLine("ready");
+    return Console.ReadLine() == "exit" ? 0 : 1;
+}
+
 CefRoleTokenPolicyTests.Run();
 CefCommandRoleTests.Run();
 CefSystemModuleVerifierTests.Run();
+
+// Refusal before any file open or process creation. The test is independent
+// of signed installed runtime, elevation or machine trust provisioning.
+foreach (string invalidPath in new[] { "", "relative.exe", @"\\server\share\cef.exe", @"\rooted-not-qualified.exe",
+    Path.Combine(Path.GetTempPath(), "cef.dll") })
+{
+    bool refused = false;
+    try { using var invalid = CefPinnedImage.OpenVerifiedBeforeCreation(invalidPath, new CefImageDigest(new string('0', 64))); }
+    catch (UnauthorizedAccessException) { refused = true; }
+    if (!refused) throw new InvalidOperationException("Invalid pre-creation executable path accepted.");
+}
+Console.WriteLine("PASS: invalid pre-creation executable paths refused");
+
+// Synthetic protection snapshots; never claim that the CI disk is
+// encrypted. Use a deliberately unrelated volume GUID for actual refusal.
+string expectedVolume = @"\\?\Volume{" + Guid.NewGuid().ToString("D") + @"}\";
+var protectedState = new BackendStatus(true, expectedVolume, true, true, true, true);
+CefProtectedDirectoryLease.RequireRegisteredProtection(expectedVolume, protectedState);
+foreach (var bad in new[] { protectedState with { Attached = false },
+    protectedState with { Unlocked = false }, protectedState with { FullyEncrypted = false },
+    protectedState with { ProtectionOn = false }, protectedState with { ProtectorPresent = false },
+    protectedState with { VolumeGuid = @"\\?\Volume{" + Guid.NewGuid().ToString("D") + @"}\" } })
+{
+    bool rejected = false;
+    try { CefProtectedDirectoryLease.RequireRegisteredProtection(expectedVolume, bad); }
+    catch (UnauthorizedAccessException) { rejected = true; }
+    Check(rejected, "Unprotected or unrelated volume snapshot accepted.");
+}
+string directoryFixture = Path.Combine(Path.GetTempPath(), "veil-cef-directory-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(directoryFixture);
+try
+{
+    bool rejected = false;
+    try { using var pin = CefProtectedDirectoryLease.Open(directoryFixture, expectedVolume, () => protectedState); }
+    catch (UnauthorizedAccessException) { rejected = true; }
+    Check(rejected, "Unrelated actual directory volume accepted.");
+}
+finally { Directory.Delete(directoryFixture); }
+Console.WriteLine("PASS: synthetic protection state and actual wrong-volume directory refusal");
+
+// Real filesystem handles, synthetic backend protection status. The
+// actual CI disk is not asserted to be BitLocker protected.
+string profileFixture = Path.Combine(Path.GetTempPath(), "veil-cef-profile-" + Guid.NewGuid().ToString("N"));
+string driveRoot = Path.GetPathRoot(profileFixture)!;
+var volumeBuffer = new System.Text.StringBuilder(64);
+Check(GetVolumeNameForVolumeMountPointW(driveRoot, volumeBuffer, (uint)volumeBuffer.Capacity),
+    "Cannot identify fixture volume.");
+string fixtureVolume = volumeBuffer.ToString();
+var fixtureStatus = new BackendStatus(true, fixtureVolume, true, true, true, true);
+string fixtureWindows = Path.Combine(driveRoot, "veil-synthetic-system-" + Guid.NewGuid().ToString("N"));
+var profileLayout = new CefProfileLayout(profileFixture);
+bool authority = true;
+Directory.CreateDirectory(profileFixture);
+try
+{
+    foreach (string path in profileLayout.Directories) Directory.CreateDirectory(path);
+    using (var profile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        Reject(() => profile.VerifiedExclusiveEnvironment());
+        var plan = profile.VerifiedEnvironment();
+        Check(plan.Count == 7 && plan["TEMP"] == profileLayout.Scratch &&
+            plan[CefChildEnvironmentPlan.RootKey] == profileLayout.EngineRoot &&
+            plan[CefChildEnvironmentPlan.CacheKey] == profileLayout.Cache &&
+            plan[CefChildEnvironmentPlan.LogKey] == profileLayout.LogFile,
+            "Retained profile environment mismatch.");
+        profile.RequireCurrent();
+        authority = false;
+        Reject(() => profile.RequireCurrent());
+        authority = true;
+        Reject(() => profile.RequireCurrent());
+    }
+    using (var profile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        File.WriteAllText(profileLayout.LogFile, "synthetic");
+        Reject(() => profile.VerifiedEnvironment());
+        File.Delete(profileLayout.LogFile);
+        Reject(() => profile.RequireCurrent());
+    }
+    // Existing regular log and nested regular files can be observed
+    // without modifying their data. A new hard link must retire the lease.
+    string nested = Path.Combine(profileLayout.Cache, "nested");
+    Directory.CreateDirectory(nested);
+    string payload = Path.Combine(nested, "data.bin");
+    string alias = Path.Combine(profileLayout.Scratch, "alias.bin");
+    File.WriteAllText(payload, "synthetic-data");
+    File.WriteAllText(profileLayout.LogFile, "synthetic-log");
+    using (var profile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        profile.RequireCurrent();
+        Check(File.ReadAllText(profileLayout.LogFile) == "synthetic-log" &&
+            File.ReadAllText(payload) == "synthetic-data", "Profile inspection modified data.");
+        Check(CreateHardLinkW(alias, payload, IntPtr.Zero), "Cannot create fixture hard link.");
+        Reject(() => profile.RequireCurrent());
+        File.Delete(alias);
+        Reject(() => profile.RequireCurrent());
+    }
+    Check(CreateHardLinkW(alias, profileLayout.LogFile, IntPtr.Zero), "Cannot create fixture log hard link.");
+    Reject(() =>
+    {
+        using var linked = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority);
+    });
+    File.Delete(alias);
+    File.Delete(profileLayout.LogFile);
+    Directory.Delete(nested, recursive: true);
+    // Broker requires an existing regular single-link lock. It must not
+    // manufacture one or defeat a desktop's existing FileShare.None open.
+    string profileLockPath = Path.Combine(profileFixture, "profile.lock");
+    using (var missingLock = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        Reject(() => missingLock.AcquireExclusiveLock());
+        Check(!File.Exists(profileLockPath), "Broker created a missing profile lock.");
+    }
+    File.WriteAllText(profileLockPath, "original-lock");
+    using (var desktopLock = new FileStream(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+    using (var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        Reject(() => competing.AcquireExclusiveLock());
+        desktopLock.Dispose();
+        Reject(() => competing.AcquireExclusiveLock());
+    }
+    using (var owned = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        owned.AcquireExclusiveLock();
+        owned.RequireCurrent();
+        Check(owned.VerifiedExclusiveEnvironment().Count == 7,
+            "Exclusive owner could not obtain protected environment.");
+        using var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority);
+        Reject(() => competing.AcquireExclusiveLock());
+        Reject(() => owned.AcquireExclusiveLock());
+        owned.RequireCurrent();
+    }
+    // Use the actual profile pin as a prerequisite of the shared drain
+    // lifetime. Failed exit proof must not release the exclusive handle.
+    using (var retainedProfile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+    {
+        retainedProfile.AcquireExclusiveLock();
+        var retained = new CefRetainedLifetime(retainedProfile);
+        Check(!retained.TryRelease(() => false), "Unconfirmed drain released the profile.");
+        using (var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority))
+            Reject(() => competing.AcquireExclusiveLock());
+        retainedProfile.RequireCurrent();
+        Check(retained.TryRelease(() => true), "Confirmed synthetic drain did not release profile.");
+        using var next = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority);
+        next.AcquireExclusiveLock();
+        next.RequireCurrent();
+    }
+    Console.WriteLine("PASS: exclusive profile retained until synthetic exit proof");
+    Check(File.ReadAllText(profileLockPath) == "original-lock",
+        "Broker modified the profile lock contents.");
+    // Put the alias outside the CEF subtree so the assertion specifically
+    // exercises the lock-file check, not the earlier subtree refusal.
+    string lockAlias = Path.Combine(profileFixture, "profile-lock-alias");
+    Check(CreateHardLinkW(lockAlias, profileLockPath, IntPtr.Zero), "Cannot create fixture lock hard link.");
+    using (var linkedLock = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority))
+        Reject(() => linkedLock.AcquireExclusiveLock());
+    File.Delete(lockAlias);
+
+    // Real separate process holding the existing lock. A busy attempt
+    // retires permanently; a new lease may acquire only after that owner
+    // exits. This is contention behavior, NOT a gapless transfer protocol.
+    using (var lockOwner = Process.Start(new ProcessStartInfo
+    {
+        FileName = Environment.ProcessPath!,
+        UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true,
+        CreateNoWindow = true, ArgumentList = { "--profile-lock-fixture", profileLockPath },
+    }) ?? throw new InvalidOperationException("Missing profile lock fixture process."))
+    {
+        try
+        {
+            Check(await lockOwner.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)) == "ready",
+                "Profile lock fixture not ready.");
+            using var refused = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+                fixtureWindows, () => fixtureStatus, () => authority);
+            Reject(() => refused.AcquireExclusiveLock());
+            Reject(() => refused.VerifiedExclusiveEnvironment());
+            await lockOwner.StandardInput.WriteLineAsync("exit");
+            Check(lockOwner.WaitForExit(10000) && lockOwner.ExitCode == 0, "Profile lock owner did not exit.");
+            Reject(() => refused.AcquireExclusiveLock());
+            using var fresh = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+                fixtureWindows, () => fixtureStatus, () => authority);
+            fresh.AcquireExclusiveLock();
+            Check(fresh.VerifiedExclusiveEnvironment().Count == 7, "Fresh owner could not acquire released lock.");
+        }
+        finally
+        {
+            if (!lockOwner.HasExited) { lockOwner.Kill(); lockOwner.WaitForExit(10000); }
+        }
+    }
+    // Actual fixture-token access, with no assertion of standard-user
+    // service execution or real BitLocker protection.
+    using (var fixtureUser = WindowsIdentity.GetCurrent())
+    {
+        using (var accessProfile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority))
+        {
+            accessProfile.AcquireExclusiveLock();
+            accessProfile.RequireUserAccess(fixtureUser.AccessToken);
+            if (Environment.GetEnvironmentVariable("VEIL_TEST_STANDARD_USER_PROFILE_ACCESS") == "1")
+            {
+                using var process = Process.GetCurrentProcess();
+                using var token = CefProcessTokenObserver.LaunchTokenLease.Acquire(process.SafeHandle,
+                    Native.ObserveProcess(process.SafeHandle));
+                token.RequireProfileAccess(accessProfile);
+                Console.WriteLine("PASS: opt-in standard-user token profile access");
+            }
+        }
+        var scratch = new DirectoryInfo(profileLayout.Scratch);
+        var originalAcl = scratch.GetAccessControl();
+        var deniedAcl = scratch.GetAccessControl();
+        deniedAcl.AddAccessRule(new FileSystemAccessRule(fixtureUser.User!, FileSystemRights.CreateFiles,
+            AccessControlType.Deny));
+        using (var deniedProfile = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+            fixtureWindows, () => fixtureStatus, () => authority))
+        {
+            deniedProfile.AcquireExclusiveLock();
+            try
+            {
+                scratch.SetAccessControl(deniedAcl);
+                Reject(() => deniedProfile.RequireUserAccess(fixtureUser.AccessToken));
+            }
+            finally { scratch.SetAccessControl(originalAcl); }
+            Reject(() => deniedProfile.VerifiedExclusiveEnvironment());
+        }
+    }
+    File.Delete(profileLockPath);
+    Console.WriteLine("PASS: existing exclusive profile lock, busy/missing/linked refusal and release");
+    Console.WriteLine("PASS: fixture-token directory access and denied add-file right (synthetic protection)");
+    Directory.Delete(profileLayout.Cache);
+    bool missingRefused = false;
+    try { using var missing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
+        fixtureWindows, () => fixtureStatus, () => authority); }
+    catch (System.ComponentModel.Win32Exception) { missingRefused = true; }
+    Check(missingRefused && !Directory.Exists(profileLayout.Cache),
+        "Missing directory was accepted or created.");
+    // The failed open must release earlier pins so cleanup can proceed.
+}
+finally { Directory.Delete(profileFixture, recursive: true); }
+Console.WriteLine("PASS: retained profile directory chain, explicit environment and irreversible refusal (synthetic protection)");
+
+// Pure installed-registration schema and broker identity matching. No
+// machine registration is published or changed by this fixture.
+string registrationBroker = Path.Combine(driveRoot, "veil-fixture", "Broker", "Veil.VolumeBroker.exe");
+var registrationFields = new Dictionary<string, object>
+{
+    ["volumeId"] = "synthetic",
+    ["pipeName"] = "VEIL.VolumeBroker",
+    ["brokerImage"] = registrationBroker,
+    ["profilePath"] = profileFixture,
+    ["requireWindowsService"] = true,
+    ["development"] = false,
+};
+string ParseRegistration(byte[] bytes) => CefRegisteredProfileLease.Parse(bytes, "synthetic",
+    "VEIL.VolumeBroker", registrationBroker, fixtureWindows);
+byte[] validRegistration = JsonSerializer.SerializeToUtf8Bytes(registrationFields);
+Check(ParseRegistration(validRegistration) == profileFixture, "Valid registered profile rejected.");
+void RejectRegistration(byte[] bytes)
+{
+    bool rejected = false;
+    try { _ = ParseRegistration(bytes); }
+    catch (Exception error) when (error is InvalidDataException or ArgumentException or JsonException)
+    { rejected = true; }
+    Check(rejected, "Invalid installed client registration accepted.");
+}
+foreach (var change in new (string Key, object Value)[] {
+    ("volumeId", "other"), ("pipeName", "other"), ("brokerImage", profileFixture),
+    ("profilePath", "relative"), ("profilePath", fixtureWindows), ("development", true),
+    ("requireWindowsService", false), ("requireWindowsService", "true"), ("unknown", 1) })
+{
+    var changed = new Dictionary<string, object>(registrationFields) { [change.Key] = change.Value };
+    RejectRegistration(JsonSerializer.SerializeToUtf8Bytes(changed));
+}
+var missingRegistration = new Dictionary<string, object>(registrationFields);
+missingRegistration.Remove("profilePath");
+RejectRegistration(JsonSerializer.SerializeToUtf8Bytes(missingRegistration));
+string duplicateRegistration = System.Text.Encoding.UTF8.GetString(validRegistration);
+RejectRegistration(System.Text.Encoding.UTF8.GetBytes(duplicateRegistration[..^1] + ",\"volumeId\":\"synthetic\"}"));
+Console.WriteLine("PASS: installed client registration schema and independent broker binding (pure parser)");
 
 // Exercise the actual production parser with no broker or volume access.
 using (var parsed = Protocol.Parse("""{"command":"CheckCefChild","volumeId":"synthetic","childHandle":"123"}"""u8))
@@ -141,6 +441,35 @@ try
         expected with { CreatedFileTime = expected.CreatedFileTime + 1 }));
     Reject(() => CefProcessTokenObserver.Observe(retained,
         expected with { SessionId = expected.SessionId + 1 }));
+    var launchToken = CefProcessTokenObserver.ObserveLaunchToken(retained, expected);
+    Check(launchToken.Token == tokenObservation &&
+        launchToken == CefProcessTokenObserver.ObserveLaunchToken(child.SafeHandle, expected),
+        "Independent retained handles disagreed on group/privilege launch snapshot.");
+    Reject(() => CefProcessTokenObserver.ObserveLaunchToken(owner.SafeHandle, expected));
+    if (launchToken.Token.Elevated || launchToken.Token.ElevationType != 1 ||
+        launchToken.AdministratorGroupPresent || !launchToken.OnlyStandardPrivileges)
+        Reject(() => CefLaunchTokenPolicy.RequireStandard(launchToken));
+    Reject(() => CefProcessTokenObserver.LaunchTokenLease.Acquire(owner.SafeHandle, expected).Dispose());
+    bool eligible = true;
+    try { CefLaunchTokenPolicy.RequireStandard(launchToken); }
+    catch (UnauthorizedAccessException) { eligible = false; }
+    if (eligible)
+    {
+        using var tokenLease = CefProcessTokenObserver.LaunchTokenLease.Acquire(retained, expected);
+        tokenLease.RequireCurrent();
+        tokenLease.Dispose();
+        bool disposedRefused = false;
+        try { tokenLease.RequireCurrent(); }
+        catch (ObjectDisposedException) { disposedRefused = true; }
+        Check(disposedRefused, "Disposed primary token lease accepted.");
+        Console.WriteLine("PASS: actual standard-user token duplicate lease (no process creation)");
+    }
+    else
+    {
+        Reject(() => CefProcessTokenObserver.LaunchTokenLease.Acquire(retained, expected).Dispose());
+        Console.WriteLine("SKIP: positive primary token duplicate requires separate standard-user account; refusal tested");
+    }
+    Console.WriteLine("PASS: actual retained launch token inventory (not a launch authorization)");
     Console.WriteLine("PASS: retained process token snapshot and wrong-object refusal");
     Check(Native.SameLiveProcess(retained, child.SafeHandle), "Different handles to the same child did not match.");
     Check(!Native.SameLiveProcess(retained, owner.SafeHandle), "Different process objects matched.");
@@ -252,3 +581,15 @@ static extern bool AssignProcessToJobObject(Microsoft.Win32.SafeHandles.SafeFile
 [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
 [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
 static extern bool TerminateJobObject(Microsoft.Win32.SafeHandles.SafeFileHandle job, uint code);
+
+
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode,
+    ExactSpelling = true, SetLastError = true)]
+[return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+static extern bool GetVolumeNameForVolumeMountPointW(string root, System.Text.StringBuilder name, uint length);
+
+
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode,
+    ExactSpelling = true, SetLastError = true)]
+[return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+static extern bool CreateHardLinkW(string newName, string existingName, IntPtr reserved);
