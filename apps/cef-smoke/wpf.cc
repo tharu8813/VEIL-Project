@@ -951,7 +951,11 @@ extern "C" __declspec(dllexport) double VeilCefZoomLevel(uint64_t id) {
 }
 extern "C" __declspec(dllexport) void VeilCefSetZoomLevel(uint64_t id, double level) {
   const auto browser = LookupBrowser(id);
-  if (browser) browser->GetHost()->SetZoomLevel(level);
+  const auto state = LookupView(id);
+  if (!CefCurrentlyOn(TID_UI) || !browser || !state || state->closing ||
+      !std::isfinite(level) || level < std::log(0.5) / std::log(1.2) - 1e-9 ||
+      level > std::log(3.0) / std::log(1.2) + 1e-9) return;
+  browser->GetHost()->SetZoomLevel(level);
 }
 
 extern "C" __declspec(dllexport) unsigned VeilCefPopupsBlocked(uint64_t id) {
