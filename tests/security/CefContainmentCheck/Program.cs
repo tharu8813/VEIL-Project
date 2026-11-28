@@ -290,9 +290,16 @@ try
                             {
                                 failedCollectionHandles.Add(handle);
                                 Check(brokerJob.TerminateAndDrain(5000), "Broker fixture termination did not drain.");
+                                // Zero active accounting is not the same as a signaled
+                                // process object. Force both exits to be observable
+                                // before allowing the diagnostic to advance.
+                                Check(rootObserver.WaitForExit(5000), "Root did not signal during diagnostic.");
+                                Check(descendant.WaitForExit(5000), "Descendant did not signal during diagnostic.");
                                 return expected.ProcessId;
                             }));
-                        Check(failedCollectionHandles.Count == 1 && failedCollectionHandles.All(handle => handle.IsClosed),
+                        Check(failedCollectionHandles.Count == 1,
+                            "Diagnostic did not stop after both retained members exited.");
+                        Check(failedCollectionHandles.All(handle => handle.IsClosed),
                             "Failed collection leaked its observed process handle.");
                         break;
                     case 4: candidate.TerminateAndDrain(5000); break;
