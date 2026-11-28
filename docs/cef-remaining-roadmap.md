@@ -256,3 +256,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #277 Windows/native PASS, #278 exact head Windows 46167628799 PASS, Native 46167628733 실행 중 확인. 독립 승인 리뷰 없음.
 - 기존 WpfSmoke 두 창의 secondary reservation은 이전 창 및 native view drain 이후에만 교체한다. 각 closure의 managed view/window와 current native ID, closing/loaded 상태를 대조하고 일치하는 pending navigation만 완료 처리한다. 종료 시 login 세대 및 pending ID 폐기, 비동기 Loaded 후 소유권 재검사. 기존 창 재사용 회귀에서 이전 completion delegate의 합성 실패 이벤트를 직접 호출해 새 창 상태가 유지되는지 검사한다. 실제 stale native callback/renderer crash 실측 아님. 새 CI/WPF runtime/보호 VM NOT RUN. 일반 사용자 제품의 새 창/popup adoption 기능은 여전히 미지원이며 WebView2/startupEnabled=false 유지.
+
+### P3-02 페이지 내 검색 개발 fixture (미완료)
+
+- #278 Windows/native PASS, #279 exact head Windows 46168165728 PASS, Native 46168165795 실행 중 확인. 독립 리뷰 미완료.
+- CEF native Find/GetFindHandler 연결과 per-view ticket, final update/monotonic CEF ID, 취소·탐색·종료·timeout 시 stale result 거부, 미완료 검색이 중단되면 해당 view의 검색 재사용 차단을 추가했다. 관리 코드의 document/selection epoch 검사를 유지하며 결과 unknown은 null로 처리한다. 256 UTF-16 unit 제한, fixture_enabled 전용, fresh search만 지원(다음/이전 일치 순환 및 검색 UI 미구현). CEF가 내부 ID를 부여하므로 실제 callback 상관 관계 검증 필요. 두 창의 동일 검색어 match/no match와 두 번째 fresh search의 회귀 코드를 작성했다. 실제 WPF 실행, 새 CI, 독립 리뷰 및 보호 VM 미검증. 제품 엔진/보안 게이트/startupEnabled=false 유지.
