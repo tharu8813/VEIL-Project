@@ -1,4 +1,3 @@
-using System.IO;
 using System.Windows;
 
 namespace Veil.Desktop;
@@ -137,12 +136,9 @@ p{color:#B8BDD0;line-height:1.6}.host{color:#F2B84B;font-weight:600}
                 Status.Text = "네트워크 설정이 올바르지 않습니다.";
                 return;
             }
-            var previous = data.Network;
-            data.Network = chosen == NetworkSettings.Standard ? null : chosen;
-            try { data.Save(statePath); }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            bool Authorized() => SettingsReady() && IsActive && session.SettingsUiOpen && session.PermissionUiOpen;
+            if (!session.TryCommitNetworkSettings(chosen, Authorized))
             {
-                data.Network = previous;
                 Status.Text = "네트워크 설정을 저장하지 못했습니다. 이전 설정을 유지합니다.";
                 return;
             }

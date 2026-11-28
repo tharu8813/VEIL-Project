@@ -1557,6 +1557,41 @@ public partial class BrowserWindow
                             $"--proxy-server=http://{NetworkPolicy.CanonicalProxyHost(host)}:80",
                             "single canonical proxy with explicit port and no local bypass");
                     }
+                    var savedProxy = new NetworkSettings(NetworkMode.Proxy, "socks5", "127.0.0.1", 9050);
+                    var nextNetwork = new NetworkSettings(DnsTemplate: "https://dns.google/dns-query");
+                    var networkData = new BrowserData { Network = savedProxy };
+                    int networkWrites = 0, networkChecks = 0;
+                    bool NetworkWrite() { networkWrites++; return true; }
+                    Check(!networkData.TryCommitNetworkSettings(new NetworkSettings((NetworkMode)99), () => true, NetworkWrite) &&
+                        !networkData.TryCommitNetworkSettings(new NetworkSettings(DnsTemplate: "http://dns.google/dns-query"), () => true, NetworkWrite) &&
+                        !networkData.TryCommitNetworkSettings(new NetworkSettings(NetworkMode.Proxy, "http", "proxy.example;direct://", 80), () => true, NetworkWrite) &&
+                        !networkData.TryCommitNetworkSettings(nextNetwork, () => false, NetworkWrite) &&
+                        networkWrites == 0 && ReferenceEquals(networkData.Network, savedProxy),
+                        "network commit rejects invalid or unauthorized choice without write");
+                    Check(!networkData.TryCommitNetworkSettings(nextNetwork, () => ++networkChecks == 1, NetworkWrite) &&
+                        networkWrites == 0 && ReferenceEquals(networkData.Network, savedProxy),
+                        "network commit restores exact proxy choice when authority is revoked");
+                    Check(!networkData.TryCommitNetworkSettings(NetworkSettings.Standard, () => true, () => false) &&
+                        ReferenceEquals(networkData.Network, savedProxy),
+                        "network commit refusal cannot replace saved proxy with direct choice");
+                    bool networkException = false;
+                    try
+                    {
+                        networkData.TryCommitNetworkSettings(nextNetwork, () => true,
+                            () => throw new IOException("Synthetic network write failure"));
+                    }
+                    catch (IOException) { networkException = true; }
+                    Check(networkException && ReferenceEquals(networkData.Network, savedProxy),
+                        "network commit exception restores exact previous settings");
+                    var appliedBefore = session.Network;
+                    Check(networkData.TryCommitNetworkSettings(nextNetwork, () => true, NetworkWrite) &&
+                        networkWrites == 1 && ReferenceEquals(networkData.Network, nextNetwork) &&
+                        ReferenceEquals(session.Network, appliedBefore),
+                        "network commit preserves DoH next-start choice without changing live network");
+                    Check(networkData.TryCommitNetworkSettings(NetworkSettings.Standard, () => true, NetworkWrite) &&
+                        networkWrites == 2 && networkData.Network is null &&
+                        ReferenceEquals(session.Network, appliedBefore),
+                        "network commit retains standard default encoding and live network");
                     Check(!NetworkPolicy.BrowserArguments(NetworkSettings.Standard).Any(), "standard mode adds no engine switches");
                     var proxyArgs = NetworkPolicy.BrowserArguments(new NetworkSettings(NetworkMode.Proxy, "socks5", "127.0.0.1", 9050)).ToList();
                     Check(proxyArgs.SequenceEqual(new[] { "--proxy-server=socks5://127.0.0.1:9050", "--proxy-bypass-list=<-loopback>",
