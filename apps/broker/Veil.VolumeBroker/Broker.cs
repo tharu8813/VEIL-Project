@@ -327,6 +327,41 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                         authenticatedOwnerHandle is not { } liveHandle || !Native.SameLiveProcess(liveHandle, pipeClient))
                         code = "NotAuthenticatedOwner";
                     break;
+#if VEIL_CEF_DIAGNOSTIC_IPC
+                case BrokerCommand.ProbeCefSuspended:
+                    // Only the separately built, signed diagnostic broker
+                    // exposes this terminal command. No client paths, keys,
+                    // process nomination or permission to resume.
+                    if (config.Development || config.Backend != "bitlocker")
+                        return Protocol.Error("CefUnavailable");
+                    if (!Registered(status) || !status.Unlocked || !status.FullyEncrypted ||
+                        !status.ProtectionOn || !status.ProtectorPresent ||
+                        unlockOwner is not { } probeGeneration || authenticatedGeneration is null ||
+                        authenticatedOwner != client || authenticatedOwnerHandle is not { } probeOwner ||
+                        !Native.SameLiveProcess(probeOwner, pipeClient))
+                        return Protocol.Error("NotAuthenticatedOwner");
+                    if (diagnosticSession.Occupied || diagnosticRelock.Pending ||
+                        pendingCefChild is not null || completedPreflight is not null ||
+                        unresolvedCefStops.Count != 0)
+                        return Protocol.Error("CefChildPending");
+                    try
+                    {
+                        RunDiagnosticCreationProbe(probeGeneration);
+                        if (!diagnosticRelock.Pending || !TryCompleteDiagnosticRelock())
+                            return Protocol.Error("LockRefused");
+                        status = backend.Status();
+                        if (!Registered(status) || status.Unlocked || !status.ReadyToUnlock)
+                            return Protocol.Error("LockRefused");
+                        // Distinct result; ordinary status and code-29
+                        // preflight cannot be mistaken for this probe.
+                        return Protocol.CefSuspendedProbeVerified(status);
+                    }
+                    catch (Exception error) when (error is not OutOfMemoryException)
+                    {
+                        log.Write("cef-creation-probe-refused", new { type = error.GetType().Name });
+                        return Protocol.Error("CefChildRejected");
+                    }
+#endif
                 case BrokerCommand.CheckCefChild:
                     // This is an owner-only preflight, not a grant or launch
                     // command. No child is added to the normal pipe allowlist.
@@ -583,13 +618,13 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             config.VolumeId, config.VolumeGuid, config.PipeName, backend.Status);
     }
 
-    // Disconnected internal probe: create, verify and drain, NEVER resume.
-    // No request, service startup or product caller. All operations hold serial.
+    // Terminal internal probe: create, verify and drain, NEVER resume.
+    // Only the isolated diagnostic build calls it; all operations hold serial.
     private void RunDiagnosticCreationProbe(object expectedGeneration)
     {
         // Refuse stale or busy requests before acquiring any cleanup
         // obligation. Only an idle, currently authenticated generation
-        // may enter this terminal probe; no IPC caller exists yet.
+        // may enter this terminal probe; ordinary builds expose no command.
         if (config.Development || diagnosticRelock.Pending || diagnosticSession.Occupied ||
             pendingCefChild is not null || completedPreflight is not null ||
             unresolvedCefStops.Count != 0 || authenticatedGeneration is null ||

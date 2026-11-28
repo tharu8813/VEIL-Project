@@ -7,6 +7,10 @@
     <Nullable>enable</Nullable>
     <DefineConstants>$(DefineConstants);VEIL_CEF_PROFILE_ACCESS_TEST</DefineConstants>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'CefDiagnostic'">
+    <DefineConstants>$(DefineConstants);VEIL_CEF_DIAGNOSTIC_IPC</DefineConstants>
+    <Product>VEIL CEF Broker Diagnostic Only</Product>
+  </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/Native.cs" Link="Native.cs" />
     <Compile Include="../../../apps/shared/AdminOnlyFile.cs" Link="AdminOnlyFile.cs" />

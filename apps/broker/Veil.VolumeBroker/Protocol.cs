@@ -3,7 +3,13 @@ using System.Text.Json;
 
 namespace Veil.VolumeBroker;
 
-internal enum BrokerCommand { Status, Attach, Unlock, Lock, Detach, AuthenticatedOwner, CheckCefChild, StageCefChild, RedeemCefChild, ConfirmCefPreflight }
+internal enum BrokerCommand
+{
+    Status, Attach, Unlock, Lock, Detach, AuthenticatedOwner, CheckCefChild, StageCefChild, RedeemCefChild, ConfirmCefPreflight,
+#if VEIL_CEF_DIAGNOSTIC_IPC
+    ProbeCefSuspended,
+#endif
+}
 
 /// <summary>One parsed request. The secret is held in a clearable buffer, never in a string.</summary>
 internal sealed class BrokerRequest : IDisposable
@@ -93,6 +99,18 @@ internal static class Protocol
     // Snapshot only, not permission to initialize CEF or manipulate the volume.
     internal static byte[] CefChildVerified() =>
         JsonSerializer.SerializeToUtf8Bytes(new { ok = true, cefChildVerified = true });
+
+#if VEIL_CEF_DIAGNOSTIC_IPC
+    internal static byte[] CefSuspendedProbeVerified(BackendStatus status)
+    {
+        if (!status.Attached || status.Unlocked || !status.ReadyToUnlock)
+            throw new UnauthorizedAccessException("CEF diagnostic lock unconfirmed.");
+        return JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            ok = true, cefSuspendedProbeVerified = true, volumeGuid = status.VolumeGuid,
+        });
+    }
+#endif
 
     internal static byte[] Ok(BackendStatus status) => JsonSerializer.SerializeToUtf8Bytes(new
     {

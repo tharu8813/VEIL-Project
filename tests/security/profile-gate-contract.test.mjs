@@ -931,7 +931,7 @@ test('disconnected creation probe owns the slot before native creation and alway
     assert.match(life, /lifetime = new CefRetainedLifetime\(prerequisites, inner, outer\)/);
     assert.doesNotMatch(life, /ResumeRetainedRoot|ResumeAfterVerification|TakeVerified/);
     assert.doesNotMatch(probe, /ResumeRetainedRoot|TryRegisterDiagnosticSession\(/);
-    assert.equal((broker.match(/RunDiagnosticCreationProbe\(/g) ?? []).length, 1);
+    assert.equal((broker.match(/RunDiagnosticCreationProbe\(/g) ?? []).length, 2);
     assert.doesNotMatch(protocol, /RunDiagnosticCreationProbe|CefPreparedCreationLifetime/);
 });
 
@@ -1133,7 +1133,7 @@ test('suspended broker creation owns the registered profile and uses only its to
     assert.match(lifetime, /lifetime = new CefRetainedLifetime\(prerequisites, inner, outer\)/);
     assert.match(lifetime, /return lifetime\.TryRelease\(\(\) => TryDrainAll\(milliseconds,\s*custody\.TryDrainAndRelease, outer\.TerminateAndDrain, inner\.TerminateAndDrain,\s*\(\) => outer\.HasNoActiveProcesses\(\) && inner\.HasNoActiveProcesses\(\)\)\);/);
     assert.match(session, /if \(borrowedCreation is not null\)\s*throw new UnauthorizedAccessException\("CEF prepared successor activation is disabled\."\);/);
-    assert.equal((broker.match(/RunDiagnosticCreationProbe\(/g) ?? []).length, 1);
+    assert.equal((broker.match(/RunDiagnosticCreationProbe\(/g) ?? []).length, 2);
     assert.match(fixture, /var retained = new CefRetainedLifetime\(retainedProfile\);\s*Check\(!retained.TryRelease\(\(\) => false\)[\s\S]*?Reject\(\(\) => competing.AcquireExclusiveLock\(\)\);[\s\S]*?retained.TryRelease\(\(\) => true\)[\s\S]*?next.AcquireExclusiveLock\(\);/);
 });
 
@@ -1237,4 +1237,19 @@ test('terminal diagnostic obtains only fixed installed baseline input before ind
     assert.match(prep, /VerifyInstalledTrust\(baselinePayload, baselineSignature\);\s*verifier.RequireBoundTrust\(\);/);
     assert.match(fixture, /ReadBoundedInput\(input, 1, 1024 \* 1024\)[\s\S]*?Verify\(snapshot, signature, publicKey, host, 7\)[\s\S]*?new\[\] \{ 0, 1024 \* 1024 \+ 1 \}[\s\S]*?new\[\] \{ 383, 513 \}/);
     assert.doesNotMatch(protocol, /ReadInstalledDiagnosticInputs|RunDiagnosticCreationProbe|baselinePayload|baselineSignature/);
+});
+
+
+test('suspended broker diagnostic IPC exists only in separate build and requires verified relock', async () => {
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
+    const project = await readFile('apps/broker/Veil.VolumeBroker/Veil.VolumeBroker.csproj', 'utf8');
+    const fixture = await readFile('tests/security/CefProcessBindingCheck/Program.cs', 'utf8');
+    const testProject = await readFile('tests/security/CefProcessBindingCheck/CefProcessBindingCheck.csproj', 'utf8');
+    for (const source of [project, testProject])
+        assert.match(source, /<PropertyGroup Condition="'\$\(Configuration\)' == 'CefDiagnostic'">\s*<DefineConstants>\$\(DefineConstants\);VEIL_CEF_DIAGNOSTIC_IPC<\/DefineConstants>/);
+    assert.match(protocol, /#if VEIL_CEF_DIAGNOSTIC_IPC\s*ProbeCefSuspended,\s*#endif/);
+    assert.match(broker, /#if VEIL_CEF_DIAGNOSTIC_IPC\s*case BrokerCommand.ProbeCefSuspended:[\s\S]*?config.Development \|\| config.Backend != "bitlocker"[\s\S]*?authenticatedOwner != client[\s\S]*?Native.SameLiveProcess\(probeOwner, pipeClient\)[\s\S]*?diagnosticSession.Occupied \|\| diagnosticRelock.Pending[\s\S]*?RunDiagnosticCreationProbe\(probeGeneration\);\s*if \(!diagnosticRelock.Pending \|\| !TryCompleteDiagnosticRelock\(\)\)[\s\S]*?status = backend.Status\(\);\s*if \(!Registered\(status\) \|\| status.Unlocked \|\| !status.ReadyToUnlock\)[\s\S]*?return Protocol.CefSuspendedProbeVerified\(status\);[\s\S]*?#endif/);
+    assert.match(protocol, /#if VEIL_CEF_DIAGNOSTIC_IPC\s*internal static byte\[\] CefSuspendedProbeVerified[\s\S]*?status.Unlocked \|\| !status.ReadyToUnlock[\s\S]*?cefSuspendedProbeVerified = true, volumeGuid = status.VolumeGuid[\s\S]*?#endif/);
+    assert.match(fixture, /#if VEIL_CEF_DIAGNOSTIC_IPC[\s\S]*?probe.Command == BrokerCommand.ProbeCefSuspended[\s\S]*?#else\s*RejectProbe\(probeRequest\);\s*#endif/);
 });
