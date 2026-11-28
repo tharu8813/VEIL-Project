@@ -19,7 +19,25 @@ internal static class CefSignedSystemModuleBaseline
         ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature)
     {
         var installed = CefSystemBaselineTrustRegistry.ReadStable();
-        return VerifyTrustedSnapshot(payload, signature, installed, CefSystemBaselineTrustRegistry.ReadStable);
+        var authority = CefSystemBaselineTrustRegistry.ReadApprovalAuthorityStable();
+        return VerifyWithApprovalSnapshot(payload, signature, installed,
+            CefSystemBaselineTrustRegistry.ReadStable, authority,
+            CefSystemBaselineTrustRegistry.ReadApprovalAuthorityStable);
+    }
+
+    internal static CefSystemModuleVerifier VerifyWithApprovalSnapshot(
+        ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature,
+        CefSystemBaselineTrustState installed, Func<CefSystemBaselineTrustState> readCurrent,
+        CefBaselineApprovalAuthority authority, Func<CefBaselineApprovalAuthority> readAuthority)
+    {
+        ArgumentNullException.ThrowIfNull(authority);
+        ArgumentNullException.ThrowIfNull(readAuthority);
+        authority.RequireIndependent(installed);
+        return VerifyTrustedSnapshot(payload, signature, installed, () =>
+        {
+            authority.RequireSame(readAuthority());
+            return readCurrent();
+        });
     }
 
     internal static CefSystemModuleVerifier VerifyTrustedSnapshot(

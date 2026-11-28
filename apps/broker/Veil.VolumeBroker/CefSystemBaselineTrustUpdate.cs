@@ -36,6 +36,23 @@ internal sealed class CefBaselineApprovalAuthority
 
     internal byte[] CopyPublicKey() => (byte[])key.Clone();
 
+    internal static CefBaselineApprovalAuthority ParseActiveRecord(ReadOnlySpan<byte> record)
+    {
+        if (record.StartsWith("VEILAPR1"u8))
+            throw new UnauthorizedAccessException("Baseline approval authority is stopped.");
+        return new CefBaselineApprovalAuthority(record, SHA256.HashData(record));
+    }
+
+    // A stop is a one-way local administrative operation, not an approval
+    // signed by a possibly compromised authority. Preserve the exact SPKI.
+    internal byte[] CreateStoppedRecord() => [.. "VEILAPR1"u8, .. key];
+
+    internal void RequireStoppedRecord(ReadOnlySpan<byte> record)
+    {
+        if (!CryptographicOperations.FixedTimeEquals(CreateStoppedRecord(), record))
+            throw new UnauthorizedAccessException("Stopped approval authority record mismatch.");
+    }
+
     // Initial authority provisioning is allowed only before either machine
     // record exists. Partial keys are not absence. Never use this for recovery.
     internal void RequireFreshInstallation(bool authorityExists, bool baselineExists)

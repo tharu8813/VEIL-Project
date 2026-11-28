@@ -167,6 +167,29 @@ internal static class CefSignedSystemModuleBaselineTests
         if (!authority.CopyPublicKey().SequenceEqual(approvalPublic))
             throw new InvalidOperationException("Mutable approval authority key escaped.");
         Console.WriteLine("PASS: approval authority bootstrap-only policy and immutable key (synthetic)");
+        authority.RequireSame(CefBaselineApprovalAuthority.ParseActiveRecord(approvalPublic));
+        byte[] stoppedAuthority = authority.CreateStoppedRecord();
+        authority.RequireStoppedRecord(stoppedAuthority);
+        Reject(() => CefBaselineApprovalAuthority.ParseActiveRecord(stoppedAuthority));
+        Reject(() => CefBaselineApprovalAuthority.ParseActiveRecord(stoppedAuthority[..8]));
+        Reject(() => authority.RequireStoppedRecord(approvalPublic));
+        byte[] tamperedStop = (byte[])stoppedAuthority.Clone();
+        tamperedStop[^1] ^= 1;
+        Reject(() => authority.RequireStoppedRecord(tamperedStop));
+        var authorityTestState = CefSystemBaselineTrustState.CreateVerifiedRecord(actualPayload, publicKey, 7);
+        byte[] currentAuthorityRecord = approvalPublic;
+        var authorityBoundVerifier = CefSignedSystemModuleBaseline.VerifyWithApprovalSnapshot(
+            actualPayload, Sign(actualPayload), authorityTestState, () => authorityTestState,
+            authority, () => CefBaselineApprovalAuthority.ParseActiveRecord(currentAuthorityRecord));
+        authorityBoundVerifier.RequireModules([]);
+        currentAuthorityRecord = stoppedAuthority;
+        Reject(() => authorityBoundVerifier.RequireModules([]));
+        Reject(() => CefSignedSystemModuleBaseline.VerifyWithApprovalSnapshot(actualPayload,
+            Sign(actualPayload), authorityTestState, () => authorityTestState,
+            authority, () => CefBaselineApprovalAuthority.ParseActiveRecord(currentAuthorityRecord)));
+        currentAuthorityRecord = wrongKey.ExportSubjectPublicKeyInfo();
+        Reject(() => authorityBoundVerifier.RequireModules([]));
+        Console.WriteLine("PASS: one-way approval stop and installed verifier authority-change refusal (synthetic)");
         byte[] Approve(byte[] digest) => approvalKey.SignHash(digest, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
         CefSystemBaselineTrustUpdate Rotate(CefSystemBaselineTrustState installed, byte[] payload,
             byte[] signature, byte[] newKey, byte[] digest, CefSystemBaselineHost expectedHost) =>

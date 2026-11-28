@@ -233,19 +233,22 @@ internal static class CefSystemBaselineTrustRegistry
         return ReadApprovalAuthorityRecord(leaf);
     }
 
-    private static CefBaselineApprovalAuthority ReadApprovalAuthorityRecord(RegistryKey leaf)
+    private static CefBaselineApprovalAuthority ReadApprovalAuthorityRecord(RegistryKey leaf) =>
+        CefBaselineApprovalAuthority.ParseActiveRecord(ReadApprovalRecordBytes(leaf));
+
+    private static byte[] ReadApprovalRecordBytes(RegistryKey leaf)
     {
         RequireProtected(leaf);
         if (leaf.SubKeyCount != 0 || leaf.ValueCount != 1 ||
             !leaf.GetValueNames().SequenceEqual(new[] { AuthorityValue }, StringComparer.Ordinal) ||
             leaf.GetValueKind(AuthorityValue) != RegistryValueKind.Binary ||
             leaf.GetValue(AuthorityValue, null, RegistryValueOptions.DoNotExpandEnvironmentNames) is not byte[] key ||
-            key.Length is 0 or > 4096)
+            key.Length is 0 or > 4104)
             throw new UnauthorizedAccessException("Unexpected baseline approval registry layout.");
         RequireProtected(leaf);
         // This hash is derived from administrator-protected storage, not
         // from an untrusted request. Provisioning that storage is separate.
-        return new CefBaselineApprovalAuthority(key, SHA256.HashData(key));
+        return key;
     }
 
     private static CefSystemBaselineTrustState ReadOnce()
@@ -335,6 +338,32 @@ internal static class CefSystemBaselineTrustRegistry
             throw new UnauthorizedAccessException("Baseline appeared during authority installation.");
         // No delete/retry after a partial or uncertain result. Manual review
         // is required; never install a different authority over existing state.
+    }
+
+    // Emergency fail-closed operation. The administrator supplies the exact
+    // expected authority SPKI and independently obtained fingerprint. No
+    // authority signature is required to STOP; never authorize a new key.
+    internal static void StopApprovalAuthority(ReadOnlySpan<byte> expectedPublicKey,
+        ReadOnlySpan<byte> independentlyExpectedSpkiSha256)
+    {
+        RequireMaintenanceAuthority();
+        var expected = new CefBaselineApprovalAuthority(expectedPublicKey, independentlyExpectedSpkiSha256);
+        using var mutex = CefSystemBaselineWriterLock.Acquire();
+        using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+        using var software = Open(machine, "SOFTWARE");
+        RequireOrdinary(software);
+        using var leaf = Open(software, AuthorityLeaf, Read64 | 2);
+        expected.RequireSame(ReadApprovalAuthorityRecord(leaf));
+        expected.RequireSame(ReadApprovalAuthorityStable());
+        byte[] stopped = expected.CreateStoppedRecord();
+        leaf.SetValue(AuthorityValue, stopped, RegistryValueKind.Binary);
+        int flush = RegFlushKey(leaf.Handle);
+        if (flush != 0) throw new Win32Exception(flush);
+        expected.RequireStoppedRecord(ReadApprovalRecordBytes(leaf));
+        using var fresh = Open(software, AuthorityLeaf);
+        expected.RequireStoppedRecord(ReadApprovalRecordBytes(fresh));
+        // No resume, deletion or implicit re-enrollment. A stopped record
+        // is deliberately not an active SPKI, including for older readers.
     }
 
     // This deliberately disconnected maintenance entry accepts only a prepared
