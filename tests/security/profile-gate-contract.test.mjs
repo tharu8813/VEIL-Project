@@ -1541,3 +1541,22 @@ test('immutable library content authentication binds store, generation, previous
     assert.doesNotMatch(broker, /CefLibraryGenerationChain|CefLibraryGenerationAnchor/);
 });
 
+
+
+test('versioned library envelope enforces bounded strict JSON and authentication before returning data', async () => {
+    const codec = await readFile('apps/broker/Veil.VolumeBroker/CefLibraryGenerationEnvelope.cs', 'utf8');
+    const chain = await readFile('apps/broker/Veil.VolumeBroker/CefLibraryGenerationChain.cs', 'utf8');
+    const broker = await readFile('apps/broker/Veil.VolumeBroker/Broker.cs', 'utf8');
+    const fixture = await readFile('tests/security/NetworkPolicyCheck/Program.cs', 'utf8');
+    assert.match(codec, /MaximumEncodedBytes =[\s\S]*?MaximumPayloadBytes[\s\S]*?writer.WriteNumber\("version", 1\);[\s\S]*?writer.WriteString\("store", storeId.ToString\("D"\)\);[\s\S]*?writer.WriteNumber\("generation", record.Generation\);[\s\S]*?writer.WriteBase64String\("previous", record.PreviousTag\);[\s\S]*?writer.WriteBase64String\("payload", record.Payload\);[\s\S]*?writer.WriteBase64String\("tag", record.Tag\);/);
+    assert.match(codec, /encoded.Length > 0 && encoded.Length <= MaximumEncodedBytes[\s\S]*?new Utf8JsonReader\(encoded, new JsonReaderOptions \{ MaxDepth = 2 \}\)/);
+    assert.match(codec, /!reader.ValueIsEscaped && reader.ValueSpan.SequenceEqual\(name\)/);
+    assert.match(codec, /reader.ValueSpan.Length <= Base64.GetMaxEncodedToUtf8Length\(maximum\)[\s\S]*?decoded.Length >= minimum && decoded.Length <= maximum[\s\S]*?reader.ValueSpan.SequenceEqual\(canonical\)/);
+    assert.match(codec, /reader.TokenType == JsonTokenType.EndObject && !reader.Read\(\)\);[\s\S]*?CefLibraryGenerationChain.RequireAuthenticated\(storeId, key, expectedGeneration, expectedPrevious, record\);\s*accepted = true;\s*return record;/);
+    assert.match(chain, /RequireAuthenticated[\s\S]*?FixedTimeEquals\(record.PreviousTag, expectedPrevious\)[\s\S]*?FixedTimeEquals\(record.Tag,[\s\S]*?Authenticate\(storeId, key, record.Generation, record.PreviousTag, record.Payload\)/);
+    assert.match(codec, /if \(!accepted && payload is not null\) CryptographicOperations.ZeroMemory\(payload\)/);
+    assert.match(fixture, /authenticated envelope roundtrip[\s\S]*?deterministic envelope[\s\S]*?for \(int length = 0; length < first.Length; length\+\+\)[\s\S]*?DecodeBad\(first\[\.\.length\]\)/);
+    assert.doesNotMatch(codec, /\b(?:File|Directory|Path|Native|Protocol)\./);
+    assert.doesNotMatch(broker, /CefLibraryGenerationEnvelope/);
+});
+

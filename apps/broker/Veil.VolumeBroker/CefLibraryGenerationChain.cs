@@ -58,6 +58,11 @@ internal static class CefLibraryGenerationChain
     internal static CefLibraryGenerationRecord Seal(Guid storeId, ReadOnlySpan<byte> key,
         int generation, ReadOnlySpan<byte> previousTag, ReadOnlySpan<byte> payload)
     {
+        // Bound untrusted lengths before allocating detached copies.
+        RequireContext(storeId, key);
+        if (generation <= 0 || generation > CefLibraryGenerationCatalog.MaximumGenerations ||
+            previousTag.Length != TagSize || payload.Length == 0 || payload.Length > MaximumPayloadBytes)
+            throw new InvalidDataException("Invalid library generation content.");
         var prior = previousTag.ToArray();
         var content = payload.ToArray();
         try
@@ -65,6 +70,21 @@ internal static class CefLibraryGenerationChain
             return new(generation, prior, content, Authenticate(storeId, key, generation, prior, content));
         }
         catch { CryptographicOperations.ZeroMemory(content); throw; }
+    }
+
+    // Validate a detached record against the caller's expected generation
+    // and prior tag. This is not an independent rollback anchor.
+    internal static void RequireAuthenticated(Guid storeId, ReadOnlySpan<byte> key,
+        int expectedGeneration, ReadOnlySpan<byte> expectedPrevious, CefLibraryGenerationRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        if (record.Generation != expectedGeneration || expectedPrevious.Length != TagSize ||
+            record.PreviousTag is not { Length: TagSize } || record.Tag is not { Length: TagSize } ||
+            record.Payload is not { Length: > 0 and <= MaximumPayloadBytes } ||
+            !CryptographicOperations.FixedTimeEquals(record.PreviousTag, expectedPrevious) ||
+            !CryptographicOperations.FixedTimeEquals(record.Tag,
+                Authenticate(storeId, key, record.Generation, record.PreviousTag, record.Payload)))
+            throw new InvalidDataException("Library generation authentication failed.");
     }
 
     // Read one bounded record at a time from the caller's verified snapshot.

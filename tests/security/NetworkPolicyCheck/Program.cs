@@ -1085,6 +1085,54 @@ Console.WriteLine("PASS: exact-volume preflight cleanup, command refusal and det
     Console.WriteLine("PASS: authenticated immutable library chain, rollback anchor and recovery refusal");
 }
 
+// Bounded authenticated JSON envelope, synthetic bytes only.
+{
+    var store = Guid.Parse("11111111-2222-3333-4444-555555555555");
+    byte[] key = Enumerable.Range(1, 32).Select(i => (byte)i).ToArray();
+    byte[] zero = new byte[32];
+    var first = Veil.VolumeBroker.CefLibraryGenerationEnvelope.Encode(store, key, 1, zero, "hello"u8);
+    var decoded = Veil.VolumeBroker.CefLibraryGenerationEnvelope.Decode(store, key, 1, zero, first);
+    Check(decoded.Generation == 1 && decoded.Payload.AsSpan().SequenceEqual("hello"u8) &&
+        decoded.PreviousTag.AsSpan().SequenceEqual(zero), "authenticated envelope roundtrip");
+    byte[] second = Veil.VolumeBroker.CefLibraryGenerationEnvelope.Encode(store, key, 2, decoded.Tag, "next"u8);
+    Check(Veil.VolumeBroker.CefLibraryGenerationEnvelope.Decode(store, key, 2, decoded.Tag, second)
+        .Payload.AsSpan().SequenceEqual("next"u8), "linked envelope roundtrip");
+    byte[] repeat = Veil.VolumeBroker.CefLibraryGenerationEnvelope.Encode(store, key, 1, zero, "hello"u8);
+    Check(first.AsSpan().SequenceEqual(repeat), "deterministic envelope");
+    void Reject(Action action)
+    {
+        bool refused = false;
+        try { action(); }
+        catch (InvalidDataException) { refused = true; }
+        Check(refused, "malformed or unauthenticated envelope accepted");
+    }
+    void DecodeBad(byte[] bytes) => Reject(() =>
+        Veil.VolumeBroker.CefLibraryGenerationEnvelope.Decode(store, key, 1, zero, bytes));
+    string json = Encoding.UTF8.GetString(first);
+    foreach (string invalid in new[] {
+        json.Replace("\"version\":1", "\"version\":2", StringComparison.Ordinal),
+        json.Replace("\"version\":1", "\"version\":1,\"version\":1", StringComparison.Ordinal),
+        json.Replace("\"generation\":1", "\"generation\":2", StringComparison.Ordinal),
+        json.Replace("aGVsbG8=", "aGVsbG9=", StringComparison.Ordinal), // same decoded bytes, noncanonical padding bits
+        json.Replace("aGVsbG8=", "aGVsbG8", StringComparison.Ordinal),
+        json.Replace("aGVsbG8=", "YWx0ZXJlZA==", StringComparison.Ordinal),
+        json.Replace("aGVsbG8=", "", StringComparison.Ordinal),
+        json.Replace("\"payload\"", "\"unknown\"", StringComparison.Ordinal),
+        json.Replace("\"payload\"", "\"pay\\u006coad\"", StringComparison.Ordinal),
+        json[..^1] + ",\"extra\":0}", json + "{}", json[..^1] })
+        DecodeBad(Encoding.UTF8.GetBytes(invalid));
+    for (int length = 0; length < first.Length; length++)
+        DecodeBad(first[..length]);
+    DecodeBad(new byte[Veil.VolumeBroker.CefLibraryGenerationEnvelope.MaximumEncodedBytes + 1]);
+    DecodeBad(second);
+    Reject(() => Veil.VolumeBroker.CefLibraryGenerationEnvelope.Decode(Guid.NewGuid(), key, 1, zero, first));
+    Reject(() => Veil.VolumeBroker.CefLibraryGenerationEnvelope.Decode(store, new byte[32], 1, zero, first));
+    Reject(() => Veil.VolumeBroker.CefLibraryGenerationEnvelope.Decode(store, key, 2, zero, second));
+    Reject(() => Veil.VolumeBroker.CefLibraryGenerationEnvelope.Encode(store, key, 1, zero,
+        new byte[Veil.VolumeBroker.CefLibraryGenerationChain.MaximumPayloadBytes + 1]));
+    Console.WriteLine("PASS: authenticated JSON library envelope, strict schema and truncation refusal");
+}
+
 file sealed class SyntheticRetainedResource : IDisposable
 {
     internal int Disposals { get; private set; }
