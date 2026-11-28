@@ -14,6 +14,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
     private readonly SafeFileHandle job;
     private readonly uint activeLimit;
     private bool assignmentIssued;
+    private bool assignmentExported;
     private bool bound;
     private bool disposed;
 
@@ -113,6 +114,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         if (assignmentIssued || Accounting().TotalProcesses != 0)
             throw new InvalidOperationException("CEF job assignment already issued.");
         assignmentIssued = true; // Never retry even if the reply is ambiguous.
+        assignmentExported = true; // Even a failed duplication disqualifies private ownership.
         return Native.DuplicateCefJobAssignment(job, owner, observedOwner);
     }
 
@@ -159,6 +161,46 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         var state = Accounting();
         return state.TotalProcesses == 1 && state.ActiveProcesses == 1;
     }
+
+    // Production-shaped diagnostics accept only another privately created
+    // broker Job object, never a caller-supplied native handle. The original
+    // desktop containment remains separate and is not attested by this pair.
+    private SafeFileHandle RequirePrivatePeer(CefBrokerOwnedJob peer)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(peer);
+        if (ReferenceEquals(this, peer) || peer.disposed || !bound || !peer.bound ||
+            assignmentExported || peer.assignmentExported || activeLimit != peer.activeLimit ||
+            CompareJobObjects(job, peer.job))
+            throw new UnauthorizedAccessException("CEF private Job pair refused.");
+        return peer.job;
+    }
+
+    internal void RequirePrivateNestedBinding(CefBrokerOwnedJob peer,
+        ClientIdentity owner, SafeProcessHandle ownerHandle,
+        ClientIdentity root, SafeProcessHandle rootHandle)
+    {
+        var peerHandle = RequirePrivatePeer(peer);
+        RequireContainmentLimits(peerHandle, peer.activeLimit);
+        RequireInitialNestedBinding(peerHandle, owner, ownerHandle, root, rootHandle);
+        RequireContainmentLimits(peerHandle, peer.activeLimit);
+    }
+
+    internal T[] ObservePrivateNestedDiagnostics<T>(CefBrokerOwnedJob peer,
+        ClientIdentity root, SafeProcessHandle rootHandle, Func<ClientIdentity, SafeProcessHandle, T> observe)
+    {
+        var peerHandle = RequirePrivatePeer(peer);
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peerHandle, peer.activeLimit);
+        var result = ObserveCollectedNestedDiagnostics(peerHandle, root, rootHandle, observe);
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peerHandle, peer.activeLimit);
+        return result;
+    }
+
+    internal bool TerminateAndVerifyPrivateDrain(CefBrokerOwnedJob peer,
+        SafeProcessHandle rootHandle, int milliseconds) =>
+        TerminateAndVerifyNestedDrain(RequirePrivatePeer(peer), rootHandle, milliseconds);
 
     // Validate the initial containment pair before ownership is transferred.
     // The desktop Job must already come from a separately trusted source.
