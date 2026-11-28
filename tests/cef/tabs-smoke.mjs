@@ -244,7 +244,7 @@ try {
   assert.match(evidence, /Unsupported mixed scope and denied profile clear preserved both cookies[\s\S]*Explicit profile cookie clear returned an empty cookie scan[\s\S]*Profile cookie clear preserved both origin localStorage markers/);
   assert.match(evidence, /Revoked cookie deletion left both domains untouched[\s\S]*Exact domain deletion preserved the other domain[\s\S]*Preserved domain HTTP check completed/);
   assert.match(evidence, /Fresh fixture cookie scan returned an empty list[\s\S]*Both views returned only the two synthetic cookie domains[\s\S]*Closed view cookie scan identity rejected/);
-  assert.match(evidence, /Tab selection preserved both native identities and active address[\s\S]*Closing active tab preserved surviving view and navigation[\s\S]*Tabbed host registry drained/);
+  assert.match(evidence, /Tab selection preserved both native identities and active address[\s\S]*Per-tab completion state and synthetic background status remained isolated[\s\S]*Closing active tab preserved surviving view and navigation[\s\S]*Tabbed host registry drained/);
   assert.match(evidence, /Storage usage rejected an unapproved origin and observed first fixture cache[\s\S]*Distinct fixture origins returned distinct finite storage usage/);
   assert.equal(cookieChecks.get('/tabs-storage-denied'), 'fixture_first=synthetic-one');
   assert.equal(cookieChecks.get('/tabs-storage-deleted'), 'fixture_first=synthetic-one', 'Origin storage clear must preserve cookies');

@@ -765,3 +765,15 @@ test('CEF native navigation rejects credential URLs and invalidated callback dec
     assert.match(cefNative, /if \(!state_->closing && active_id_ != 0 && frame->IsMain\(\) && failed_url == active_url_\)/);
     assert.match(cefSmoke, /phase == -2 && blockedRedirect[\s\S]*?Native navigation refused non-HTTP redirect/);
 });
+
+
+test('CEF tab status publication is scoped to live tab and current navigation identity', () => {
+    assert.match(cefTabbed, /private bool AcceptTabEvent\(Tab tab\) =>\s*!shuttingDown && !tab.Closing && tabs.Contains\(tab\);/);
+    assert.match(cefTabbed, /private void SetTabStatus\(Tab tab, string message\)\s*\{\s*if \(!AcceptTabEvent\(tab\)\) return;\s*tab.Status = message;\s*if \(ReferenceEquals\(active, tab\)\) status.Text = message;/);
+    assert.match(cefTabbed, /request.IsRedirected && tab.PendingNavigationId != request.NavigationId/);
+    assert.match(cefTabbed, /!request.IsRedirected && request.NavigationId <= tab.LastNavigationId/);
+    assert.match(cefTabbed, /view.NavigationCompleted \+= \(_, completed\) =>\s*\{\s*if \(!AcceptTabEvent\(tab\) \|\| completed.NavigationId == 0 \|\|\s*tab.PendingNavigationId != completed.NavigationId\) return;\s*tab.PendingNavigationId = 0;/);
+    assert.match(cefTabbed, /view.ProcessFailed \+= \(_, failure\) =>\s*\{\s*if \(!AcceptTabEvent\(tab\)\) return;\s*tab.PendingNavigationId = 0;\s*SetTabStatus\(tab, "CEF child process failed."\);/);
+    assert.match(cefTabbed, /tab.LastSource = tab.View.Source;\s*status.Text = tab.Status;/);
+    assert.match(cefTabbed, /SetTabStatus\(first, "Synthetic background status."\);[\s\S]*?Per-tab completion state and synthetic background status remained isolated/);
+});
