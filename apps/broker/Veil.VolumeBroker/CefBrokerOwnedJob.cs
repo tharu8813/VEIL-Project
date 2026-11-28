@@ -160,6 +160,63 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         return state.TotalProcesses == 1 && state.ActiveProcesses == 1;
     }
 
+    // Validate the initial containment pair before ownership is transferred.
+    // The desktop Job must already come from a separately trusted source.
+    // Membership and limits alone cannot establish who created that Job.
+    internal void RequireInitialNestedBinding(SafeFileHandle desktopJob,
+        ClientIdentity owner, SafeProcessHandle ownerHandle,
+        ClientIdentity root, SafeProcessHandle rootHandle)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(desktopJob);
+        if (!bound || desktopJob.IsClosed || desktopJob.IsInvalid ||
+            CompareJobObjects(job, desktopJob) || owner.ProcessId == root.ProcessId ||
+            owner.SessionId != root.SessionId ||
+            !string.Equals(owner.UserSid, root.UserSid, StringComparison.OrdinalIgnoreCase) ||
+            root.CreatedFileTime < owner.CreatedFileTime ||
+            ObserveLiveMember(ownerHandle) != owner || ObserveLiveMember(rootHandle) != root)
+            throw new UnauthorizedAccessException("CEF initial nested binding identity refused.");
+
+        void RequireInitialState()
+        {
+            if (!IsProcessInJob(ownerHandle, job, out bool inBroker) || inBroker ||
+                !IsProcessInJob(ownerHandle, desktopJob, out bool inDesktop) || inDesktop)
+                throw new UnauthorizedAccessException("CEF owner is not outside both jobs.");
+            var brokerState = Accounting();
+            var desktopState = Accounting(desktopJob);
+            if (brokerState.ActiveProcesses != 1 || brokerState.TotalProcesses != 1 ||
+                brokerState.TotalTerminatedProcesses != 0 ||
+                desktopState.ActiveProcesses != 1 || desktopState.TotalProcesses != 1 ||
+                desktopState.TotalTerminatedProcesses != 0)
+                throw new UnauthorizedAccessException("CEF initial nested jobs must contain only the original root.");
+            RequireContainmentLimits(job, activeLimit);
+            RequireContainmentLimits(desktopJob, null);
+        }
+
+        RequireInitialState();
+        _ = ObserveNestedRetainedMembers(desktopJob, [(root, rootHandle)]);
+        RequireInitialState();
+        if (ObserveLiveMember(ownerHandle) != owner || ObserveLiveMember(rootHandle) != root)
+            throw new UnauthorizedAccessException("CEF initial nested binding changed.");
+    }
+
+    private static void RequireContainmentLimits(SafeFileHandle observedJob, uint? expectedCap)
+    {
+        if (!QueryJobLimits(observedJob, 9, out var limits,
+            (uint)Marshal.SizeOf<ExtendedLimits>(), IntPtr.Zero))
+            throw new UnauthorizedAccessException("CEF job limits unavailable.", new Win32Exception());
+        const uint killOnClose = 0x00002000, breakaway = 0x00000800 | 0x00001000;
+        uint flags = limits.Basic.Flags;
+        if ((flags & killOnClose) == 0 || (flags & breakaway) != 0 ||
+            (expectedCap is uint cap && ((flags & 0x00000008) == 0 || limits.Basic.ActiveLimit != cap)))
+            throw new UnauthorizedAccessException("CEF job containment limits refused.");
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "QueryInformationJobObject", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryJobLimits(SafeFileHandle job, int infoClass, out ExtendedLimits limits,
+        uint length, IntPtr returned);
+
     // P2-03 observation primitive, not a launch grant. The serialized broker
     // must supply retained process handles obtained from its own observations.
     // This verifies one job only, not the second job, module pins, role
