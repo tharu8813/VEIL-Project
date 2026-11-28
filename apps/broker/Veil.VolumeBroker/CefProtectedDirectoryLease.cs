@@ -269,6 +269,37 @@ internal sealed class CefProtectedDirectoryLease : IDisposable
         throw new Win32Exception(unchecked((int)RtlNtStatusToDosError(status)), "Synthetic CEF rename refused.");
     }
 
+    // Disposable generation experiment. The directory and minimum are fixture
+    // inputs, NOT a product registration or authenticated rollback anchor.
+    // Unlike legacy overwrite, a competing final name is never replaced.
+    internal static bool ProbeLibraryGenerationFixture(string generationRoot, string volume,
+        Func<BackendStatus> readStatus, Func<bool> current, int minimumCommitted)
+    {
+        if (!Environment.Is64BitProcess || !current()) return false;
+        using var directory = Open(generationRoot, volume, readStatus);
+        var snapshot = CefLibraryGenerationCatalog.Inspect(
+            Directory.EnumerateFileSystemEntries(generationRoot).Select(path => Path.GetFileName(path)!),
+            minimumCommitted, allowEmpty: minimumCommitted == 0);
+        if (snapshot.Pending is not int generation) return false;
+        string stagedPath = Path.Combine(generationRoot, CefLibraryGenerationCatalog.Name(generation, staged: true));
+        using var source = CreateFileW(stagedPath, 0x00110081, FileShare.Read, IntPtr.Zero,
+            FileMode.Open, 0x00200000, IntPtr.Zero);
+        if (source.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        RequireRegularFile(source, stagedPath, volume);
+        directory.RequireCurrent(readStatus);
+        RequireRegisteredProtection(volume, readStatus());
+        if (!current()) return false;
+        RequireRegularFile(source, stagedPath, volume);
+        byte[] name = Encoding.Unicode.GetBytes(CefLibraryGenerationCatalog.Name(generation));
+        byte[] buffer = new byte[24 + name.Length]; // ReplaceIfExists remains zero
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(16, 4), name.Length);
+        name.CopyTo(buffer, 20);
+        int status = NtSetInformationFile(source, out _, buffer, (uint)buffer.Length, 10);
+        if (status == 0) return true;
+        if (unchecked((uint)status) == 0xC0000035u) return false;
+        throw new Win32Exception(unchecked((int)RtlNtStatusToDosError(status)), "Synthetic generation publication refused.");
+    }
+
     // Disposable fixture only: compare legacy replacement with a retained
     // destination pin and after its release. The second case intentionally
     // has an identity-to-rename gap, and MUST NOT become a product writer.

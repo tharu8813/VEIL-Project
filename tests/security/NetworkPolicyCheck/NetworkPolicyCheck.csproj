@@ -25,6 +25,7 @@
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/ClientIdentity.cs" Link="ClientIdentity.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefChildAdmission.cs" Link="CefChildAdmission.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefBrokerOperationGate.cs" Link="CefBrokerOperationGate.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefLibraryGenerationCatalog.cs" Link="CefLibraryGenerationCatalog.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefSessionObservationPolicy.cs" Link="CefSessionObservationPolicy.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefImageDigest.cs" Link="CefImageDigest.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefPendingChild.cs" Link="CefPendingChild.cs" />

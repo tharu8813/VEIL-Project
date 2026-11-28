@@ -991,6 +991,49 @@ Console.WriteLine("PASS: exact-volume preflight cleanup, command refusal and det
     Console.WriteLine("PASS: broker operation gate serializes prospective publication and lock");
 }
 
+// The namespace is strict and bounded, independent of enumeration order.
+{
+    string N(int n, bool staged = false) => Veil.VolumeBroker.CefLibraryGenerationCatalog.Name(n, staged);
+    Veil.VolumeBroker.CefLibraryGenerationSnapshot Inspect(string[] names, int minimum = 0, bool allowEmpty = true) =>
+        Veil.VolumeBroker.CefLibraryGenerationCatalog.Inspect(names, minimum, allowEmpty);
+    void RejectCatalog(string[] names, int minimum = 0, bool allowEmpty = true)
+    {
+        bool refused = false;
+        try { _ = Inspect(names, minimum, allowEmpty); }
+        catch (InvalidDataException) { refused = true; }
+        Check(refused, "invalid generation namespace accepted");
+    }
+    Check(Inspect([]) is { Committed: 0, Pending: null, Next: 1, RecoveryRequired: false },
+        "explicit empty generation initialization");
+    Check(Inspect([N(2), N(1)], 2, false) is { Committed: 2, Pending: null, Next: 3 },
+        "unordered contiguous catalog");
+    Check(Inspect([N(2, true), N(1)], 1, false) is
+        { Committed: 1, Pending: 2, Next: null, RecoveryRequired: true }, "pending stage blocks new append");
+    Check(Inspect([N(1, true)]) is { Committed: 0, Pending: 1, Next: null, RecoveryRequired: true },
+        "first interrupted publication requires recovery");
+    RejectCatalog([], 0, false);
+    RejectCatalog([N(1)], 2);
+    RejectCatalog([N(2)]);
+    RejectCatalog([N(1), N(3)]);
+    RejectCatalog([N(1), N(1)]);
+    RejectCatalog([N(1), N(1, true)]);
+    RejectCatalog([N(2, true)]);
+    RejectCatalog([N(1, true), N(2, true)]);
+    RejectCatalog([N(1), N(3, true)]);
+    foreach (string malformed in new[] { "", "library-state.json", "library-1.json",
+        N(1).ToUpperInvariant(), N(1) + ":alternate", "../" + N(1),
+        "library-00000000000000000000.json", "library-9999999999999999999.json",
+        "library-000000000000000000０1.json", N(1) + " ", "unrelated" })
+        RejectCatalog([malformed]);
+    int limit = Veil.VolumeBroker.CefLibraryGenerationCatalog.MaximumGenerations;
+    string[] full = Enumerable.Range(1, limit).Select(n => N(n)).ToArray();
+    Check(Inspect(full, limit, false) is { Next: null, Pending: null, RecoveryRequired: false },
+        "generation limit does not wrap or prune");
+    RejectCatalog([.. full, N(1, true)]);
+    RejectCatalog([.. full, N(1, true), N(2, true)]);
+    Console.WriteLine("PASS: bounded immutable generation namespace, rollback and pending-stage refusal");
+}
+
 file sealed class SyntheticRetainedResource : IDisposable
 {
     internal int Disposals { get; private set; }

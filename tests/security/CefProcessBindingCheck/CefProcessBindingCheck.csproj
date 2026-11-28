@@ -33,6 +33,7 @@
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/Protocol.cs" Link="Protocol.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/BackendStatus.cs" Link="BackendStatus.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefProtectedDirectoryLease.cs" Link="CefProtectedDirectoryLease.cs" />
+    <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefLibraryGenerationCatalog.cs" Link="CefLibraryGenerationCatalog.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefProtectedProfileLease.cs" Link="CefProtectedProfileLease.cs" />
     <Compile Include="../../../apps/broker/Veil.VolumeBroker/CefRegisteredProfileLease.cs" Link="CefRegisteredProfileLease.cs" />
     <Compile Include="../../../apps/desktop/Engine/CefProfileLayout.cs" Link="CefProfileLayout.cs" />

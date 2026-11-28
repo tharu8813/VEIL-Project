@@ -352,6 +352,41 @@ try
         File.ReadAllText(libraryPath) == "replacement-next", "Controlled unpinned replacement failed.");
     File.Delete(libraryPath);
     Console.WriteLine("PASS: test-only legacy replacement boundary (pinned refusal, unpinned fixture success)");
+    // Dedicated disposable namespace: committed generations stay pinned.
+    // A colliding final name inserted after observation must remain intact.
+    string generationRoot = Path.Combine(profileLayout.EngineRoot, "library-generations-fixture");
+    Directory.CreateDirectory(generationRoot);
+    string GenerationPath(int n, bool stage = false) =>
+        Path.Combine(generationRoot, CefLibraryGenerationCatalog.Name(n, stage));
+    bool PublishGeneration(int minimum, Func<bool>? current = null) =>
+        CefProtectedDirectoryLease.ProbeLibraryGenerationFixture(generationRoot, fixtureVolume,
+            () => fixtureStatus, current ?? (() => authority), minimum);
+    File.WriteAllText(GenerationPath(1, true), "generation-one");
+    Check(PublishGeneration(0) && !File.Exists(GenerationPath(1, true)) &&
+        File.ReadAllText(GenerationPath(1)) == "generation-one", "First immutable generation failed.");
+    using (var previous = new FileStream(GenerationPath(1), FileMode.Open, FileAccess.Read, FileShare.Read))
+    {
+        File.WriteAllText(GenerationPath(2, true), "generation-two");
+        Check(PublishGeneration(1) && File.ReadAllText(GenerationPath(1)) == "generation-one" &&
+            File.ReadAllText(GenerationPath(2)) == "generation-two", "Pinned previous generation blocked append.");
+        File.WriteAllText(GenerationPath(3, true), "generation-three");
+        int generationChecks = 0;
+        Check(!PublishGeneration(2, () => ++generationChecks == 1) &&
+            File.Exists(GenerationPath(3, true)) && !File.Exists(GenerationPath(3)),
+            "Revoked generation was published.");
+        generationChecks = 0;
+        Check(!PublishGeneration(2, () =>
+        {
+            if (++generationChecks == 2) File.WriteAllText(GenerationPath(3), "competing-final");
+            return true;
+        }) && File.ReadAllText(GenerationPath(3)) == "competing-final" &&
+            File.ReadAllText(GenerationPath(3, true)) == "generation-three",
+            "Generation collision overwrote an existing file.");
+        File.Delete(GenerationPath(3));
+        File.Delete(GenerationPath(3, true));
+    }
+    Directory.Delete(generationRoot, recursive: true);
+    Console.WriteLine("PASS: test-only immutable generation append with retained prior file and collision refusal");
     using (var desktopLock = new FileStream(profileLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
     using (var competing = CefProtectedProfileLease.Open(profileFixture, fixtureVolume,
         fixtureWindows, () => fixtureStatus, () => authority))
