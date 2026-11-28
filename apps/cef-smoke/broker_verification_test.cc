@@ -25,6 +25,17 @@ int main() {
   }
   // Invalid IDs must fail before attempting any SCM or pipe operation.
   if (RequestChildVerification("invalid/volume")) return 5;
-  std::cout << "PASS: native CEF redemption wire request and strict receipt checks\n";
+  if (!BuildRuntimeAuthorityRequest("volume_01-A", request) ||
+      request != "{\"command\":\"CheckCefRuntimeAuthority\",\"volumeId\":\"volume_01-A\"}\n") return 6;
+  if (BuildRuntimeAuthorityRequest("bad/volume", request) || !request.empty() ||
+      RequestRuntimeAuthority("bad/volume")) return 7;
+  if (!IsRuntimeAuthorityReply(kRuntimeAuthorityReply) ||
+      IsRuntimeAuthorityReply(kVerifiedReply) || IsVerifiedReply(kRuntimeAuthorityReply)) return 8;
+  for (std::string_view bad : {"", "{\"ok\":true}\n",
+      "{\"ok\":true,\"cefRuntimeAuthorityCurrent\":false}\n",
+      "{\"ok\":true,\"cefRuntimeAuthorityCurrent\":true}\r\n",
+      "{\"ok\":true,\"cefRuntimeAuthorityCurrent\":true,\"extra\":1}\n"})
+    if (IsRuntimeAuthorityReply(bad)) return 9;
+  std::cout << "PASS: native CEF redemption and distinct runtime authority wire checks\n";
   return 0;
 }
