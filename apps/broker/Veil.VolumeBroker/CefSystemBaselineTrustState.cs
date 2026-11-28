@@ -230,6 +230,11 @@ internal static class CefSystemBaselineTrustRegistry
         using var software = Open(machine, "SOFTWARE");
         RequireOrdinary(software);
         using var leaf = Open(software, AuthorityLeaf);
+        return ReadApprovalAuthorityRecord(leaf);
+    }
+
+    private static CefBaselineApprovalAuthority ReadApprovalAuthorityRecord(RegistryKey leaf)
+    {
         RequireProtected(leaf);
         if (leaf.SubKeyCount != 0 || leaf.ValueCount != 1 ||
             !leaf.GetValueNames().SequenceEqual(new[] { AuthorityValue }, StringComparer.Ordinal) ||
@@ -298,6 +303,40 @@ internal static class CefSystemBaselineTrustRegistry
         catch { handle.Dispose(); throw; }
     }
 
+    // Explicit bootstrap only, with a SHA-256 anchor supplied independently
+    // by the trusted installer/release policy. No TOFU or automatic repair.
+    // All baseline and authority maintenance must use the same writer lock.
+    internal static void InstallApprovalAuthority(ReadOnlySpan<byte> publicKey,
+        ReadOnlySpan<byte> independentlyTrustedSpkiSha256)
+    {
+        RequireMaintenanceAuthority();
+        var expected = new CefBaselineApprovalAuthority(publicKey, independentlyTrustedSpkiSha256);
+        using var mutex = CefSystemBaselineWriterLock.Acquire();
+        using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+        using var software = Open(machine, "SOFTWARE", Read64 | 4);
+        RequireOrdinary(software);
+        using var existingAuthority = TryOpen(software, AuthorityLeaf, Read64);
+        using var existingBaseline = TryOpen(software, Leaf, Read64);
+        expected.RequireFreshInstallation(existingAuthority is not null, existingBaseline is not null);
+        using var created = CreateNew(software, AuthorityLeaf);
+        RequireProtected(created);
+        if (created.ValueCount != 0 || created.SubKeyCount != 0)
+            throw new UnauthorizedAccessException("New approval authority key is not empty.");
+        using var baselineBeforeWrite = TryOpen(software, Leaf, Read64);
+        if (baselineBeforeWrite is not null)
+            throw new UnauthorizedAccessException("Baseline appeared during authority installation.");
+        created.SetValue(AuthorityValue, expected.CopyPublicKey(), RegistryValueKind.Binary);
+        int flush = RegFlushKey(created.Handle);
+        if (flush != 0) throw new Win32Exception(flush);
+        expected.RequireSame(ReadApprovalAuthorityRecord(created));
+        expected.RequireSame(ReadApprovalAuthorityStable());
+        using var baselineAfterWrite = TryOpen(software, Leaf, Read64);
+        if (baselineAfterWrite is not null)
+            throw new UnauthorizedAccessException("Baseline appeared during authority installation.");
+        // No delete/retry after a partial or uncertain result. Manual review
+        // is required; never install a different authority over existing state.
+    }
+
     // This deliberately disconnected maintenance entry accepts only a prepared
     // signed transition, not raw registry data. All cooperative writers share
     // the protected machine mutex. Administrator bypass is outside this boundary.
@@ -316,7 +355,7 @@ internal static class CefSystemBaselineTrustRegistry
         // Validate before creating a key. An existing empty/partial key is
         // never treated as absent and is not deleted or repaired automatically.
         byte[] record = update.RequireExpectedAndCopyRecord(current, CefSystemBaselineHostObserver.Observe());
-        using var created = existing is null ? CreateNew(software) : null;
+        using var created = existing is null ? CreateNew(software, Leaf) : null;
         var target = existing ?? created!;
         RequireProtected(target);
         if (existing is null)
@@ -410,7 +449,7 @@ internal static class CefSystemBaselineTrustRegistry
         authority.RequireSame(ReadApprovalAuthorityStable());
     }
 
-    private static RegistryKey CreateNew(RegistryKey parent)
+    private static RegistryKey CreateNew(RegistryKey parent, string leafName)
     {
         var raw = new RawSecurityDescriptor(Descriptor);
         byte[] bytes = new byte[raw.BinaryLength];
@@ -423,7 +462,7 @@ internal static class CefSystemBaselineTrustRegistry
             {
                 Length = Marshal.SizeOf<SecurityAttributes>(), Descriptor = descriptor
             };
-            int result = RegCreateKeyEx(parent.Handle, Leaf, 0, null, 0, Read64 | 2,
+            int result = RegCreateKeyEx(parent.Handle, leafName, 0, null, 0, Read64 | 2,
                 ref attributes, out var handle, out int disposition);
             if (result != 0 || disposition != 1)
             {

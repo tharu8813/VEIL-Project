@@ -34,6 +34,16 @@ internal sealed class CefBaselineApprovalAuthority
         keyId = CefSystemBaselineTrustState.KeyId(key);
     }
 
+    internal byte[] CopyPublicKey() => (byte[])key.Clone();
+
+    // Initial authority provisioning is allowed only before either machine
+    // record exists. Partial keys are not absence. Never use this for recovery.
+    internal void RequireFreshInstallation(bool authorityExists, bool baselineExists)
+    {
+        if (authorityExists || baselineExists)
+            throw new UnauthorizedAccessException("Existing approval or baseline registration requires review.");
+    }
+
     internal void RequireSame(CefBaselineApprovalAuthority current)
     {
         if (current is null || !CryptographicOperations.FixedTimeEquals(key, current.key))

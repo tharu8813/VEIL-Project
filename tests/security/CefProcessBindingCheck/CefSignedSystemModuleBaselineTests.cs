@@ -158,6 +158,15 @@ internal static class CefSignedSystemModuleBaselineTests
         byte[] approvalPublic = approvalKey.ExportSubjectPublicKeyInfo();
         byte[] approvalAnchor = SHA256.HashData(approvalPublic);
         var authority = new CefBaselineApprovalAuthority(approvalPublic, approvalAnchor);
+        authority.RequireFreshInstallation(false, false);
+        Reject(() => authority.RequireFreshInstallation(true, false));
+        Reject(() => authority.RequireFreshInstallation(false, true));
+        Reject(() => authority.RequireFreshInstallation(true, true));
+        byte[] authorityCopy = authority.CopyPublicKey();
+        authorityCopy[0] ^= 1;
+        if (!authority.CopyPublicKey().SequenceEqual(approvalPublic))
+            throw new InvalidOperationException("Mutable approval authority key escaped.");
+        Console.WriteLine("PASS: approval authority bootstrap-only policy and immutable key (synthetic)");
         byte[] Approve(byte[] digest) => approvalKey.SignHash(digest, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
         CefSystemBaselineTrustUpdate Rotate(CefSystemBaselineTrustState installed, byte[] payload,
             byte[] signature, byte[] newKey, byte[] digest, CefSystemBaselineHost expectedHost) =>
