@@ -4,7 +4,7 @@ using Veil.VolumeBroker;
 #if VEIL_CEF_DIAGNOSTIC_IPC
 // Explicit administrator-only, create-only trust maintenance. No private
 // keys, arbitrary file paths, service start, IPC or enrollment fallback.
-if (args.Length > 0 && args[0] == "--cef-enroll-diagnostic-trust")
+if (args.Length > 0 && args[0] is "--cef-enroll-diagnostic-trust" or "--cef-check-diagnostic-trust")
 {
     try
     {
@@ -30,10 +30,15 @@ if (args.Length > 0 && args[0] == "--cef-enroll-diagnostic-trust")
             System.Globalization.CultureInfo.InvariantCulture, out long sequence) || sequence <= 0)
             throw new ArgumentException("Independent exact sequence required.");
         var (payload, signature) = CefSignedSystemModuleBaseline.ReadInstalledDiagnosticInputs();
-        CefSystemBaselineTrustRegistry.InstallDiagnosticTrust(payload, signature,
-            DecodeKey(baselineSpki), DecodeDigest(baselineSha256), DecodeDigest(payloadSha256), sequence,
-            DecodeKey(approvalSpki), DecodeDigest(approvalSha256));
-        Console.WriteLine("Diagnostic trust enrolled and verified. Service startup NOT RUN.");
+        if (args[0] == "--cef-enroll-diagnostic-trust")
+            CefSystemBaselineTrustRegistry.InstallDiagnosticTrust(payload, signature,
+                DecodeKey(baselineSpki), DecodeDigest(baselineSha256), DecodeDigest(payloadSha256), sequence,
+                DecodeKey(approvalSpki), DecodeDigest(approvalSha256));
+        else
+            CefSystemBaselineTrustRegistry.CheckDiagnosticTrust(payload, signature,
+                DecodeKey(baselineSpki), DecodeDigest(baselineSha256), DecodeDigest(payloadSha256), sequence,
+                DecodeKey(approvalSpki), DecodeDigest(approvalSha256));
+        Console.WriteLine("Diagnostic trust verified. Service startup NOT RUN.");
         return 0;
     }
     catch (Exception error) when (error is not OutOfMemoryException)
