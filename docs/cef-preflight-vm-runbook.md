@@ -195,3 +195,7 @@ $diagnosticPlan = .\scripts\stage-cef-preflight-package.ps1 -Diagnostic -Disposa
 ~~~
 
 설치된 고정 기준 파일 원본을 읽고 실제 호스트 메타데이터, 두 키의 독립성, 서명, 정확한 해시 및 순번을 먼저 확인한다. 기존 관리자 전용 create-only writer로 승인 키와 기준 기록을 순차 등록 후 다시 검증한다. 두 기록은 원자적 트랜잭션이 아니며 중단 시 기존 키를 삭제하거나 재등록하지 말고 VM을 검토한다. 이 CLI 자체는 SCM 상태나 패키지 저널을 재검증하지 않으므로 선행 서비스/패키지 검증 및 격리 VM 확인은 운영자 책임이다. 실제 HKLM/ACL/전원 손실/VM NOT RUN. 개인키는 인자로 전달하지 않는다. CEF 시작 또는 서비스 시작 없음.
+
+### 진단 세션 통합 실행 도구
+
+기존 `test-cef-protected-session.ps1`에 `-Diagnostic -DisposableVm -RunProtectedSession`과 독립 `-BaselineSpkiBase64`, `-BaselineKeySha256`, `-BaselinePayloadSha256`, `-BaselineSequence`, `-ApprovalSpkiBase64`, `-ApprovalKeySha256`을 함께 지정한다. 동일 설치/볼륨 입력 및 독립 승인 자료를 사용한다. 서명된 설치 및 Disabled/Stopped SCM 등록과 독립 신뢰를 읽기 전용으로 재검증한 뒤 별도 표준 사용자로 `--cef-broker-suspended-probe`를 실행한다. 코드 31만 허용하며 재잠금 확인은 데스크톱의 엄격한 응답 검증에 의존한다. 최종 VHDX 분리 및 Disabled/Stopped 상태를 관찰하고 별도 기록을 재구성한다. 사용자 암호 입력은 대화형으로 필요하다. 일반 코드 29 기록과 혼용 금지. 실제 Windows VM, 키 등록, BitLocker 및 CEF 초기화 NOT RUN. 준비 레이아웃은 별도로 미리 존재해야 하며 실제 시험이 실패할 경우 성공 처리하지 않는다.

@@ -312,6 +312,23 @@ internal static class CefSystemBaselineTrustRegistry
     // Create-only pair under the cooperative writer mutex. The existing
     // per-record writers recursively acquire the same Windows mutex.
     // A crash between writes leaves partial state for manual review.
+    // Read-only exact comparison with independently authorized release values.
+    internal static void CheckDiagnosticTrust(ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature,
+        ReadOnlySpan<byte> baselineKey, ReadOnlySpan<byte> baselineAnchor,
+        ReadOnlySpan<byte> payloadAnchor, long sequence,
+        ReadOnlySpan<byte> approvalKey, ReadOnlySpan<byte> approvalAnchor)
+    {
+        RequireMaintenanceAuthority();
+        var authority = new CefBaselineApprovalAuthority(approvalKey, approvalAnchor);
+        var update = CefSystemBaselineTrustUpdate.PrepareDiagnosticEnrollment(payload, signature,
+            baselineKey, baselineAnchor, payloadAnchor, sequence, CefSystemBaselineHostObserver.Observe(), authority);
+        authority.RequireSame(ReadApprovalAuthorityStable());
+        update.RequirePublished(ReadStable(), CefSystemBaselineHostObserver.Observe());
+        CefSignedSystemModuleBaseline.VerifyInstalledTrust(payload, signature).RequireBoundTrust();
+        update.RequirePublished(ReadStable(), CefSystemBaselineHostObserver.Observe());
+        authority.RequireSame(ReadApprovalAuthorityStable());
+    }
+
     internal static void InstallDiagnosticTrust(ReadOnlySpan<byte> payload, ReadOnlySpan<byte> signature,
         ReadOnlySpan<byte> baselineKey, ReadOnlySpan<byte> baselineAnchor,
         ReadOnlySpan<byte> payloadAnchor, long sequence,
