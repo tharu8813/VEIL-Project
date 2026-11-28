@@ -15,6 +15,9 @@ internal sealed class CefBrokerOwnedJob : IDisposable
     private readonly uint activeLimit;
     private bool assignmentIssued;
     private bool assignmentExported;
+    private CefBrokerOwnedJob? privatePeer;
+    private SafeProcessHandle? privateRoot;
+    private ClientIdentity? privateRootIdentity;
     private bool bound;
     private bool disposed;
 
@@ -181,15 +184,34 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         ClientIdentity root, SafeProcessHandle rootHandle)
     {
         var peerHandle = RequirePrivatePeer(peer);
+        if (privatePeer is not null || peer.privatePeer is not null)
+            throw new UnauthorizedAccessException("CEF private Job pair already bound.");
         RequireContainmentLimits(peerHandle, peer.activeLimit);
         RequireInitialNestedBinding(peerHandle, owner, ownerHandle, root, rootHandle);
         RequireContainmentLimits(peerHandle, peer.activeLimit);
+        // Bind once to the exact retained objects. Neither a different peer
+        // nor a reused PID can subsequently authorize a diagnostic or drain.
+        privatePeer = peer;
+        peer.privatePeer = this;
+        privateRoot = peer.privateRoot = rootHandle;
+        privateRootIdentity = peer.privateRootIdentity = root;
+    }
+
+    private SafeFileHandle RequireBoundPrivatePeer(CefBrokerOwnedJob peer, SafeProcessHandle rootHandle)
+    {
+        var peerHandle = RequirePrivatePeer(peer);
+        if (!ReferenceEquals(privatePeer, peer) || !ReferenceEquals(peer.privatePeer, this) ||
+            !ReferenceEquals(privateRoot, rootHandle) || !ReferenceEquals(peer.privateRoot, rootHandle))
+            throw new UnauthorizedAccessException("CEF private Job lifetime binding mismatch.");
+        return peerHandle;
     }
 
     internal T[] ObservePrivateNestedDiagnostics<T>(CefBrokerOwnedJob peer,
         ClientIdentity root, SafeProcessHandle rootHandle, Func<ClientIdentity, SafeProcessHandle, T> observe)
     {
-        var peerHandle = RequirePrivatePeer(peer);
+        var peerHandle = RequireBoundPrivatePeer(peer, rootHandle);
+        if (privateRootIdentity != root)
+            throw new UnauthorizedAccessException("CEF private Job root identity mismatch.");
         RequireContainmentLimits(job, activeLimit);
         RequireContainmentLimits(peerHandle, peer.activeLimit);
         var result = ObserveCollectedNestedDiagnostics(peerHandle, root, rootHandle, observe);
@@ -200,7 +222,7 @@ internal sealed class CefBrokerOwnedJob : IDisposable
 
     internal bool TerminateAndVerifyPrivateDrain(CefBrokerOwnedJob peer,
         SafeProcessHandle rootHandle, int milliseconds) =>
-        TerminateAndVerifyNestedDrain(RequirePrivatePeer(peer), rootHandle, milliseconds);
+        TerminateAndVerifyNestedDrain(RequireBoundPrivatePeer(peer, rootHandle), rootHandle, milliseconds);
 
     // Validate the initial containment pair before ownership is transferred.
     // The desktop Job must already come from a separately trusted source.
