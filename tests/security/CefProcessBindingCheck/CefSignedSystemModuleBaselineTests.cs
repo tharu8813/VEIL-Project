@@ -131,6 +131,18 @@ internal static class CefSignedSystemModuleBaselineTests
         var mismatched = CefSystemBaselineTrustState.CreateVerifiedRecord(actualPayload, publicKey, 6);
         Reject(() => CefSignedSystemModuleBaseline.VerifyTrustedSnapshot(actualPayload, Sign(actualPayload),
             mismatched, () => mismatched));
+        static byte[] MutexDescriptor(string sddl)
+        {
+            var raw = new System.Security.AccessControl.RawSecurityDescriptor(sddl);
+            byte[] bytes = new byte[raw.BinaryLength];
+            raw.GetBinaryForm(bytes, 0);
+            return bytes;
+        }
+        CefSystemBaselineWriterLock.RequireDescriptor(MutexDescriptor("O:BAG:BAD:P(A;;0x1f0001;;;SY)(A;;0x1f0001;;;BA)"));
+        Reject(() => CefSystemBaselineWriterLock.RequireDescriptor(MutexDescriptor("O:BAG:BAD:P(A;;0x1f0001;;;SY)(A;;0x1f0001;;;BA)(A;;0x1f0001;;;BU)")));
+        Reject(() => CefSystemBaselineWriterLock.RequireDescriptor(MutexDescriptor("O:BUG:BAD:P(A;;0x1f0001;;;SY)(A;;0x1f0001;;;BA)")));
+        Reject(() => CefSystemBaselineWriterLock.RequireDescriptor(MutexDescriptor("O:BAG:BAD:(A;;0x1f0001;;;SY)(A;;0x1f0001;;;BA)")));
+        Console.WriteLine("PASS: baseline writer mutex descriptor refusal (synthetic, no machine registry writes)");
         Console.WriteLine("PASS: independently anchored enrollment, strictly increasing signed update and stale-state refusal");
         var wrongHost = Payload(build: actual.Build, revision: actual.UpdateRevision == 0 ? 1 : 0);
         Reject(() => CefSignedSystemModuleBaseline.VerifyCurrentHost(wrongHost, Sign(wrongHost), publicKey, 7));

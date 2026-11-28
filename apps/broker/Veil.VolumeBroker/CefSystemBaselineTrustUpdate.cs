@@ -58,7 +58,7 @@ internal sealed class CefSystemBaselineTrustUpdate
         return new(previous, next, host);
     }
 
-    // Must be called under a future single administrator writer transaction,
+    // Must be called under the single administrator writer transaction,
     // immediately before persistence. This check alone is NOT an atomic CAS.
     internal byte[] RequireExpectedAndCopyRecord(CefSystemBaselineTrustState? current,
         CefSystemBaselineHost currentHost)

@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 
@@ -85,7 +86,7 @@ internal sealed class CefSystemBaselineTrustState
 }
 
 // Separate fixed machine key: do not alter the strict VEIL/CefBootstrap
-// layout. No IPC, installation, registry mutation or fallback to user state.
+// layout. Explicit administrator maintenance only; no IPC or user fallback.
 internal static class CefSystemBaselineTrustRegistry
 {
     private const string Leaf = "VEIL.CefSystemBaselineTrust";
@@ -119,6 +120,11 @@ internal static class CefSystemBaselineTrustRegistry
         using var software = Open(machine, "SOFTWARE");
         RequireOrdinary(software);
         using var leaf = Open(software, Leaf);
+        return ReadRecord(leaf);
+    }
+
+    private static CefSystemBaselineTrustState ReadRecord(RegistryKey leaf)
+    {
         RequireProtected(leaf);
         if (leaf.SubKeyCount != 0 || leaf.ValueCount != 1 ||
             !leaf.GetValueNames().SequenceEqual(new[] { Value }, StringComparer.Ordinal) ||
@@ -143,9 +149,17 @@ internal static class CefSystemBaselineTrustRegistry
             .GetSecurityDescriptorBinaryForm());
     }
 
-    private static RegistryKey Open(RegistryKey parent, string name)
+    private static RegistryKey Open(RegistryKey parent, string name, int access = Read64) =>
+        TryOpen(parent, name, access) ?? throw new Win32Exception(2);
+
+    private static RegistryKey? TryOpen(RegistryKey parent, string name, int access)
     {
-        int result = RegOpenKeyEx(parent.Handle, name, OpenLink, Read64, out var handle);
+        int result = RegOpenKeyEx(parent.Handle, name, OpenLink, access, out var handle);
+        if (result == 2)
+        {
+            handle?.Dispose();
+            return null;
+        }
         if (result != 0)
         {
             handle?.Dispose();
@@ -154,6 +168,93 @@ internal static class CefSystemBaselineTrustRegistry
         try { return RegistryKey.FromHandle(handle, RegistryView.Registry64); }
         catch { handle.Dispose(); throw; }
     }
+
+    // This deliberately disconnected maintenance entry accepts only a prepared
+    // signed transition, not raw registry data. All cooperative writers share
+    // the protected machine mutex. Administrator bypass is outside this boundary.
+    internal static void Publish(CefSystemBaselineTrustUpdate update)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        if (!OperatingSystem.IsWindows() || RuntimeInformation.OSArchitecture != Architecture.X64 ||
+            RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            throw new PlatformNotSupportedException("Expected native Windows x64.");
+        using var identity = WindowsIdentity.GetCurrent();
+        if (!identity.IsSystem && !new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
+            throw new UnauthorizedAccessException("Elevated administrator required.");
+        using var mutex = CefSystemBaselineWriterLock.Acquire();
+        using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+        using var software = Open(machine, "SOFTWARE", Read64 | 4);
+        RequireOrdinary(software);
+        using var existing = TryOpen(software, Leaf, Read64 | 2);
+        var current = existing is null ? null : ReadRecord(existing);
+        // Validate before creating a key. An existing empty/partial key is
+        // never treated as absent and is not deleted or repaired automatically.
+        byte[] record = update.RequireExpectedAndCopyRecord(current, CefSystemBaselineHostObserver.Observe());
+        using var created = existing is null ? CreateNew(software) : null;
+        var target = existing ?? created!;
+        RequireProtected(target);
+        if (existing is null)
+        {
+            if (target.ValueCount != 0 || target.SubKeyCount != 0)
+                throw new UnauthorizedAccessException("New baseline key is not empty.");
+        }
+        else
+        {
+            current!.RequireSame(ReadRecord(target));
+        }
+        // Recheck host immediately before the sole record write.
+        _ = update.RequireExpectedAndCopyRecord(current, CefSystemBaselineHostObserver.Observe());
+        target.SetValue(Value, record, RegistryValueKind.Binary);
+        int flush = RegFlushKey(target.Handle);
+        if (flush != 0) throw new Win32Exception(flush);
+        update.RequirePublished(ReadRecord(target), CefSystemBaselineHostObserver.Observe());
+        update.RequirePublished(ReadStable(), CefSystemBaselineHostObserver.Observe());
+        // Never undo a write on an uncertain result: rollback could lower the
+        // floor. Operators must inspect the installed state before retry.
+    }
+
+    private static RegistryKey CreateNew(RegistryKey parent)
+    {
+        var raw = new RawSecurityDescriptor(Descriptor);
+        byte[] bytes = new byte[raw.BinaryLength];
+        raw.GetBinaryForm(bytes, 0);
+        IntPtr descriptor = Marshal.AllocHGlobal(bytes.Length);
+        try
+        {
+            Marshal.Copy(bytes, 0, descriptor, bytes.Length);
+            var attributes = new SecurityAttributes
+            {
+                Length = Marshal.SizeOf<SecurityAttributes>(), Descriptor = descriptor
+            };
+            int result = RegCreateKeyEx(parent.Handle, Leaf, 0, null, 0, Read64 | 2,
+                ref attributes, out var handle, out int disposition);
+            if (result != 0 || disposition != 1)
+            {
+                handle?.Dispose();
+                if (result != 0) throw new Win32Exception(result);
+                throw new UnauthorizedAccessException("Existing trust key refused during enrollment.");
+            }
+            try { return RegistryKey.FromHandle(handle, RegistryView.Registry64); }
+            catch { handle.Dispose(); throw; }
+        }
+        finally { Marshal.FreeHGlobal(descriptor); }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SecurityAttributes
+    {
+        public int Length;
+        public IntPtr Descriptor;
+        public int Inherit;
+    }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, EntryPoint = "RegCreateKeyExW")]
+    private static extern int RegCreateKeyEx(SafeRegistryHandle parent, string name,
+        int reserved, string? keyClass, int options, int access,
+        ref SecurityAttributes attributes, out SafeRegistryHandle key, out int disposition);
+
+    [DllImport("advapi32.dll", ExactSpelling = true)]
+    private static extern int RegFlushKey(SafeRegistryHandle key);
 
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, EntryPoint = "RegOpenKeyExW")]
     private static extern int RegOpenKeyEx(SafeRegistryHandle parent, string name, int options,
