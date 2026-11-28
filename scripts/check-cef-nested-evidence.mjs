@@ -16,6 +16,62 @@ function parse(bytes) {
     return JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/, ''));
 }
 
+const mitigationFields = ['Aslr', 'DynamicCode', 'SystemCallDisable', 'ControlFlowGuard', 'ImageLoad', 'ChildProcess'];
+const exactKeys = (value, fields) => record(value) && Object.keys(value).length === fields.length &&
+    fields.every(field => Object.hasOwn(value, field));
+const uint = value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
+const mitigationStatuses = ['observed', 'query-unavailable', 'identity-unavailable', 'policy-changed'];
+
+// This summarizes last live samples only. Do not infer safe flag values,
+// admission, or complete coverage from the existence of a record.
+function checkMitigationEvidence(sample) {
+    const entries = [...(sample.schema >= 3 ? [sample.browser] : []), ...sample.observed];
+    const present = Object.hasOwn(sample, 'mitigationCoverage') ||
+        entries.some(entry => Object.hasOwn(entry, 'Mitigation'));
+    if (!present) return null; // historical schema-5 and earlier reports
+    require(sample.schema === 5 && entries.every(entry => Object.hasOwn(entry, 'Mitigation')),
+        'Partial or unsupported mitigation evidence');
+    const coverage = sample.mitigationCoverage;
+    require(exactKeys(coverage, ['scope', 'sampled', 'available', 'unavailable']) &&
+        coverage.scope === 'last-live-sample-per-process' &&
+        uint(coverage.sampled) && uint(coverage.available) && uint(coverage.unavailable),
+        'Invalid mitigation coverage record');
+    const byRole = {};
+    let available = 0;
+    for (const entry of entries) {
+        const m = entry.Mitigation;
+        require(exactKeys(m, ['Status', 'Flags', 'Win32Error']) && mitigationStatuses.includes(m.Status),
+            'Invalid mitigation observation');
+        if (m.Status === 'observed') {
+            require(exactKeys(m.Flags, mitigationFields) && mitigationFields.every(key => uint(m.Flags[key])) &&
+                m.Win32Error === null, 'Invalid observed mitigation flags');
+            available++;
+        } else {
+            require(m.Flags === null && (m.Status === 'query-unavailable'
+                ? Number.isInteger(m.Win32Error) && m.Win32Error > 0 && m.Win32Error <= 0x7fffffff
+                : m.Win32Error === null), 'Invalid unavailable mitigation observation');
+        }
+        const role = byRole[entry.Role] ??= {
+            sampled: 0, available: 0, unavailable: 0, missingPids: [], distinctFlagSets: []
+        };
+        role.sampled++;
+        if (m.Status === 'observed') {
+            role.available++;
+            const key = mitigationFields.map(field => m.Flags[field]).join(',');
+            if (!role.distinctFlagSets.some(set => mitigationFields.map(field => set[field]).join(',') === key))
+                role.distinctFlagSets.push(Object.fromEntries(mitigationFields.map(field => [field, m.Flags[field]])));
+        } else {
+            role.unavailable++;
+            role.missingPids.push(entry.Pid);
+        }
+    }
+    const unavailable = entries.length - available;
+    require(coverage.sampled === entries.length && coverage.available === available &&
+        coverage.unavailable === unavailable, 'Mitigation coverage totals mismatch');
+    return { scope: coverage.scope, sampled: entries.length, available, unavailable, byRole,
+        roleBaselineStatus: 'NOT ESTABLISHED', completeProcessLifetimeCoverage: 'NOT ESTABLISHED' };
+}
+
 // Structural consistency review of locally reported evidence. This is NOT
 // attestation, provenance, independent execution, or a product gate.
 export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes, sampleBytes }) {
@@ -142,6 +198,7 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
         }
         retainedHandleExitCount = sample.handleExits.length;
     }
+    const mitigationEvidence = checkMitigationEvidence(sample);
     return {
         status: 'CONSISTENT_REPORTED_SMOKE_PASS',
         sourceCommit: expectedCommit,
@@ -154,6 +211,7 @@ export function checkNestedEvidence({ expectedCommit, manifestBytes, reportBytes
         processesWithModuleInventory: sample.schema >= 3 ? processesWithModuleInventory : null,
         jobNotifications,
         retainedHandleExitCount,
+        mitigationEvidence,
         independentRuntimeVerification: 'NOT ESTABLISHED',
         productReleaseGates: 'NOT RUN',
         limitations: 'Unsigned local evidence from sampled processes; no complete containment audit, site isolation, protected storage or product authorization.'
