@@ -625,7 +625,7 @@ test('broker retains executable and runtime pins until confirmed candidate exit'
     assert.match(nested, /guard\.Revoke\(\);\s*if \(borrowedCreation is not null\)\s*return guard\.RevokeAndCheckDrain\(\(\) => borrowedCreation\.RevokeAndRelease\(milliseconds\)\);\s*return lifetime!\.TryRelease\(\(\) => guard\.RevokeAndCheckDrain\(\(\) => drain\(milliseconds\)\)\);/);
     const creation = await readFile('apps/broker/Veil.VolumeBroker/CefPreparedCreationLifetime.cs', 'utf8');
     assert.match(creation, /lifetime = new CefRetainedLifetime\(prerequisites, inner, outer\)/);
-    assert.match(creation, /return lifetime\.TryRelease\(\(\) =>[\s\S]*?if \(!custody\.TryDrainAndRelease\(Remaining\(\)\)\) return false;[\s\S]*?return outer\.HasNoActiveProcesses\(\) && inner\.HasNoActiveProcesses\(\);/);
+    assert.match(creation, /return lifetime\.TryRelease\(\(\) => TryDrainAll\(milliseconds,\s*custody\.TryDrainAndRelease, outer\.TerminateAndDrain, inner\.TerminateAndDrain,\s*\(\) => outer\.HasNoActiveProcesses\(\) && inner\.HasNoActiveProcesses\(\)\)\);/);
 });
 
 test('isolated CEF preflight entry is compile-time exclusive and never falls back to browsing', async () => {
@@ -926,7 +926,7 @@ test('disconnected creation probe owns the slot before native creation and alway
     assert.match(broker, /CefDiagnosticSessionSlot<ICefDiagnosticLifetime> diagnosticSession/);
     assert.match(probe, /preparation = PrepareDiagnosticLaunch[\s\S]*?outer = CefBrokerOwnedJob\.CreateDisabledCandidate\(\);\s*inner = CefBrokerOwnedJob\.CreateDisabledCandidate\(\);[\s\S]*?new CefPreparedCreationLifetime[\s\S]*?diagnosticSession\.RegisterAndActivate\(expectedGeneration, probe, \(\) =>\s*\{\s*accepted = true;[^\n]*\s*probe\.Create\(\);/);
     assert.match(probe, /finally\s*\{\s*if \(accepted\)[\s\S]*?diagnosticRelock\.Request\(expectedGeneration\);\s*try \{ ClearAuthenticatedOwner\(\); \}\s*finally \{ EnsureCefStopRetry\(\); \}/);
-    assert.match(life, /if \(creating\) return false;\s*return lifetime\.TryRelease\(\(\) =>[\s\S]*?custody\.TryDrainAndRelease\(Remaining\(\)\)[\s\S]*?outer\.TerminateAndDrain\(Remaining\(\)\)[\s\S]*?inner\.TerminateAndDrain\(Remaining\(\)\)[\s\S]*?return outer\.HasNoActiveProcesses\(\) && inner\.HasNoActiveProcesses\(\);/);
+    assert.match(life, /return lifetime\.TryRelease\(\(\) => TryDrainAll\(milliseconds,\s*custody\.TryDrainAndRelease, outer\.TerminateAndDrain, inner\.TerminateAndDrain,\s*\(\) => outer\.HasNoActiveProcesses\(\) && inner\.HasNoActiveProcesses\(\)\)\);/);
     assert.match(life, /lifetime = new CefRetainedLifetime\(prerequisites, inner, outer\)/);
     assert.doesNotMatch(life, /ResumeRetainedRoot|ResumeAfterVerification|TakeVerified/);
     assert.doesNotMatch(probe, /ResumeRetainedRoot|TryRegisterDiagnosticSession\(/);
@@ -1130,8 +1130,17 @@ test('suspended broker creation owns the registered profile and uses only its to
     assert.match(prep, /public void Dispose\(\)[\s\S]*?try \{ profile.Dispose\(\); \}[\s\S]*?try \{ token.Dispose\(\); \}[\s\S]*?registration.Dispose\(\)/);
     assert.match(broker, /new CefPreparedCreationLifetime\(outer, inner, preparation,\s*preparation.CreateDiagnosticCandidate\);[\s\S]*?diagnosticSession.RegisterAndActivate/);
     assert.match(lifetime, /lifetime = new CefRetainedLifetime\(prerequisites, inner, outer\)/);
-    assert.match(lifetime, /return lifetime.TryRelease\(\(\) =>[\s\S]*?if \(!custody.TryDrainAndRelease\(Remaining\(\)\)\) return false;[\s\S]*?return outer.HasNoActiveProcesses\(\) && inner.HasNoActiveProcesses\(\);/);
+    assert.match(lifetime, /return lifetime\.TryRelease\(\(\) => TryDrainAll\(milliseconds,\s*custody\.TryDrainAndRelease, outer\.TerminateAndDrain, inner\.TerminateAndDrain,\s*\(\) => outer\.HasNoActiveProcesses\(\) && inner\.HasNoActiveProcesses\(\)\)\);/);
     assert.match(session, /if \(borrowedCreation is not null\)\s*throw new UnauthorizedAccessException\("CEF prepared successor activation is disabled\."\);/);
     assert.equal((broker.match(/RunDiagnosticCreationProbe\(/g) ?? []).length, 1);
     assert.match(fixture, /var retained = new CefRetainedLifetime\(retainedProfile\);\s*Check\(!retained.TryRelease\(\(\) => false\)[\s\S]*?Reject\(\(\) => competing.AcquireExclusiveLock\(\)\);[\s\S]*?retained.TryRelease\(\(\) => true\)[\s\S]*?next.AcquireExclusiveLock\(\);/);
+});
+
+
+test('prepared drain independently attempts every private stop before releasing protected prerequisites', async () => {
+    const life = await readFile('apps/broker/Veil.VolumeBroker/CefPreparedCreationLifetime.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    assert.match(life, /try \{ return drain\(Remaining\(\)\); \}[\s\S]*?failure \?\?= error;\s*return false;/);
+    assert.match(life, /bool custodyDrained = Attempt\(drainCustody\);\s*bool outerDrained = Attempt\(drainOuter\);\s*bool innerDrained = Attempt\(drainInner\);\s*if \(failure is not null\)[\s\S]*?return custodyDrained && outerDrained && innerDrained && verifyEmpty\(\);/);
+    assert.match(fixture, /foreach \(int failedStage in new\[\] \{ 0, 1, 2, 3 \}\)[\s\S]*?retained.TryRelease\(Drain\);[\s\S]*?!released && pin.CanRead[\s\S]*?retried = true;\s*Check\(retained.TryRelease\(Drain\) && !pin.CanRead/);
 });
