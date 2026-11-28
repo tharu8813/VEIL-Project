@@ -90,7 +90,7 @@ test('bookmark and history edits both require the current live native manager', 
     assert.match(library, /void Open\(\)\s*\{\s*if \(canEdit\?\.Invoke\(\) != true/);
 });
 test('failed library save restores data and successful save publishes separately', () => {
-    assert.match(library, /var previous = entries\.ToArray\(\);[\s\S]*?change\(\);[\s\S]*?committed = \(folders is null \|\| BookmarkPolicy\.Valid\(folders, entries\)\) && save\(\);[\s\S]*?if \(!committed\)[\s\S]*?entries\.AddRange\(previous\);[\s\S]*?folders\.AddRange\(previousFolders\);[\s\S]*?return false;[\s\S]*?published\?\.Invoke\(\);/);
+    assert.match(library, /if \(!LibraryMutation\.TryCommit\(entries, folders, \(\) => canEdit\?\.Invoke\(\) == true, change, save\)\)[\s\S]*?return false;[\s\S]*?published\?\.Invoke\(\);/);
     assert.match(library, /new HashSet<PageEntry>\(targets, ReferenceEqualityComparer\.Instance\);\s*Commit\(\(\) => entries\.RemoveAll\(confirmed\.Contains\)\);/);
     assert.match(toolbar, /private void RefreshHistoryLibraries[\s\S]*?window\.historyLibrary is \{ \} library && !ReferenceEquals\(library, source\)/);
 });
@@ -869,4 +869,14 @@ test('CEF fixture history records only matching successful navigation and keeps 
     assert.match(cefTabbed, /if \(visits.Count > FixtureHistoryLimit\)[\s\S]*?visits.RemoveAt\(visits.Count - 1\)/);
     assert.match(cefTabbed, /bookmarkList.Items.Clear\(\);\s*ClearFixtureHistory\(\);/);
     assert.match(cefTabbed, /Failed HTTP navigation did not create a fixture visit/);
+});
+
+
+const libraryMutation = await readFile('apps/desktop/LibraryMutation.cs', 'utf8');
+test('engine-neutral library edit rechecks authorization and restores on failed commit', () => {
+    assert.match(libraryMutation, /if \(!authorized\(\)\) return false;[\s\S]*?var previous = entries.ToArray\(\);[\s\S]*?change\(\);[\s\S]*?BookmarkPolicy.Valid\(folders, entries\)\) &&\s*authorized\(\) && save\(\);/);
+    assert.match(libraryMutation, /finally\s*\{\s*if \(!committed\)[\s\S]*?entries.AddRange\(previous\);[\s\S]*?folders.AddRange\(previousFolders\);/);
+    assert.match(session, /internal bool TrySaveLibrary\(Func<bool> authorized\)\s*\{\s*libraryDispatcher.VerifyAccess\(\);[\s\S]*?IsPrivate \|\| IsEnding \|\| EngineLost \|\| !EngineHost.IsReady \|\| persistentStatePath is null \|\|\s*!authorized\(\)\) return false;[\s\S]*?Data.Save\(persistentStatePath\);/);
+    assert.match(browser, /bool SaveLibrary\(\) => session.TrySaveLibrary\(CanEditLibrary\);/);
+    assert.match(browser, /LibraryMutation.TryCommit\(data.Bookmarks, data.BookmarkFolders, Authorized,[\s\S]*?session.TrySaveLibrary\(Authorized\)/);
 });

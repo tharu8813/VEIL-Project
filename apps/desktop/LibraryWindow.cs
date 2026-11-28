@@ -190,27 +190,8 @@ internal sealed class LibraryWindow : VeilDialog
             if (canEdit?.Invoke() != true) return false;
             // The list is shared by all windows. Do not report success if the protected state
             // could not be saved; restore the in-memory list before showing the error.
-            var previous = entries.ToArray();
-            var previousFolders = folders?.ToArray();
-            bool committed;
-            try
+            if (!LibraryMutation.TryCommit(entries, folders, () => canEdit?.Invoke() == true, change, save))
             {
-                change();
-                committed = (folders is null || BookmarkPolicy.Valid(folders, entries)) && save();
-            }
-            catch (Exception error) when (RecoverableFailure.Is(error))
-            {
-                committed = false;
-            }
-            if (!committed)
-            {
-                entries.Clear();
-                entries.AddRange(previous);
-                if (folders is not null && previousFolders is not null)
-                {
-                    folders.Clear();
-                    folders.AddRange(previousFolders);
-                }
                 Refresh();
                 UserPrompts.Notice(PromptOwner, "변경사항을 저장하지 못했습니다. 기존 목록을 유지합니다.", title);
                 return false;

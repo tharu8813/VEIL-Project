@@ -286,3 +286,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - #284 exact Windows 46170874531 / Native 46170874524 PASS, 독립 리뷰 없음.
 - fixture 전용 128개 메모리 history, 성공 completion의 native ID/navigation ID/expected URL/source 일치 검증, 동일 ID 중복 방지, 최신순 조회/열기/선택 삭제/전체 삭제 및 종료 폐기. title callback에는 탐색 ID가 없어 URL+시간만 기록한다. 두 창의 성공 기록, 삭제/전체 삭제, HTTP 404 제외 및 후속 정상 탐색 기록을 요구하는 회귀 작성. history reopen, 제품 암호화 저장/복원, same-URL stale native callback 구분 및 실제 WPF runtime 미검증. 새 CI/보호 VM/독립 리뷰 NOT RUN. WebView2/startupEnabled=false 유지.
+
+### P3-02 제품 라이브러리 공통 저장 경계 준비 (미완료)
+
+- #285 exact Windows 46172371655 / Native 46172371697 PASS, 독립 리뷰 없음.
+- 기존 PageEntry/BrowserData JSON schema 및 mounted profile 경로를 유지한다. 엔진 독립 LibraryMutation 동기 transaction을 추출해 기존 제품 북마크 버튼/라이브러리 편집에서 사용하고 변경 전/저장 직전 권한 재검사, 실패/예외 시 entry/folder rollback, 성공 후 UI publish 분리를 유지했다. BrowserSession.TrySaveLibrary는 소유 dispatcher, private/ending/engine lost/not ready 및 호출자 권한을 확인하며 기존 session 소유 경로만 사용한다. 이는 세션 수명 검사이며 물리 볼륨 잠금/ACL/암호화 권한의 독립 증명은 아니다. 기존 WebView2에도 편집 저장 경계 변경이 적용된다. 기존 desktop smoke에 합성 revoke/save-fail/success 케이스와 source contract 추가. CEF fixture 메모리 데이터는 제품 저장소에 연결하지 않으며 방문 기록 자동 저장 경로/보호 볼륨 실측/새 CI/실제 runtime/독립 리뷰 미검증. startupEnabled=false 유지.

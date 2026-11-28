@@ -1306,15 +1306,17 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         if (!SettingsReady() || Active is not { } tab || !CanUseTab(tab.Item) || !IsWebUrl(tab.Url)) return;
         if (data.Bookmarks.All(entry => entry.Url != tab.Url))
         {
-            data.Bookmarks.Add(new PageEntry(tab.Title, tab.Url, DateTimeOffset.Now));
-            Status.Text = "북마크에 추가했습니다.";
-            try { data.Save(statePath); }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            string url = tab.Url;
+            bool Authorized() => SettingsReady() && Active == tab && CanUseTab(tab.Item) &&
+                tab.Url == url && IsWebUrl(url);
+            if (!LibraryMutation.TryCommit(data.Bookmarks, data.BookmarkFolders, Authorized,
+                () => data.Bookmarks.Add(new PageEntry(tab.Title, url, DateTimeOffset.Now)),
+                () => session.TrySaveLibrary(Authorized)))
             {
-                data.Bookmarks.RemoveAt(data.Bookmarks.Count - 1);
                 Status.Text = "북마크를 저장하지 못했습니다.";
                 return;
             }
+            Status.Text = "북마크에 추가했습니다.";
             RefreshBookmarkBars();
             Motion.Pop((System.Windows.Media.ScaleTransform)BookmarkGlyph.RenderTransform, 1.6);
         }
@@ -1340,18 +1342,7 @@ main{max-width:920px;margin:0 auto;padding:28px 32px}h1{margin:0 0 18px;font-siz
         if (FocusManagementPage(internalUrl)) return;
         var entries = editable ? data.Bookmarks : data.History;
         LibraryWindow? dialog = null;
-        bool SaveLibrary()
-        {
-            try
-            {
-                data.Save(statePath);
-                return true;
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                return false;
-            }
-        }
+        bool SaveLibrary() => session.TrySaveLibrary(CanEditLibrary);
 
         bool CanEditLibrary() => SettingsReady() && IsActive &&
             Active is { CancelManagement: not null } active && active.Url == internalUrl &&
