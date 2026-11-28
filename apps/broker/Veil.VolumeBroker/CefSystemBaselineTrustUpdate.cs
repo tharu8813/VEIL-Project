@@ -280,9 +280,9 @@ internal sealed class CefSystemBaselineTrustUpdate
 }
 
 
-// Deliberately disconnected recovery plan. The offline recovery anchor is
+// Deliberately disconnected recovery plan and ordered maintenance transaction. The offline recovery anchor is
 // obtained out of band from independent release policy, never from the
-// compromised authority or candidate package. No registry writer here.
+// compromised authority or candidate package. No product admission here.
 internal enum CefApprovalRecoveryStatus
 {
     StoppedOriginal,
@@ -374,7 +374,7 @@ internal sealed class CefApprovalAuthorityRecovery
         return CefApprovalRecoveryStatus.UnexpectedRequiresReview;
     }
 
-    // Future transaction must hold the common writer lock. Baseline first,
+    // Persistent transaction must hold the common writer lock. Baseline first,
     // while the approval authority is still stopped; then verify/flush both
     // records before publishing the new active authority LAST.
     internal byte[] RequireBaselineStage(ReadOnlySpan<byte> authorityRecord,
@@ -383,6 +383,63 @@ internal sealed class CefApprovalAuthorityRecovery
         if (Classify(authorityRecord, baseline, currentHost) != CefApprovalRecoveryStatus.StoppedOriginal)
             throw new UnauthorizedAccessException("Unexpected original recovery state.");
         return next.CopyRecord();
+    }
+
+    // Caller must hold the shared writer lock for the entire operation.
+    // Explicit restart is allowed only with the exact same prepared plan.
+    // No catch-and-retry, rollback, deletion or activation on uncertain data.
+    internal void ExecuteOrdered(
+        Func<(byte[] Authority, CefSystemBaselineTrustState Baseline, CefSystemBaselineHost Host)> read,
+        Action<byte[]> writeBaseline, Action flushBaseline,
+        Action<byte[]> writeAuthority, Action flushAuthority)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+        ArgumentNullException.ThrowIfNull(writeBaseline);
+        ArgumentNullException.ThrowIfNull(flushBaseline);
+        ArgumentNullException.ThrowIfNull(writeAuthority);
+        ArgumentNullException.ThrowIfNull(flushAuthority);
+
+        CefApprovalRecoveryStatus Status() {
+            var observed = read();
+            return Classify(observed.Authority, observed.Baseline, observed.Host);
+        }
+        void RequireStatus(CefApprovalRecoveryStatus expected) {
+            if (Status() != expected)
+                throw new UnauthorizedAccessException("Recovery record pair changed.");
+        }
+
+        var initial = Status();
+        if (initial == CefApprovalRecoveryStatus.UnexpectedRequiresReview)
+            throw new UnauthorizedAccessException("Unexpected authority recovery state.");
+        if (initial == CefApprovalRecoveryStatus.IntendedPairPresentUnconfirmed)
+        {
+            // Confirmation only: do not rewrite an already active pair.
+            flushBaseline();
+            RequireStatus(initial);
+            flushAuthority();
+            RequireStatus(initial);
+            return;
+        }
+
+        // Ensure the stopped record is flushed before any baseline write.
+        flushAuthority();
+        RequireStatus(initial);
+        if (initial == CefApprovalRecoveryStatus.StoppedOriginal)
+        {
+            var current = read();
+            writeBaseline(RequireBaselineStage(current.Authority, current.Baseline, current.Host));
+            RequireStatus(CefApprovalRecoveryStatus.StoppedBaselineReplaced);
+        }
+
+        // Also flush when resuming the exact intermediate pair: a previous
+        // run may have stopped after SetValue but before successful flush.
+        flushBaseline();
+        RequireStatus(CefApprovalRecoveryStatus.StoppedBaselineReplaced);
+        var intermediate = read();
+        writeAuthority(RequireAuthorityStage(intermediate.Authority, intermediate.Baseline, intermediate.Host));
+        RequireStatus(CefApprovalRecoveryStatus.IntendedPairPresentUnconfirmed);
+        flushAuthority();
+        RequireStatus(CefApprovalRecoveryStatus.IntendedPairPresentUnconfirmed);
     }
 
     internal byte[] RequireAuthorityStage(ReadOnlySpan<byte> authorityRecord,

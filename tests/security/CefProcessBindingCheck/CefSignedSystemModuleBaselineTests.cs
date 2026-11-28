@@ -243,6 +243,60 @@ internal static class CefSignedSystemModuleBaselineTests
             recoveryPublic, recoveryAnchor, recoverySignature));
         Reject(() => recovered.CreateSuccessor(Payload(sequence: 11), approvalPublic, 11));
         Reject(() => authority.RequireIndependent(recovered));
+        // Fault injection uses in-memory records only; no HKLM writes.
+        // Each explicit restart uses the original authenticated plan.
+        string[] expectedOperations = ["flush-authority", "write-baseline", "flush-baseline",
+            "write-authority", "flush-authority"];
+        for (int failAt = 0; failAt <= expectedOperations.Length; failAt++)
+        {
+            byte[] simulatedAuthority = stoppedAuthority;
+            var simulatedBaseline = nextState;
+            var operations = new List<string>();
+            void Step(string operation) {
+                operations.Add(operation);
+                if (operations.Count == failAt) throw new System.IO.IOException("Synthetic recovery fault.");
+            }
+            (byte[], CefSystemBaselineTrustState, CefSystemBaselineHost) Read() =>
+                (simulatedAuthority, simulatedBaseline, host);
+            void WriteBaseline(byte[] bytes) {
+                simulatedBaseline = CefSystemBaselineTrustState.Parse(bytes);
+                Step("write-baseline");
+            }
+            void WriteAuthority(byte[] bytes) {
+                expectedRecovered.RequireSame(simulatedBaseline);
+                simulatedAuthority = bytes;
+                Step("write-authority");
+            }
+            bool failed = false;
+            try {
+                recoveryPlan.ExecuteOrdered(Read, WriteBaseline, () => Step("flush-baseline"),
+                    WriteAuthority, () => Step("flush-authority"));
+            }
+            catch (System.IO.IOException) { failed = true; }
+            if (failed != (failAt != 0) ||
+                !operations.SequenceEqual(expectedOperations.Take(failAt == 0 ? expectedOperations.Length : failAt)))
+                throw new InvalidOperationException("Recovery fault did not stop at the expected operation.");
+            var interrupted = recoveryPlan.Classify(simulatedAuthority, simulatedBaseline, host);
+            if (interrupted == CefApprovalRecoveryStatus.UnexpectedRequiresReview)
+                throw new InvalidOperationException("Unexpected simulated interrupted recovery pair.");
+            operations.Clear();
+            // Disable injection and explicitly resume/confirm the same plan.
+            recoveryPlan.ExecuteOrdered(Read,
+                bytes => { simulatedBaseline = CefSystemBaselineTrustState.Parse(bytes); operations.Add("write-baseline"); },
+                () => operations.Add("flush-baseline"),
+                bytes => { expectedRecovered.RequireSame(simulatedBaseline); simulatedAuthority = bytes; operations.Add("write-authority"); },
+                () => operations.Add("flush-authority"));
+            if (recoveryPlan.Classify(simulatedAuthority, simulatedBaseline, host) != CefApprovalRecoveryStatus.IntendedPairPresentUnconfirmed)
+                throw new InvalidOperationException("Recovery resume regression.");
+            if (interrupted != CefApprovalRecoveryStatus.StoppedOriginal && operations.Contains("write-baseline") ||
+                interrupted == CefApprovalRecoveryStatus.IntendedPairPresentUnconfirmed && operations.Contains("write-authority"))
+                throw new InvalidOperationException("Recovery rewrote an already completed stage.");
+        }
+        int unexpectedWrites = 0;
+        Reject(() => recoveryPlan.ExecuteOrdered(() => (recoveredApprovalPublic, nextState, host),
+            _ => unexpectedWrites++, () => unexpectedWrites++, _ => unexpectedWrites++, () => unexpectedWrites++));
+        if (unexpectedWrites != 0) throw new InvalidOperationException("Unexpected recovery pair modified.");
+        Console.WriteLine("PASS: recovery ordered persistence, fault injection and explicit same-plan resume (synthetic)");
         Console.WriteLine("PASS: independently signed two-record authority recovery plan and fail-closed ordering");
         byte[] Approve(byte[] digest) => approvalKey.SignHash(digest, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
         CefSystemBaselineTrustUpdate Rotate(CefSystemBaselineTrustState installed, byte[] payload,

@@ -366,6 +366,43 @@ internal static class CefSystemBaselineTrustRegistry
         // is deliberately not an active SPKI, including for older readers.
     }
 
+    // Explicit offline recovery, not callable from IPC/startup. The prepared
+    // plan must originate from independently authorized release evidence.
+    internal static void RecoverApprovalAuthority(CefApprovalAuthorityRecovery recovery)
+    {
+        ArgumentNullException.ThrowIfNull(recovery);
+        RequireMaintenanceAuthority();
+        using var mutex = CefSystemBaselineWriterLock.Acquire();
+        using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+        using var software = Open(machine, "SOFTWARE");
+        RequireOrdinary(software);
+        using var authority = Open(software, AuthorityLeaf, Read64 | 2);
+        using var baseline = Open(software, Leaf, Read64 | 2);
+
+        (byte[] Authority, CefSystemBaselineTrustState Baseline, CefSystemBaselineHost Host) ReadPair()
+        {
+            RequireOrdinary(software);
+            byte[] authorityRecord = ReadApprovalRecordBytes(authority);
+            var baselineRecord = ReadRecord(baseline);
+            using var freshAuthority = Open(software, AuthorityLeaf);
+            using var freshBaseline = Open(software, Leaf);
+            if (!CryptographicOperations.FixedTimeEquals(authorityRecord, ReadApprovalRecordBytes(freshAuthority)))
+                throw new UnauthorizedAccessException("Recovery authority changed during read.");
+            baselineRecord.RequireSame(ReadRecord(freshBaseline));
+            return (authorityRecord, baselineRecord, CefSystemBaselineHostObserver.Observe());
+        }
+        static void Flush(RegistryKey key)
+        {
+            int result = RegFlushKey(key.Handle);
+            if (result != 0) throw new Win32Exception(result);
+        }
+        recovery.ExecuteOrdered(ReadPair,
+            bytes => baseline.SetValue(Value, bytes, RegistryValueKind.Binary),
+            () => Flush(baseline),
+            bytes => authority.SetValue(AuthorityValue, bytes, RegistryValueKind.Binary),
+            () => Flush(authority));
+    }
+
     // This deliberately disconnected maintenance entry accepts only a prepared
     // signed transition, not raw registry data. All cooperative writers share
     // the protected machine mutex. Administrator bypass is outside this boundary.
