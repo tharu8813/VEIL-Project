@@ -16,6 +16,48 @@ internal enum CefBaselinePublicationStatus
     UnexpectedStateRequiresReview
 }
 
+// Independent public-key anchor must come from reviewed release policy,
+// not from a candidate approval envelope. No production anchor is embedded.
+internal sealed class CefBaselineApprovalAuthority
+{
+    private readonly byte[] key;
+    private readonly string keyId;
+
+    internal CefBaselineApprovalAuthority(ReadOnlySpan<byte> publicKey,
+        ReadOnlySpan<byte> independentlyTrustedSpkiSha256)
+    {
+        if (publicKey.Length is 0 or > 4096 || independentlyTrustedSpkiSha256.Length != 32)
+            throw new UnauthorizedAccessException("Missing independent approval authority anchor.");
+        key = publicKey.ToArray();
+        if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(key), independentlyTrustedSpkiSha256))
+            throw new UnauthorizedAccessException("Approval authority anchor mismatch.");
+        keyId = CefSystemBaselineTrustState.KeyId(key);
+    }
+
+    internal void RequireApproval(ReadOnlySpan<byte> digest, ReadOnlySpan<byte> signature,
+        CefSystemBaselineTrustState previous, CefSystemBaselineTrustState next)
+    {
+        if (digest.Length != 32 || signature.Length is < 384 or > 512 ||
+            keyId == CefSystemBaselineTrustState.KeyId(previous.CopyPublicKey()) ||
+            keyId == CefSystemBaselineTrustState.KeyId(next.CopyPublicKey()) ||
+            previous.CopyRetiredKeyIds().Contains(keyId, StringComparer.Ordinal) ||
+            next.CopyRetiredKeyIds().Contains(keyId, StringComparer.Ordinal))
+            throw new UnauthorizedAccessException("Approval authority must be independent of baseline keys.");
+        using var rsa = RSA.Create();
+        try
+        {
+            rsa.ImportSubjectPublicKeyInfo(key, out int consumed);
+            if (consumed != key.Length || signature.Length != rsa.KeySize / 8 ||
+                !rsa.VerifyHash(digest, signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pss))
+                throw new UnauthorizedAccessException("Independent approval signature refused.");
+        }
+        catch (CryptographicException e)
+        {
+            throw new UnauthorizedAccessException("Independent approval signature refused.", e);
+        }
+    }
+}
+
 internal sealed class CefSystemBaselineTrustUpdate
 {
     private readonly CefSystemBaselineTrustState? previous;
@@ -59,23 +101,20 @@ internal sealed class CefSystemBaselineTrustUpdate
 
     // Emergency stop does not depend on a signature from the compromised key.
     // The independently authenticated authority approves the exact installed
-    // record. This digest is a binding, not an authenticated channel.
+    // record via a detached RSA-PSS signature over the domain-separated digest.
     internal static CefSystemBaselineTrustUpdate PrepareRevocation(
         CefSystemBaselineTrustState installed,
-        ReadOnlySpan<byte> independentlyApprovedRevocationSha256,
+        CefBaselineApprovalAuthority authority, ReadOnlySpan<byte> approvalSignature,
         CefSystemBaselineHost host)
     {
         ArgumentNullException.ThrowIfNull(installed);
         CefSystemBaselineHostObserver.RequireCurrent(host, host);
-        if (independentlyApprovedRevocationSha256.Length != 32)
-            throw new UnauthorizedAccessException("Missing baseline revocation authorization.");
+        ArgumentNullException.ThrowIfNull(authority);
         var revoked = installed.CreateRevokedRecord();
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData("VEIL-CEF-BASELINE-KEY-REVOCATION-V1"u8);
         hash.AppendData(SHA256.HashData(installed.CopyRecord()));
-        if (!CryptographicOperations.FixedTimeEquals(hash.GetHashAndReset(),
-            independentlyApprovedRevocationSha256))
-            throw new UnauthorizedAccessException("Baseline revocation is not independently approved.");
+        authority.RequireApproval(hash.GetHashAndReset(), approvalSignature, installed, revoked);
         return new(installed, revoked, host);
     }
 
@@ -86,13 +125,13 @@ internal sealed class CefSystemBaselineTrustUpdate
     internal static CefSystemBaselineTrustUpdate PrepareKeyRotation(
         CefSystemBaselineTrustState installed, ReadOnlySpan<byte> payload,
         ReadOnlySpan<byte> signature, ReadOnlySpan<byte> newPublicKey,
-        ReadOnlySpan<byte> independentlyApprovedTransitionSha256,
+        CefBaselineApprovalAuthority authority, ReadOnlySpan<byte> approvalSignature,
         CefSystemBaselineHost host)
     {
         ArgumentNullException.ThrowIfNull(installed);
+        ArgumentNullException.ThrowIfNull(authority);
         if (installed.MinimumSequence == long.MaxValue ||
-            newPublicKey.Length is 0 or > 4096 ||
-            independentlyApprovedTransitionSha256.Length != 32)
+            newPublicKey.Length is 0 or > 4096)
             throw new UnauthorizedAccessException("Invalid key rotation authorization.");
         byte[] key = newPublicKey.ToArray();
         // Compare mathematical RSA identity, not just the SPKI serialization.
@@ -122,9 +161,7 @@ internal sealed class CefSystemBaselineTrustUpdate
         hash.AppendData("VEIL-CEF-BASELINE-KEY-ROTATION-V1"u8);
         hash.AppendData(SHA256.HashData(installed.CopyRecord()));
         hash.AppendData(SHA256.HashData(prepared.next.CopyRecord()));
-        if (!CryptographicOperations.FixedTimeEquals(hash.GetHashAndReset(),
-            independentlyApprovedTransitionSha256))
-            throw new UnauthorizedAccessException("Key rotation transition is not independently approved.");
+        authority.RequireApproval(hash.GetHashAndReset(), approvalSignature, installed, prepared.next);
         return prepared;
     }
 

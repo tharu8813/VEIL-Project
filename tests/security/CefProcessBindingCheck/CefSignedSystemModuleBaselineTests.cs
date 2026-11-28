@@ -154,6 +154,21 @@ internal static class CefSignedSystemModuleBaselineTests
         Console.WriteLine("PASS: interrupted baseline publication classification and exact confirmation refusal");
         // Synthetic independent approval fixture. Production must never
         // manufacture approval from an untrusted request in this manner.
+        using var approvalKey = RSA.Create(3072);
+        byte[] approvalPublic = approvalKey.ExportSubjectPublicKeyInfo();
+        byte[] approvalAnchor = SHA256.HashData(approvalPublic);
+        var authority = new CefBaselineApprovalAuthority(approvalPublic, approvalAnchor);
+        byte[] Approve(byte[] digest) => approvalKey.SignHash(digest, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+        CefSystemBaselineTrustUpdate Rotate(CefSystemBaselineTrustState installed, byte[] payload,
+            byte[] signature, byte[] newKey, byte[] digest, CefSystemBaselineHost expectedHost) =>
+            CefSystemBaselineTrustUpdate.PrepareKeyRotation(installed, payload, signature, newKey,
+                authority, Approve(digest), expectedHost);
+        CefSystemBaselineTrustUpdate Revoke(CefSystemBaselineTrustState installed, byte[] digest,
+            CefSystemBaselineHost expectedHost) =>
+            CefSystemBaselineTrustUpdate.PrepareRevocation(installed, authority, Approve(digest), expectedHost);
+        Reject(() => new CefBaselineApprovalAuthority(approvalPublic, new byte[32]));
+        Reject(() => new CefBaselineApprovalAuthority(weakKey.ExportSubjectPublicKeyInfo(),
+            SHA256.HashData(weakKey.ExportSubjectPublicKeyInfo())));
         using var rotatedKey = RSA.Create(3072);
         byte[] rotatedPublicKey = rotatedKey.ExportSubjectPublicKeyInfo();
         byte[] rotationPayload = Payload(sequence: 10);
@@ -164,7 +179,28 @@ internal static class CefSignedSystemModuleBaselineTests
         string retiredId = Convert.ToHexString(SHA256.HashData(signing.ExportParameters(false).Modulus!));
         var proposed = CefSystemBaselineTrustState.CreateVerifiedRecord(rotationPayload, rotatedPublicKey, 10, [retiredId]);
         byte[] approval = Approval(nextState, proposed);
-        var rotation = CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+        byte[] signedApproval = Approve(approval);
+        byte[] badApproval = (byte[])signedApproval.Clone();
+        badApproval[0] ^= 1;
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+            rotationSignature, rotatedPublicKey, authority, badApproval, host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+            rotationSignature, rotatedPublicKey, authority, approval, host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+            rotationSignature, rotatedPublicKey, authority,
+            signing.SignHash(approval, HashAlgorithmName.SHA256, RSASignaturePadding.Pss), host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+            rotationSignature, rotatedPublicKey, authority,
+            approvalKey.SignHash(approval, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1), host));
+        var oldAuthority = new CefBaselineApprovalAuthority(publicKey, SHA256.HashData(publicKey));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+            rotationSignature, rotatedPublicKey, oldAuthority,
+            signing.SignHash(approval, HashAlgorithmName.SHA256, RSASignaturePadding.Pss), host));
+        var newAuthority = new CefBaselineApprovalAuthority(rotatedPublicKey, SHA256.HashData(rotatedPublicKey));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+            rotationSignature, rotatedPublicKey, newAuthority,
+            rotatedKey.SignHash(approval, HashAlgorithmName.SHA256, RSASignaturePadding.Pss), host));
+        var rotation = Rotate(nextState, rotationPayload,
             rotationSignature, rotatedPublicKey, approval, host);
         var rotated = CefSystemBaselineTrustState.Parse(rotation.RequireExpectedAndCopyRecord(nextState, host));
         proposed.RequireSame(rotated);
@@ -172,21 +208,21 @@ internal static class CefSignedSystemModuleBaselineTests
         Reject(() => rotation.RequireExpectedAndCopyRecord(enrolled, host));
         Reject(() => rotation.RequireExpectedAndCopyRecord(rotated, host));
         Reject(() => rotation.RequirePublished(nextState, host));
-        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+        Reject(() => Rotate(nextState, rotationPayload,
             rotationSignature, rotatedPublicKey, new byte[32], host));
-        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(enrolled, rotationPayload,
+        Reject(() => Rotate(enrolled, rotationPayload,
             rotationSignature, rotatedPublicKey, approval, host));
-        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+        Reject(() => Rotate(nextState, rotationPayload,
             Sign(rotationPayload), rotatedPublicKey, approval, host));
-        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, rotationPayload,
+        Reject(() => Rotate(nextState, rotationPayload,
             Sign(rotationPayload), publicKey, Approval(nextState,
                 CefSystemBaselineTrustState.CreateVerifiedRecord(rotationPayload, publicKey, 10)), host));
-        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, nextPayload,
+        Reject(() => Rotate(nextState, nextPayload,
             rotatedKey.SignData(nextPayload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss),
             rotatedPublicKey, Approval(nextState,
                 CefSystemBaselineTrustState.CreateVerifiedRecord(nextPayload, rotatedPublicKey, 9)), host));
         byte[] otherRotationPayload = Payload(sequence: 11);
-        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(nextState, otherRotationPayload,
+        Reject(() => Rotate(nextState, otherRotationPayload,
             rotatedKey.SignData(otherRotationPayload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss),
             rotatedPublicKey, approval, host));
         Reject(() => CefSystemBaselineTrustUpdate.PrepareReplacement(rotated, otherRotationPayload,
@@ -197,7 +233,7 @@ internal static class CefSignedSystemModuleBaselineTests
         if (afterRotationState.MinimumSequence != 11 || !afterRotationState.CopyRetiredKeyIds().SequenceEqual(new[] { retiredId }))
             throw new InvalidOperationException("New signing key or retained history regression.");
         // Even a separately approved rotation cannot reintroduce a retired modulus.
-        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(rotated, otherRotationPayload,
+        Reject(() => Rotate(rotated, otherRotationPayload,
             Sign(otherRotationPayload), publicKey, new byte[32], host));
         Reject(() => rotated.CreateSuccessor(otherRotationPayload, publicKey, 11));
         var historyCopy = rotated.CopyRetiredKeyIds();
@@ -210,7 +246,7 @@ internal static class CefSignedSystemModuleBaselineTests
         string secondId = Convert.ToHexString(SHA256.HashData(rotatedKey.ExportParameters(false).Modulus!));
         string[] expectedHistory = new[] { retiredId, secondId }.OrderBy(x => x, StringComparer.Ordinal).ToArray();
         var thirdProposed = CefSystemBaselineTrustState.CreateVerifiedRecord(thirdPayload, thirdPublic, 12, expectedHistory);
-        var thirdUpdate = CefSystemBaselineTrustUpdate.PrepareKeyRotation(afterRotationState, thirdPayload,
+        var thirdUpdate = Rotate(afterRotationState, thirdPayload,
             thirdKey.SignData(thirdPayload, HashAlgorithmName.SHA256, RSASignaturePadding.Pss),
             thirdPublic, Approval(afterRotationState, thirdProposed), host);
         var thirdState = CefSystemBaselineTrustState.Parse(thirdUpdate.RequireExpectedAndCopyRecord(afterRotationState, host));
@@ -233,7 +269,15 @@ internal static class CefSignedSystemModuleBaselineTests
         Console.WriteLine("PASS: retained RSA modulus history, rotation reuse and malformed history refusal");
         byte[] revocationApproval = SHA256.HashData([.. "VEIL-CEF-BASELINE-KEY-REVOCATION-V1"u8,
             .. SHA256.HashData(nextState.CopyRecord())]);
-        var revoke = CefSystemBaselineTrustUpdate.PrepareRevocation(nextState, revocationApproval, host);
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareRevocation(nextState, authority, signedApproval, host));
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareRevocation(nextState, oldAuthority,
+            signing.SignHash(revocationApproval, HashAlgorithmName.SHA256, RSASignaturePadding.Pss), host));
+        byte[] rotatedRevokeDigest = SHA256.HashData([.. "VEIL-CEF-BASELINE-KEY-REVOCATION-V1"u8,
+            .. SHA256.HashData(rotated.CopyRecord())]);
+        Reject(() => CefSystemBaselineTrustUpdate.PrepareRevocation(rotated, oldAuthority,
+            signing.SignHash(rotatedRevokeDigest, HashAlgorithmName.SHA256, RSASignaturePadding.Pss), host));
+        var revoke = Revoke(nextState, revocationApproval, host);
+        Console.WriteLine("PASS: independent RSA-PSS approval, domain separation and current/new/retired key refusal");
         var revoked = CefSystemBaselineTrustState.Parse(revoke.RequireExpectedAndCopyRecord(nextState, host));
         if (!revoked.Revoked || revoked.MinimumSequence != nextState.MinimumSequence ||
             !revoked.CopyPublicKey().SequenceEqual(publicKey))
@@ -242,13 +286,13 @@ internal static class CefSignedSystemModuleBaselineTests
         Reject(() => revoked.RequirePayload(nextPayload));
         Reject(() => revoke.RequireExpectedAndCopyRecord(revoked, host));
         Reject(() => revoke.RequirePublished(nextState, host));
-        Reject(() => CefSystemBaselineTrustUpdate.PrepareRevocation(enrolled, revocationApproval, host));
-        Reject(() => CefSystemBaselineTrustUpdate.PrepareRevocation(nextState, new byte[32], host));
-        Reject(() => CefSystemBaselineTrustUpdate.PrepareRevocation(revoked, revocationApproval, host));
+        Reject(() => Revoke(enrolled, revocationApproval, host));
+        Reject(() => Revoke(nextState, new byte[32], host));
+        Reject(() => Revoke(revoked, revocationApproval, host));
         Reject(() => CefSystemBaselineTrustUpdate.PrepareReplacement(revoked, rotationPayload, Sign(rotationPayload), host));
-        Reject(() => CefSystemBaselineTrustUpdate.PrepareKeyRotation(revoked, rotationPayload,
+        Reject(() => Rotate(revoked, rotationPayload,
             rotationSignature, rotatedPublicKey, approval, host));
-        var resume = CefSystemBaselineTrustUpdate.PrepareKeyRotation(revoked, rotationPayload,
+        var resume = Rotate(revoked, rotationPayload,
             rotationSignature, rotatedPublicKey, Approval(revoked, proposed), host);
         var resumed = CefSystemBaselineTrustState.Parse(resume.RequireExpectedAndCopyRecord(revoked, host));
         if (resumed.Revoked) throw new InvalidOperationException("Approved rotation did not restore active trust.");
