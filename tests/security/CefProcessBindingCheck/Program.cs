@@ -21,6 +21,63 @@ if (args is ["--profile-lock-fixture", var lockPath])
     return Console.ReadLine() == "exit" ? 0 : 1;
 }
 
+// Actual Windows user-scope DPAPI in a disposable fixture directory.
+// No installed service, real profile or browser data is touched.
+{
+    var store = Guid.NewGuid();
+    bool current = true;
+    byte[] genesis = new byte[32];
+    string rootFixture = Path.Combine(Path.GetTempPath(), "veil-cef-root-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(rootFixture);
+    string blobPath = Path.Combine(rootFixture, "root.dpapi");
+    void RefuseRoot(Action action)
+    {
+        bool refused = false;
+        try { action(); }
+        catch (Exception error) when (error is UnauthorizedAccessException or InvalidDataException or System.ComponentModel.Win32Exception)
+        { refused = true; }
+        Check(refused, "Invalid fixture root operation accepted.");
+    }
+    try
+    {
+        byte[] blob = CefLibraryRootProtectionFixture.Create(store, () => current);
+        using (var writer = new FileStream(blobPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            writer.Write(blob);
+            writer.Flush(flushToDisk: true);
+        }
+        byte[] envelope;
+        using (var first = CefLibraryRootProtectionFixture.Open(store, blob, () => current))
+            envelope = first.Encode(1, genesis, "dpapi-synthetic"u8);
+        byte[] reloaded = File.ReadAllBytes(blobPath);
+        using (var second = CefLibraryRootProtectionFixture.Open(store, reloaded, () => current))
+            Check(second.Decode(1, genesis, envelope).Payload.AsSpan().SequenceEqual("dpapi-synthetic"u8),
+                "Persisted fixture root did not reopen.");
+        RefuseRoot(() => CefLibraryRootProtectionFixture.Open(Guid.NewGuid(), reloaded, () => current));
+        RefuseRoot(() => CefLibraryRootProtectionFixture.Open(store, reloaded[..(reloaded.Length / 2)], () => current));
+        RefuseRoot(() => CefLibraryRootProtectionFixture.Open(store, [], () => current));
+        RefuseRoot(() => CefLibraryRootProtectionFixture.Open(store,
+            new byte[CefLibraryRootProtectionFixture.MaximumBlobBytes + 1], () => current));
+        byte[] independent = CefLibraryRootProtectionFixture.Create(store, () => current);
+        using (var unrelated = CefLibraryRootProtectionFixture.Open(store, independent, () => current))
+            RefuseRoot(() => unrelated.Decode(1, genesis, envelope));
+        using (var user = WindowsIdentity.GetCurrent())
+            WindowsIdentity.RunImpersonated(user.AccessToken, () =>
+                RefuseRoot(() => CefLibraryRootProtectionFixture.Open(store, reloaded, () => current)));
+        using var revoked = CefLibraryRootProtectionFixture.Open(store, reloaded, () => current);
+        current = false;
+        RefuseRoot(() => revoked.Decode(1, genesis, envelope));
+        RefuseRoot(() => CefLibraryRootProtectionFixture.Create(store, () => current));
+        RefuseRoot(() => CefLibraryRootProtectionFixture.Open(store, reloaded, () => current));
+        current = true;
+        RefuseRoot(() => revoked.Decode(1, genesis, envelope));
+        Check(File.ReadAllBytes(blobPath).AsSpan().SequenceEqual(blob),
+            "Failed fixture root open modified the persisted blob.");
+    }
+    finally { Directory.Delete(rootFixture, recursive: true); }
+    Console.WriteLine("PASS: user-scope DPAPI fixture root reopen, wrong context and revocation refusal");
+}
+
 // Same strict parser compiled in both ordinary and diagnostic configurations.
 const string probeRequest = """{"command":"ProbeCefSuspended","volumeId":"synthetic"}""";
 #if VEIL_CEF_DIAGNOSTIC_IPC
