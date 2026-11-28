@@ -181,3 +181,8 @@ GPU PID 2844의 Procmon 종료는 root 종료보다 약 60ms 앞섰다. 이 기�
 
 - 진단 전용 권한 요청자를 브라우저 루트 외에 두 private Job의 실제 멤버까지 검사하도록 확장했다. IPC의 retained process handle을 브로커가 독립 수집한 멤버 객체와 비교하며, 전체 관측의 Job accounting, 이미지, 모듈, 토큰 및 세션 검증을 유지한다. 클라이언트가 역할/PID를 제출하지 않는다.
 - 현재 역할 정책은 Browser 및 Renderer의 기존 잠정 토큰 기준만 허용 대상으로 분류한다. GPU/Utility/Network/Unknown 및 불일치 역할은 거부한다. 잠정 기준은 실제 sandbox admission 증명이 아니다. 기존 활성화 금지 및 production Job cap=1을 유지하며 네이티브 진입점 연결, 실제 멀티프로세스 CEF, SCM/BitLocker/VM 검증은 NOT RUN. P2-03~05 미완료.
+
+### P2-05 고정 페이지 fixture 준비 (미완료)
+
+- 네이티브 수명주기 어댑터를 고정 data 페이지 시험에 연결했다. 정확한 URL/제목과 단일 브라우저 식별자, `OnBeforeClose` 관측을 요구하며, 로드 및 정리 시간 예산과 주기 권한 검사 및 실패 시 닫기 요청을 추가했다. 추가 브라우저나 모호한 닫힘은 정상 `CefShutdown` 허가가 아니며 외부 broker drain이 필요하다. 합성 관측 정책 시험 9개를 추가했다.
+- 시간 예산은 CEF/IPC 호출 자체가 반환된다는 전제의 제한이며 OS 수준 hard timeout이 아니다. 고정 data 페이지는 네트워크 격리 증명이 아니다. GPU/Utility/Network 역할은 실제 독립 보안 기준이 없으므로 계속 거부한다. 제품 진입점, Job cap=1 및 borrowed activation 차단을 유지한다. 실제 CEF 생성/렌더링/닫힘, 보호 볼륨/VM 및 다중 프로세스는 NOT RUN. P2-03~05 미완료.
