@@ -175,3 +175,23 @@ internal static class CefWindowsSessionRevocation
     internal static bool MatchesOwner(ClientIdentity? owner, uint sessionId) =>
         owner is { SessionId: > 0 } && (uint)owner.SessionId == sessionId;
 }
+
+// Bound to one successful broker unlock. A failed live observation retires
+// it permanently; a later matching volume snapshot cannot restore authority.
+internal sealed class CefAuthenticatedGeneration(ClientIdentity owner, object generation)
+{
+    private bool retired;
+
+    internal bool Observe(ClientIdentity? currentOwner, object? currentGeneration,
+        bool ownerObjectVerified, bool volumeProtected)
+    {
+        if (retired) return false;
+        if (currentOwner == owner && ReferenceEquals(generation, currentGeneration) &&
+            ownerObjectVerified && volumeProtected)
+            return true;
+        retired = true;
+        return false;
+    }
+
+    internal void Revoke() => retired = true;
+}
