@@ -281,6 +281,42 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         privateRootIdentity = peer.privateRootIdentity = root;
     }
 
+    // Called while the original creation custody still owns the exact
+    // root handle. No new nomination, PID reopening or handle export.
+    // If either binding fails the pair is consumed, not reusable.
+    internal void BindPreparedPrivatePair(CefBrokerOwnedJob peer,
+        ClientIdentity owner, SafeProcessHandle ownerHandle,
+        ClientIdentity root, SafeProcessHandle rootHandle)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        if (ReferenceEquals(this, peer) || disposed || peer.disposed ||
+            !assignmentIssued || !peer.assignmentIssued ||
+            assignmentExported || peer.assignmentExported || bound || peer.bound ||
+            privatePeer is not null || peer.privatePeer is not null ||
+            activeLimit != peer.activeLimit || CompareJobObjects(job, peer.job))
+            throw new UnauthorizedAccessException("CEF prepared Job pair unavailable.");
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peer.job, peer.activeLimit);
+        BindSingleCandidate(owner, ownerHandle, root, rootHandle);
+        peer.BindSingleCandidate(owner, ownerHandle, root, rootHandle);
+        RequirePrivateNestedBinding(peer, owner, ownerHandle, root, rootHandle);
+        RequirePreparedPrivateRoot(peer, owner, ownerHandle, root, rootHandle);
+    }
+
+    // A later session constructor may validate an already bound pair, but
+    // cannot rebind it to a different peer, identity or handle wrapper.
+    // The existing unbound-private-pair path still requires fresh binding.
+    internal void RequireOrBindPreparedPrivatePair(CefBrokerOwnedJob peer,
+        ClientIdentity owner, SafeProcessHandle ownerHandle,
+        ClientIdentity root, SafeProcessHandle rootHandle)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        if (privatePeer is not null || peer.privatePeer is not null)
+            RequirePreparedPrivateRoot(peer, owner, ownerHandle, root, rootHandle);
+        else
+            RequirePrivateNestedBinding(peer, owner, ownerHandle, root, rootHandle);
+    }
+
     private SafeFileHandle RequireBoundPrivatePeer(CefBrokerOwnedJob peer, SafeProcessHandle rootHandle)
     {
         var peerHandle = RequirePrivatePeer(peer);

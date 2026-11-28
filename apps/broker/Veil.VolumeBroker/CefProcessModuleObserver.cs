@@ -126,7 +126,7 @@ internal sealed class CefBoundDiagnosticSession : ICefDiagnosticLifetime
         // Before accepting ownership, require two private broker-created Jobs.
         // Failure leaves ownership with the caller for stop recovery.
         registration.RequireCurrent();
-        brokerJob.RequirePrivateNestedBinding(peerJob, owner, ownerHandle, root, rootHandle);
+        brokerJob.RequireOrBindPreparedPrivatePair(peerJob, owner, ownerHandle, root, rootHandle);
         registration.RequireCurrent();
         guard = new(owner, generation, registration);
         readContext = () =>

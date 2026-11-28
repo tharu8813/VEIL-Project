@@ -11,6 +11,8 @@ namespace Veil.VolumeBroker;
 internal sealed class CefBrokerLaunchPreparation : IDisposable
 {
     private readonly string path;
+    private readonly ClientIdentity owner;
+    private readonly SafeProcessHandle ownerHandle;
     private readonly CefImageDigest digest;
     private readonly Func<bool> authorityCurrent;
     private readonly CefRuntimeRegistrationLease registration;
@@ -23,9 +25,11 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
     private CefBrokerLaunchPreparation(string path, CefImageDigest digest,
         Func<bool> authorityCurrent, CefRuntimeRegistrationLease registration,
         FileStream image, CefProcessTokenObserver.LaunchTokenLease token,
-        CefSystemModuleVerifier verifier)
+        CefSystemModuleVerifier verifier, ClientIdentity owner, SafeProcessHandle ownerHandle)
     {
         this.path = path;
+        this.owner = owner;
+        this.ownerHandle = ownerHandle;
         this.digest = digest;
         this.authorityCurrent = authorityCurrent;
         this.registration = registration;
@@ -57,7 +61,7 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
                 throw new UnauthorizedAccessException("CEF preparation generation retired.");
             token = CefProcessTokenObserver.LaunchTokenLease.Acquire(ownerHandle, owner);
             var prepared = new CefBrokerLaunchPreparation(registeredPath, digest, authorityCurrent,
-                registration, image, token, verifier);
+                registration, image, token, verifier, owner, ownerHandle);
             prepared.RequireCurrent();
             return prepared;
         }
@@ -119,6 +123,12 @@ internal sealed class CefBrokerLaunchPreparation : IDisposable
             var identity = token.RequireCreatedRoot(root, path);
             using var verified = CefPinnedImage.OpenVerified(identity, root, path, digest);
             RequireCurrent();
+            // Bind both private Jobs to the original creation handle while
+            // custody still owns it. A partially bound pair on refusal is
+            // terminal and can only be drained by the existing owner.
+            outer.BindPreparedPrivatePair(inner, owner, ownerHandle, identity, root);
+            RequireCurrent();
+            outer.RequirePreparedPrivateRoot(inner, owner, ownerHandle, identity, root);
         });
         // Keep preparation, Jobs and custody alive. No ownership transfer,
         // activation or cleanup/relock authorization occurs here.

@@ -688,7 +688,7 @@ test('nested diagnostic lifetime requires an independently trusted initial root-
     assert.match(initial, /RequireInitialState\(\);\s*_ = ObserveNestedRetainedMembers\(desktopJob, \[\(root, rootHandle\)\]\);\s*RequireInitialState\(\)/);
     assert.match(initial, /const uint killOnClose = 0x00002000, breakaway = 0x00000800 \| 0x00001000;/);
     assert.match(initial, /\(flags & killOnClose\) == 0 \|\| \(flags & breakaway\) != 0/);
-    assert.match(nested, /registration\.RequireCurrent\(\);\s*brokerJob\.RequirePrivateNestedBinding\(peerJob, owner, ownerHandle, root, rootHandle\);\s*registration\.RequireCurrent\(\);[\s\S]*?lifetime = new CefRetainedLifetime/);
+    assert.match(nested, /registration\.RequireCurrent\(\);\s*brokerJob\.RequireOrBindPreparedPrivatePair\(peerJob, owner, ownerHandle, root, rootHandle\);\s*registration\.RequireCurrent\(\);[\s\S]*?lifetime = new CefRetainedLifetime/);
     assert.doesNotMatch(broker, /IssueAssignmentHandle|DuplicateCefJobAssignment/);
 });
 
@@ -785,7 +785,7 @@ test('internal diagnostic root and owner require separate standard-user tokens a
     assert.match(observer, /ReadVariable\(token, 3\); \/\/ TokenPrivileges/);
     assert.match(observer, /snapshot\.AdministratorGroupPresent \|\|\s*!snapshot\.OnlyStandardPrivileges/);
     assert.match(observer, /owner\.AuthenticationId != root\.AuthenticationId/);
-    assert.match(nested, /ObserveLaunchToken\(ownerHandle, owner\);[\s\S]*?ObserveLaunchToken\(rootHandle, root\);[\s\S]*?CefLaunchTokenPolicy\.RequirePair\(ownerToken, rootToken\);[\s\S]*?RequirePrivateNestedBinding/);
+    assert.match(nested, /ObserveLaunchToken\(ownerHandle, owner\);[\s\S]*?ObserveLaunchToken\(rootHandle, root\);[\s\S]*?CefLaunchTokenPolicy\.RequirePair\(ownerToken, rootToken\);[\s\S]*?RequireOrBindPreparedPrivatePair/);
     assert.match(nested, /CefLaunchTokenPolicy\.RequireSame\(ownerToken, CefProcessTokenObserver\.ObserveLaunchToken\(ownerHandle, owner\)\);[\s\S]*?CefLaunchTokenPolicy\.RequireSame\(rootToken, CefProcessTokenObserver\.ObserveLaunchToken\(rootHandle, root\)\);/);
 });
 
@@ -946,4 +946,19 @@ test('native creation adopts handles into preallocated owners before allocating 
     assert.doesNotMatch(core.slice(adopt, publish), /\bnew\s+|Dispose\(|FreeHGlobal\(/);
     assert.match(core, /custody\?\.Capture\(captured\);\s*#if VEIL_CEF_CONTAINMENT_TEST\s*if \(injectAllocationFailure\)\s*throw new OutOfMemoryException/);
     assert.match(fixture, /injectFailure: false, injectAllocationFailure: true\);[\s\S]*?catch \(OutOfMemoryException error\)[\s\S]*?custody\.HasRetainedProcess[\s\S]*?Reject\(\(\) => custody\.TakeVerified\(\)\);[\s\S]*?custody\.TryDrainAndRelease\(5000\)/);
+});
+
+
+test('prepared creation binds private Jobs to original custody handle before session construction', async () => {
+    const prep = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerLaunchPreparation.cs', 'utf8');
+    const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
+    const session = await readFile('apps/broker/Veil.VolumeBroker/CefProcessModuleObserver.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    assert.match(prep, /custody\.VerifyRetainedRoot\(root =>[\s\S]*?token\.RequireCreatedRoot\(root, path\);[\s\S]*?RequireCurrent\(\);[\s\S]*?outer\.BindPreparedPrivatePair\(inner, owner, ownerHandle, identity, root\);\s*RequireCurrent\(\);\s*outer\.RequirePreparedPrivateRoot\(inner, owner, ownerHandle, identity, root\);/);
+    assert.match(job, /internal void BindPreparedPrivatePair[\s\S]*?assignmentExported \|\| peer.assignmentExported \|\| bound \|\| peer.bound[\s\S]*?privatePeer is not null \|\| peer.privatePeer is not null[\s\S]*?RequireContainmentLimits\(job, activeLimit\);\s*RequireContainmentLimits\(peer.job, peer.activeLimit\);\s*BindSingleCandidate\(owner, ownerHandle, root, rootHandle\);\s*peer\.BindSingleCandidate\(owner, ownerHandle, root, rootHandle\);\s*RequirePrivateNestedBinding\(peer, owner, ownerHandle, root, rootHandle\);\s*RequirePreparedPrivateRoot\(peer, owner, ownerHandle, root, rootHandle\);/);
+    assert.match(job, /internal void RequireOrBindPreparedPrivatePair[\s\S]*?if \(privatePeer is not null \|\| peer.privatePeer is not null\)\s*RequirePreparedPrivateRoot\(peer, owner, ownerHandle, root, rootHandle\);\s*else\s*RequirePrivateNestedBinding\(peer, owner, ownerHandle, root, rootHandle\);/);
+    assert.match(job, /!ReferenceEquals\(privateRoot, rootHandle\) \|\| !ReferenceEquals\(peer.privateRoot, rootHandle\)/);
+    assert.match(session, /brokerJob\.RequireOrBindPreparedPrivatePair\(peerJob, owner, ownerHandle, root, rootHandle\);/);
+    assert.match(fixture, /outer\.BindPreparedPrivatePair\(inner, ownerIdentity,[\s\S]*?outer\.RequireOrBindPreparedPrivatePair\(inner, ownerIdentity, owner.SafeHandle, identity, root\);[\s\S]*?aliasRefused[\s\S]*?custody\.TryDrainAndRelease\(5000\)/);
+    assert.doesNotMatch(prep, /TakeVerified|ResumeRetainedRoot/);
 });

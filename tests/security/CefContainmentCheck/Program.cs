@@ -200,6 +200,43 @@ try
             inner.HasNoActiveProcesses() && !File.Exists(markerPath), "Post-create refusal did not drain.");
     }
     Console.WriteLine("PASS: second-stage validation refusal retains original root and blocks transfer");
+    // The creation custody owns the original root while both Jobs are
+    // bound. Revalidation may use the same handle wrapper only, never a
+    // second wrapper even if it points to the same kernel process object.
+    foreach (bool wrongOwner in new[] { false, true })
+    {
+        using var owner = Process.GetCurrentProcess();
+        var ownerIdentity = Native.ObserveProcess(owner.SafeHandle);
+        using var outer = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var inner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        var custody = new CefContainedProcess.CreationCustody();
+        outer.CreateAtomicRetainedPairFixture(inner, image, environment, custody, false);
+        bool refused = false;
+        try
+        {
+            custody.VerifyRetainedRoot(root =>
+            {
+                var identity = Native.ObserveProcess(root);
+                outer.BindPreparedPrivatePair(inner, ownerIdentity,
+                    wrongOwner ? root : owner.SafeHandle, identity, root);
+                outer.RequireOrBindPreparedPrivatePair(inner, ownerIdentity, owner.SafeHandle, identity, root);
+                using var alias = new Microsoft.Win32.SafeHandles.SafeProcessHandle(root.DangerousGetHandle(), ownsHandle: false);
+                bool aliasRefused = false;
+                try { outer.RequireOrBindPreparedPrivatePair(inner, ownerIdentity, owner.SafeHandle, identity, alias); }
+                catch (UnauthorizedAccessException) { aliasRefused = true; }
+                Check(aliasRefused, "Prepared pair accepted a different root handle wrapper.");
+                outer.RequirePreparedPrivateRoot(inner, ownerIdentity, owner.SafeHandle, identity, root);
+                Check(!File.Exists(markerPath), "Binding unexpectedly executed the root.");
+            });
+        }
+        catch (UnauthorizedAccessException) when (wrongOwner) { refused = true; }
+        Check(refused == wrongOwner && custody.HasRetainedProcess && !File.Exists(markerPath),
+            "Prepared pair binding lost root or accepted invalid owner.");
+        if (wrongOwner) Reject(() => custody.TakeVerified());
+        Check(custody.TryDrainAndRelease(5000) && outer.HasNoActiveProcesses() &&
+            inner.HasNoActiveProcesses() && !File.Exists(markerPath), "Bound creation did not drain.");
+    }
+    Console.WriteLine("PASS: creation custody binds and revalidates exact private Job pair without resume");
     // Exercise the production-shaped lifetime with the isolated apphost,
     // not the installed product, service token or real encrypted volume.
     foreach (bool injectFailure in new[] { false, true })
