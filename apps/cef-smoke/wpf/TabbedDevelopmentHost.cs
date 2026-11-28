@@ -38,6 +38,14 @@ internal sealed class TabbedDevelopmentHost
     private readonly DockPanel layout = new();
     private readonly StackPanel strip = new() { Orientation = Orientation.Horizontal };
     private readonly Grid pages = new();
+    private readonly DockPanel toolbar = new() { Margin = new Thickness(6) };
+    private readonly Button fullscreenToggle = new() { Content = "Full screen (F11)" };
+    private readonly Button pageFullscreenExit = new() { Content = "Exit page full screen", Visibility = Visibility.Collapsed };
+    private readonly TextBlock fullscreenNotice = new() { Margin = new Thickness(6) };
+    private bool browserFullscreen, pageExitPending;
+    private WindowStyle savedWindowStyle;
+    private WindowState savedWindowState;
+    private ResizeMode savedResizeMode;
     private readonly TextBox address = new() { VerticalContentAlignment = VerticalAlignment.Center };
     private readonly TextBlock status = new() { Margin = new Thickness(6) };
     private readonly TextBlock popupNotice = new() { Margin = new Thickness(6), TextWrapping = TextWrapping.Wrap };
@@ -93,7 +101,6 @@ internal sealed class TabbedDevelopmentHost
         layout.Children.Add(strip);
         strip.Children.Add(add);
         strip.Children.Add(close);
-        var toolbar = new DockPanel { Margin = new Thickness(6) };
         DockPanel.SetDock(toolbar, Dock.Top);
         layout.Children.Add(toolbar);
         foreach (var button in new[] { back, forward, reload })
@@ -124,6 +131,14 @@ internal sealed class TabbedDevelopmentHost
         layout.Children.Add(status);
         DockPanel.SetDock(popupNotice, Dock.Bottom);
         layout.Children.Add(popupNotice);
+        // Always-visible host controls: a native page must never hide the
+        // only escape route, even when WPF keyboard focus is unavailable.
+        var fullscreenControls = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6) };
+        DockPanel.SetDock(fullscreenControls, Dock.Bottom);
+        fullscreenControls.Children.Add(fullscreenToggle);
+        fullscreenControls.Children.Add(pageFullscreenExit);
+        fullscreenControls.Children.Add(fullscreenNotice);
+        layout.Children.Add(fullscreenControls);
         layout.Children.Add(pages);
         window.Content = layout;
 
@@ -136,6 +151,8 @@ internal sealed class TabbedDevelopmentHost
         zoomOut.Click += (_, _) => ChangeZoom(-0.25);
         zoomIn.Click += (_, _) => ChangeZoom(0.25);
         zoomReset.Click += (_, _) => ChangeZoom(0, reset: true);
+        fullscreenToggle.Click += (_, _) => SetBrowserFullscreen(!browserFullscreen);
+        pageFullscreenExit.Click += async (_, _) => await ExitActivePageFullscreenAsync();
         findOpen.Click += (_, _) => ShowFindBar(true);
         findClose.Click += (_, _) => ShowFindBar(false);
         findSearch.Click += async (_, _) => await SearchPageAsync(false);
@@ -148,9 +165,24 @@ internal sealed class TabbedDevelopmentHost
         };
         // WPF-routed keys only; keyboard focus within native CEF HWND still
         // requires separate integration and runtime verification.
-        window.PreviewKeyDown += (_, e) =>
+        window.PreviewKeyDown += async (_, e) =>
         {
-            if (fixture is not null && e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
+            if (e.Key == Key.F11 && Keyboard.Modifiers == ModifierKeys.None)
+            {
+                SetBrowserFullscreen(!browserFullscreen);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape && active?.View.IsPageFullScreen == true)
+            {
+                e.Handled = true;
+                await ExitActivePageFullscreenAsync();
+            }
+            else if (e.Key == Key.Escape && browserFullscreen)
+            {
+                SetBrowserFullscreen(false);
+                e.Handled = true;
+            }
+            else if (fixture is not null && e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 ShowFindBar(true);
                 e.Handled = true;
@@ -307,7 +339,7 @@ internal sealed class TabbedDevelopmentHost
 
     private void ShowFindBar(bool visible, bool focus = true)
     {
-        if (visible && (fixture is null || shuttingDown || active is not { Closing: false })) return;
+        if (visible && (fixture is null || shuttingDown || browserFullscreen || active is not { Closing: false })) return;
         InvalidateFindUi();
         findBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         if (visible && focus)
@@ -369,6 +401,54 @@ internal sealed class TabbedDevelopmentHost
         { SetTabStatus(tab, error.Message); }
     }
 
+    private void SetBrowserFullscreen(bool enabled)
+    {
+        if (enabled == browserFullscreen || (enabled && shuttingDown)) return;
+        if (enabled)
+        {
+            savedWindowStyle = window.WindowStyle;
+            savedWindowState = window.WindowState;
+            savedResizeMode = window.ResizeMode;
+            ShowFindBar(false);
+            window.WindowState = WindowState.Normal;
+            window.WindowStyle = WindowStyle.None;
+            window.ResizeMode = ResizeMode.NoResize;
+            window.WindowState = WindowState.Maximized;
+        }
+        else
+        {
+            window.WindowState = WindowState.Normal;
+            window.WindowStyle = savedWindowStyle;
+            window.ResizeMode = savedResizeMode;
+            window.WindowState = savedWindowState;
+        }
+        browserFullscreen = enabled;
+        strip.Visibility = toolbar.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
+        fullscreenToggle.Content = enabled ? "Exit full screen (F11)" : "Full screen (F11)";
+    }
+
+    private async Task ExitActivePageFullscreenAsync()
+    {
+        if (pageExitPending || active is not { } tab || !AcceptTabEvent(tab) ||
+            tab.View.IsPageFullScreen != true) return;
+        ulong id = tab.View.NativeHandle, navigation = tab.LastNavigationId;
+        pageExitPending = true;
+        RefreshToolbar();
+        try
+        {
+            bool exited = await tab.View.TryExitPageFullScreenAsync();
+            if (!exited && AcceptTabEvent(tab) && ReferenceEquals(active, tab) &&
+                tab.View.NativeHandle == id && tab.LastNavigationId == navigation &&
+                tab.View.IsPageFullScreen == true)
+                SetTabStatus(tab, "Page full screen exit not confirmed.");
+        }
+        finally
+        {
+            pageExitPending = false;
+            RefreshToolbar();
+        }
+    }
+
     private void ChangeZoom(double delta, bool reset = false)
     {
         if (shuttingDown || active is not { } tab || !AcceptTabEvent(tab) ||
@@ -408,6 +488,7 @@ internal sealed class TabbedDevelopmentHost
     {
         if (shuttingDown) return;
         shuttingDown = true;
+        SetBrowserFullscreen(false);
         ShowFindBar(false);
         foreach (var tab in tabs.ToArray()) RequestClose(tab);
     }
@@ -428,6 +509,11 @@ internal sealed class TabbedDevelopmentHost
         zoomOut.IsEnabled = zoomKnown && zoom > 0.5 + 1e-6;
         zoomIn.IsEnabled = zoomKnown && zoom < 3.0 - 1e-6;
         zoomReset.IsEnabled = zoomKnown;
+        bool pageFullscreen = live && !shuttingDown && active!.View.IsPageFullScreen == true;
+        pageFullscreenExit.Visibility = pageFullscreen ? Visibility.Visible : Visibility.Collapsed;
+        pageFullscreenExit.IsEnabled = pageFullscreen && !pageExitPending;
+        fullscreenNotice.Text = pageFullscreen ? "Page requested full screen; host controls remain available." : "";
+        fullscreenToggle.IsEnabled = !shuttingDown;
         add.IsEnabled = !shuttingDown && tabs.Count + retired.Count < CefNative.VeilCefViewLimit();
         // Read the selected live view only. A denial is informational, not
         // a deferred popup request or a permission to replay the target URL.
@@ -616,6 +702,19 @@ internal sealed class TabbedDevelopmentHost
             if (zoomLabel.Text != "100%") { Fail(); return; }
             Select(second);
             Log("Zoom readback followed selected distinct-origin view and reset to 100 percent");
+            var style = window.WindowStyle;
+            var state = window.WindowState;
+            var resize = window.ResizeMode;
+            SetBrowserFullscreen(true);
+            if (!browserFullscreen || window.WindowStyle != WindowStyle.None ||
+                window.WindowState != WindowState.Maximized || strip.Visibility != Visibility.Collapsed ||
+                toolbar.Visibility != Visibility.Collapsed || fullscreenToggle.Visibility != Visibility.Visible ||
+                second.View.IsPageFullScreen != false) { Fail(); return; }
+            SetBrowserFullscreen(false);
+            if (browserFullscreen || window.WindowStyle != style || window.WindowState != state ||
+                window.ResizeMode != resize || toolbar.Visibility != Visibility.Visible ||
+                strip.Visibility != Visibility.Visible || active != second) { Fail(); return; }
+            Log("Browser full screen restored host state without changing page full screen");
             firstDomains = ((IEngineSiteDataReader)first.View).GetCookieDomainsAsync();
             secondDomains = ((IEngineSiteDataReader)second.View).GetCookieDomainsAsync();
             phase = 11;
