@@ -232,3 +232,59 @@ internal sealed class CefRetainedLifetime(params IDisposable?[] resources)
         finally { releasing = false; }
     }
 }
+
+// Single owner slot, serialized by Broker.serial. No IPC surface and no
+// ownership transfer on a refused registration. An occupied retired slot
+// continues to block admission until its entire retained lifetime is released.
+internal interface ICefDiagnosticLifetime
+{
+    void Revoke();
+    bool RevokeAndRelease(int milliseconds);
+}
+
+internal sealed class CefDiagnosticSessionSlot<T> where T : class, ICefDiagnosticLifetime
+{
+    private T? session;
+    private object? generation;
+    private bool retired;
+    private bool releasing;
+    internal bool Occupied => session is not null;
+    internal bool CleanupPending => Occupied && retired;
+
+    internal bool TryRegister(object expectedGeneration, T candidate)
+    {
+        ArgumentNullException.ThrowIfNull(expectedGeneration);
+        ArgumentNullException.ThrowIfNull(candidate);
+        if (Occupied || releasing) return false;
+        session = candidate;
+        generation = expectedGeneration;
+        retired = false;
+        return true;
+    }
+
+    internal T? Current(object? expectedGeneration) =>
+        !retired && ReferenceEquals(generation, expectedGeneration) ? session : null;
+
+    internal void Retire()
+    {
+        if (session is null) return;
+        retired = true;
+        session.Revoke();
+    }
+
+    internal bool TryReleaseRetired(int milliseconds)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        if (session is null) return true;
+        if (!retired || releasing) return false;
+        releasing = true;
+        try
+        {
+            if (!session.RevokeAndRelease(milliseconds)) return false;
+            session = null;
+            generation = null;
+            return true;
+        }
+        finally { releasing = false; }
+    }
+}
