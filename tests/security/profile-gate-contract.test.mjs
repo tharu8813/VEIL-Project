@@ -1250,7 +1250,7 @@ test('suspended broker diagnostic IPC exists only in separate build and requires
         assert.match(source, /<PropertyGroup Condition="'\$\(Configuration\)' == 'CefDiagnostic'">\s*<DefineConstants>\$\(DefineConstants\);VEIL_CEF_DIAGNOSTIC_IPC<\/DefineConstants>/);
     assert.match(protocol, /#if VEIL_CEF_DIAGNOSTIC_IPC\s*ProbeCefSuspended, CheckCefRuntimeAuthority,\s*#endif/);
     assert.match(broker, /#if VEIL_CEF_DIAGNOSTIC_IPC\s*case BrokerCommand.ProbeCefSuspended:[\s\S]*?config.Development \|\| config.Backend != "bitlocker"[\s\S]*?authenticatedOwner != client[\s\S]*?Native.SameLiveProcess\(probeOwner, pipeClient\)[\s\S]*?diagnosticSession.Occupied \|\| diagnosticRelock.Pending[\s\S]*?RunDiagnosticCreationProbe\(probeGeneration\);\s*if \(!diagnosticRelock.Pending \|\| !TryCompleteDiagnosticRelock\(\)\)[\s\S]*?status = backend.Status\(\);\s*if \(!Registered\(status\) \|\| status.Unlocked \|\| !status.ReadyToUnlock\)[\s\S]*?return Protocol.CefSuspendedProbeVerified\(status\);[\s\S]*?#endif/);
-    assert.match(protocol, /#if VEIL_CEF_DIAGNOSTIC_IPC\s*internal static byte\[\] CefSuspendedProbeVerified[\s\S]*?status.Unlocked \|\| !status.ReadyToUnlock[\s\S]*?cefSuspendedProbeVerified = true, volumeGuid = status.VolumeGuid[\s\S]*?#endif/);
+    assert.match(protocol, /#if VEIL_CEF_DIAGNOSTIC_IPC(?:(?!#endif)[\s\S])*?internal static byte\[\] CefSuspendedProbeVerified[\s\S]*?status.Unlocked \|\| !status.ReadyToUnlock[\s\S]*?cefSuspendedProbeVerified = true, volumeGuid = status.VolumeGuid[\s\S]*?#endif/);
     assert.match(fixture, /#if VEIL_CEF_DIAGNOSTIC_IPC[\s\S]*?probe.Command == BrokerCommand.ProbeCefSuspended[\s\S]*?#else\s*RejectProbe\(probeRequest\);\s*#endif/);
 });
 
