@@ -78,6 +78,15 @@ try
         rootPid, exit, outerEmpty, innerEmpty, restricted, rendererRestrictedLow,
         browser,
         observed = observed.Values.OrderBy(s => s.Pid),
+        mitigationCoverage = new
+        {
+            scope = "last-live-sample-per-process",
+            sampled = observed.Count + (browser is null ? 0 : 1),
+            available = observed.Values.Count(s => s.Mitigation.Status == "observed") +
+                (browser?.Mitigation.Status == "observed" ? 1 : 0),
+            unavailable = observed.Values.Count(s => s.Mitigation.Status != "observed") +
+                (browser is not null && browser.Mitigation.Status != "observed" ? 1 : 0)
+        },
         jobNotifications = notifications.Events,
         handleExits,
         limitations = "Exit codes are from handles retained for live samples. Unsampled processes are outside handle coverage; Job notifications are best-effort."
@@ -156,8 +165,11 @@ sealed class FixtureJob : IDisposable
     }
 
     internal sealed record ModuleSample(string Name, string Location);
+    internal sealed record MitigationFlags(uint Aslr, uint DynamicCode, uint SystemCallDisable,
+        uint ControlFlowGuard, uint ImageLoad, uint ChildProcess);
+    internal sealed record MitigationSample(string Status, MitigationFlags? Flags, int? Win32Error);
     internal sealed record TokenSample(uint Pid, uint IntegrityRid, bool Restricted, string Role, bool AppContainer,
-        ModuleSample[]? Modules);
+        ModuleSample[]? Modules, MitigationSample Mitigation);
     internal sealed record HandleExit(uint Pid, uint ExitCode);
 
     internal bool TrySample(uint pid, string image, CefContainedProcess outerJob, out TokenSample sample)
@@ -192,14 +204,52 @@ sealed class FixtureJob : IDisposable
                 bool appContainer = Marshal.ReadInt32(buffer) != 0;
                 string role = ReadRole(process);
                 var modules = ObserveModules(pid, Path.GetDirectoryName(image)!);
+                var mitigation = ObserveMitigation(pid, process, outerJob);
                 if (!Contains(process) || WaitForSingleObject(process, 0) != 0x102) return false;
                 if (!outerJob.ContainsFixtureMember(process))
                     throw new InvalidOperationException("Live fixture member is missing from the outer job.");
                 RetainSample(pid, process);
-                sample = new TokenSample(pid, rid, restricted, role, appContainer, modules);
+                sample = new TokenSample(pid, rid, restricted, role, appContainer, modules, mitigation);
                 return true;
             }
             finally { Marshal.FreeHGlobal(buffer); }
+        }
+    }
+
+    // Independent read-only fixture observation. Do not convert missing
+    // access, unstable identity or policy changes into zero-valued flags.
+    private MitigationSample ObserveMitigation(uint pid, SafeProcessHandle original,
+        CefContainedProcess outerJob)
+    {
+        using var query = OpenProcess(0x0400 | 0x1000 | 0x00100000, false, pid);
+        if (query.IsInvalid) return new("query-unavailable", null, Marshal.GetLastWin32Error());
+        bool Current() =>
+            CompareObjectHandles(original, query) &&
+            WaitForSingleObject(original, 0) == 0x102 &&
+            WaitForSingleObject(query, 0) == 0x102 &&
+            Contains(original) && Contains(query) &&
+            outerJob.ContainsFixtureMember(original) && outerJob.ContainsFixtureMember(query);
+        if (!Current()) return new("identity-unavailable", null, null);
+        uint Read(int policy)
+        {
+            if (!GetProcessMitigationPolicy(query, policy, out uint flags, (UIntPtr)sizeof(uint)))
+                throw new Win32Exception();
+            return flags;
+        }
+        MitigationFlags Snapshot() => new(Read(1), Read(2), Read(4), Read(7), Read(10), Read(13));
+        try
+        {
+            var first = Snapshot();
+            if (!Current()) return new("identity-unavailable", null, null);
+            var second = Snapshot();
+            if (!Current()) return new("identity-unavailable", null, null);
+            return first == second
+                ? new("observed", first, null)
+                : new("policy-changed", null, null);
+        }
+        catch (Win32Exception error)
+        {
+            return new("query-unavailable", null, error.NativeErrorCode);
         }
     }
 
@@ -358,6 +408,10 @@ sealed class FixtureJob : IDisposable
     private static extern uint GetProcessId(SafeProcessHandle process);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, uint pid);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessMitigationPolicy(SafeProcessHandle process, int policy,
+        out uint flags, UIntPtr bytes);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint WaitForSingleObject(SafeProcessHandle process, uint ms);
     [DllImport("kernel32.dll", SetLastError = true)]
