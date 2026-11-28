@@ -3,12 +3,27 @@
 . (Join-Path $PSScriptRoot 'cef-preflight-staging.ps1')
 . (Join-Path $PSScriptRoot 'cef-registration-plan.ps1')
 
-function New-VeilPreflightRegistrationDraft($StagePlan,[string]$BinRoot,[string]$ImagePath,[string]$ProfilePath,
-    [guid]$VolumeGuid,[guid]$ProtectorId,[guid]$RecoveryProtectorId,[string]$UserSid,[string]$VolumeId) {
-    if ($StagePlan.kind -cne 'cef-preflight-stage-plan' -or
+function Assert-VeilRegistrationStageMode($StagePlan,[switch]$Diagnostic) {
+    $kind = if ($Diagnostic) { 'cef-diagnostic-stage-plan' } else { 'cef-preflight-stage-plan' }
+    if ($StagePlan.kind -cne $kind -or
         $StagePlan.installable -isnot [bool] -or $StagePlan.installable -or
-        $StagePlan.startupEnabled -isnot [bool] -or $StagePlan.startupEnabled -or
-        $StagePlan.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or
+        $StagePlan.startupEnabled -isnot [bool] -or $StagePlan.startupEnabled) {
+        throw 'Registration stage mode mismatch.'
+    }
+    if ($Diagnostic) {
+        foreach ($hash in @($StagePlan.baselinePayloadSha256,$StagePlan.baselineSignatureSha256)) {
+            if ($hash -isnot [string] -or $hash -cnotmatch '\A[0-9a-f]{64}\z') { throw 'Missing diagnostic baseline digest.' }
+        }
+    } elseif ($null -ne $StagePlan.PSObject.Properties['baselinePayloadSha256'] -or
+              $null -ne $StagePlan.PSObject.Properties['baselineSignatureSha256']) {
+        throw 'Diagnostic baseline fields refused in ordinary preparation.'
+    }
+}
+
+function New-VeilPreflightRegistrationDraft($StagePlan,[string]$BinRoot,[string]$ImagePath,[string]$ProfilePath,
+    [guid]$VolumeGuid,[guid]$ProtectorId,[guid]$RecoveryProtectorId,[string]$UserSid,[string]$VolumeId,[switch]$Diagnostic) {
+    Assert-VeilRegistrationStageMode $StagePlan -Diagnostic:$Diagnostic
+    if ($StagePlan.sourceCommit -cnotmatch '\A[0-9a-f]{40}\z' -or
         $StagePlan.runtimePins.kind -cne 'cef-admin-runtime-pins' -or
         $StagePlan.runtimePins.sourceCommit -cne $StagePlan.sourceCommit -or
         $StagePlan.runtimePins.startupEnabled -isnot [bool] -or $StagePlan.runtimePins.startupEnabled) {
@@ -71,7 +86,8 @@ function Write-VeilPreflightDraftFile([string]$Path,$Value) {
     finally { $sha.Dispose() }
 }
 
-function Write-VeilPreflightRegistrationDraft([string]$Destination,$Draft,$StagePlan) {
+function Write-VeilPreflightRegistrationDraft([string]$Destination,$Draft,$StagePlan,[switch]$Diagnostic) {
+    Assert-VeilRegistrationStageMode $StagePlan -Diagnostic:$Diagnostic
     if (Test-Path -LiteralPath $Destination) { throw 'Preserve existing registration preparation for inspection.' }
     Assert-VeilAdminPath (Split-Path -Parent $Destination)
     $names = @('broker.json','client.json','cef-runtime-pins.json')
@@ -85,7 +101,7 @@ function Write-VeilPreflightRegistrationDraft([string]$Destination,$Draft,$Stage
     }
     # Last record is only preparation evidence, not a commit/activation marker.
     # Partial writes remain preserved; no automatic resume or deletion.
-    $journal = New-VeilPreflightPreparationJournal $StagePlan $files
+    $journal = New-VeilPreflightPreparationJournal $StagePlan $files -Diagnostic:$Diagnostic
     foreach ($file in $files) {
         if ((Get-FileHash -LiteralPath (Join-Path $Destination $file.name) -Algorithm SHA256).Hash -ne $file.sha256) {
             throw 'Registration draft changed before preparation marker.'
@@ -96,14 +112,21 @@ function Write-VeilPreflightRegistrationDraft([string]$Destination,$Draft,$Stage
 }
 
 
-function New-VeilPreflightPreparationJournal($StagePlan,[object[]]$Files) {
-    return [ordered]@{
-        kind='cef-preflight-registration-journal'; format=2; state='prepared-only'
+function New-VeilPreflightPreparationJournal($StagePlan,[object[]]$Files,[switch]$Diagnostic) {
+    Assert-VeilRegistrationStageMode $StagePlan -Diagnostic:$Diagnostic
+    $kind = if ($Diagnostic) { 'cef-diagnostic-registration-journal' } else { 'cef-preflight-registration-journal' }
+    $journal = [ordered]@{
+        kind=$kind; format=2; state='prepared-only'
         sourceCommit=$StagePlan.sourceCommit; installable=$false; startupEnabled=$false
         desktopSha256=$StagePlan.desktopSha256; brokerSha256=$StagePlan.brokerSha256
         cefChildSha256=$StagePlan.cefChildSha256
         signerThumbprint=$StagePlan.signerThumbprint; proofHashes=$StagePlan.proofHashes; files=$Files
     }
+    if ($Diagnostic) {
+        $journal.Add('baselinePayloadSha256',$StagePlan.baselinePayloadSha256)
+        $journal.Add('baselineSignatureSha256',$StagePlan.baselineSignatureSha256)
+    }
+    return $journal
 }
 
 function Read-VeilPreflightDraftBytes([string]$Path) {
@@ -138,7 +161,8 @@ function Assert-VeilPreflightDraftBytes([byte[]]$Actual,$Expected) {
 }
 
 function Read-VeilPreflightRegistrationDraft([string]$Directory,$StagePlan,[string]$BinRoot,[string]$ImagePath,[string]$ProfilePath,
-    [guid]$VolumeGuid,[guid]$ProtectorId,[guid]$RecoveryProtectorId,[string]$UserSid) {
+    [guid]$VolumeGuid,[guid]$ProtectorId,[guid]$RecoveryProtectorId,[string]$UserSid,[switch]$Diagnostic) {
+    Assert-VeilRegistrationStageMode $StagePlan -Diagnostic:$Diagnostic
     Assert-VeilAdminPath $Directory
     $names = @('broker.json','client.json','cef-runtime-pins.json','preparation.json')
     $items = @(Get-ChildItem -LiteralPath $Directory -Force)
@@ -152,13 +176,13 @@ function Read-VeilPreflightRegistrationDraft([string]$Directory,$StagePlan,[stri
     # a newly verified stage. The ID is validated by the draft constructor.
     $broker = [Text.UTF8Encoding]::new($false,$true).GetString($observed['broker.json']) | ConvertFrom-Json
     if ($broker.volumeId -isnot [string]) { throw 'Missing prepared volume ID.' }
-    $draft = New-VeilPreflightRegistrationDraft $StagePlan $BinRoot $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid $broker.volumeId
+    $draft = New-VeilPreflightRegistrationDraft $StagePlan $BinRoot $ImagePath $ProfilePath $VolumeGuid $ProtectorId $RecoveryProtectorId $UserSid $broker.volumeId -Diagnostic:$Diagnostic
     $files = @()
     foreach ($name in @('broker.json','client.json','cef-runtime-pins.json')) {
         $digest = Assert-VeilPreflightDraftBytes $observed[$name] $draft[$name]
         $files += [ordered]@{name=$name;sha256=$digest}
     }
-    $journal = New-VeilPreflightPreparationJournal $StagePlan $files
+    $journal = New-VeilPreflightPreparationJournal $StagePlan $files -Diagnostic:$Diagnostic
     [void](Assert-VeilPreflightDraftBytes $observed['preparation.json'] $journal)
     # Check a second observation for ordinary concurrent changes. This is
     # still a read-only snapshot, not retained file handles or launch authority.
