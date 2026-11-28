@@ -152,7 +152,7 @@ try
     using (var owner = Process.GetCurrentProcess())
     {
         var identity = Native.ObserveProcess(owner.SafeHandle);
-        foreach (int mode in new[] { 0, 1, 2, 3, 4 })
+        foreach (int mode in new[] { 0, 1, 2, 3, 4, 5 })
         {
             using var candidate = CefContainedProcess.CreateSuspended(image, environment);
             using var brokerJob = mode == 0 ? CefBrokerOwnedJob.CreateDisabledCandidate() :
@@ -296,6 +296,20 @@ try
                             "Failed collection leaked its observed process handle.");
                         break;
                     case 4: candidate.TerminateAndDrain(5000); break;
+                    case 5:
+                        Check(brokerJob.TerminateAndVerifyNestedDrain(candidate.FixtureJobHandle, retained, 5000),
+                            "Nested drain did not verify both jobs and retained root exit.");
+                        Check(brokerJob.TerminateAndVerifyNestedDrain(candidate.FixtureJobHandle, retained, 5000),
+                            "Repeated nested drain did not verify.");
+                        Check(!brokerJob.TerminateAndVerifyNestedDrain(candidate.FixtureJobHandle, owner.SafeHandle, 0),
+                            "Live unrelated owner was accepted as exited root.");
+                        using (var unrelated = CefContainedProcess.CreateSuspended(image, environment))
+                        {
+                            Check(!brokerJob.TerminateAndVerifyNestedDrain(unrelated.FixtureJobHandle, retained, 0),
+                                "Nonempty unrelated desktop job was accepted.");
+                            Check(unrelated.IsAlive, "Drain terminated an unrelated desktop job.");
+                        }
+                        break;
                 }
                 Check(descendant.WaitForExit(10000), $"Descendant survived fixture cleanup (mode {mode}).");
                 Check(rootObserver.WaitForExit(10000), $"Root survived fixture cleanup (mode {mode}).");
