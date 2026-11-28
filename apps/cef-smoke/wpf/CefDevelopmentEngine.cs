@@ -509,7 +509,8 @@ internal sealed class CefDevelopmentView : HwndHost, IBrowserEngineView, IEngine
         }
         set
         {
-            if (!double.IsFinite(value) || value <= 0) throw new ArgumentOutOfRangeException(nameof(value));
+            if (!double.IsFinite(value) || value < 0.5 || value > 3.0)
+                throw new ArgumentOutOfRangeException(nameof(value));
             RequireView();
             CefNative.VeilCefSetZoomLevel(NativeHandle, Math.Log(value, 1.2));
         }
