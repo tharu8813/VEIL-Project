@@ -353,6 +353,47 @@ try
             "Successful retry did not verify relock and stop.");
     }
     Console.WriteLine("PASS: retry worker defers unsafe relock, retains generation and retries recoverable faults");
+    // Synthetic owner-revocation faults must not skip independent cleanup
+    // phases. A retired slot remains hidden and blocks a new registration
+    // until its actual release callback confirms success.
+    foreach (int failedPhase in new[] { 0, 1, 2, 3, 4 })
+    {
+        var generation = new object();
+        var obligation = new CefDiagnosticRelock();
+        var slot = new CefDiagnosticSessionSlot<ICefDiagnosticLifetime>();
+        var injected = new IOException("Synthetic owner revocation failure.");
+        var candidate = new RevocationFaultFixture(failedPhase == 0 ? injected : null);
+        Check(slot.TryRegister(generation, candidate), "Revocation fixture registration refused.");
+        obligation.Request(generation);
+        var phases = new List<int>();
+        void Phase(int phase, Action action)
+        {
+            phases.Add(phase);
+            if (phase == failedPhase && phase != 0) throw injected;
+            action();
+        }
+        Exception? failure = null;
+        try
+        {
+            CefOwnerRevocationCleanup.Run(() => Phase(0, slot.Retire),
+                () => Phase(1, () => { }),
+                () => Phase(2, () => Check(!slot.TryReleaseRetired(0), "Unconfirmed drain released slot.")),
+                () => Phase(3, () => { }));
+        }
+        catch (IOException error) { failure = error; }
+        Check(phases.SequenceEqual(new[] { 0, 1, 2, 3 }) &&
+            (failedPhase == 4 ? failure is null : ReferenceEquals(failure, injected)),
+            "Owner revocation skipped a phase or lost the failure.");
+        Check(slot.CleanupPending && slot.Current(generation) is null &&
+            !slot.TryRegister(new object(), new RevocationFaultFixture(null)) && obligation.Pending,
+            "Revoked session was visible or relock obligation was lost.");
+        Check(!obligation.TryComplete(generation, !slot.Occupied,
+            () => throw new InvalidOperationException("Premature relock.")), "Unconfirmed cleanup allowed relock.");
+        candidate.AllowRelease = true;
+        Check(slot.TryReleaseRetired(0) && obligation.TryComplete(generation, !slot.Occupied, () => true),
+            "Verified cleanup did not permit relock.");
+    }
+    Console.WriteLine("PASS: owner revocation faults preserve retired slot and attempt all cleanup phases");
     // Exercise in-place ownership handoff using the actual synthetic root.
     // No apphost execution and no second native handle owner.
     foreach (int mode in new[] { 0, 1, 2 })
@@ -949,4 +990,14 @@ internal sealed class BorrowingFixtureSuccessor(CefPreparedCreationLifetime owne
 {
     public void Revoke() => owner.Revoke();
     public bool RevokeAndRelease(int milliseconds) => owner.RevokeAndRelease(milliseconds);
+}
+
+internal sealed class RevocationFaultFixture(Exception? revokeFailure) : ICefDiagnosticLifetime
+{
+    internal bool AllowRelease { get; set; }
+    public void Revoke()
+    {
+        if (revokeFailure is not null) throw revokeFailure;
+    }
+    public bool RevokeAndRelease(int milliseconds) => AllowRelease;
 }
