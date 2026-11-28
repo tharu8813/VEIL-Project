@@ -13,6 +13,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     private CefAuthenticatedGeneration? authenticatedGeneration;
     private SafeProcessHandle? authenticatedOwnerHandle;
     private CefPendingChild? pendingCefChild;
+    private readonly CefDiagnosticSessionSlot<CefBoundDiagnosticSession> diagnosticSession = new();
     private sealed record CandidateStop(SafeProcessHandle Child, CefBrokerOwnedJob? Job, IDisposable? Image, IDisposable? Runtime)
     {
         internal CefRetainedLifetime Lifetime { get; } = new(Runtime, Image, Job, Child);
@@ -76,6 +77,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         {
             ClearAuthenticatedOwner(); // Service cleanup retires CEF authority even if locking fails.
             RetryUnresolvedCefStops();
+            if (diagnosticSession.Occupied)
+                throw new InvalidOperationException("CEF diagnostic lifetime remains unconfirmed; service cleanup refused.");
             var status = backend.Status();
             if (!status.Attached) return;
             if (!string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase))
@@ -274,7 +277,12 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             if (unresolvedCefStops.Count != 0 &&
                 request.Command is BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild)
                 return Protocol.Error("CefExitUnconfirmed");
-            // Non-forced Lock remains available even if an exit is unconfirmed.
+            if (diagnosticSession.CleanupPending)
+                RetryUnresolvedCefStops();
+            if (diagnosticSession.Occupied &&
+                request.Command is BrokerCommand.Lock or BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild)
+                return Protocol.Error("CefExitUnconfirmed");
+            // Non-forced Lock remains available even if a disabled candidate exit is unconfirmed.
             var status = backend.Status();
             RefreshAuthenticatedOwner(status);
             bool Registered(BackendStatus current) => current.Attached &&
@@ -294,6 +302,9 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             // first guard. Do not admit a new candidate in that same request.
             if (unresolvedCefStops.Count != 0 &&
                 request.Command is BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild)
+                return Protocol.Error("CefExitUnconfirmed");
+            if (diagnosticSession.Occupied &&
+                request.Command is BrokerCommand.Lock or BrokerCommand.Detach or BrokerCommand.Unlock or BrokerCommand.StageCefChild)
                 return Protocol.Error("CefExitUnconfirmed");
             switch (request.Command)
             {
@@ -548,7 +559,13 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
         authenticatedGeneration = null;
         authenticatedOwner = null;
         authenticatedOwnerHandle = null;
-        RevokePendingCefChild();
+        diagnosticSession.Retire();
+        try { RevokePendingCefChild(); }
+        finally
+        {
+            RetryDiagnosticSession();
+            if (diagnosticSession.CleanupPending) EnsureCefStopRetry();
+        }
     }
 
     private void RevokePendingCefChild()
@@ -621,10 +638,27 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
     {
         unresolvedCefStops.Add(candidate);
         log.Write("cef-child-stop", new { result = "ExitNotConfirmed" });
-        if (!cefStopRetryRunning)
+        EnsureCefStopRetry();
+    }
+
+    private void EnsureCefStopRetry()
+    {
+        if (cefStopRetryRunning) return;
+        cefStopRetryRunning = true;
+        _ = RetryCefStopsAsync();
+    }
+
+    private void RetryDiagnosticSession()
+    {
+        if (!diagnosticSession.CleanupPending) return;
+        try
         {
-            cefStopRetryRunning = true;
-            _ = RetryCefStopsAsync();
+            if (diagnosticSession.TryReleaseRetired(2000))
+                log.Write("cef-diagnostic-stop", new { result = "Released" });
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Write("cef-diagnostic-stop", new { result = "ReleaseUnconfirmed", type = error.GetType().Name });
         }
     }
 
@@ -643,6 +677,7 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
 
     private void RetryUnresolvedCefStops()
     {
+        RetryDiagnosticSession();
         for (int i = unresolvedCefStops.Count - 1; i >= 0; --i)
         {
             var candidate = unresolvedCefStops[i];
@@ -663,10 +698,10 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
             try
             {
                 RetryUnresolvedCefStops();
-                if (unresolvedCefStops.Count == 0 || attempt == 29)
+                if ((unresolvedCefStops.Count == 0 && !diagnosticSession.CleanupPending) || attempt == 29)
                 {
                     cefStopRetryRunning = false;
-                    if (unresolvedCefStops.Count != 0)
+                    if (unresolvedCefStops.Count != 0 || diagnosticSession.CleanupPending)
                         log.Write("cef-child-stop", new { result = "RetryExhausted" });
                     return;
                 }
@@ -807,6 +842,8 @@ internal sealed class Broker(BrokerConfig config, IBitLockerBackend backend, Bro
                     if (!ReferenceEquals(unlockOwner, ownership)) return;
                     ClearAuthenticatedOwner();
                     RetryUnresolvedCefStops();
+                    if (diagnosticSession.Occupied)
+                        throw new InvalidOperationException("CEF diagnostic lifetime remains unconfirmed; crash relock deferred.");
                     var status = backend.Status();
                     if (!status.Attached) { unlockOwner = null; return; }
                     if (!string.Equals(status.VolumeGuid, config.VolumeGuid, StringComparison.OrdinalIgnoreCase))
