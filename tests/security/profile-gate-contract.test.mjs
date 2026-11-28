@@ -189,7 +189,18 @@ test('future CEF executable checks use a retained file handle and do not extend 
     assert.match(native, /GetProcessId\(process\) != \(uint\)expected\.ProcessId[\s\S]*?created != expected\.CreatedFileTime/);
     assert.match(native, /GetFinalPathNameByHandleW\(file, resolved,[\s\S]*?info\.Links != 1/);
     assert.match(admin, /Require\(file\.GetAccessControl\(\), "executable"\);\s*Require\(file\.Directory!\.GetAccessControl\(\), "executable directory"\);/);
-    assert.doesNotMatch(broker, /CefPinnedImage|CefImageDigest/);
+    // The disconnected broker-internal diagnostic registration now performs
+    // the same pin check. Ordinary IPC and admission paths must not gain it.
+    const start = broker.indexOf('private bool TryRegisterDiagnosticSession(');
+    const end = broker.indexOf('private void ClearAuthenticatedOwner()', start);
+    assert.ok(start >= 0 && end > start);
+    const registration = broker.slice(start, end);
+    assert.match(registration, /config\.Development \|\| config\.CefChildImage is not \{ \} image \|\|\s*config\.CefChildSha256 is not \{ \} digest/);
+    assert.match(registration, /using var verified = CefPinnedImage\.OpenVerified\(root, rootHandle, image, new CefImageDigest\(digest\)\);\s*registration\.RequireCurrent\(\);/);
+    assert.doesNotMatch(broker.slice(0, start) + broker.slice(end), /CefPinnedImage|CefImageDigest/);
+    assert.equal((broker.match(/TryRegisterDiagnosticSession\s*\(/g) ?? []).length, 1);
+    const protocol = await readFile('apps/broker/Veil.VolumeBroker/Protocol.cs', 'utf8');
+    assert.doesNotMatch(protocol, /TryRegisterDiagnosticSession|CefDiagnosticSession|CefPinnedImage|CefImageDigest/);
 });
 
 
