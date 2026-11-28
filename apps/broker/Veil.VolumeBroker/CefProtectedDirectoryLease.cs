@@ -210,6 +210,60 @@ internal sealed class CefProtectedDirectoryLease : IDisposable
         public void Dispose() => handle.Dispose();
     }
 
+#if VEIL_CEF_PROFILE_ACCESS_TEST
+    // Synthetic Windows handle experiment only. Not compiled in the broker.
+    // This is a first-publication primitive, never a replace-existing API.
+    // Retain a data-access directory handle and a DELETE-capable source
+    // handle; deny concurrent write/delete opens. Rename by source handle
+    // with a simple name in its own directory. No path-based rename fallback.
+    internal static bool TryPublishNewLibraryFixture(string engineRoot, string volume,
+        Func<BackendStatus> readStatus, Func<bool> current)
+    {
+        if (!Environment.Is64BitProcess || !current()) return false;
+        using var directory = Open(engineRoot, volume, readStatus);
+        using var directoryAccess = OpenAccess(engineRoot, 0xA1); // list/traverse/read attributes
+        RequireDirectory(directoryAccess, engineRoot, volume);
+        RequireSameIdentity(directory.handle, directoryAccess);
+        string stagedPath = Path.Combine(engineRoot, "library-state.stage");
+        // DELETE | SYNCHRONIZE | READ_ATTRIBUTES | READ_DATA.
+        using var source = CreateFileW(stagedPath, 0x00110081, FileShare.Read, IntPtr.Zero,
+            FileMode.Open, 0x00200000, IntPtr.Zero);
+        if (source.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        RequireRegularFile(source, stagedPath, volume);
+        directory.RequireCurrent(readStatus);
+        RequireSameIdentity(directory.handle, directoryAccess);
+        RequireRegisteredProtection(volume, readStatus());
+        if (!current()) return false;
+        RequireRegularFile(source, stagedPath, volume);
+
+        // Native FILE_RENAME_INFORMATION x64: ReplaceIfExists=false,
+        // RootDirectory=NULL (same-directory simple name), length at 16,
+        // UTF-16 name at 20. No overwrite, stream name, or caller input.
+        byte[] name = Encoding.Unicode.GetBytes("library-state.json");
+        byte[] buffer = new byte[24 + name.Length];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(16, 4), name.Length);
+        name.CopyTo(buffer, 20);
+        int status = NtSetInformationFile(source, out _, buffer, (uint)buffer.Length, 10);
+        if (status == 0) return true; // irreversible native success
+        if (unchecked((uint)status) == 0xC0000035u) return false; // STATUS_OBJECT_NAME_COLLISION
+        throw new Win32Exception(unchecked((int)RtlNtStatusToDosError(status)), "Synthetic CEF rename refused.");
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoStatusBlock
+    {
+        public IntPtr Status;
+        public UIntPtr Information;
+    }
+
+    [DllImport("ntdll.dll", ExactSpelling = true)]
+    private static extern int NtSetInformationFile(SafeFileHandle file, out IoStatusBlock status,
+        byte[] information, uint length, int informationClass);
+
+    [DllImport("ntdll.dll", ExactSpelling = true)]
+    private static extern uint RtlNtStatusToDosError(int status);
+#endif
+
     // Acquire the same existing profile.lock used by the desktop. This
     // is a broker-owned exclusive open, not proof of another process's
     // lock and not a claim that all filesystem writers honor the lock.
@@ -266,60 +320,6 @@ internal sealed class CefProtectedDirectoryLease : IDisposable
 
         public void Dispose() => handle.Dispose();
     }
-
-#if VEIL_CEF_PROFILE_ACCESS_TEST
-    // Synthetic Windows handle experiment only. Not compiled in the broker.
-    // This is a first-publication primitive, never a replace-existing API.
-    // Retain a data-access directory handle and a DELETE-capable source
-    // handle; deny concurrent write/delete opens. Rename by source handle
-    // with a simple name in its own directory. No path-based rename fallback.
-    internal static bool TryPublishNewLibraryFixture(string engineRoot, string volume,
-        Func<BackendStatus> readStatus, Func<bool> current)
-    {
-        if (!Environment.Is64BitProcess || !current()) return false;
-        using var directory = Open(engineRoot, volume, readStatus);
-        using var directoryAccess = OpenAccess(engineRoot, 0xA1); // list/traverse/read attributes
-        RequireDirectory(directoryAccess, engineRoot, volume);
-        RequireSameIdentity(directory.handle, directoryAccess);
-        string stagedPath = Path.Combine(engineRoot, "library-state.stage");
-        // DELETE | SYNCHRONIZE | READ_ATTRIBUTES | READ_DATA.
-        using var source = CreateFileW(stagedPath, 0x00110081, FileShare.Read, IntPtr.Zero,
-            FileMode.Open, 0x00200000, IntPtr.Zero);
-        if (source.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
-        RequireRegularFile(source, stagedPath, volume);
-        directory.RequireCurrent(readStatus);
-        RequireSameIdentity(directory.handle, directoryAccess);
-        RequireRegisteredProtection(volume, readStatus());
-        if (!current()) return false;
-        RequireRegularFile(source, stagedPath, volume);
-
-        // Native FILE_RENAME_INFORMATION x64: ReplaceIfExists=false,
-        // RootDirectory=NULL (same-directory simple name), length at 16,
-        // UTF-16 name at 20. No overwrite, stream name, or caller input.
-        byte[] name = Encoding.Unicode.GetBytes("library-state.json");
-        byte[] buffer = new byte[24 + name.Length];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(16, 4), name.Length);
-        name.CopyTo(buffer, 20);
-        int status = NtSetInformationFile(source, out _, buffer, (uint)buffer.Length, 10);
-        if (status == 0) return true; // irreversible native success
-        if (unchecked((uint)status) == 0xC0000035u) return false; // STATUS_OBJECT_NAME_COLLISION
-        throw new Win32Exception(unchecked((int)RtlNtStatusToDosError(status)), "Synthetic CEF rename refused.");
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct IoStatusBlock
-    {
-        public IntPtr Status;
-        public UIntPtr Information;
-    }
-
-    [DllImport("ntdll.dll", ExactSpelling = true)]
-    private static extern int NtSetInformationFile(SafeFileHandle file, out IoStatusBlock status,
-        byte[] information, uint length, int informationClass);
-
-    [DllImport("ntdll.dll", ExactSpelling = true)]
-    private static extern uint RtlNtStatusToDosError(int status);
-#endif
 
     private static string FinalPath(SafeFileHandle handle, uint flags)
     {
