@@ -48,10 +48,22 @@ internal sealed class CefContainedProcess : IDisposable
     internal static CefContainedProcess CreateSuspendedWithFixtureJobs(string image,
         IReadOnlyDictionary<string, string?> environment, SafeFileHandle outer, SafeFileHandle inner) =>
         CreateSuspendedCore(image, environment, [outer, inner]);
+
+    internal static CefContainedProcess CreateSuspendedWithUserFixtureJobs(string image,
+        IReadOnlyDictionary<string, string?> environment, SafeFileHandle outer, SafeFileHandle inner,
+        SafeAccessTokenHandle token)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+        if (token.IsInvalid || token.IsClosed ||
+            !string.Equals(image, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Invalid synthetic user launch.");
+        return CreateSuspendedCore(image, environment, [outer, inner], token);
+    }
 #endif
 
     private static CefContainedProcess CreateSuspendedCore(string image,
-        IReadOnlyDictionary<string, string?> environment, SafeFileHandle[]? additionalJobs)
+        IReadOnlyDictionary<string, string?> environment, SafeFileHandle[]? additionalJobs,
+        SafeAccessTokenHandle? userToken = null)
     {
         if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess)
             throw new PlatformNotSupportedException("CEF containment requires Windows x64.");
@@ -87,6 +99,15 @@ internal sealed class CefContainedProcess : IDisposable
             ProcessInformation info;
             try
             {
+#if VEIL_CEF_CONTAINMENT_TEST
+                if (userToken is not null)
+                {
+                    if (!CreateProcessAsUserW(userToken, image, command, IntPtr.Zero, IntPtr.Zero, false, flags,
+                        env, Path.GetDirectoryName(image)!, ref startup, out info))
+                        throw Failure("CreateProcessAsUser");
+                }
+                else
+#endif
                 if (!CreateProcessW(image, command, IntPtr.Zero, IntPtr.Zero, false, flags,
                     env, Path.GetDirectoryName(image)!, ref startup, out info))
                     throw Failure("CreateProcess");
@@ -385,6 +406,14 @@ internal sealed class CefContainedProcess : IDisposable
     private static extern bool CreateProcessW(string image, StringBuilder command, IntPtr processAttributes,
         IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint flags,
         IntPtr environment, string currentDirectory, ref StartupInfoEx startup, out ProcessInformation info);
+#if VEIL_CEF_CONTAINMENT_TEST
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateProcessAsUserW(SafeAccessTokenHandle token,
+        string image, StringBuilder command, IntPtr processAttributes, IntPtr threadAttributes,
+        [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint flags, IntPtr environment,
+        string currentDirectory, ref StartupInfoEx startup, out ProcessInformation info);
+#endif
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, uint flags, ref UIntPtr size);

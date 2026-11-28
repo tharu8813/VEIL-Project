@@ -101,6 +101,35 @@ try
         Check(observer.WaitForExit(10000), "Child survived job close.");
     }
     File.Delete(markerPath);
+    // Explicit VM test, never silently claim positive user-token creation
+    // on an elevated CI account. The runner must have the required OS rights.
+    if (Environment.GetEnvironmentVariable("VEIL_TEST_STANDARD_USER_CREATION") == "1")
+    {
+        using var owner = Process.GetCurrentProcess();
+        var ownerIdentity = Native.ObserveProcess(owner.SafeHandle);
+        using var lease = CefProcessTokenObserver.LaunchTokenLease.Acquire(owner.SafeHandle, ownerIdentity);
+        using var outer = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var inner = CefBrokerOwnedJob.CreateMultiprocessFixture();
+        using var candidate = outer.CreateAtomicUserPairFixture(inner, lease, image, environment);
+        var binding = Native.DuplicateNominatedChild(ownerIdentity, owner.SafeHandle, new IntPtr(candidate.NominatedHandle));
+        using var retained = binding.Handle;
+        Check(candidate.IsAlive && !File.Exists(markerPath), "User fixture executed before verification.");
+        outer.BindSingleCandidate(ownerIdentity, owner.SafeHandle, binding.Identity, retained);
+        inner.BindSingleCandidate(ownerIdentity, owner.SafeHandle, binding.Identity, retained);
+        outer.RequirePrivateNestedBinding(inner, ownerIdentity, owner.SafeHandle, binding.Identity, retained);
+        candidate.ResumeAfterVerification(() =>
+        {
+            lease.RequireFixtureRoot(retained, binding.Identity);
+            return outer.ContainsFixtureRoot(binding.Identity, retained) &&
+                inner.ContainsFixtureRoot(binding.Identity, retained);
+        });
+        Check(SpinWait.SpinUntil(() => File.Exists(markerPath), TimeSpan.FromSeconds(10)),
+            "User fixture did not execute.");
+        Check(outer.TerminateAndVerifyPrivateDrain(inner, retained, 5000), "User fixture did not drain.");
+        File.Delete(markerPath);
+        Console.WriteLine("PASS: explicit standard-user atomic creation fixture");
+    }
+    else Console.WriteLine("SKIP: positive user-token process creation requires explicitly configured Windows VM");
     // Actual nested-job integration: desktop atomically creates a suspended
     // child, then broker retains a second job without exporting its handle.
     // Test both independent containment owners; no CEF or BitLocker.

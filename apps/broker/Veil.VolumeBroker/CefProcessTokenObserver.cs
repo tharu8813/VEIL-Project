@@ -268,6 +268,34 @@ internal static class CefProcessTokenObserver
                 ReadTokenSnapshot(duplicate, sourceSnapshot.Token.Identity, true));
         }
 
+#if VEIL_CEF_CONTAINMENT_TEST
+        // Same-user synthetic apphost only; no token export to the caller.
+        internal Veil.Desktop.CefContainedProcess CreateUserFixture(string image,
+            IReadOnlyDictionary<string, string?> environment, SafeFileHandle outer, SafeFileHandle inner)
+        {
+            RequireCurrent();
+            var child = Veil.Desktop.CefContainedProcess.CreateSuspendedWithUserFixtureJobs(
+                image, environment, outer, inner, duplicate);
+            try
+            {
+                using var borrowed = new SafeProcessHandle(new IntPtr(child.NominatedHandle), ownsHandle: false);
+                RequireFixtureRoot(borrowed, Native.ObserveProcess(borrowed));
+                return child;
+            }
+            catch { child.Dispose(); throw; }
+        }
+
+        internal void RequireFixtureRoot(SafeProcessHandle root, ClientIdentity identity)
+        {
+            RequireCurrent();
+            var observed = ObserveLaunchToken(root, identity);
+            CefLaunchTokenPolicy.RequirePair(sourceSnapshot, observed);
+            if (!string.Equals(identity.ImagePath, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("Unexpected synthetic root image.");
+            RequireCurrent();
+        }
+#endif
+
         public void Dispose()
         {
             if (disposed) return;

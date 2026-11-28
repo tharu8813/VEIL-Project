@@ -796,3 +796,15 @@ test('launch token lease duplicates only verified retained standard-user primary
     assert.doesNotMatch(lease, /CreateProcessAsUser|AdjustTokenPrivileges|SetTokenInformation|WindowsIdentity\.GetCurrent|GetLinkedToken/);
     assert.doesNotMatch(broker, /LaunchTokenLease|DuplicateTokenEx/);
 });
+
+
+test('user-token atomic creation remains containment fixture only with no fallback on failure', async () => {
+    const launch = await readFile('apps/desktop/Engine/CefContainedProcess.cs', 'utf8');
+    const token = await readFile('apps/broker/Veil.VolumeBroker/CefProcessTokenObserver.cs', 'utf8');
+    const job = await readFile('apps/broker/Veil.VolumeBroker/CefBrokerOwnedJob.cs', 'utf8');
+    const fixture = await readFile('tests/security/CefContainmentCheck/Program.cs', 'utf8');
+    assert.match(launch, /#if VEIL_CEF_CONTAINMENT_TEST\s*if \(userToken is not null\)[\s\S]*?CreateProcessAsUserW\(userToken, image, command, IntPtr.Zero, IntPtr.Zero, false, flags,[\s\S]*?throw Failure\("CreateProcessAsUser"\);\s*\}\s*else\s*#endif\s*if \(!CreateProcessW/);
+    assert.match(token, /#if VEIL_CEF_CONTAINMENT_TEST[\s\S]*?RequireCurrent\(\);\s*var child = Veil\.Desktop\.CefContainedProcess\.CreateSuspendedWithUserFixtureJobs[\s\S]*?RequireFixtureRoot\(borrowed, Native\.ObserveProcess\(borrowed\)\);[\s\S]*?catch \{ child\.Dispose\(\); throw; \}/);
+    assert.match(job, /lease\.RequireCurrent\(\);\s*assignmentIssued = peer\.assignmentIssued = true;\s*return lease\.CreateUserFixture/);
+    assert.match(fixture, /VEIL_TEST_STANDARD_USER_CREATION[\s\S]*?CreateAtomicUserPairFixture[\s\S]*?RequirePrivateNestedBinding[\s\S]*?ResumeAfterVerification[\s\S]*?lease\.RequireFixtureRoot[\s\S]*?TerminateAndVerifyPrivateDrain/);
+});

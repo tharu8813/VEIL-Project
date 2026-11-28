@@ -55,6 +55,24 @@ internal sealed class CefBrokerOwnedJob : IDisposable
         return Veil.Desktop.CefContainedProcess.CreateSuspendedWithFixtureJobs(image, environment, job, peer.job);
     }
 
+    internal Veil.Desktop.CefContainedProcess CreateAtomicUserPairFixture(CefBrokerOwnedJob peer,
+        CefProcessTokenObserver.LaunchTokenLease lease, string image, IReadOnlyDictionary<string, string?> environment)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(peer);
+        if (ReferenceEquals(this, peer) || disposed || peer.disposed ||
+            activeLimit != 2 || peer.activeLimit != 2 ||
+            assignmentIssued || peer.assignmentIssued || bound || peer.bound ||
+            CompareJobObjects(job, peer.job) ||
+            Accounting().TotalProcesses != 0 || peer.Accounting().TotalProcesses != 0)
+            throw new UnauthorizedAccessException("Atomic user fixture Jobs must be fresh and distinct.");
+        RequireContainmentLimits(job, activeLimit);
+        RequireContainmentLimits(peer.job, peer.activeLimit);
+        lease.RequireCurrent();
+        assignmentIssued = peer.assignmentIssued = true;
+        return lease.CreateUserFixture(image, environment, job, peer.job);
+    }
+
     internal ClientIdentity[] ObserveSameJobFixture(
         IReadOnlyList<(ClientIdentity Identity, SafeProcessHandle Handle)> members) =>
         ObserveNestedRetainedMembers(job, members);
